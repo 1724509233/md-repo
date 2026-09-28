@@ -1,0 +1,144 @@
+"""FastAPI application factory and API routes."""
+from __future__ import annotations
+
+import hashlib
+import re
+import time
+from pathlib import Path
+
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+
+from .db import get_all_files, upsert_file
+from .sync import compare_files
+from .web import get_web_html
+
+# In-memory sync lock: {"locked_at": float} or None
+_sync_lock: dict | None = None
+_SYNC_LOCK_TIMEOUT = 300  # 5 minutes
+
+
+def _acquire_lock() -> bool:
+    """Try to acquire the sync lock. Returns True if acquired."""
+    global _sync_lock
+    now = time.time()
+    if _sync_lock is not None and (now - _sync_lock["locked_at"]) < _SYNC_LOCK_TIMEOUT:
+        return False
+    _sync_lock = {"locked_at": now}
+    return True
+
+
+def _release_lock() -> None:
+    global _sync_lock
+    _sync_lock = None
+
+
+def _safe_rel_path(raw: str) -> Path | None:
+    """Validate a URL-decoded relative path. Returns None if unsafe.
+
+    Paths are normalized to forward slashes (vault-relative).
+    """
+    raw = raw.replace("\\", "/")
+    if not raw or raw.startswith("/"):
+        return None
+    parts = Path(raw).parts
+    if any(p in ("..", "") for p in parts):
+        return None
+    return Path(*parts)
+
+
+def _hash_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def create_app(vault_dir: Path, db_conn) -> FastAPI:
+    """Create the FastAPI application."""
+    app = FastAPI(title="md-sync server")
+
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> HTMLResponse:
+        return HTMLResponse(get_web_html())
+
+    @app.get("/api/health")
+    async def health() -> dict:
+        files = get_all_files(db_conn)
+        return {"status": "ok", "file_count": len(files)}
+
+    @app.get("/api/docs")
+    async def list_docs() -> list[dict]:
+        return get_all_files(db_conn)
+
+    @app.get("/api/docs/{path:path}")
+    async def get_doc(path: str) -> PlainTextResponse:
+        rel = _safe_rel_path(path)
+        if rel is None:
+            raise HTTPException(status_code=400, detail="invalid path")
+        file_path = vault_dir / rel
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="file not found")
+        content = file_path.read_bytes().decode("utf-8", errors="replace")
+        return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
+
+    @app.post("/api/docs/{path:path}")
+    async def upload_doc(path: str, file: UploadFile = File(...)) -> dict:
+        rel = _safe_rel_path(path)
+        if rel is None:
+            raise HTTPException(status_code=400, detail="invalid path")
+        file_path = vault_dir / rel
+        try:
+            content = await file.read()
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(content)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
+        digest = _hash_bytes(content)
+        mtime = file_path.stat().st_mtime
+        rel_str = rel.as_posix()
+        upsert_file(db_conn, rel_str, digest, mtime)
+        return {"path": rel_str, "hash": digest}
+
+    @app.post("/api/sync")
+    async def sync(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+
+        device_name = body.get("device_name")
+        local_files = body.get("local_files")
+        logs = body.get("logs", [])
+
+        if not isinstance(device_name, str) or not device_name:
+            raise HTTPException(status_code=400, detail="device_name is required")
+        if not isinstance(local_files, dict):
+            raise HTTPException(status_code=400, detail="local_files must be an object")
+
+        if not _acquire_lock():
+            return JSONResponse(
+                status_code=409, content={"error": "sync in progress"}
+            )
+
+        try:
+            server_files = {f["path"]: f["hash"] for f in get_all_files(db_conn)}
+            result = compare_files(local_files, server_files)
+
+            # Save client logs to vault_dir/.sync/logs/{device_name}.log
+            safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", device_name)
+            logs_dir = vault_dir / ".sync" / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = logs_dir / f"{safe_name}.log"
+            if isinstance(logs, list):
+                with open(log_path, "a", encoding="utf-8") as f:
+                    for entry in logs:
+                        if not isinstance(entry, dict):
+                            continue
+                        ts = entry.get("timestamp", "")
+                        level = str(entry.get("level", "INFO")).upper()
+                        message = entry.get("message", "")
+                        f.write(f"{ts} [{level}] {message}\n")
+
+            return JSONResponse(content=result)
+        finally:
+            _release_lock()
+
+    return app
