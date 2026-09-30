@@ -96,3 +96,74 @@ def test_rag_search_respects_top_k(tmp_path):
 
     results = rag_search(str(tmp_path), "common keyword", top_k=3)
     assert len(results) == 3
+
+
+import json
+from unittest.mock import AsyncMock, patch
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_yields_sse_lines():
+    """chat_stream passes through SSE lines from the LLM API."""
+    from server.ai import chat_stream
+
+    async def fake_lines():
+        yield 'data: {"choices": [{"delta": {"content": "Hello"}}]}'
+        yield 'data: {"choices": [{"delta": {"content": " world"}}]}'
+        yield "data: [DONE]"
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_resp = AsyncMock()
+        mock_resp.aiter_lines = fake_lines
+        mock_resp.raise_for_status = lambda: None
+        mock_stream_ctx = AsyncMock()
+        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_client_cls.return_value.stream = lambda *a, **kw: mock_stream_ctx
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client_cls.return_value)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        events = []
+        async for line in chat_stream(
+            base_url="http://localhost:11434/v1",
+            api_key="test",
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+        ):
+            events.append(line)
+
+    assert len(events) == 3
+    assert events[0].startswith("data: ")
+    assert events[-1] == "data: [DONE]"
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_empty_response():
+    """chat_stream handles empty response gracefully."""
+    from server.ai import chat_stream
+
+    async def fake_lines():
+        return
+        yield  # empty generator
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_resp = AsyncMock()
+        mock_resp.aiter_lines = fake_lines
+        mock_resp.raise_for_status = lambda: None
+        mock_stream_ctx = AsyncMock()
+        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+        mock_client_cls.return_value.stream = lambda *a, **kw: mock_stream_ctx
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client_cls.return_value)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        events = []
+        async for line in chat_stream(
+            base_url="http://localhost:11434/v1",
+            api_key="test",
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+        ):
+            events.append(line)
+
+    assert events == []
