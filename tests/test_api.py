@@ -112,3 +112,42 @@ def test_sync_lock(client) -> None:
         assert r.json() == {"error": "sync in progress"}
     finally:
         api_module._sync_lock = None
+
+
+def test_ai_search_endpoint(client, vault_dir):
+    """POST /api/ai/search returns ranked results."""
+    (vault_dir / "test.md").write_bytes(b"# Test\n\nYARA rules and pattern matching.")
+    resp = client.post("/api/ai/search", json={"query": "YARA pattern", "top_k": 3})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "results" in data
+    assert len(data["results"]) >= 1
+
+
+def test_ai_search_no_results(client, vault_dir):
+    """POST /api/ai/search with no matches returns empty list."""
+    resp = client.post("/api/ai/search", json={"query": "zzz_nonexistent_zzz", "top_k": 3})
+    assert resp.status_code == 200
+    assert resp.json()["results"] == []
+
+
+def test_ai_chat_endpoint_disabled(client):
+    """POST /api/ai/chat returns 503 when AI is not configured."""
+    resp = client.post("/api/ai/chat", json={"message": "hello"})
+    assert resp.status_code == 503
+
+
+def test_put_doc_save(client, vault_dir):
+    """PUT /api/docs/{path} saves markdown content."""
+    resp = client.put("/api/docs/new-doc.md", content=b"# New Doc\n\nHello world.")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+    # Verify file was written
+    saved = (vault_dir / "new-doc.md").read_bytes()
+    assert saved == b"# New Doc\n\nHello world."
+
+
+def test_put_doc_invalid_path(client):
+    """PUT /api/docs/{path} rejects path traversal."""
+    resp = client.put("/api/docs/%2e%2e/etc/passwd", content=b"hack")
+    assert resp.status_code == 400

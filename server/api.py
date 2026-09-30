@@ -51,7 +51,7 @@ def _hash_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
-def create_app(vault_dir: Path, db_conn) -> FastAPI:
+def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     """Create the FastAPI application."""
     app = FastAPI(title="md-sync server")
 
@@ -140,5 +140,74 @@ def create_app(vault_dir: Path, db_conn) -> FastAPI:
             return JSONResponse(content=result)
         finally:
             _release_lock()
+
+    @app.post("/api/ai/search")
+    async def ai_search(request: Request) -> dict:
+        body = await request.json()
+        query = body.get("query", "")
+        top_k = int(body.get("top_k", 5))
+        from .ai import rag_search
+        results = rag_search(str(vault_dir), query, top_k=top_k)
+        return {"results": results}
+
+    @app.post("/api/ai/chat")
+    async def ai_chat(request: Request):
+        if ai_config is None:
+            raise HTTPException(status_code=503, detail="AI not configured")
+        body = await request.json()
+        message = body.get("message", "")
+        mode = body.get("mode", "current_doc")
+        doc_path = body.get("doc_path", "")
+
+        # Build context
+        messages = [{"role": "system", "content": "You are a helpful assistant for markdown documents."}]
+        if mode == "current_doc" and doc_path:
+            rel = _safe_rel_path(doc_path)
+            if rel:
+                fp = vault_dir / rel
+                if fp.is_file():
+                    content = fp.read_bytes().decode("utf-8", errors="replace")
+                    messages.append({"role": "system", "content": f"Current document:\n\n{content}"})
+        elif mode == "rag_search":
+            from .ai import rag_search
+            results = rag_search(str(vault_dir), message, top_k=3)
+            if results:
+                context = "\n\n".join(f"[{r['path']}]: {r['snippet']}" for r in results)
+                messages.append({"role": "system", "content": f"Relevant documents:\n\n{context}"})
+
+        messages.append({"role": "user", "content": message})
+
+        from .ai import chat_stream
+        from fastapi.responses import StreamingResponse
+
+        async def event_generator():
+            async for line in chat_stream(
+                base_url=ai_config.base_url,
+                api_key=ai_config.api_key,
+                model=ai_config.model,
+                messages=messages,
+                max_tokens=ai_config.max_tokens,
+                temperature=ai_config.temperature,
+            ):
+                yield f"{line}\n\n"
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    @app.put("/api/docs/{path:path}")
+    async def save_doc(path: str, request: Request) -> dict:
+        rel = _safe_rel_path(path)
+        if rel is None:
+            raise HTTPException(status_code=400, detail="invalid path")
+        file_path = vault_dir / rel
+        content = await request.body()
+        try:
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_bytes(content)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"failed to save: {e}")
+        digest = _hash_bytes(content)
+        mtime = file_path.stat().st_mtime
+        upsert_file(db_conn, rel.as_posix(), digest, mtime)
+        return {"ok": True}
 
     return app

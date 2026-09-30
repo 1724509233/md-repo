@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> None:
     if cursor.fetchone()[0] == 0:
         _initial_index(vault_dir, conn)
 
-    app = create_app(vault_dir, conn)
+    app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai)
 
     async def _run() -> None:
         logs_dir = vault_dir / ".sync" / "logs"
