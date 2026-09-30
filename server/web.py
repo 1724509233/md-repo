@@ -50,6 +50,7 @@ body {
 #content-panel th, #content-panel td { border: 1px solid var(--border); padding: 6px 10px; }
 #content-panel blockquote { border-left: 4px solid var(--accent); margin: 12px 0; padding: 4px 12px; color: var(--muted); }
 #content-panel img { max-width: 100%; }
+#content-panel .mermaid { text-align: center; margin: 16px 0; }
 .tree-node { user-select: none; }
 .tree-row {
   display: flex;
@@ -96,8 +97,10 @@ body {
   </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <script>
 (function () {
+  mermaid.initialize({ startOnLoad: false, theme: 'default' });
   var treeEl = document.getElementById('tree');
   var statusEl = document.getElementById('status');
   var docEl = document.getElementById('doc');
@@ -186,6 +189,16 @@ body {
       })
       .then(function (text) {
         docEl.innerHTML = marked.parse(text);
+        var blocks = docEl.querySelectorAll('pre code.language-mermaid');
+        if (blocks.length) {
+          blocks.forEach(function (block, i) {
+            var div = document.createElement('div');
+            div.className = 'mermaid';
+            div.textContent = block.textContent;
+            block.parentElement.replaceWith(div);
+          });
+          mermaid.run({ nodes: docEl.querySelectorAll('.mermaid') });
+        }
         btnDownload.disabled = false;
       })
       .catch(function (err) {
