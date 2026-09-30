@@ -10,3 +10,11 @@ client:
   vault_dir: ./vault
   device_name: mac
   poll_interval: 300
+
+# AI 配置 (可选)
+ai:
+  base_url: http://localhost:11434/v1
+  api_key: ollama
+  model: qwen2.5:14b
+  max_tokens: 4096
+  temperature: 0.7
