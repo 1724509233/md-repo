@@ -203,15 +203,19 @@ body {
     document.body.removeChild(a);
   });
 
-  fetch('/api/docs')
-    .then(function (r) { return r.json(); })
-    .then(function (files) {
-      statusEl.textContent = files.length + ' 个文档';
-      buildTree(files);
-    })
-    .catch(function (err) {
-      statusEl.textContent = '加载失败: ' + err.message;
-    });
+  function loadDocs() {
+    fetch('/api/docs')
+      .then(function (r) { return r.json(); })
+      .then(function (files) {
+        statusEl.textContent = files.length + ' 个文档';
+        if (!currentPath) buildTree(files);
+      })
+      .catch(function (err) {
+        statusEl.textContent = '加载失败: ' + err.message;
+      });
+  }
+  loadDocs();
+  setInterval(loadDocs, 30000);
 })();
 </script>
 </body>

@@ -12,6 +12,7 @@ from .api import create_app
 from .config import load_server_config
 from .db import init_db, upsert_file
 from .logrotate import start_logrotate
+from .watcher import start_watcher
 
 
 def _initial_index(vault_dir: Path, conn) -> int:
@@ -54,6 +55,7 @@ def main(argv: list[str] | None = None) -> None:
         logs_dir = vault_dir / ".sync" / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         start_logrotate(None, logs_dir)
+        start_watcher(vault_dir, conn)
         await asyncio.sleep(0)  # let the task start
 
     config_obj = uvicorn.Config(
