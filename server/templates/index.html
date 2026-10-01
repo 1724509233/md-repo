@@ -207,8 +207,13 @@ async function pollChanges(){
       if(!stillExists){
         editor.value='';
         document.getElementById('current-file').textContent='(已删除)';
+        if(previewMode)renderPreview();
       } else {
-        openDoc(currentPath);
+        // Re-fetch content and update preview if in preview mode
+        fetch('/api/docs/'+encodeURIComponent(currentPath)).then(function(r){return r.text()}).then(function(text){
+          editor.value=text;
+          if(previewMode)renderPreview();
+        }).catch(function(){});
       }
     }
   }catch(e){}
