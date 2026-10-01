@@ -13,3 +13,24 @@
 .tree-group.open>.tree-row .chev{transform:rotate(90deg)}
 .chev{transition:transform .2s ease}
 input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!important}
+
+/* Tool cards in AI chat */
+.tool-card {
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin: 6px 0;
+    font-size: 12px;
+    border: 1px solid #e5e7eb;
+}
+.dark .tool-card { border-color: #374151; }
+.tool-pending { background: #f9fafb; }
+.dark .tool-pending { background: #1f2937; }
+.tool-done { background: #f0fdf4; border-color: #bbf7d0; }
+.dark .tool-done { background: #052e16; border-color: #166534; }
+.tool-confirm { background: #fef3c7; border-color: #fde68a; }
+.dark .tool-confirm { background: #422006; border-color: #a16207; }
+.tool-rejected, .tool-error { background: #fef2f2; border-color: #fecaca; }
+.dark .tool-rejected, .dark .tool-error { background: #450a0a; border-color: #991b1b; }
+.tool-header { display: flex; align-items: center; gap: 6px; }
+.tool-path { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+.dark .tool-path { background: #374151; }

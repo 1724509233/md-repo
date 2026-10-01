@@ -261,6 +261,7 @@ function toggleAI(open){
 aiBtn.addEventListener('click',function(){toggleAI(!aiPanel.classList.contains('open'))});
 document.getElementById('ai-close').addEventListener('click',function(){toggleAI(false)});
 var aiMode='当前文档';
+var sessionId = 'web-' + Date.now();
 document.getElementById('ai-mode').addEventListener('click',function(){
   aiMode=aiMode==='当前文档'?'全库搜索':'当前文档';
   this.textContent=aiMode;
@@ -289,12 +290,12 @@ async function sendChat(){
   var bubble=addMsg('ai','');
   bubble.classList.add('stream-cursor');
   try{
-    var body={message:text,mode:aiMode,doc_path:currentPath};
+    var body={message:text,session_id:sessionId,doc_path:currentPath};
     if(aiMode==='全库搜索'){
       var results=await ragSearch(text);
       body.context=(results||[]).map(function(r){return '【'+r.path+'】\n'+(r.snippet||'')}).join('\n\n');
     }
-    var resp=await fetch('/api/ai/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    var resp=await fetch('/api/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(!resp.ok){bubble.textContent='错误: '+resp.status;document.getElementById('ai-status').textContent='就绪';bubble.classList.remove('stream-cursor');return}
     var reader=resp.body.getReader();
     var decoder=new TextDecoder();
@@ -309,9 +310,25 @@ async function sendChat(){
         var line=lines[i].trim();
         if(line.startsWith('data: ')){
           try{
-            var data=JSON.parse(line.slice(6));
-            if(data.token)bubble.textContent+=data.token;
-            else if(data.error){bubble.textContent=data.error;break}
+            var evt=JSON.parse(line.slice(6));
+            switch(evt.type){
+              case 'token':
+                bubble.textContent+=evt.text;
+                break;
+              case 'tool_call':
+                insertToolCard(evt.id,evt.name,evt.args,'pending');
+                break;
+              case 'confirm_request':
+                updateToolCard(evt.id,'confirm',evt.args);
+                break;
+              case 'tool_result':
+                updateToolCard(evt.id,evt.rejected?'rejected':(evt.error?'error':'done'),evt.result);
+                break;
+              case 'done':
+                finishStream();
+                enableInput();
+                break;
+            }
           }catch(e){}
         }
       }
@@ -319,6 +336,79 @@ async function sendChat(){
     }
   }catch(e){bubble.textContent='请求失败: '+e.message}
   bubble.classList.remove('stream-cursor');
+  document.getElementById('ai-status').textContent='就绪';
+}
+var toolCardNames = {
+    read_doc: '📖 读取文档',
+    search_docs: '🔍 搜索文档',
+    list_files: '📁 列出文件',
+    write_doc: '✏️ 写入文档',
+    delete_doc: '🗑 删除文档',
+    move_doc: '📦 移动文档'
+};
+function insertToolCard(id, name, args, status) {
+    var chat = document.getElementById('ai-messages');
+    var card = document.createElement('div');
+    card.id = 'tool-' + id;
+    card.className = 'tool-card tool-' + status;
+    var label = toolCardNames[name] || name;
+    var pathArg = args.path || args.from_path || '';
+    card.innerHTML =
+        '<div class="tool-header">' +
+        '<span class="tool-icon">⏳</span>' +
+        '<span class="tool-label">' + label + '</span>' +
+        (pathArg ? '<code class="tool-path">' + pathArg + '</code>' : '') +
+        '</div>';
+    chat.appendChild(card);
+    chat.scrollTop = chat.scrollHeight;
+}
+function updateToolCard(id, status, result) {
+    var card = document.getElementById('tool-' + id);
+    if (!card) return;
+    card.className = 'tool-card tool-' + status;
+    var icon = card.querySelector('.tool-icon');
+    if (status === 'done') {
+        icon.textContent = '✓';
+        icon.className = 'tool-icon text-green-600';
+    } else if (status === 'confirm') {
+        icon.textContent = '⚠';
+        icon.className = 'tool-icon text-amber-600';
+        // Add confirm/cancel buttons
+        var btns = document.createElement('div');
+        btns.className = 'tool-buttons flex gap-2 mt-2';
+        btns.innerHTML =
+            '<button onclick="sendConfirm(\'' + id + '\',true)" class="text-xs px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">✓ 确认</button>' +
+            '<button onclick="sendConfirm(\'' + id + '\',false)" class="text-xs px-3 py-1 border rounded hover:bg-gray-50">✕ 取消</button>';
+        card.appendChild(btns);
+    } else if (status === 'rejected' || status === 'error') {
+        icon.textContent = '✕';
+        icon.className = 'tool-icon text-red-600';
+    }
+    if (result) {
+        var detail = document.createElement('div');
+        detail.className = 'tool-detail text-xs text-gray-500 mt-1 truncate';
+        detail.textContent = result;
+        card.appendChild(detail);
+    }
+}
+function sendConfirm(id, approved) {
+    fetch('/api/agent/confirm', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id: id, approved: approved, session_id: sessionId})
+    });
+    // Update card to show waiting state
+    var card = document.getElementById('tool-' + id);
+    if (card) {
+        var btns = card.querySelector('.tool-buttons');
+        if (btns) btns.innerHTML = '<span class="text-xs text-gray-400">等待处理...</span>';
+    }
+}
+function finishStream(){
+  var bubble=document.querySelector('.stream-cursor');
+  if(bubble)bubble.classList.remove('stream-cursor');
+}
+function enableInput(){
   document.getElementById('ai-status').textContent='就绪';
 }
 document.getElementById('ai-send').addEventListener('click',sendChat);
