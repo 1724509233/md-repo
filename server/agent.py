@@ -190,3 +190,81 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
         return f"Moved: {args['from_path']} → {args['to_path']}"
 
     return f"Error: unknown tool '{name}'"
+
+
+from openai import AsyncOpenAI
+
+
+async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn):
+    """Core agent loop. Yields SSE events."""
+    client = AsyncOpenAI(base_url=ai_config.base_url, api_key=ai_config.api_key)
+
+    while True:
+        stream = await client.chat.completions.create(
+            model=ai_config.model,
+            messages=messages,
+            tools=tools if tools else None,
+            stream=True,
+        )
+
+        content = ""
+        tool_calls = {}
+
+        async for chunk in stream:
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                content += delta.content
+                yield sse("token", {"text": delta.content})
+
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    acc = tool_calls.setdefault(
+                        tc.index, {"id": None, "name": None, "arguments": ""}
+                    )
+                    if tc.id:
+                        acc["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        acc["name"] = tc.function.name
+                    if tc.function and tc.function.arguments:
+                        acc["arguments"] += tc.function.arguments
+
+        if not tool_calls:
+            yield sse("done", {})
+            return
+
+        messages.append({
+            "role": "assistant",
+            "content": content or None,
+            "tool_calls": [
+                {"id": tc["id"], "type": "function",
+                 "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                for tc in tool_calls.values()
+            ],
+        })
+
+        for tc in tool_calls.values():
+            args = json.loads(tc["arguments"])
+
+            yield sse("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
+
+            error = validate_tool_call(tc["name"], args, vault_dir)
+            if error:
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": error})
+                yield sse("tool_result", {"id": tc["id"], "result": error, "error": True})
+                continue
+
+            if tc["name"] in WRITE_TOOLS:
+                yield sse("confirm_request", {
+                    "id": tc["id"], "name": tc["name"], "args": args,
+                })
+                approved = await confirm_queue.get()
+                if not approved:
+                    result = "User rejected this operation."
+                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                    yield sse("tool_result", {"id": tc["id"], "result": result, "rejected": True})
+                    continue
+
+            result = execute_tool(tc["name"], args, vault_dir, db_conn)
+            yield sse("tool_result", {"id": tc["id"], "result": result})
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
