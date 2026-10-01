@@ -151,3 +151,98 @@ def test_put_doc_invalid_path(client):
     """PUT /api/docs/{path} rejects path traversal."""
     resp = client.put("/api/docs/%2e%2e/etc/passwd", content=b"hack")
     assert resp.status_code == 400
+
+
+def test_agent_chat_not_configured(client):
+    """Agent chat returns 503 when AI not configured."""
+    resp = client.post("/api/agent/chat", json={"message": "hi"})
+    assert resp.status_code == 503
+
+
+def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
+    """Agent chat returns SSE stream with token and done events."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from server.api import create_app
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    from fastapi.testclient import TestClient
+
+    tc = TestClient(app)
+
+    # Mock the openai client to return a simple text response
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "Hello"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        resp = tc.post(
+            "/api/agent/chat",
+            json={"message": "hi", "session_id": "test1"},
+        )
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    body = resp.text
+    assert '"type": "token"' in body
+    assert '"type": "done"' in body
+
+
+def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
+    """Agent confirm endpoint accepts approval."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from server.api import create_app
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    from fastapi.testclient import TestClient
+
+    tc = TestClient(app)
+
+    # Create a session first (confirm requires an existing session).
+    # Mock the LLM so the chat stream completes without a real API call.
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "ok"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        resp = tc.post(
+            "/api/agent/chat",
+            json={"message": "hi", "session_id": "test1"},
+        )
+    assert resp.status_code == 200
+
+    resp = tc.post(
+        "/api/agent/confirm",
+        json={"id": "call_1", "approved": True, "session_id": "test1"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}

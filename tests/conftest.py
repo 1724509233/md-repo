@@ -50,3 +50,15 @@ def app(vault_dir: Path, db_conn):
 def client(app):
     """TestClient for the FastAPI app."""
     return TestClient(app)
+
+
+@pytest.fixture
+def ai_config():
+    """Mock AI config for agent endpoint tests."""
+    from server.config import AIConfig
+
+    return AIConfig(
+        base_url="http://localhost:11434/v1",
+        api_key="test",
+        model="qwen2.5:14b",
+    )

@@ -1,6 +1,7 @@
 """FastAPI application factory and API routes."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
 import time
@@ -57,6 +58,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     app = FastAPI(title="md-sync server")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
+
+    # Agent session store: session_id -> {"messages": [...], "confirm_queue": asyncio.Queue}
+    _agent_sessions: dict[str, dict] = {}
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -195,6 +199,68 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 yield f"{line}\n\n"
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    @app.post("/api/agent/chat")
+    async def agent_chat(request: Request):
+        if ai_config is None:
+            raise HTTPException(status_code=503, detail="AI not configured")
+        body = await request.json()
+        message = body.get("message", "")
+        session_id = body.get("session_id", "default")
+        doc_path = body.get("doc_path", "")
+
+        # Get or create session
+        if session_id not in _agent_sessions:
+            _agent_sessions[session_id] = {
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant for managing markdown documents in a vault. Use tools to read, search, create, edit, move, and delete documents."}
+                ],
+                "confirm_queue": asyncio.Queue(),
+            }
+        session = _agent_sessions[session_id]
+
+        # Add current doc context if provided
+        if doc_path:
+            rel = _safe_rel_path(doc_path)
+            if rel:
+                fp = vault_dir / rel
+                if fp.is_file():
+                    content = fp.read_bytes().decode("utf-8", errors="replace")
+                    session["messages"].append(
+                        {"role": "system", "content": f"Current document:\n\n{content}"}
+                    )
+
+        session["messages"].append({"role": "user", "content": message})
+
+        from .agent import TOOLS, agent_loop
+
+        async def event_generator():
+            async for event in agent_loop(
+                messages=session["messages"],
+                tools=TOOLS,
+                ai_config=ai_config,
+                confirm_queue=session["confirm_queue"],
+                vault_dir=vault_dir,
+                db_conn=db_conn,
+            ):
+                yield event
+
+        from fastapi.responses import StreamingResponse
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    @app.post("/api/agent/confirm")
+    async def agent_confirm(request: Request) -> dict:
+        body = await request.json()
+        session_id = body.get("session_id", "default")
+        approved = bool(body.get("approved", False))
+
+        session = _agent_sessions.get(session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        session["confirm_queue"].put_nowait(approved)
+        return {"ok": True}
 
     @app.put("/api/docs/{path:path}")
     async def save_doc(path: str, request: Request) -> dict:
