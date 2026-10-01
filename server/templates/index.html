@@ -222,8 +222,15 @@ async function pollChanges(){
 setInterval(pollChanges, 10000);
 
 /* ---------- doc load / save ---------- */
+var dirty=false;
+
 async function openDoc(path){
+  // Auto-save if current doc has unsaved edits
+  if(dirty && currentPath){
+    await saveDoc();
+  }
   currentPath=path;
+  dirty=false;
   document.getElementById('current-file').textContent=path;
   try{
     var res=await fetch('/api/docs/'+encodeURIComponent(path));
@@ -235,10 +242,11 @@ async function saveDoc(){
   if(!currentPath)return;
   try{
     var res=await fetch('/api/docs/'+encodeURIComponent(currentPath),{method:'PUT',headers:{'Content-Type':'text/plain'},body:editor.value});
-    if(res.ok){document.getElementById('btn-save').textContent='✓ 已保存';setTimeout(function(){document.getElementById('btn-save').textContent='保存'},1500)}
+    if(res.ok){dirty=false;document.getElementById('btn-save').textContent='✓ 已保存';setTimeout(function(){document.getElementById('btn-save').textContent='保存'},1500)}
     else{alert('保存失败: '+res.status)}
   }catch(e){alert('保存失败: '+e.message)}
 }
+editor.addEventListener('input',function(){dirty=true});
 
 /* ---------- edit / preview toggle ---------- */
 function setMode(mode){
