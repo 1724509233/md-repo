@@ -32,3 +32,27 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 ## Design Spec
 
 `docs/superpowers/specs/2026-09-27-md-sync-design.md` — read before making architectural changes.
+
+## Frontend UI Workflow
+
+Web UI lives in `server/templates/index.html` + `server/templates/style.css`, served via Jinja2. Tailwind CSS Play CDN + Flowbite 2.5.2. No build step.
+
+### Rules
+
+1. **Design-first**: For any UI layout change (panel placement, responsive behavior, animation, scroll strategy), present the approach to the user BEFORE implementing. Do not iterate reactively — decide placement, transition mechanism, and content reflow strategy upfront.
+2. **Verify before commit**: UI/CSS changes require user visual confirmation in a browser before committing. "Tests pass" ≠ "UI works". Never commit layout changes without explicit user approval.
+3. **Segmented writing**: HTML files >100 lines must be written in segments (structure → styles → scripts), not one-shot. This makes diffs reviewable and errors locatable.
+4. **Panel/drawer checklist**: Before implementing any slide-in panel or drawer, explicitly decide:
+   - Placement: side (left/right) vs bottom vs overlay
+   - Transition: `transform` (GPU, no reflow) vs `width`/`flex-basis` (triggers reflow) — prefer transform
+   - Content reflow: does the main content area resize? If yes, how does centering/scrolling behave?
+   - Toggle control: where is the button? Must be visible in BOTH open and closed states. Position must not jump between states.
+   - Z-index layering: does the toggle get occluded by the panel? Use `position: relative; z-index` if needed.
+
+### Known Pitfalls (learned the hard way)
+
+- `position: absolute` panels don't participate in flex layout — main content width doesn't change, so `mx-auto` centering is visually off. Fix: add `padding-right` to main area when panel opens.
+- `min-h-[Xpx]` on content children prevents the container from shrinking when a panel takes space.
+- `flex-basis` transitions cause content reflow (text rewrapping) during animation. Use `transform: translateX()` instead for GPU-accelerated, zero-reflow slides.
+- Scroll position is not preserved when container height changes during a transition. If this matters, anchor an element and adjust `scrollTop` per frame via `requestAnimationFrame`.
+- Tailwind Play CDN generates styles at runtime — class names in JS `classList.add()` work, but dynamically constructed class strings must be complete (no partial matching).
