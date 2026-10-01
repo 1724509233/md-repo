@@ -72,6 +72,7 @@ tailwind.config={darkMode:'class',theme:{extend:{colors:{primary:{50:'#eff6ff',1
 <div class="flex items-end gap-2 bg-gray-100 dark:bg-gray-800 rounded-xl p-3 focus-within:ring-2 focus-within:ring-blue-500/40">
 <textarea id="ai-input" rows="1" class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm" placeholder="输入消息，Enter 发送..."></textarea>
 <button id="ai-send" aria-label="发送消息" class="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shrink-0">↑</button>
+<button id="ai-stop" aria-label="中止" class="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shrink-0 hidden">■</button>
 </div>
 </div>
 </div>
@@ -262,6 +263,7 @@ aiBtn.addEventListener('click',function(){toggleAI(!aiPanel.classList.contains('
 document.getElementById('ai-close').addEventListener('click',function(){toggleAI(false)});
 var aiMode='当前文档';
 var sessionId = 'web-' + Date.now();
+var abortCtrl=null;
 document.getElementById('ai-mode').addEventListener('click',function(){
   aiMode=aiMode==='当前文档'?'全库搜索':'当前文档';
   this.textContent=aiMode;
@@ -273,7 +275,7 @@ function addMsg(role,text){
   if(role==='ai'){var av=document.createElement('div');av.className='w-7 h-7 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-xs shrink-0';av.textContent='🤖';d.appendChild(av)}
   var b=document.createElement('div');
   if(role==='user'){b.className='max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-blue-600 text-white text-sm'}
-  else{b.className='max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-gray-100 dark:bg-gray-800 text-sm'}
+  else{b.className='max-w-[85%] flex-1 ai-turn text-sm'}
   b.textContent=text;d.appendChild(b);m.appendChild(d);m.scrollTop=m.scrollHeight;return b;
 }
 async function ragSearch(query){
@@ -284,19 +286,21 @@ async function sendChat(){
   var inp=document.getElementById('ai-input');
   var text=inp.value.trim();
   if(!text)return;
+  if(abortCtrl){abortCtrl.abort();abortCtrl=null}
   inp.value='';
   addMsg('user',text);
   document.getElementById('ai-status').textContent='思考中...';
-  var bubble=addMsg('ai','');
-  bubble.classList.add('stream-cursor');
+  var turn=null, textEl=null;
+  abortCtrl=new AbortController();
+  setBtnState('busy');
   try{
     var body={message:text,session_id:sessionId,doc_path:currentPath};
     if(aiMode==='全库搜索'){
       var results=await ragSearch(text);
       body.context=(results||[]).map(function(r){return '【'+r.path+'】\n'+(r.snippet||'')}).join('\n\n');
     }
-    var resp=await fetch('/api/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    if(!resp.ok){bubble.textContent='错误: '+resp.status;document.getElementById('ai-status').textContent='就绪';bubble.classList.remove('stream-cursor');return}
+    var resp=await fetch('/api/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:abortCtrl.signal});
+    if(!resp.ok){var eb=addMsg('ai','');eb.textContent='错误: '+resp.status;setBtnState('idle');document.getElementById('ai-status').textContent='就绪';return}
     var reader=resp.body.getReader();
     var decoder=new TextDecoder();
     var buffer='';
@@ -313,29 +317,42 @@ async function sendChat(){
             var evt=JSON.parse(line.slice(6));
             switch(evt.type){
               case 'token':
-                bubble.textContent+=evt.text;
+                if(!turn){turn=addMsg('ai','');turn.classList.add('stream-cursor')}
+                if(!textEl){textEl=document.createElement('div');textEl.className='turn-text';textEl.style.whiteSpace='pre-wrap';turn.appendChild(textEl)}
+                if(!textEl._tn){textEl._tn=document.createTextNode('');textEl.appendChild(textEl._tn)}
+                textEl._tn.data+=evt.text;
                 break;
               case 'tool_call':
-                insertToolCard(evt.id,evt.name,evt.args,'pending');
+                if(!turn){turn=addMsg('ai','');turn.classList.add('stream-cursor')}
+                textEl=null;
+                insertToolCard(turn,evt.id,evt.name,evt.args,'pending');
                 break;
               case 'confirm_request':
-                updateToolCard(evt.id,'confirm',evt.args);
+                updateToolCard(evt.id,'confirm',null);
                 break;
               case 'tool_result':
                 updateToolCard(evt.id,evt.rejected?'rejected':(evt.error?'error':'done'),evt.result);
                 break;
               case 'done':
-                finishStream();
-                enableInput();
+                finishTurn(turn);
                 break;
             }
           }catch(e){}
         }
       }
-      document.getElementById('ai-messages').scrollTop=1e9;
+      var chatEl=document.getElementById('ai-messages');
+      if(chatEl.scrollHeight-chatEl.scrollTop-chatEl.clientHeight<80)chatEl.scrollTop=chatEl.scrollHeight;
     }
-  }catch(e){bubble.textContent='请求失败: '+e.message}
-  bubble.classList.remove('stream-cursor');
+  }catch(e){
+    if(e.name==='AbortError'){
+      finishTurn(turn);
+    }else{
+      if(!turn)turn=addMsg('ai','');
+      turn.textContent='请求失败: '+e.message;
+    }
+  }
+  abortCtrl=null;
+  setBtnState('idle');
   document.getElementById('ai-status').textContent='就绪';
 }
 var toolCardNames = {
@@ -346,8 +363,7 @@ var toolCardNames = {
     delete_doc: '🗑 删除文档',
     move_doc: '📦 移动文档'
 };
-function insertToolCard(id, name, args, status) {
-    var chat = document.getElementById('ai-messages');
+function insertToolCard(turn, id, name, args, status) {
     var card = document.createElement('div');
     card.id = 'tool-' + id;
     card.className = 'tool-card tool-' + status;
@@ -359,7 +375,8 @@ function insertToolCard(id, name, args, status) {
         '<span class="tool-label">' + label + '</span>' +
         (pathArg ? '<code class="tool-path">' + pathArg + '</code>' : '') +
         '</div>';
-    chat.appendChild(card);
+    turn.appendChild(card);
+    var chat = document.getElementById('ai-messages');
     chat.scrollTop = chat.scrollHeight;
 }
 function updateToolCard(id, status, result) {
@@ -367,13 +384,16 @@ function updateToolCard(id, status, result) {
     if (!card) return;
     card.className = 'tool-card tool-' + status;
     var icon = card.querySelector('.tool-icon');
+    if (status !== 'confirm') {
+        var oldBtns = card.querySelector('.tool-buttons');
+        if (oldBtns) oldBtns.remove();
+    }
     if (status === 'done') {
         icon.textContent = '✓';
         icon.className = 'tool-icon text-green-600';
     } else if (status === 'confirm') {
         icon.textContent = '⚠';
         icon.className = 'tool-icon text-amber-600';
-        // Add confirm/cancel buttons
         var btns = document.createElement('div');
         btns.className = 'tool-buttons flex gap-2 mt-2';
         btns.innerHTML =
@@ -385,10 +405,13 @@ function updateToolCard(id, status, result) {
         icon.className = 'tool-icon text-red-600';
     }
     if (result) {
-        var detail = document.createElement('div');
-        detail.className = 'tool-detail text-xs text-gray-500 mt-1 truncate';
-        detail.textContent = result;
-        card.appendChild(detail);
+        var existing = card.querySelector('.tool-detail');
+        if (!existing) {
+            var detail = document.createElement('div');
+            detail.className = 'tool-detail text-xs text-gray-500 mt-1 truncate';
+            detail.textContent = result;
+            card.appendChild(detail);
+        }
     }
 }
 function sendConfirm(id, approved) {
@@ -397,26 +420,48 @@ function sendConfirm(id, approved) {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({id: id, approved: approved, session_id: sessionId})
     });
-    // Update card to show waiting state
-    var card = document.getElementById('tool-' + id);
-    if (card) {
-        var btns = card.querySelector('.tool-buttons');
-        if (btns) btns.innerHTML = '<span class="text-xs text-gray-400">等待处理...</span>';
+}
+function finishTurn(turn){
+  if(!turn)return;
+  turn.classList.remove('stream-cursor');
+  var texts=turn.querySelectorAll('.turn-text');
+  for(var i=0;i<texts.length;i++){
+    var el=texts[i];
+    var raw=el._tn?el._tn.data:'';
+    if(raw){
+      var html=marked.parse(raw);
+      var clean=window.DOMPurify?DOMPurify.sanitize(html):html;
+      el.innerHTML=clean;
+      el.style.whiteSpace='';
+    }else{
+      el.remove();
     }
+  }
+  turn.querySelectorAll('pre code').forEach(function(el){if(window.hljs)hljs.highlightElement(el)});
 }
-function finishStream(){
-  var bubble=document.querySelector('.stream-cursor');
-  if(bubble)bubble.classList.remove('stream-cursor');
-}
-function enableInput(){
-  document.getElementById('ai-status').textContent='就绪';
+function setBtnState(state){
+  var send=document.getElementById('ai-send');
+  var stop=document.getElementById('ai-stop');
+  if(state==='busy'){
+    send.classList.add('hidden');
+    stop.classList.remove('hidden');
+  }else{
+    send.classList.remove('hidden');
+    stop.classList.add('hidden');
+  }
 }
 document.getElementById('ai-send').addEventListener('click',sendChat);
+document.getElementById('ai-stop').addEventListener('click',function(){
+  if(abortCtrl){abortCtrl.abort();abortCtrl=null}
+  setBtnState('idle');
+  document.getElementById('ai-status').textContent='就绪';
+});
 document.getElementById('ai-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
 addMsg('ai','你好！我可以帮你总结文档、回答问题、改写内容。试试问我"总结这篇文档"。');
 
 /* ---------- init ---------- */
 loadDocs();
+window.sendConfirm=sendConfirm;
 })();
 </script>
 </body>

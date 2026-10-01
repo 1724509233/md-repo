@@ -199,7 +199,7 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
     """Core agent loop. Yields SSE events."""
     client = AsyncOpenAI(base_url=ai_config.base_url, api_key=ai_config.api_key)
 
-    while True:
+    for _round in range(50):
         stream = await client.chat.completions.create(
             model=ai_config.model,
             messages=messages,
@@ -244,7 +244,13 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
         })
 
         for tc in tool_calls.values():
-            args = json.loads(tc["arguments"])
+            try:
+                args = json.loads(tc["arguments"])
+            except (json.JSONDecodeError, TypeError):
+                err_msg = "Error: malformed tool arguments"
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": err_msg})
+                yield sse("tool_result", {"id": tc["id"], "result": err_msg, "error": True})
+                continue
 
             yield sse("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
 

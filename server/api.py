@@ -59,8 +59,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
 
-    # Agent session store: session_id -> {"messages": [...], "confirm_queue": asyncio.Queue}
+    # Agent session store: session_id -> {"messages": [...], "confirm_queue": asyncio.Queue, "last_active": float}
     _agent_sessions: dict[str, dict] = {}
+    _SESSION_TTL = 1800  # 30 minutes
+
+    def _cleanup_sessions():
+        now = time.time()
+        expired = [sid for sid, s in _agent_sessions.items() if now - s.get("last_active", 0) > _SESSION_TTL]
+        for sid in expired:
+            del _agent_sessions[sid]
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -209,6 +216,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         session_id = body.get("session_id", "default")
         doc_path = body.get("doc_path", "")
 
+        _cleanup_sessions()
+
         # Get or create session
         if session_id not in _agent_sessions:
             _agent_sessions[session_id] = {
@@ -216,34 +225,43 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     {"role": "system", "content": "You are a helpful assistant for managing markdown documents in a vault. Use tools to read, search, create, edit, move, and delete documents."}
                 ],
                 "confirm_queue": asyncio.Queue(),
+                "last_active": time.time(),
             }
         session = _agent_sessions[session_id]
+        session["last_active"] = time.time()
 
-        # Add current doc context if provided
+        # Add current doc context if provided (replace previous doc context to avoid duplication)
         if doc_path:
             rel = _safe_rel_path(doc_path)
             if rel:
                 fp = vault_dir / rel
                 if fp.is_file():
                     content = fp.read_bytes().decode("utf-8", errors="replace")
-                    session["messages"].append(
-                        {"role": "system", "content": f"Current document:\n\n{content}"}
-                    )
+                    doc_msg = {"role": "system", "content": f"Current document:\n\n{content}"}
+                    # Remove any previous doc context messages
+                    session["messages"] = [
+                        m for m in session["messages"]
+                        if not (m.get("role") == "system" and m.get("content", "").startswith("Current document:"))
+                    ]
+                    session["messages"].append(doc_msg)
 
         session["messages"].append({"role": "user", "content": message})
 
         from .agent import TOOLS, agent_loop
 
         async def event_generator():
-            async for event in agent_loop(
-                messages=session["messages"],
-                tools=TOOLS,
-                ai_config=ai_config,
-                confirm_queue=session["confirm_queue"],
-                vault_dir=vault_dir,
-                db_conn=db_conn,
-            ):
-                yield event
+            try:
+                async for event in agent_loop(
+                    messages=session["messages"],
+                    tools=TOOLS,
+                    ai_config=ai_config,
+                    confirm_queue=session["confirm_queue"],
+                    vault_dir=vault_dir,
+                    db_conn=db_conn,
+                ):
+                    yield event
+            except (GeneratorExit, asyncio.CancelledError):
+                return
 
         from fastapi.responses import StreamingResponse
 
