@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .db import get_all_files, upsert_file
@@ -55,6 +56,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     """Create the FastAPI application."""
     app = FastAPI(title="md-sync server")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:

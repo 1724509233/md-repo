@@ -16,30 +16,10 @@ tailwind.config={darkMode:'class',theme:{extend:{colors:{primary:{50:'#eff6ff',1
 <link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
 <link id="hljs-dark" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" disabled>
 <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
-<style type="text/tailwindcss">
-*{scrollbar-width:thin;scrollbar-color:rgba(120,120,140,.3) transparent}
-*::-webkit-scrollbar{width:5px;height:5px}
-*::-webkit-scrollbar-track{background:transparent}
-*::-webkit-scrollbar-thumb{background:rgba(120,120,140,.3);border-radius:9999px}
-*::-webkit-scrollbar-thumb:hover{background:rgba(120,120,140,.5)}
-*::-webkit-scrollbar-button{display:none;width:0;height:0}
-#ai-drawer{flex-basis:0%;max-height:0;overflow:hidden;transition:flex-basis .35s cubic-bezier(.32,.72,0,1),max-height .35s cubic-bezier(.32,.72,0,1)}
-#ai-drawer.open{flex-basis:50%;max-height:50vh}
-@keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.msg-in{animation:msgIn .25s ease-out both}
-.stream-cursor::after{content:'▍';color:#3b82f6;animation:blink .9s steps(1) infinite}
-@keyframes blink{50%{opacity:0}}
-.tree-group.open>.tree-row .chev{transform:rotate(90deg)}
-.chev{transition:transform .2s ease}
-input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!important}
-</style>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 h-screen overflow-hidden antialiased">
-<div class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs py-1.5 px-4 text-center">
-  <b>md-vault:</b> AI 原生工作台
-  <button id="theme-toggle" aria-label="切换深色/浅色模式" class="ml-3 text-white/90 hover:text-white border border-white/30 rounded px-2 py-0.5 text-xs">🌙 深色</button>
-</div>
-<div class="flex h-[calc(100vh-2.25rem)]">
+<div class="flex h-screen">
 <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 flex flex-col transform transition-transform duration-300 -translate-x-full lg:translate-x-0">
 <div class="flex items-center gap-2.5 px-4 h-14 border-b border-gray-200 dark:border-gray-800 shrink-0">
 <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-sm">M</div>
@@ -57,42 +37,50 @@ input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!i
 </nav>
 </aside>
 <div id="overlay" class="fixed inset-0 bg-black/30 z-30 hidden"></div>
-<main class="flex-1 flex flex-col overflow-hidden relative">
+<div class="flex-1 flex overflow-hidden relative">
+<main id="main-area" class="flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
 <div class="flex items-center gap-3 px-4 h-14 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 shrink-0">
 <button id="hamburger" aria-label="打开侧边栏" class="lg:hidden text-gray-500 hover:text-gray-700">☰</button>
 <span id="current-file" class="font-medium text-sm flex-1 truncate">未选择文档</span>
 <div class="flex rounded-lg overflow-hidden border border-gray-300 dark:border-gray-700 text-xs">
-<button id="btn-edit" class="px-3 py-1.5 bg-blue-600 text-white font-medium">✏️ 编辑</button>
-<button id="btn-preview" class="px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">👁 预览</button>
+<button id="btn-edit" class="px-3 py-1.5 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700">✏️ 编辑</button>
+<button id="btn-preview" class="px-3 py-1.5 bg-blue-600 text-white font-medium">👁 预览</button>
 </div>
 <button id="btn-download" class="text-xs px-3 py-1.5 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800">↓ 下载</button>
 <button id="btn-save" class="text-xs px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700">保存</button>
+<button id="theme-toggle" aria-label="切换深色/浅色模式" class="text-xs px-2.5 py-1.5 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800">🌙</button>
 </div>
-<div class="flex-1 overflow-y-auto p-4 md:p-6 relative">
-<textarea id="editor" class="w-full h-full border-0 bg-transparent resize-none focus:outline-none font-mono text-sm leading-relaxed" placeholder="从左侧选择一个文档..."></textarea>
-<div id="preview" class="hidden w-full h-full max-w-none"></div>
+<div class="flex-1 overflow-y-auto p-4 md:p-6">
+<div class="max-w-[720px] mx-auto min-h-full">
+<textarea id="editor" class="hidden w-full min-h-full border-0 bg-transparent resize-none focus:outline-none font-mono text-sm leading-relaxed" placeholder="从左侧选择一个文档..."></textarea>
+<div id="preview" class="w-full min-h-full"></div>
 </div>
-<button id="ai-btn" aria-label="打开 AI 助手" class="absolute bottom-5 right-5 w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white text-2xl shadow-lg hover:scale-110 transition-transform z-20 flex items-center justify-center">🤖</button>
-<div id="ai-drawer" class="shrink-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 flex flex-col">
-<div class="flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+</div>
+</main>
+<button id="ai-btn" aria-label="打开/关闭 AI 助手" class="shrink-0 w-8 h-16 self-center my-auto bg-gray-100 dark:bg-gray-800 border border-r-0 border-gray-200 dark:border-gray-700 rounded-l-lg hover:bg-blue-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-center text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 relative z-20">
+<svg id="ai-chevron" class="w-5 h-5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
+</button>
+<div id="ai-panel" class="bg-white dark:bg-gray-900 border-l border-gray-200 dark:border-gray-700 flex flex-col">
+<div class="flex items-center gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-800 shrink-0">
 <div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white">🤖</div>
 <div class="flex-1"><div class="font-semibold text-sm">AI 助手</div><div id="ai-status" class="text-xs text-gray-400">就绪</div></div>
 <span id="ai-mode" class="text-xs px-2.5 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-md cursor-pointer font-medium">当前文档</span>
+<button id="ai-close" aria-label="关闭 AI 助手" class="text-gray-400 hover:text-gray-600">✕</button>
 </div>
 <div id="ai-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
-<div class="p-3 border-t border-gray-200 dark:border-gray-800">
+<div class="p-3 border-t border-gray-200 dark:border-gray-800 shrink-0">
 <div class="flex items-end gap-2 bg-gray-100 dark:bg-gray-800 rounded-xl p-3 focus-within:ring-2 focus-within:ring-blue-500/40">
 <textarea id="ai-input" rows="1" class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm" placeholder="输入消息，Enter 发送..."></textarea>
 <button id="ai-send" aria-label="发送消息" class="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center shrink-0">↑</button>
 </div>
 </div>
 </div>
-</main>
+</div>
 </div>
 <script>
 (function(){
 var currentPath=null;
-var previewMode=false;
+var previewMode=true;
 var btnEdit=document.getElementById('btn-edit'),btnPrev=document.getElementById('btn-preview');
 var editor=document.getElementById('editor'),preview=document.getElementById('preview');
 var treeEl=document.getElementById('file-tree');
@@ -159,7 +147,7 @@ function buildTree(files){
       html+='<svg class="chev w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
       html+='<span>📁</span><span class="font-medium">'+esc(dn)+'</span><span class="ml-auto text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">'+count+'</span>';
       html+='</button>';
-      html+='<div class="tree-children ml-4 pl-3 border-l border-gray-200 dark:border-gray-800 space-y-0.5 py-0.5">';
+      html+='<div class="tree-children ml-2 pl-1.5 border-l border-gray-200 dark:border-gray-800 space-y-0.5 py-0.5">';
       html+=renderNode(child,depth+1);
       html+='</div></div>';
     });
@@ -255,12 +243,23 @@ function applyTheme(dark){document.getElementById('hljs-light').disabled=dark;do
 document.getElementById('theme-toggle').addEventListener('click',function(){
   var h=document.documentElement;var d=h.classList.contains('dark');
   h.classList.toggle('dark');applyTheme(!d);
-  this.textContent=d?'🌙 深色':'☀️ 浅色';
+  this.textContent=d?'🌙':'☀️';
 });
 applyTheme(document.documentElement.classList.contains('dark'));
 
 /* ---------- AI chat (SSE streaming) ---------- */
-document.getElementById('ai-btn').addEventListener('click',function(){document.getElementById('ai-drawer').classList.toggle('open')});
+var aiBtn=document.getElementById('ai-btn'),aiPanel=document.getElementById('ai-panel');
+var mainArea=document.getElementById('main-area');
+var aiChevron=document.getElementById('ai-chevron');
+function toggleAI(open){
+  aiPanel.classList.toggle('open',open);
+  mainArea.style.paddingRight=open?'40%':'0';
+  aiChevron.style.transform=open?'rotate(180deg)':'';
+  if(open){aiBtn.classList.add('bg-blue-50','dark:bg-blue-900/30','border-blue-200','dark:border-blue-800','text-blue-600','dark:text-blue-400')}
+  else{aiBtn.classList.remove('bg-blue-50','dark:bg-blue-900/30','border-blue-200','dark:border-blue-800','text-blue-600','dark:text-blue-400')}
+}
+aiBtn.addEventListener('click',function(){toggleAI(!aiPanel.classList.contains('open'))});
+document.getElementById('ai-close').addEventListener('click',function(){toggleAI(false)});
 var aiMode='当前文档';
 document.getElementById('ai-mode').addEventListener('click',function(){
   aiMode=aiMode==='当前文档'?'全库搜索':'当前文档';
