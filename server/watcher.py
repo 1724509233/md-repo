@@ -33,7 +33,7 @@ class _VaultHandler(FileSystemEventHandler):
         except (ValueError, OSError):
             return None
 
-    def _index(self, path: str) -> None:
+    def _index(self, path: str, action: str = "modified") -> None:
         rel = self._rel(path)
         if rel is None:
             return
@@ -44,28 +44,30 @@ class _VaultHandler(FileSystemEventHandler):
         digest = hashlib.sha256(content).hexdigest()
         mtime = Path(path).stat().st_mtime
         with self._lock:
-            from .db import upsert_file
+            from .db import upsert_file, log_change
 
             upsert_file(self._conn, rel, digest, mtime)
-        logger.info("indexed %s", rel)
+            log_change(self._conn, rel, action)
+        logger.info("indexed %s (%s)", rel, action)
 
     def _remove(self, path: str) -> None:
         rel = self._rel(path)
         if rel is None:
             return
         with self._lock:
-            from .db import delete_file
+            from .db import delete_file, log_change
 
             delete_file(self._conn, rel)
+            log_change(self._conn, rel, "deleted")
         logger.info("removed %s", rel)
 
     def on_created(self, event) -> None:
         if not event.is_directory:
-            self._index(event.src_path)
+            self._index(event.src_path, action="created")
 
     def on_modified(self, event) -> None:
         if not event.is_directory:
-            self._index(event.src_path)
+            self._index(event.src_path, action="modified")
 
     def on_deleted(self, event) -> None:
         if not event.is_directory:

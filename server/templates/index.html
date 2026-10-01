@@ -185,6 +185,37 @@ async function loadDocs(){
   }catch(e){treeEl.innerHTML='<div class="text-red-400 text-xs px-2 py-3">加载失败: '+esc(e.message)+'</div>'}
 }
 
+/* ---------- change polling ---------- */
+var lastChangeTs = Date.now() / 1000;
+
+async function pollChanges(){
+  try{
+    var res = await fetch('/api/docs/changes?since=' + lastChangeTs);
+    var changes = await res.json();
+    if(!changes.length) return;
+    for(var i=0;i<changes.length;i++){
+      lastChangeTs = changes[i].ts;
+    }
+    loadDocs();
+    var curAffected = changes.some(function(c){
+      return c.path === currentPath || (c.action==='moved' && c.from_path===currentPath);
+    });
+    if(curAffected && currentPath){
+      var stillExists = changes.every(function(c){
+        return !(c.path===currentPath && c.action==='deleted');
+      });
+      if(!stillExists){
+        editor.value='';
+        document.getElementById('current-file').textContent='(已删除)';
+      } else {
+        openDoc(currentPath);
+      }
+    }
+  }catch(e){}
+}
+
+setInterval(pollChanges, 10000);
+
 /* ---------- doc load / save ---------- */
 async function openDoc(path){
   currentPath=path;
@@ -332,6 +363,7 @@ async function sendChat(){
                 break;
               case 'tool_result':
                 updateToolCard(evt.id,evt.rejected?'rejected':(evt.error?'error':'done'),evt.result);
+                pollChanges();
                 break;
               case 'done':
                 finishTurn(turn);

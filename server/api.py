@@ -287,6 +287,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid path")
         file_path = vault_dir / rel
         content = await request.body()
+        existed = file_path.is_file()
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(content)
@@ -295,6 +296,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         digest = _hash_bytes(content)
         mtime = file_path.stat().st_mtime
         upsert_file(db_conn, rel.as_posix(), digest, mtime)
+        from .db import log_change
+
+        log_change(db_conn, rel.as_posix(), "modified" if existed else "created")
         return {"ok": True}
+
+    @app.get("/api/docs/changes")
+    async def get_changes(since: float = 0.0) -> list[dict]:
+        from .db import get_changes as _get_changes
+
+        return _get_changes(db_conn, since=since)
 
     return app
