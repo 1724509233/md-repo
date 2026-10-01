@@ -8,10 +8,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.templating import Jinja2Templates
 
 from .db import get_all_files, upsert_file
 from .sync import compare_files
-from .web import get_web_html
 
 # In-memory sync lock: {"locked_at": float} or None
 _sync_lock: dict | None = None
@@ -54,10 +54,11 @@ def _hash_bytes(content: bytes) -> str:
 def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     """Create the FastAPI application."""
     app = FastAPI(title="md-sync server")
+    templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
     @app.get("/", response_class=HTMLResponse)
-    async def index() -> HTMLResponse:
-        return HTMLResponse(get_web_html())
+    async def index(request: Request) -> HTMLResponse:
+        return templates.TemplateResponse("index.html", {"request": request})
 
     @app.get("/api/health")
     async def health() -> dict:
