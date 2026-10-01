@@ -237,11 +237,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 fp = vault_dir / rel
                 if fp.is_file():
                     content = fp.read_bytes().decode("utf-8", errors="replace")
-                    doc_msg = {"role": "system", "content": f"Current document:\n\n{content}"}
+                    doc_msg = {"role": "system", "content": f"Current document (path: {rel.as_posix()}):\n\n{content}"}
                     # Remove any previous doc context messages
                     session["messages"] = [
                         m for m in session["messages"]
-                        if not (m.get("role") == "system" and m.get("content", "").startswith("Current document:"))
+                        if not (m.get("role") == "system" and m.get("content", "").startswith("Current document"))
                     ]
                     session["messages"].append(doc_msg)
 
