@@ -186,7 +186,7 @@ async function loadDocs(){
 }
 
 /* ---------- change polling ---------- */
-var lastChangeTs = Date.now() / 1000;
+var lastChangeTs = 0;
 
 async function pollChanges(){
   try{

@@ -44,10 +44,6 @@ def main(argv: list[str] | None = None) -> None:
     db_path = vault_dir / ".sync" / "index.db"
     conn = init_db(db_path)
 
-    from .db import clear_changes
-
-    clear_changes(conn)
-
     # First run: build the initial index if the db is empty
     cursor = conn.execute("SELECT COUNT(*) FROM files")
     if cursor.fetchone()[0] == 0:
