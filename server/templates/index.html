@@ -132,42 +132,55 @@ function renderPreview(){
   }
 }
 
-/* ---------- file tree ---------- */
+/* ---------- file tree (recursive) ---------- */
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function buildTree(files){
+  var root={dirs:{},files:[]};
+  files.forEach(function(f){
+    var parts=f.path.split('/');
+    var node=root;
+    for(var i=0;i<parts.length-1;i++){
+      if(!node.dirs[parts[i]])node.dirs[parts[i]]={dirs:{},files:[]};
+      node=node.dirs[parts[i]];
+    }
+    var name=parts[parts.length-1];
+    if(name.toLowerCase().endsWith('.md'))name=name.slice(0,-3);
+    node.files.push({path:f.path,name:name});
+  });
+  function renderNode(node,depth){
+    var html='';
+    var dirNames=Object.keys(node.dirs).sort();
+    dirNames.forEach(function(dn){
+      var child=node.dirs[dn];
+      var count=0;
+      (function c(n){n.files.forEach(function(){count++});Object.keys(n.dirs).forEach(function(k){c(n.dirs[k])})})(child);
+      html+='<div class="tree-group open">';
+      html+='<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-left">';
+      html+='<svg class="chev w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
+      html+='<span>📁</span><span class="font-medium">'+esc(dn)+'</span><span class="ml-auto text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">'+count+'</span>';
+      html+='</button>';
+      html+='<div class="tree-children ml-4 pl-3 border-l border-gray-200 dark:border-gray-800 space-y-0.5 py-0.5">';
+      html+=renderNode(child,depth+1);
+      html+='</div></div>';
+    });
+    node.files.sort(function(a,b){return a.name<b.name?-1:1}).forEach(function(it){
+      html+='<button class="tree-file w-full text-left px-2 py-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300" data-path="'+esc(it.path)+'">'+esc(it.name)+'</button>';
+    });
+    return html;
+  }
+  return renderNode(root,0);
+}
 async function loadDocs(){
   try{
     var res=await fetch('/api/docs');
     var files=await res.json();
-    var groups={};
-    files.forEach(function(f){
-      var parts=f.path.split('/');
-      var dir=parts.length>1?parts[0]:'(根目录)';
-      var name=parts[parts.length-1];
-      if(name.toLowerCase().endsWith('.md'))name=name.slice(0,-3);
-      if(!groups[dir])groups[dir]=[];
-      groups[dir].push({path:f.path,name:name});
-    });
-    var html='';
-    Object.keys(groups).sort().forEach(function(dir){
-      var items=groups[dir].sort(function(a,b){return a.name<b.name?-1:1});
-      html+='<div class="tree-group open" data-group="'+esc(dir)+'">';
-      html+='<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-left">';
-      html+='<svg class="chev w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
-      html+='<span>📁</span><span class="font-medium">'+esc(dir)+'</span><span class="ml-auto text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">'+items.length+'</span>';
-      html+='</button>';
-      html+='<div class="tree-children ml-4 pl-3 border-l border-gray-200 dark:border-gray-800 space-y-0.5 py-0.5">';
-      items.forEach(function(it){
-        html+='<button class="tree-file w-full text-left px-2 py-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300" data-path="'+esc(it.path)+'">'+esc(it.name)+'</button>';
-      });
-      html+='</div></div>';
-    });
-    treeEl.innerHTML=html;
+    treeEl.innerHTML=buildTree(files);
     treeEl.querySelectorAll('.tree-row').forEach(function(btn){
       btn.addEventListener('click',function(){
         var g=btn.closest('.tree-group');
         if(!g)return;
         g.classList.toggle('open');
-        var c=g.querySelector('.tree-children');
+        var c=g.querySelector(':scope > .tree-children');
         if(c)c.classList.toggle('hidden');
       });
     });
