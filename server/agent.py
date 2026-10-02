@@ -172,20 +172,15 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_bytes(args["content"].encode("utf-8"))
         if db_conn:
-            digest = hashlib.sha256(args["content"].encode()).hexdigest()
-            from .db import upsert_file, log_change, fts_index_file
+            from .db import apply_change
 
-            upsert_file(db_conn, args["path"], digest, fp.stat().st_mtime)
-            log_change(
+            apply_change(
                 db_conn,
+                vault_dir,
                 args["path"],
                 "modified" if existed else "created",
                 source="agent",
             )
-            fts_index_file(db_conn, vault_dir, args["path"])
-            from .db import graph_extract_file
-
-            graph_extract_file(db_conn, vault_dir, args["path"])
         return f"Saved: {args['path']} ({len(args['content'])} chars)"
 
     elif name == "delete_doc":
@@ -194,14 +189,9 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             return f"Error: file not found: {args['path']}"
         fp.unlink()
         if db_conn:
-            from .db import delete_file, log_change, fts_delete
+            from .db import apply_change
 
-            delete_file(db_conn, args["path"])
-            log_change(db_conn, args["path"], "deleted", source="agent")
-            fts_delete(db_conn, args["path"])
-            from .db import graph_delete_file
-
-            graph_delete_file(db_conn, args["path"])
+            apply_change(db_conn, vault_dir, args["path"], "deleted", source="agent")
         return f"Deleted: {args['path']}"
 
     elif name == "move_doc":
@@ -212,24 +202,16 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.rename(dst)
         if db_conn:
-            from .db import delete_file, upsert_file, log_change, fts_delete, fts_index_file
+            from .db import apply_change
 
-            delete_file(db_conn, args["from_path"])
-            digest = hashlib.sha256(dst.read_bytes()).hexdigest()
-            upsert_file(db_conn, args["to_path"], digest, dst.stat().st_mtime)
-            log_change(
+            apply_change(
                 db_conn,
+                vault_dir,
                 args["to_path"],
                 "moved",
-                from_path=args["from_path"],
                 source="agent",
+                from_path=args["from_path"],
             )
-            fts_delete(db_conn, args["from_path"])
-            fts_index_file(db_conn, vault_dir, args["to_path"])
-            from .db import graph_delete_file, graph_extract_file
-
-            graph_delete_file(db_conn, args["from_path"])
-            graph_extract_file(db_conn, vault_dir, args["to_path"])
         return f"Moved: {args['from_path']} → {args['to_path']}"
 
     elif name == "get_related_docs":

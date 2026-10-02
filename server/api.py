@@ -124,9 +124,10 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
-        mtime = file_path.stat().st_mtime
         rel_str = rel.as_posix()
-        upsert_file(db_conn, rel_str, digest, mtime)
+        from .db import apply_change
+
+        apply_change(db_conn, vault_dir, rel_str, "created", source="web")
         return {"path": rel_str, "hash": digest}
 
     @app.post("/api/sync")
@@ -311,21 +312,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        digest = _hash_bytes(content)
-        mtime = file_path.stat().st_mtime
-        upsert_file(db_conn, rel.as_posix(), digest, mtime)
-        from .db import log_change, fts_index_file
+        from .db import apply_change
 
-        log_change(
+        apply_change(
             db_conn,
+            vault_dir,
             rel.as_posix(),
             "modified" if existed else "created",
             source="web",
         )
-        fts_index_file(db_conn, vault_dir, rel.as_posix())
-        from .db import graph_extract_file
-
-        graph_extract_file(db_conn, vault_dir, rel.as_posix())
         return {"ok": True}
 
     return app

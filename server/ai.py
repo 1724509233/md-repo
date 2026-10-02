@@ -13,12 +13,17 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _get_or_open_conn(vault: Path):
-    """Open a read-only connection to the vault's index db, or None if absent."""
+    """Open a read-write connection to the vault's index db, or None if absent.
+
+    Read-write is required because the lazy rebuild path (empty FTS table on
+    first run) must be able to write into ``docs_fts``.
+    """
     db_path = vault / ".sync" / "index.db"
     if not db_path.is_file():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+        conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
         return conn
     except sqlite3.Error:
         return None
@@ -94,15 +99,11 @@ def rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
     if not results:
         return []
 
-    # Enrich snippets with actual file content context
+    # The FTS snippet() output already carries the matched context with
+    # [highlight] markers; strip the markers for display instead of re-reading
+    # each file from disk.
     for r in results:
-        try:
-            fp = vault / r["path"]
-            if fp.is_file():
-                content = fp.read_bytes().decode("utf-8", errors="replace")
-                r["snippet"] = content[:200].replace("\n", " ")
-        except OSError:
-            pass
+        r["snippet"] = r["snippet"].replace("[", "").replace("]", "")
 
     return results
 

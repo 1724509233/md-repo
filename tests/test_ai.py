@@ -85,9 +85,16 @@ def test_rag_search_basic(tmp_path):
         b"# Conda Guide\n\nChannel conflicts, lock files, environment management."
     )
 
+    # "YARA pattern detection" is AND-joined: only skill-scanner.md contains
+    # all three terms (yara, pattern, detection). llm-plan.md has pattern and
+    # detection but not yara.
     results = rag_search(str(tmp_path), "YARA pattern detection", top_k=2)
-    assert len(results) == 2
+    assert len(results) == 1
     assert "skill-scanner" in results[0]["path"]
+
+    # A query with terms present in multiple docs returns multiple results.
+    results = rag_search(str(tmp_path), "pattern detection", top_k=2)
+    assert len(results) == 2
 
 
 def test_rag_search_no_match(tmp_path):
@@ -130,6 +137,19 @@ def test_rag_search_chinese(tmp_path):
     results = rag_search(str(tmp_path), "路由冲突", top_k=3)
     assert len(results) >= 1
     assert "fastapi" in results[0]["path"]
+
+
+def test_rag_search_special_chars(tmp_path):
+    """FTS search handles queries with quotes and parens without crashing."""
+    _setup_fts_db(tmp_path)
+
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "yara.md").write_bytes(
+        b"# YARA\n\nYARA rules and quoted strings with (parens) and OR logic."
+    )
+
+    results = rag_search(str(tmp_path), 'YARA "quoted" OR (a AND b)', top_k=3)
+    assert isinstance(results, list)
 
 
 import json

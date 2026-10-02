@@ -1,9 +1,16 @@
 """SQLite index operations for the file hash database."""
 from __future__ import annotations
 
+import hashlib
 import sqlite3
+import threading
 import time
 from pathlib import Path
+
+# Global lock guarding all mutations of the shared db connection. The same
+# connection is used from the watchdog thread and the async event loop, so
+# every write path must hold this lock to avoid interleaved transactions.
+_db_lock = threading.Lock()
 
 # Map legacy action names (old file_changes.action) to new op names (change_log.op).
 _ACTION_TO_OP = {
@@ -202,13 +209,24 @@ def fts_delete(conn: sqlite3.Connection, path: str) -> None:
 def fts_search(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[dict]:
     """Search the FTS index. query should be pre-tokenized (jieba-cut, space-joined).
 
-    Returns list of {"path": str, "score": float, "snippet": str}.
+    Each whitespace-separated token is quoted as a literal FTS5 string so that
+    special characters (quotes, parens, operators) cannot inject FTS5 query
+    syntax. Returns list of {"path": str, "score": float, "snippet": str}.
     """
+    tokens = [t for t in query.split() if t.strip()]
+    if not tokens:
+        return []
+    # Quote each token as a literal FTS5 string so special characters (quotes,
+    # parens, operators) cannot inject FTS5 query syntax. Strip embedded double
+    # quotes (which would terminate the quoted string) and join with explicit
+    # AND to preserve the implicit-AND semantics of a plain multi-word query.
+    quoted = ['"' + t.replace('"', "") + '"' for t in tokens]
+    safe_query = " AND ".join(quoted)
     try:
         cursor = conn.execute(
             "SELECT path, snippet(docs_fts, 2, '[', ']', '...', 64), rank "
             "FROM docs_fts WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
-            (query, top_k),
+            (safe_query, top_k),
         )
     except sqlite3.OperationalError:
         return []
@@ -242,24 +260,33 @@ def _extract_title(content: str) -> str:
 
 
 def fts_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
-    """Full rebuild of FTS index from vault. Returns count of indexed files."""
+    """Full rebuild of FTS index from vault. Returns count of indexed files.
+
+    Runs inside a single transaction: if any insert fails, the DELETE is rolled
+    back so the index is never left empty.
+    """
     import jieba
 
-    conn.execute("DELETE FROM docs_fts")
-    count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
-        rel = md_file.relative_to(vault_dir).as_posix()
-        content = md_file.read_bytes().decode("utf-8", errors="replace")
-        title = _extract_title(content)
-        tokens = " ".join(jieba.cut(content))
-        conn.execute(
-            "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
-            (rel, title, tokens),
-        )
-        count += 1
-    conn.commit()
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM docs_fts")
+        count = 0
+        for md_file in vault_dir.rglob("*.md"):
+            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+                continue
+            rel = md_file.relative_to(vault_dir).as_posix()
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+            title = _extract_title(content)
+            tokens = " ".join(jieba.cut(content))
+            conn.execute(
+                "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
+                (rel, title, tokens),
+            )
+            count += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     return count
 
 
@@ -370,11 +397,13 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
 
 
 def graph_delete_file(conn: sqlite3.Connection, path: str) -> None:
-    """Remove all edges where this document is the source."""
+    """Remove all edges where this document is src or dst, and the entity itself."""
     cursor = conn.execute("SELECT id FROM entities WHERE name = ? AND type = 'doc'", (path,))
     row = cursor.fetchone()
     if row:
-        conn.execute("DELETE FROM edges WHERE src_id = ?", (row[0],))
+        doc_id = row[0]
+        conn.execute("DELETE FROM edges WHERE src_id = ? OR dst_id = ?", (doc_id, doc_id))
+        conn.execute("DELETE FROM entities WHERE id = ?", (doc_id,))
     conn.commit()
 
 
@@ -393,68 +422,127 @@ def graph_get_backlinks(conn: sqlite3.Connection, path: str) -> list[dict]:
 
 
 def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> list[dict]:
-    """Get related documents within N hops."""
+    """Get related documents within N hops (capped at 3).
+
+    Each BFS level issues a single batched query over the whole frontier
+    instead of one query per node.
+    """
+    hops = min(hops, 3)
     if hops < 1:
         return []
 
-    # Get direct connections
-    cursor = conn.execute(
-        """
-        SELECT dst.name, ed.type FROM edges ed
-        JOIN entities src ON src.id = ed.src_id
-        JOIN entities dst ON dst.id = ed.dst_id
-        WHERE src.name = ? AND dst.type = 'doc'
-        UNION
-        SELECT src.name, ed.type FROM edges ed
-        JOIN entities src ON src.id = ed.src_id
-        JOIN entities dst ON dst.id = ed.dst_id
-        WHERE dst.name = ? AND src.type = 'doc'
-        """,
-        (path, path),
-    )
-    results = [{"path": row[0], "type": row[1]} for row in cursor.fetchall() if row[0] != path]
+    def _get_neighbors(paths: list[str]) -> list[tuple[str, str]]:
+        if not paths:
+            return []
+        placeholders = ",".join("?" * len(paths))
+        cursor = conn.execute(
+            f"""
+            SELECT dst.name, ed.type FROM edges ed
+            JOIN entities src ON src.id = ed.src_id
+            JOIN entities dst ON dst.id = ed.dst_id
+            WHERE src.name IN ({placeholders}) AND dst.type = 'doc'
+            UNION
+            SELECT src.name, ed.type FROM edges ed
+            JOIN entities src ON src.id = ed.src_id
+            JOIN entities dst ON dst.id = ed.dst_id
+            WHERE dst.name IN ({placeholders}) AND src.type = 'doc'
+            """,
+            paths + paths,
+        )
+        return [(row[0], row[1]) for row in cursor.fetchall()]
 
-    # For hops > 1, expand (simple BFS)
-    if hops > 1:
-        seen = {path} | {r["path"] for r in results}
-        current = [r["path"] for r in results]
-        for _ in range(hops - 1):
-            next_level = []
-            for p in current:
-                cursor2 = conn.execute(
-                    """
-                    SELECT dst.name, ed.type FROM edges ed
-                    JOIN entities src ON src.id = ed.src_id
-                    JOIN entities dst ON dst.id = ed.dst_id
-                    WHERE src.name = ? AND dst.type = 'doc'
-                    UNION
-                    SELECT src.name, ed.type FROM edges ed
-                    JOIN entities src ON src.id = ed.src_id
-                    JOIN entities dst ON dst.id = ed.dst_id
-                    WHERE dst.name = ? AND src.type = 'doc'
-                    """,
-                    (p, p),
-                )
-                for row in cursor2.fetchall():
-                    if row[0] not in seen:
-                        seen.add(row[0])
-                        next_level.append(row[0])
-                        results.append({"path": row[0], "type": row[1]})
-            current = next_level
+    seen = {path}
+    results = []
+    current = [path]
+
+    for _ in range(hops):
+        neighbors = _get_neighbors(current)
+        next_level = []
+        for name, etype in neighbors:
+            if name not in seen and name != path:
+                seen.add(name)
+                results.append({"path": name, "type": etype})
+                next_level.append(name)
+        current = next_level
+        if not current:
+            break
 
     return results
 
 
 def graph_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
-    """Full rebuild of graph from vault. Returns count of processed files."""
-    conn.execute("DELETE FROM edges")
-    conn.execute("DELETE FROM entities")
-    count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
-        rel = md_file.relative_to(vault_dir).as_posix()
-        graph_extract_file(conn, vault_dir, rel)
-        count += 1
-    conn.commit()
+    """Full rebuild of graph from vault. Returns count of processed files.
+
+    Runs inside a single transaction: if any extraction fails, the DELETEs are
+    rolled back so the graph is never left empty.
+    """
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM edges")
+        conn.execute("DELETE FROM entities")
+        count = 0
+        for md_file in vault_dir.rglob("*.md"):
+            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+                continue
+            rel = md_file.relative_to(vault_dir).as_posix()
+            graph_extract_file(conn, vault_dir, rel)
+            count += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     return count
+
+
+def apply_change(
+    conn: sqlite3.Connection,
+    vault_dir: Path,
+    path: str,
+    action: str,
+    source: str = "unknown",
+    from_path: str = "",
+    new_hash: str = "",
+) -> None:
+    """Centralized change application: upsert/delete + log_change + FTS + graph.
+
+    Thread-safe via the module-level ``_db_lock``. Replaces the duplicated
+    upsert/log/fts/graph logic that previously lived in agent.py, api.py and
+    watcher.py.
+    """
+    with _db_lock:
+        if action in ("created", "modified", "create", "update"):
+            fp = vault_dir / path
+            if fp.is_file():
+                content = fp.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+                mtime = fp.stat().st_mtime
+                upsert_file(conn, path, digest, mtime)
+            log_change(conn, path, action, from_path=from_path, source=source, new_hash=new_hash)
+            fts_index_file(conn, vault_dir, path)
+            graph_extract_file(conn, vault_dir, path)
+        elif action in ("deleted", "delete"):
+            delete_file(conn, path)
+            log_change(conn, path, action, source=source)
+            fts_delete(conn, path)
+            graph_delete_file(conn, path)
+        elif action in ("moved", "move"):
+            src = vault_dir / from_path
+            dst = vault_dir / path
+            if src.is_file():
+                content = src.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+            elif dst.is_file():
+                content = dst.read_bytes()
+                digest = hashlib.sha256(content).hexdigest()
+            else:
+                digest = ""
+            if dst.is_file():
+                upsert_file(conn, path, digest, dst.stat().st_mtime)
+            if from_path:
+                delete_file(conn, from_path)
+            log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
+            if from_path:
+                fts_delete(conn, from_path)
+                graph_delete_file(conn, from_path)
+            fts_index_file(conn, vault_dir, path)
+            graph_extract_file(conn, vault_dir, path)

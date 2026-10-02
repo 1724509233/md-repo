@@ -1,9 +1,7 @@
 """Filesystem watcher: auto-index vault .md files on change."""
 from __future__ import annotations
 
-import hashlib
 import logging
-import threading
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
@@ -19,7 +17,6 @@ class _VaultHandler(FileSystemEventHandler):
         super().__init__()
         self._vault = vault_dir
         self._conn = conn
-        self._lock = threading.Lock()
 
     def _rel(self, path: str) -> str | None:
         try:
@@ -38,35 +35,21 @@ class _VaultHandler(FileSystemEventHandler):
         if rel is None:
             return
         try:
-            content = Path(path).read_bytes()
+            Path(path).read_bytes()
         except OSError:
             return
-        digest = hashlib.sha256(content).hexdigest()
-        mtime = Path(path).stat().st_mtime
-        with self._lock:
-            from .db import upsert_file, log_change, fts_index_file
+        from .db import apply_change
 
-            upsert_file(self._conn, rel, digest, mtime)
-            log_change(self._conn, rel, action, source="watchdog")
-            fts_index_file(self._conn, self._vault, rel)
-            from .db import graph_extract_file
-
-            graph_extract_file(self._conn, self._vault, rel)
+        apply_change(self._conn, self._vault, rel, action, source="watchdog")
         logger.info("indexed %s (%s)", rel, action)
 
     def _remove(self, path: str) -> None:
         rel = self._rel(path)
         if rel is None:
             return
-        with self._lock:
-            from .db import delete_file, log_change, fts_delete
+        from .db import apply_change
 
-            delete_file(self._conn, rel)
-            log_change(self._conn, rel, "deleted", source="watchdog")
-            fts_delete(self._conn, rel)
-            from .db import graph_delete_file
-
-            graph_delete_file(self._conn, rel)
+        apply_change(self._conn, self._vault, rel, "deleted", source="watchdog")
         logger.info("removed %s", rel)
 
     def on_created(self, event) -> None:
