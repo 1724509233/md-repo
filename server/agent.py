@@ -5,6 +5,9 @@ import json
 import logging
 from pathlib import Path
 
+import openai
+from pydantic import BaseModel, Field
+
 logger = logging.getLogger("md-vault.agent")
 
 
@@ -59,125 +62,68 @@ def sse(event_type: str, data: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **data}, ensure_ascii=False)}\n\n"
 
 
+class ReadDoc(BaseModel):
+    """Read a markdown document. By default returns the full content. Use offset/limit to read a specific line range (e.g. after an edit failure, re-read the affected section)."""
+    path: str = Field(description="Relative path, e.g. 'notes/Skill-Scanner.md'")
+    offset: int = Field(default=1, description="Line number to start from (1-indexed). Default 1.")
+    limit: int | None = Field(default=None, description="Number of lines to read. Default: all remaining lines.")
+
+
+class SearchDocs(BaseModel):
+    """Full-text search using FTS5 + jieba. Supports Chinese and English keywords. Returns matching paths with snippets."""
+    query: str = Field(description="Search keywords")
+    top_k: int = Field(default=5, description="Number of results")
+
+
+class ListFiles(BaseModel):
+    """List all .md files in the vault. Returns relative paths only (no size or date metadata)."""
+    dir: str = Field(default="", description="Subdirectory path, defaults to root")
+
+
+class WriteDoc(BaseModel):
+    """Create a new document or fully overwrite an existing one. Use edit_doc for small changes instead."""
+    path: str = Field(description="Relative path")
+    content: str = Field(description="Full document content (markdown)")
+
+
+class DeleteDoc(BaseModel):
+    """Permanently delete a document. Irreversible — confirm with user before calling."""
+    path: str = Field(description="Relative path")
+
+
+class MoveDoc(BaseModel):
+    """Move or rename a document. Changes the path, which may break links in other documents. Check get_related_docs first."""
+    from_path: str = Field(description="Original path")
+    to_path: str = Field(description="Destination path")
+
+
+class EditDoc(BaseModel):
+    """Replace exact text in a document. The old_string must match exactly once in the file. Use this for small edits instead of rewriting the whole document."""
+    path: str = Field(description="Relative path")
+    old_string: str = Field(description="Exact text to find (must be unique in the file)")
+    new_string: str = Field(description="Replacement text (empty string deletes the matched text)")
+
+
+class GetRelatedDocs(BaseModel):
+    """Get documents linked to the given document via [[wikilinks]], #tags, or frontmatter related field. Use for relationship/exploration queries."""
+    path: str = Field(description="Document path, e.g. 'notes/fastapi.md'")
+
+
+def _tool(model: type[BaseModel], name: str) -> dict:
+    t = openai.pydantic_function_tool(model, name=name)
+    t["function"].pop("strict", None)
+    return t
+
+
 TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "read_doc",
-            "description": "Read a markdown document. By default returns the full content. Use offset/limit to read a specific line range (e.g. after an edit failure, re-read the affected section).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path, e.g. 'notes/Skill-Scanner.md'"},
-                    "offset": {"type": "integer", "description": "Line number to start from (1-indexed). Default 1.", "default": 1},
-                    "limit": {"type": "integer", "description": "Number of lines to read. Default: all remaining lines."},
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_docs",
-            "description": "Full-text search using FTS5 + jieba. Supports Chinese and English keywords. Returns matching paths with snippets.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Search keywords"},
-                    "top_k": {"type": "integer", "description": "Number of results", "default": 5},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_files",
-            "description": "List all .md files in the vault. Returns relative paths only (no size or date metadata).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "dir": {"type": "string", "description": "Subdirectory path, defaults to root"}
-                },
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "write_doc",
-            "description": "Create a new document or fully overwrite an existing one. Use edit_doc for small changes instead.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path"},
-                    "content": {"type": "string", "description": "Full document content (markdown)"},
-                },
-                "required": ["path", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "delete_doc",
-            "description": "Permanently delete a document. Irreversible — confirm with user before calling.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path"}
-                },
-                "required": ["path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "move_doc",
-            "description": "Move or rename a document. Changes the path, which may break links in other documents. Check get_related_docs first.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "from_path": {"type": "string", "description": "Original path"},
-                    "to_path": {"type": "string", "description": "Destination path"},
-                },
-                "required": ["from_path", "to_path"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "edit_doc",
-            "description": "Replace exact text in a document. The old_string must match exactly once in the file. Use this for small edits instead of rewriting the whole document.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Relative path"},
-                    "old_string": {"type": "string", "description": "Exact text to find (must be unique in the file)"},
-                    "new_string": {"type": "string", "description": "Replacement text (empty string deletes the matched text)"},
-                },
-                "required": ["path", "old_string", "new_string"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_related_docs",
-            "description": "Get documents linked to the given document via [[wikilinks]], #tags, or frontmatter related field. Use for relationship/exploration queries.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Document path, e.g. 'notes/fastapi.md'"}
-                },
-                "required": ["path"],
-            },
-        },
-    },
+    _tool(ReadDoc, "read_doc"),
+    _tool(SearchDocs, "search_docs"),
+    _tool(ListFiles, "list_files"),
+    _tool(WriteDoc, "write_doc"),
+    _tool(DeleteDoc, "delete_doc"),
+    _tool(MoveDoc, "move_doc"),
+    _tool(EditDoc, "edit_doc"),
+    _tool(GetRelatedDocs, "get_related_docs"),
 ]
 
 READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs"}
