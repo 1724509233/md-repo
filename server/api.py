@@ -251,20 +251,28 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         session = _agent_sessions[session_id]
         session["last_active"] = time.time()
 
-        # Add current doc context if provided (replace previous doc context to avoid duplication)
+        # Inject current doc context: one-line path + change signal (not full content)
         if doc_path:
             rel = _safe_rel_path(doc_path)
             if rel:
+                rel_str = rel.as_posix()
                 fp = vault_dir / rel
                 if fp.is_file():
-                    content = fp.read_bytes().decode("utf-8", errors="replace")
-                    doc_msg = {"role": "system", "content": f"Current document (path: {rel.as_posix()}):\n\n{content}"}
-                    # Remove any previous doc context messages
+                    # Check for external changes since agent last read this doc
+                    last_read_ts = session.get("last_read_ts", {}).get(rel_str, 0)
+                    warning = ""
+                    if last_read_ts > 0 and db_conn:
+                        from .db import get_changes
+                        changes = get_changes(db_conn, since=last_read_ts, path=rel_str, limit=1)
+                        if changes:
+                            warning = " ⚠ 自上次读取后有修改"
+                    doc_context = f"[当前打开: {rel_str}{warning}]"
+                    # Remove any previous doc context (user message prefix)
                     session["messages"] = [
                         m for m in session["messages"]
-                        if not (m.get("role") == "system" and m.get("content", "").startswith("Current document"))
+                        if not (m.get("role") == "user" and m.get("content", "").startswith("[当前打开:"))
                     ]
-                    session["messages"].append(doc_msg)
+                    session["messages"].append({"role": "user", "content": doc_context})
 
         session["messages"].append({"role": "user", "content": message})
 
@@ -279,6 +287,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     confirm_queue=session["confirm_queue"],
                     vault_dir=vault_dir,
                     db_conn=db_conn,
+                    last_read_ts=session.setdefault("last_read_ts", {}),
                 ):
                     yield event
             except (GeneratorExit, asyncio.CancelledError):

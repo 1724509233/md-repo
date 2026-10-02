@@ -348,7 +348,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
 from openai import AsyncOpenAI
 
 
-async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn):
+async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn, last_read_ts=None):
     """Core agent loop. Yields SSE events."""
     client = AsyncOpenAI(base_url=ai_config.base_url, api_key=ai_config.api_key)
 
@@ -445,3 +445,9 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
             logger.info("tool_result %s => %s", tc["name"], result[:500])
             yield sse("tool_result", {"id": tc["id"], "result": result})
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+            # Track last read timestamp for change detection (P6)
+            if tc["name"] == "read_doc" and not result.startswith("Error"):
+                path = args.get("path", "")
+                if path and last_read_ts is not None:
+                    last_read_ts[path] = time.time()
