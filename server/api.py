@@ -302,7 +302,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         digest = _hash_bytes(content)
         mtime = file_path.stat().st_mtime
         upsert_file(db_conn, rel.as_posix(), digest, mtime)
-        from .db import log_change
+        from .db import log_change, fts_index_file
 
         log_change(
             db_conn,
@@ -310,6 +310,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             "modified" if existed else "created",
             source="web",
         )
+        fts_index_file(db_conn, vault_dir, rel.as_posix())
         return {"ok": True}
 
     return app

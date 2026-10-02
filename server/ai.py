@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from collections import Counter
 from pathlib import Path
 
@@ -11,8 +12,20 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]", text.lower())
 
 
-def rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
-    """Keyword-based search over vault markdown files.
+def _get_or_open_conn(vault: Path):
+    """Open a read-only connection to the vault's index db, or None if absent."""
+    db_path = vault / ".sync" / "index.db"
+    if not db_path.is_file():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
+        return conn
+    except sqlite3.Error:
+        return None
+
+
+def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
+    """TF-overlap keyword search (fallback when the FTS index is unavailable).
 
     Scores each file by term frequency overlap with the query.
     Returns list of {"path": str, "score": float, "snippet": str}.
@@ -50,6 +63,48 @@ def rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:top_k]
+
+
+def rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
+    """FTS5-based search over vault markdown files.
+
+    Uses jieba for Chinese tokenization and SQLite FTS5 BM25 ranking.
+    Falls back to TF-overlap if the FTS index is empty (first run before rebuild).
+    """
+    import jieba
+    from .db import fts_search, fts_rebuild_all
+
+    vault = Path(vault_dir)
+
+    # Check if FTS index has data; if not, do a full rebuild
+    conn = _get_or_open_conn(vault)
+    if conn is None:
+        return _legacy_rag_search(vault_dir, query, top_k)
+
+    try:
+        cursor = conn.execute("SELECT count(*) FROM docs_fts")
+        if cursor.fetchone()[0] == 0:
+            fts_rebuild_all(conn, vault)
+    except Exception:
+        return _legacy_rag_search(vault_dir, query, top_k)
+
+    tokens = " ".join(jieba.cut(query))
+    results = fts_search(conn, tokens, top_k=top_k)
+
+    if not results:
+        return []
+
+    # Enrich snippets with actual file content context
+    for r in results:
+        try:
+            fp = vault / r["path"]
+            if fp.is_file():
+                content = fp.read_bytes().decode("utf-8", errors="replace")
+                r["snippet"] = content[:200].replace("\n", " ")
+        except OSError:
+            pass
+
+    return results
 
 
 import httpx

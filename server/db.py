@@ -55,6 +55,9 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_changelog_path ON change_log(path)"
     )
 
+    # Ensure the FTS5 search index exists.
+    init_fts(conn)
+
     # Migrate legacy file_changes table into change_log, then drop it.
     cursor = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='file_changes'"
@@ -157,3 +160,101 @@ def clear_changes(conn: sqlite3.Connection) -> None:
     """Remove all change events (called on server startup)."""
     conn.execute("DELETE FROM change_log")
     conn.commit()
+
+
+def init_fts(conn: sqlite3.Connection) -> None:
+    """Create the FTS5 virtual table if it doesn't exist."""
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
+            path,
+            title,
+            body,
+            tokenize='unicode61 remove_diacritics 2'
+        )
+        """
+    )
+    conn.commit()
+
+
+def fts_upsert(conn: sqlite3.Connection, path: str, title: str, body: str) -> None:
+    """Insert or replace a document in the FTS index.
+
+    body should be pre-tokenized (jieba-cut, space-joined).
+    """
+    conn.execute("DELETE FROM docs_fts WHERE path = ?", (path,))
+    conn.execute(
+        "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
+        (path, title, body),
+    )
+    conn.commit()
+
+
+def fts_delete(conn: sqlite3.Connection, path: str) -> None:
+    """Remove a document from the FTS index."""
+    conn.execute("DELETE FROM docs_fts WHERE path = ?", (path,))
+    conn.commit()
+
+
+def fts_search(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[dict]:
+    """Search the FTS index. query should be pre-tokenized (jieba-cut, space-joined).
+
+    Returns list of {"path": str, "score": float, "snippet": str}.
+    """
+    try:
+        cursor = conn.execute(
+            "SELECT path, snippet(docs_fts, 2, '[', ']', '...', 64), rank "
+            "FROM docs_fts WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
+            (query, top_k),
+        )
+    except sqlite3.OperationalError:
+        return []
+    return [
+        {"path": row[0], "score": -row[2], "snippet": row[1]}
+        for row in cursor.fetchall()
+    ]
+
+
+def fts_index_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
+    """Read a file from vault, tokenize with jieba, upsert into FTS index."""
+    import jieba
+
+    fp = vault_dir / path
+    if not fp.is_file():
+        fts_delete(conn, path)
+        return
+
+    content = fp.read_bytes().decode("utf-8", errors="replace")
+    title = _extract_title(content)
+    tokens = " ".join(jieba.cut(content))
+    fts_upsert(conn, path, title, tokens)
+
+
+def _extract_title(content: str) -> str:
+    """Extract the first markdown heading as title."""
+    for line in content.split("\n"):
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+def fts_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
+    """Full rebuild of FTS index from vault. Returns count of indexed files."""
+    import jieba
+
+    conn.execute("DELETE FROM docs_fts")
+    count = 0
+    for md_file in vault_dir.rglob("*.md"):
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+            continue
+        rel = md_file.relative_to(vault_dir).as_posix()
+        content = md_file.read_bytes().decode("utf-8", errors="replace")
+        title = _extract_title(content)
+        tokens = " ".join(jieba.cut(content))
+        conn.execute(
+            "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
+            (rel, title, tokens),
+        )
+        count += 1
+    conn.commit()
+    return count

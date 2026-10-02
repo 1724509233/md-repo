@@ -59,8 +59,21 @@ def test_ai_config_partial(tmp_path):
 from server.ai import rag_search
 
 
+def _setup_fts_db(tmp_path):
+    """Create an empty .sync/index.db with the FTS table for rag_search."""
+    import sqlite3
+    from server.db import init_db, init_fts
+
+    (tmp_path / ".sync").mkdir()
+    conn = init_db(tmp_path / ".sync" / "index.db")
+    init_fts(conn)
+    conn.close()
+
+
 def test_rag_search_basic(tmp_path):
-    """Search returns relevant docs ranked by keyword overlap."""
+    """Search returns relevant docs ranked by FTS5 BM25."""
+    _setup_fts_db(tmp_path)
+
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "skill-scanner.md").write_bytes(
         b"# Skill-Scanner\n\nStatic analysis tool with YARA rules and YAML pattern detection."
@@ -79,6 +92,8 @@ def test_rag_search_basic(tmp_path):
 
 def test_rag_search_no_match(tmp_path):
     """Search with no matching terms returns empty list."""
+    _setup_fts_db(tmp_path)
+
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.md").write_bytes(b"# A\n\nHello world.")
 
@@ -88,6 +103,8 @@ def test_rag_search_no_match(tmp_path):
 
 def test_rag_search_respects_top_k(tmp_path):
     """top_k limits result count."""
+    _setup_fts_db(tmp_path)
+
     (tmp_path / "notes").mkdir()
     for i in range(5):
         (tmp_path / "notes" / f"doc{i}.md").write_bytes(
@@ -96,6 +113,23 @@ def test_rag_search_respects_top_k(tmp_path):
 
     results = rag_search(str(tmp_path), "common keyword", top_k=3)
     assert len(results) == 3
+
+
+def test_rag_search_chinese(tmp_path):
+    """FTS5 with jieba handles Chinese search."""
+    _setup_fts_db(tmp_path)
+
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "fastapi.md").write_bytes(
+        "# FastAPI 路由冲突\n\nFastAPI 路径匹配规则，路由顺序很重要。".encode()
+    )
+    (tmp_path / "notes" / "other.md").write_bytes(
+        "# 其他\n\n无关内容。".encode()
+    )
+
+    results = rag_search(str(tmp_path), "路由冲突", top_k=3)
+    assert len(results) >= 1
+    assert "fastapi" in results[0]["path"]
 
 
 import json
