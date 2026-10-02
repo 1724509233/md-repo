@@ -19,9 +19,11 @@ def test_init_db_creates_table(tmp_path) -> None:
     conn = init_db(tmp_path / "index.db")
     try:
         cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='files'"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('files', 'change_log')"
         )
-        assert cursor.fetchone() is not None
+        tables = {row[0] for row in cursor.fetchall()}
+        assert "files" in tables
+        assert "change_log" in tables
     finally:
         conn.close()
 
@@ -97,3 +99,62 @@ def test_clear_changes(db_conn):
     assert len(get_changes(db_conn, since=0)) == 1
     clear_changes(db_conn)
     assert len(get_changes(db_conn, since=0)) == 0
+
+
+def test_log_change_source_default(db_conn):
+    log_change(db_conn, "a.md", "created")
+    changes = get_changes(db_conn, since=0)
+    assert changes[0]["source"] == "unknown"
+
+
+def test_log_change_source_explicit(db_conn):
+    log_change(db_conn, "a.md", "created", source="agent")
+    log_change(db_conn, "b.md", "modified", source="web")
+    changes = get_changes(db_conn, since=0)
+    assert changes[0]["source"] == "agent"
+    assert changes[1]["source"] == "web"
+
+
+def test_log_change_new_hash(db_conn):
+    log_change(db_conn, "a.md", "created", new_hash="abc123")
+    changes = get_changes(db_conn, since=0)
+    assert changes[0]["new_hash"] == "abc123"
+
+
+def test_change_log_seq_monotonic(db_conn):
+    log_change(db_conn, "a.md", "created", ts=100.0)
+    log_change(db_conn, "b.md", "modified", ts=200.0)
+    log_change(db_conn, "c.md", "created", ts=300.0)
+    changes = get_changes(db_conn, since=0)
+    seqs = [c["seq"] for c in changes]
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == 3
+
+
+def test_migration_from_old_schema(tmp_path):
+    """Simulate an existing DB with old file_changes table, then init_db migrates it."""
+    import sqlite3
+
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE files (path TEXT PRIMARY KEY, hash TEXT NOT NULL, mtime REAL NOT NULL)")
+    conn.execute(
+        "CREATE TABLE file_changes ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ts REAL NOT NULL, path TEXT NOT NULL, "
+        "action TEXT NOT NULL, from_path TEXT DEFAULT ''"
+        ")"
+    )
+    conn.execute("INSERT INTO file_changes (ts, path, action, from_path) VALUES (100.0, 'old.md', 'created', '')")
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        changes = get_changes(conn, since=0)
+        assert len(changes) == 1
+        assert changes[0]["path"] == "old.md"
+        assert changes[0]["action"] == "created"
+        assert changes[0]["source"] == "unknown"
+    finally:
+        conn.close()

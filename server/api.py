@@ -304,7 +304,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         upsert_file(db_conn, rel.as_posix(), digest, mtime)
         from .db import log_change
 
-        log_change(db_conn, rel.as_posix(), "modified" if existed else "created")
+        log_change(
+            db_conn,
+            rel.as_posix(),
+            "modified" if existed else "created",
+            source="web",
+        )
         return {"ok": True}
 
     return app

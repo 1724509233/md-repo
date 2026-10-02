@@ -47,7 +47,7 @@ class _VaultHandler(FileSystemEventHandler):
             from .db import upsert_file, log_change
 
             upsert_file(self._conn, rel, digest, mtime)
-            log_change(self._conn, rel, action)
+            log_change(self._conn, rel, action, source="watchdog")
         logger.info("indexed %s (%s)", rel, action)
 
     def _remove(self, path: str) -> None:
@@ -58,7 +58,7 @@ class _VaultHandler(FileSystemEventHandler):
             from .db import delete_file, log_change
 
             delete_file(self._conn, rel)
-            log_change(self._conn, rel, "deleted")
+            log_change(self._conn, rel, "deleted", source="watchdog")
         logger.info("removed %s", rel)
 
     def on_created(self, event) -> None:

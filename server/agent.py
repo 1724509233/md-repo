@@ -162,7 +162,12 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             from .db import upsert_file, log_change
 
             upsert_file(db_conn, args["path"], digest, fp.stat().st_mtime)
-            log_change(db_conn, args["path"], "modified" if existed else "created")
+            log_change(
+                db_conn,
+                args["path"],
+                "modified" if existed else "created",
+                source="agent",
+            )
         return f"Saved: {args['path']} ({len(args['content'])} chars)"
 
     elif name == "delete_doc":
@@ -174,7 +179,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             from .db import delete_file, log_change
 
             delete_file(db_conn, args["path"])
-            log_change(db_conn, args["path"], "deleted")
+            log_change(db_conn, args["path"], "deleted", source="agent")
         return f"Deleted: {args['path']}"
 
     elif name == "move_doc":
@@ -190,7 +195,13 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             delete_file(db_conn, args["from_path"])
             digest = hashlib.sha256(dst.read_bytes()).hexdigest()
             upsert_file(db_conn, args["to_path"], digest, dst.stat().st_mtime)
-            log_change(db_conn, args["to_path"], "moved", from_path=args["from_path"])
+            log_change(
+                db_conn,
+                args["to_path"],
+                "moved",
+                from_path=args["from_path"],
+                source="agent",
+            )
         return f"Moved: {args['from_path']} → {args['to_path']}"
 
     return f"Error: unknown tool '{name}'"
