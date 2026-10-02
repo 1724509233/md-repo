@@ -129,7 +129,83 @@ def test_execute_read_doc(tmp_path: Path):
     result = execute_tool("read_doc", {"path": "notes/test.md"}, vault, None)
     assert "notes/test.md" in result
     assert "# Hello" in result
-    assert "14 chars" in result
+    assert "3 lines" in result
+
+
+def test_execute_read_doc_offset_limit(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    (notes / "big.md").write_bytes(b"line1\nline2\nline3\nline4\nline5\n")
+
+    # Read lines 2-3
+    result = execute_tool(
+        "read_doc", {"path": "notes/big.md", "offset": 2, "limit": 2}, vault, None
+    )
+    assert "lines 2-3 of 5" in result
+    assert "line2\nline3" in result
+    assert "line1" not in result
+    assert "line4" not in result
+
+    # Read from line 4 to end
+    result = execute_tool(
+        "read_doc", {"path": "notes/big.md", "offset": 4}, vault, None
+    )
+    assert "lines 4-5 of 5" in result
+    assert "line4\nline5" in result
+
+    # Offset beyond file
+    result = execute_tool(
+        "read_doc", {"path": "notes/big.md", "offset": 99}, vault, None
+    )
+    assert "Error" in result
+    assert "exceeds" in result
+
+
+def test_execute_read_doc_truncation(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    # 200 lines of 50 chars each = 10000 chars total (> 8000 budget)
+    lines = [f"line{i:03d} " + "x" * 42 + "\n" for i in range(1, 201)]
+    (notes / "big.md").write_bytes("".join(lines).encode("utf-8"))
+
+    result = execute_tool("read_doc", {"path": "notes/big.md"}, vault, None)
+    assert "truncated" in result
+    assert "more lines" in result
+    assert "offset=" in result
+    # Should show some lines but not all 200
+    assert "line001" in result
+    assert "line200" not in result
+    # Extract the suggested offset
+    import re
+    m = re.search(r"offset=(\d+)", result)
+    assert m, "should suggest next offset"
+    next_offset = int(m.group(1))
+    assert next_offset > 1
+
+    # Continue reading from suggested offset
+    result2 = execute_tool(
+        "read_doc", {"path": "notes/big.md", "offset": next_offset}, vault, None
+    )
+    assert "line200" in result2 or "truncated" in result2
+
+
+def test_execute_read_doc_small_no_truncation(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    (notes / "small.md").write_bytes(b"hello\nworld\n")
+
+    result = execute_tool("read_doc", {"path": "notes/small.md"}, vault, None)
+    assert "truncated" not in result
+    assert "hello\nworld" in result
 
 
 def test_execute_read_doc_not_found(tmp_path: Path):
