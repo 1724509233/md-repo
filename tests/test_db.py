@@ -70,12 +70,13 @@ def test_log_change_and_get(db_conn):
 
     changes = get_changes(db_conn, since=0)
     assert len(changes) == 3
-    assert changes[0]["path"] == "notes/foo.md"
-    assert changes[0]["action"] == "created"
+    # DESC order: newest first
+    assert changes[0]["path"] == "notes/baz.md"
+    assert changes[0]["action"] == "deleted"
     assert changes[1]["path"] == "notes/bar.md"
     assert changes[1]["action"] == "modified"
-    assert changes[2]["path"] == "notes/baz.md"
-    assert changes[2]["action"] == "deleted"
+    assert changes[2]["path"] == "notes/foo.md"
+    assert changes[2]["action"] == "created"
 
 
 def test_get_changes_since_filter(db_conn):
@@ -112,8 +113,9 @@ def test_log_change_source_explicit(db_conn):
     log_change(db_conn, "a.md", "created", source="agent")
     log_change(db_conn, "b.md", "modified", source="web")
     changes = get_changes(db_conn, since=0)
-    assert changes[0]["source"] == "agent"
-    assert changes[1]["source"] == "web"
+    # DESC order: newest first
+    assert changes[0]["source"] == "web"
+    assert changes[1]["source"] == "agent"
 
 
 def test_log_change_new_hash(db_conn):
@@ -128,7 +130,8 @@ def test_change_log_seq_monotonic(db_conn):
     log_change(db_conn, "c.md", "created", ts=300.0)
     changes = get_changes(db_conn, since=0)
     seqs = [c["seq"] for c in changes]
-    assert seqs == sorted(seqs)
+    # DESC order: newest first, so seqs are descending
+    assert seqs == sorted(seqs, reverse=True)
     assert len(set(seqs)) == 3
 
 

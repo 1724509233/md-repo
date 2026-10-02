@@ -79,22 +79,22 @@ def test_validate_rejects_move_outside_vault(tmp_path: Path):
     assert result is not None
 
 
-def test_tools_schema_has_eight_tools():
+def test_tools_schema_has_nine_tools():
     from server.agent import TOOLS
 
     names = {t["function"]["name"] for t in TOOLS}
-    assert len(names) == 8
+    assert len(names) == 9
     assert names == {
         "read_doc", "search_docs", "list_files",
         "write_doc", "edit_doc", "delete_doc", "move_doc",
-        "get_related_docs",
+        "get_related_docs", "recent_changes",
     }
 
 
 def test_read_write_tool_sets():
     from server.agent import READ_TOOLS, WRITE_TOOLS
 
-    assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs"}
+    assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
     assert WRITE_TOOLS == {"write_doc", "edit_doc", "delete_doc", "move_doc"}
     assert READ_TOOLS.isdisjoint(WRITE_TOOLS)
 
@@ -512,3 +512,110 @@ def _async_iter(items):
         for item in items:
             yield item
     return gen()
+
+
+# ── recent_changes ──────────────────────────────────────────────
+
+def test_parse_since_relative():
+    from server.agent import parse_since
+    import time
+
+    now = time.time()
+    assert abs(parse_since("5m") - (now - 300)) < 5
+    assert abs(parse_since("1h") - (now - 3600)) < 5
+    assert abs(parse_since("2d") - (now - 172800)) < 5
+
+
+def test_parse_since_epoch():
+    from server.agent import parse_since
+
+    assert parse_since("1762108800") == 1762108800.0
+
+
+def test_parse_since_iso():
+    from server.agent import parse_since
+    from datetime import datetime
+
+    result = parse_since("2026-10-02T14:00:00")
+    expected = datetime(2026, 10, 2, 14, 0, 0).timestamp()
+    assert abs(result - expected) < 1
+
+
+def test_parse_since_invalid():
+    from server.agent import parse_since
+
+    assert parse_since("garbage") == 0.0
+
+
+def test_execute_recent_changes(tmp_path: Path):
+    from server.agent import execute_tool
+    from server.db import init_db, apply_change
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+
+    # Create some changes
+    (vault / "notes").mkdir()
+    (vault / "notes" / "a.md").write_bytes(b"hello")
+    apply_change(conn, vault, "notes/a.md", "created", source="web")
+    apply_change(conn, vault, "notes/a.md", "modified", source="agent")
+    (vault / "notes" / "b.md").write_bytes(b"world")
+    apply_change(conn, vault, "notes/b.md", "created", source="mcp")
+
+    result = execute_tool("recent_changes", {}, vault, conn)
+    assert "web" in result
+    assert "agent" in result
+    assert "mcp" in result
+    assert "notes/a.md" in result
+    assert "notes/b.md" in result
+
+
+def test_execute_recent_changes_filter(tmp_path: Path):
+    from server.agent import execute_tool
+    from server.db import init_db, apply_change
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+
+    (vault / "notes").mkdir()
+    (vault / "notes" / "a.md").write_bytes(b"hello")
+    apply_change(conn, vault, "notes/a.md", "created", source="web")
+    (vault / "notes" / "b.md").write_bytes(b"world")
+    apply_change(conn, vault, "notes/b.md", "created", source="agent")
+
+    # Filter by path
+    result = execute_tool(
+        "recent_changes", {"path": "notes/a.md"}, vault, conn
+    )
+    assert "notes/a.md" in result
+    assert "notes/b.md" not in result
+
+    # Filter by source
+    result = execute_tool(
+        "recent_changes", {"source": "agent"}, vault, conn
+    )
+    assert "notes/b.md" in result
+    assert "notes/a.md" not in result
+
+
+def test_execute_recent_changes_empty(tmp_path: Path):
+    from server.agent import execute_tool
+    from server.db import init_db
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+
+    result = execute_tool("recent_changes", {}, vault, conn)
+    assert "No recent changes" in result
+
+
+def test_execute_recent_changes_no_db(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = execute_tool("recent_changes", {}, vault, None)
+    assert "Error" in result

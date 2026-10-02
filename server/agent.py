@@ -109,6 +109,14 @@ class GetRelatedDocs(BaseModel):
     path: str = Field(description="Document path, e.g. 'notes/fastapi.md'")
 
 
+class RecentChanges(BaseModel):
+    """Query the vault change log. Shows who modified what and when (agent/web/watchdog/mcp). All params optional."""
+    path: str | None = Field(default=None, description="Filter by document path")
+    since: str | None = Field(default=None, description='Time filter: "5m", "1h", "2d", or ISO timestamp')
+    source: str | None = Field(default=None, description="Filter by source: agent/web/watchdog/mcp")
+    limit: int = Field(default=20, description="Max results")
+
+
 def _tool(model: type[BaseModel], name: str) -> dict:
     t = openai.pydantic_function_tool(model, name=name)
     t["function"].pop("strict", None)
@@ -124,9 +132,10 @@ TOOLS = [
     _tool(MoveDoc, "move_doc"),
     _tool(EditDoc, "edit_doc"),
     _tool(GetRelatedDocs, "get_related_docs"),
+    _tool(RecentChanges, "recent_changes"),
 ]
 
-READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs"}
+READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
 WRITE_TOOLS = {"write_doc", "edit_doc", "delete_doc", "move_doc"}
 
 
@@ -150,6 +159,33 @@ def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
 
 
 import hashlib
+import re
+import time
+from datetime import datetime
+
+
+def parse_since(s: str) -> float:
+    """Parse a human-friendly time string to a Unix timestamp.
+
+    Supports: "5m", "1h", "2d", ISO 8601 ("2026-10-02T14:00:00"), or epoch seconds.
+    Returns time.time() - delta for relative strings.
+    """
+    s = s.strip().lower()
+    m = re.match(r"^(\d+)\s*([mhd])$", s)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2)
+        delta = n * {"m": 60, "h": 3600, "d": 86400}[unit]
+        return time.time() - delta
+    try:
+        return float(s)
+    except ValueError:
+        pass
+    try:
+        dt = datetime.fromisoformat(s)
+        return dt.timestamp()
+    except ValueError:
+        return 0.0
 
 
 def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
@@ -281,6 +317,30 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             return f"No related documents found for {args['path']}."
         lines = [f"{r['path']} (via {r['type']})" for r in results]
         return f"Related documents for {args['path']}:\n" + "\n".join(lines)
+
+    elif name == "recent_changes":
+        from .db import get_changes
+
+        if not db_conn:
+            return "Error: database not available"
+        since_ts = parse_since(args["since"]) if args.get("since") else 0.0
+        changes = get_changes(
+            db_conn,
+            since=since_ts,
+            path=args.get("path"),
+            source=args.get("source"),
+            limit=args.get("limit", 20),
+        )
+        if not changes:
+            return "No recent changes found."
+        lines = []
+        for c in changes:
+            ts_str = time.strftime("%H:%M", time.localtime(c["ts"]))
+            path_str = c["path"]
+            if c.get("from_path"):
+                path_str += f" (was: {c['from_path']})"
+            lines.append(f"{ts_str} {c['source']:<10} {c['action']:<8} {path_str}")
+        return "\n".join(lines)
 
     return f"Error: unknown tool '{name}'"
 

@@ -141,17 +141,29 @@ def log_change(
     conn.commit()
 
 
-def get_changes(conn: sqlite3.Connection, since: float = 0.0) -> list[dict]:
+def get_changes(
+    conn: sqlite3.Connection,
+    since: float = 0.0,
+    path: str | None = None,
+    source: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
     """Return change events with ts > since, ordered by seq.
 
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
     and new keys (``seq``, ``source``, ``new_hash``).
     """
-    cursor = conn.execute(
-        "SELECT seq, ts, source, op, path, old_path, new_hash "
-        "FROM change_log WHERE ts > ? ORDER BY seq",
-        (since,),
-    )
+    sql = "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log WHERE ts > ?"
+    params: list = [since]
+    if path is not None:
+        sql += " AND path = ?"
+        params.append(path)
+    if source is not None:
+        sql += " AND source = ?"
+        params.append(source)
+    sql += " ORDER BY seq DESC LIMIT ?"
+    params.append(limit)
+    cursor = conn.execute(sql, params)
     return [
         {
             "seq": row[0],
