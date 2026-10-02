@@ -560,11 +560,16 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
     content = fp.read_bytes().decode("utf-8", errors="replace")
     count = content.count(old_string)
     if count == 0:
-        return f"Error: old_string not found in {path}"
+        return (
+            f"Error: old_string not found in {path}. "
+            "The file may have been modified since you last read it. "
+            "Call read_doc to get the current content, then retry with the exact text."
+        )
     if count > 1:
         return (
-            f"Error: old_string found {count} times in {path}, "
-            "provide more context to make it unique"
+            f"Error: old_string found {count} times in {path}. "
+            "Include more surrounding context to make the match unique, "
+            "or call read_doc to see the full content."
         )
     new_content = content.replace(old_string, new_string)
     fp.write_bytes(new_content.encode("utf-8"))

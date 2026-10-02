@@ -405,8 +405,10 @@ var toolCardNames = {
     search_docs: '🔍 搜索文档',
     list_files: '📁 列出文件',
     write_doc: '✏️ 写入文档',
+    edit_doc: '✂️ 编辑文档',
     delete_doc: '🗑 删除文档',
-    move_doc: '📦 移动文档'
+    move_doc: '📦 移动文档',
+    get_related_docs: '🔗 关联文档'
 };
 function insertToolCard(turn, id, name, args, status) {
     var card = document.createElement('div');
@@ -414,15 +416,21 @@ function insertToolCard(turn, id, name, args, status) {
     card.className = 'tool-card tool-' + status;
     var label = toolCardNames[name] || name;
     var pathArg = args.path || args.from_path || '';
+    var argsJson = JSON.stringify(args, null, 2);
     card.innerHTML =
         '<div class="tool-header">' +
         '<span class="tool-icon">⏳</span>' +
         '<span class="tool-label">' + label + '</span>' +
         (pathArg ? '<code class="tool-path">' + pathArg + '</code>' : '') +
-        '</div>';
+        '</div>' +
+        '<details class="tool-details"><summary>参数</summary><pre class="tool-pre">' + escapeHtml(argsJson) + '</pre></details>';
+    card._args = args;
     turn.appendChild(card);
     var chat = document.getElementById('ai-messages');
     chat.scrollTop = chat.scrollHeight;
+}
+function escapeHtml(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 function updateToolCard(id, status, result) {
     var card = document.getElementById('tool-' + id);
@@ -456,6 +464,13 @@ function updateToolCard(id, status, result) {
             detail.className = 'tool-detail text-xs text-gray-500 mt-1 truncate';
             detail.textContent = result;
             card.appendChild(detail);
+        }
+        var details = card.querySelector('.tool-details');
+        if (details) {
+            details.innerHTML = '<summary>参数 + 结果</summary>' +
+                '<pre class="tool-pre">' + escapeHtml(JSON.stringify(card._args, null, 2)) + '</pre>' +
+                '<div class="tool-result-label">结果</div>' +
+                '<pre class="tool-pre tool-result-pre">' + escapeHtml(result) + '</pre>';
         }
     }
 }

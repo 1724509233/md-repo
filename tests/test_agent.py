@@ -79,14 +79,14 @@ def test_validate_rejects_move_outside_vault(tmp_path: Path):
     assert result is not None
 
 
-def test_tools_schema_has_seven_tools():
+def test_tools_schema_has_eight_tools():
     from server.agent import TOOLS
 
     names = {t["function"]["name"] for t in TOOLS}
-    assert len(names) == 7
+    assert len(names) == 8
     assert names == {
         "read_doc", "search_docs", "list_files",
-        "write_doc", "delete_doc", "move_doc",
+        "write_doc", "edit_doc", "delete_doc", "move_doc",
         "get_related_docs",
     }
 
@@ -95,7 +95,7 @@ def test_read_write_tool_sets():
     from server.agent import READ_TOOLS, WRITE_TOOLS
 
     assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs"}
-    assert WRITE_TOOLS == {"write_doc", "delete_doc", "move_doc"}
+    assert WRITE_TOOLS == {"write_doc", "edit_doc", "delete_doc", "move_doc"}
     assert READ_TOOLS.isdisjoint(WRITE_TOOLS)
 
 
@@ -153,6 +153,56 @@ def test_execute_write_doc(tmp_path: Path):
     fp = vault / "notes" / "new.md"
     assert fp.is_file()
     assert fp.read_bytes() == b"# New Doc"
+
+
+def test_execute_edit_doc(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    (notes / "edit.md").write_bytes(b"# Title\n\nOld text here.\n")
+
+    result = execute_tool(
+        "edit_doc",
+        {"path": "notes/edit.md", "old_string": "Old text here.", "new_string": "New text here."},
+        vault, None,
+    )
+    assert "Edited" in result
+    assert (notes / "edit.md").read_bytes() == b"# Title\n\nNew text here.\n"
+
+
+def test_execute_edit_doc_not_found(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    (notes / "edit.md").write_bytes(b"# Title\n")
+
+    result = execute_tool(
+        "edit_doc",
+        {"path": "notes/edit.md", "old_string": "nonexistent", "new_string": "x"},
+        vault, None,
+    )
+    assert "Error" in result
+
+
+def test_execute_edit_doc_multiple(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    notes = vault / "notes"
+    notes.mkdir(parents=True)
+    (notes / "edit.md").write_bytes(b"foo bar foo\n")
+
+    result = execute_tool(
+        "edit_doc",
+        {"path": "notes/edit.md", "old_string": "foo", "new_string": "baz"},
+        vault, None,
+    )
+    assert "Error" in result
+    assert "2 times" in result
 
 
 def test_execute_delete_doc(tmp_path: Path):

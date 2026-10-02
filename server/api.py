@@ -239,9 +239,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         # Get or create session
         if session_id not in _agent_sessions:
+            from .agent import SYSTEM_PROMPT
+
             _agent_sessions[session_id] = {
                 "messages": [
-                    {"role": "system", "content": "You are a helpful assistant for managing markdown documents in a vault. Use tools to read, search, create, edit, move, and delete documents."}
+                    {"role": "system", "content": SYSTEM_PROMPT}
                 ],
                 "confirm_queue": asyncio.Queue(),
                 "last_active": time.time(),

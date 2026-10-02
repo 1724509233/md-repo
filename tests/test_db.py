@@ -175,7 +175,8 @@ def test_edit_file_not_found(tmp_path) -> None:
     fp.parent.mkdir(parents=True)
     fp.write_bytes(b"hello world\n")
     result = edit_file(tmp_path, "notes/a.md", "absent", "x")
-    assert result == "Error: old_string not found in notes/a.md"
+    assert "Error: old_string not found" in result
+    assert "read_doc" in result
     assert fp.read_bytes() == b"hello world\n"
 
 
@@ -184,10 +185,8 @@ def test_edit_file_multiple(tmp_path) -> None:
     fp.parent.mkdir(parents=True)
     fp.write_bytes(b"foo bar foo\n")
     result = edit_file(tmp_path, "notes/a.md", "foo", "baz")
-    assert result == (
-        "Error: old_string found 2 times in notes/a.md, "
-        "provide more context to make it unique"
-    )
+    assert "Error: old_string found 2 times" in result
+    assert "read_doc" in result
     assert fp.read_bytes() == b"foo bar foo\n"
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import sys
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from .config import load_server_config
 from .db import fts_rebuild_all, graph_rebuild_all, init_db, upsert_file
 from .logrotate import start_logrotate
 from .watcher import start_watcher
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 
 def _initial_index(vault_dir: Path, conn) -> int:

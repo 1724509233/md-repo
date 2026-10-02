@@ -34,3 +34,12 @@ input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!i
 .tool-header { display: flex; align-items: center; gap: 6px; }
 .tool-path { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
 .dark .tool-path { background: #374151; }
+.tool-details { margin-top: 6px; font-size: 11px; }
+.tool-details summary { cursor: pointer; color: #6b7280; user-select: none; }
+.dark .tool-details summary { color: #9ca3af; }
+.tool-pre { background: #f3f4f6; border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 200px; overflow-y: auto; }
+.dark .tool-pre { background: #1f2937; color: #d1d5db; }
+.tool-result-label { margin-top: 6px; font-weight: 600; color: #6b7280; }
+.dark .tool-result-label { color: #9ca3af; }
+.tool-result-pre { border-left: 2px solid #d1d5db; }
+.dark .tool-result-pre { border-left-color: #4b5563; }
