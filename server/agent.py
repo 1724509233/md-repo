@@ -97,9 +97,23 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_related_docs",
+            "description": "Get documents related to the given document via wikilinks, tags, or frontmatter related field",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Document path, e.g. 'notes/fastapi.md'"}
+                },
+                "required": ["path"],
+            },
+        },
+    },
 ]
 
-READ_TOOLS = {"read_doc", "search_docs", "list_files"}
+READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs"}
 WRITE_TOOLS = {"write_doc", "delete_doc", "move_doc"}
 
 
@@ -169,6 +183,9 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
                 source="agent",
             )
             fts_index_file(db_conn, vault_dir, args["path"])
+            from .db import graph_extract_file
+
+            graph_extract_file(db_conn, vault_dir, args["path"])
         return f"Saved: {args['path']} ({len(args['content'])} chars)"
 
     elif name == "delete_doc":
@@ -182,6 +199,9 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             delete_file(db_conn, args["path"])
             log_change(db_conn, args["path"], "deleted", source="agent")
             fts_delete(db_conn, args["path"])
+            from .db import graph_delete_file
+
+            graph_delete_file(db_conn, args["path"])
         return f"Deleted: {args['path']}"
 
     elif name == "move_doc":
@@ -206,7 +226,20 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             )
             fts_delete(db_conn, args["from_path"])
             fts_index_file(db_conn, vault_dir, args["to_path"])
+            from .db import graph_delete_file, graph_extract_file
+
+            graph_delete_file(db_conn, args["from_path"])
+            graph_extract_file(db_conn, vault_dir, args["to_path"])
         return f"Moved: {args['from_path']} → {args['to_path']}"
+
+    elif name == "get_related_docs":
+        from .db import graph_get_related
+
+        results = graph_get_related(db_conn, args["path"], hops=1)
+        if not results:
+            return f"No related documents found for {args['path']}."
+        lines = [f"{r['path']} (via {r['type']})" for r in results]
+        return f"Related documents for {args['path']}:\n" + "\n".join(lines)
 
     return f"Error: unknown tool '{name}'"
 

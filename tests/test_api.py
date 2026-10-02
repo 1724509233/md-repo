@@ -202,6 +202,40 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
     assert '"type": "done"' in body
 
 
+def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
+    """GET /api/graph/backlinks returns documents linking to a path."""
+    from server.db import init_graph, graph_extract_file
+
+    init_graph(db_conn)
+    # Files at vault root so bare wikilinks resolve (no dangling edges).
+    (vault_dir / "a.md").write_bytes(b"# A\n\n[[b]]")
+    (vault_dir / "b.md").write_bytes(b"# B\n\n[[a]]")
+    graph_extract_file(db_conn, vault_dir, "a.md")
+    graph_extract_file(db_conn, vault_dir, "b.md")
+
+    resp = client.get("/api/graph/backlinks", params={"path": "b.md"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any(item["path"] == "a.md" for item in data)
+
+
+def test_graph_related_endpoint(client, vault_dir, db_conn):
+    """GET /api/graph/related returns related documents."""
+    from server.db import init_graph, graph_extract_file
+
+    init_graph(db_conn)
+    # Files at vault root so bare wikilinks resolve (no dangling edges).
+    (vault_dir / "a.md").write_bytes(b"# A\n\n[[b]]")
+    (vault_dir / "b.md").write_bytes(b"# B\n\n[[a]]")
+    graph_extract_file(db_conn, vault_dir, "a.md")
+    graph_extract_file(db_conn, vault_dir, "b.md")
+
+    resp = client.get("/api/graph/related", params={"path": "a.md"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert any(item["path"] == "b.md" for item in data)
+
+
 def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
     """Agent confirm endpoint accepts approval."""
     from unittest.mock import AsyncMock, MagicMock, patch

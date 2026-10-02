@@ -88,6 +88,18 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         return _get_changes(db_conn, since=since)
 
+    @app.get("/api/graph/backlinks")
+    async def graph_backlinks(path: str) -> list[dict]:
+        from .db import graph_get_backlinks
+
+        return graph_get_backlinks(db_conn, path)
+
+    @app.get("/api/graph/related")
+    async def graph_related(path: str, hops: int = 1) -> list[dict]:
+        from .db import graph_get_related
+
+        return graph_get_related(db_conn, path, hops=hops)
+
     @app.get("/api/docs/{path:path}")
     async def get_doc(path: str) -> PlainTextResponse:
         rel = _safe_rel_path(path)
@@ -311,6 +323,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             source="web",
         )
         fts_index_file(db_conn, vault_dir, rel.as_posix())
+        from .db import graph_extract_file
+
+        graph_extract_file(db_conn, vault_dir, rel.as_posix())
         return {"ok": True}
 
     return app

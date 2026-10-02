@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from server.agent import execute_tool
+
 
 def test_validate_rejects_path_traversal(tmp_path: Path):
     from server.agent import validate_tool_call
@@ -77,22 +79,40 @@ def test_validate_rejects_move_outside_vault(tmp_path: Path):
     assert result is not None
 
 
-def test_tools_schema_has_six_tools():
+def test_tools_schema_has_seven_tools():
     from server.agent import TOOLS
 
     names = {t["function"]["name"] for t in TOOLS}
+    assert len(names) == 7
     assert names == {
         "read_doc", "search_docs", "list_files",
         "write_doc", "delete_doc", "move_doc",
+        "get_related_docs",
     }
 
 
 def test_read_write_tool_sets():
     from server.agent import READ_TOOLS, WRITE_TOOLS
 
-    assert READ_TOOLS == {"read_doc", "search_docs", "list_files"}
+    assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs"}
     assert WRITE_TOOLS == {"write_doc", "delete_doc", "move_doc"}
     assert READ_TOOLS.isdisjoint(WRITE_TOOLS)
+
+
+def test_execute_get_related_docs(vault_dir, db_conn):
+    """get_related_docs returns linked documents."""
+    from server.db import init_graph, graph_extract_file
+
+    init_graph(db_conn)
+    # Create two linked docs at the vault root (bare wikilinks resolve relative to root).
+    (vault_dir / "a.md").write_bytes(b"# A\n\nSee [[b]] for more.")
+    (vault_dir / "b.md").write_bytes(b"# B\n\nBack to [[a]].")
+
+    graph_extract_file(db_conn, vault_dir, "a.md")
+    graph_extract_file(db_conn, vault_dir, "b.md")
+
+    result = execute_tool("get_related_docs", {"path": "a.md"}, vault_dir, db_conn)
+    assert "b.md" in result
 
 
 import hashlib
