@@ -4,7 +4,7 @@ Expose the md-vault knowledge base as an MCP (Model Context Protocol) stdio serv
 
 ## Goals
 
-- Agent can search, read, create, edit, move, and delete vault documents via standard MCP tool calls
+- External agent can search, read, create, and edit vault documents via standard MCP tool calls
 - Reuse existing `server/db.py` data access layer (FTS5, graph, change_log)
 - Independent process — does not depend on FastAPI server running
 - Zero new business logic — MCP server is a thin adapter over existing functions
@@ -15,6 +15,7 @@ Expose the md-vault knowledge base as an MCP (Model Context Protocol) stdio serv
 - No HTTP transport (stdio only)
 - No authentication (LAN-only, same as existing system)
 - No resource/prompts API (tools only)
+- **No move/delete** — document organization and cleanup is the vault agent's (Web UI) responsibility, not the external agent's
 
 ## Architecture
 
@@ -30,8 +31,8 @@ Expose the md-vault knowledge base as an MCP (Model Context Protocol) stdio serv
 │  mcp_server.py (independent process)        │
 │  ┌─────────────────────────────────────┐    │
 │  │  MCPServer("md-vault")              │    │
-│  │  7 tools: read/search/list/related  │    │
-│  │           write/delete/move         │    │
+│  │  5 tools: search/related/read       │    │
+│  │           write/edit                │    │
 │  └──────────────┬──────────────────────┘    │
 │                 │                           │
 │  ┌──────────────▼──────────────────────┐    │
@@ -65,15 +66,36 @@ Expose the md-vault knowledge base as an MCP (Model Context Protocol) stdio serv
 
 ## Tools
 
+5 tools forming a memory loop: **search → read → write/edit**
+
 | Tool | Parameters | Returns | Underlying call |
 |------|-----------|---------|-----------------|
-| `read_doc` | `path: str` | Full document content (str) | Direct file read |
 | `search_docs` | `query: str, top_k: int = 5` | Matching paths + snippets (str) | `rag_search()` → FTS5 + jieba |
-| `list_files` | `dir: str = ""` | File path listing (str) | `rglob("*.md")` |
 | `get_related_docs` | `path: str, hops: int = 1` | Related docs + relation type (str) | `graph_get_related()` |
+| `read_doc` | `path: str` | Full document content (str) | Direct file read |
 | `write_doc` | `path: str, content: str` | Confirmation (str) | File write + `apply_change(source="mcp")` |
-| `delete_doc` | `path: str` | Confirmation (str) | File delete + `apply_change(source="mcp")` |
-| `move_doc` | `from_path: str, to_path: str` | Confirmation (str) | Rename + `apply_change(source="mcp")` |
+| `edit_doc` | `path: str, old_string: str, new_string: str, replace_all: bool = false` | Confirmation (str) | Read → string replace → write + `apply_change(source="mcp")` |
+
+### edit_doc Behavior
+
+- Reads the file, finds `old_string` (exact match), replaces with `new_string`, writes back
+- If `old_string` not found → return error: `"Error: old_string not found in {path}"`
+- If `old_string` appears multiple times and `replace_all=False` → return error: `"Error: old_string found {n} times, use replace_all=true or provide more context"`
+- If `replace_all=True` → replace all occurrences
+- Empty `new_string` → deletes the matched text (acts as a targeted delete)
+
+### Shared Implementation
+
+The edit logic lives in `server/db.py` as `edit_file(vault_dir, path, old_string, new_string, replace_all=False) -> str`:
+
+```python
+def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Exact string replacement in a vault file. Returns confirmation or error string."""
+```
+
+- MCP server's `edit_doc` tool calls this function
+- Vault agent (Web UI) will add an `edit_doc` tool that calls the same function
+- Keeps edit semantics in one place — no duplication
 
 ### Safety Guard
 
@@ -149,7 +171,7 @@ MCP server calls `init_db()` to open `vault/.sync/index.db` with WAL mode. Concu
 ### MCP Integration Tests
 
 - Use `mcp` SDK client in stdio mode to spawn server process
-- Verify: tool list returns 7 tools, `read_doc` returns content, `write_doc` creates file
+- Verify: tool list returns 5 tools, `read_doc` returns content, `write_doc` creates file, `edit_doc` replaces text
 - Verify: error paths return `isError: true`
 
 ### Not Tested
@@ -159,7 +181,7 @@ MCP server calls `init_db()` to open `vault/.sync/index.db` with WAL mode. Concu
 
 ## Change Tracking
 
-Write operations (`write_doc`, `delete_doc`, `move_doc`) call `apply_change()` with `source="mcp"`. This ensures:
+Write operations (`write_doc`, `edit_doc`) call `apply_change()` with `source="mcp"`. This ensures:
 - `change_log` records the event (auditable)
 - FTS index updates incrementally
 - Knowledge graph updates incrementally
