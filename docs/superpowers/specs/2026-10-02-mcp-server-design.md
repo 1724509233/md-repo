@@ -165,6 +165,15 @@ Write operations (`write_doc`, `delete_doc`, `move_doc`) call `apply_change()` w
 - Knowledge graph updates incrementally
 - Web frontend picks up changes via existing 10s poll
 
+## Startup Initialization
+
+On process start, before accepting tool calls:
+
+1. **Resolve vault path** (CLI arg → env var → default)
+2. **Open SQLite**: `init_db(vault/.sync/index.db)` with WAL mode
+3. **Warm up jieba**: `import jieba; jieba.cut("warmup")` in a background thread (~0.4s first load). Prevents first `search_docs` call from stalling.
+4. **Ensure FTS + graph indexes**: If `docs_fts` table is empty, call `fts_rebuild_all()` + `graph_rebuild_all()`. Same logic as `server/main.py` startup.
+
 ## Constraints
 
 - Python 3.10+
