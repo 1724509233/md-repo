@@ -7,8 +7,9 @@ LAN 多设备 Markdown 文档同步系统。Win PC 跑 FastAPI 服务端，Mac/�
 - **文件同步** — SHA-256 哈希比对，冲突自动保留双方版本（`.conflict-{device}.md`）
 - **Web 工作台** — 文件树浏览、Markdown 编辑/预览（marked.js + highlight.js + mermaid）、深色模式
 - **AI Agent** — 基于 OpenAI 兼容 API 的工具调用 agent，可读写/搜索/移动/删除文档，写操作需用户确认
-- **RAG 搜索** — 关键词 TF 重叠评分，无需向量数据库
-- **变更日志** — SQLite 追加式 change feed，Web 前端增量轮询 + 客户端同步基础
+- **FTS5 检索** — SQLite FTS5 + jieba 中文分词，BM25 排序，增量索引
+- **知识图谱** — wikilink/tag/related 关系抽取，关联文档发现
+- **变更日志** — SQLite 事件溯源 change_log（seq/source/op），驱动 FTS5 + 图谱增量更新
 
 ## 架构
 
@@ -97,8 +98,9 @@ python -m client.main config.yaml
 | 工具 | 权限 | 说明 |
 |------|------|------|
 | `read_doc` | 自动 | 读取文档内容 |
-| `search_docs` | 自动 | RAG 关键词搜索 |
+| `search_docs` | 自动 | FTS5 + jieba 中文搜索 |
 | `list_files` | 自动 | 列出 vault 文件 |
+| `get_related_docs` | 自动 | 图谱关联文档（wikilink/tag/related） |
 | `write_doc` | **需确认** | 创建/覆盖文档 |
 | `delete_doc` | **需确认** | 删除文档 |
 | `move_doc` | **需确认** | 移动/重命名文档 |
@@ -116,14 +118,16 @@ python -m client.main config.yaml
 | POST | `/api/docs/{path}` | 上传文档 |
 | PUT | `/api/docs/{path}` | 保存文档 |
 | POST | `/api/sync` | 客户端同步 |
-| POST | `/api/ai/search` | RAG 搜索 |
+| POST | `/api/ai/search` | FTS5 搜索 |
+| GET | `/api/graph/backlinks?path=<p>` | 反向链接（谁引用了这篇） |
+| GET | `/api/graph/related?path=<p>&hops=1` | 关联文档（N-hop） |
 | POST | `/api/agent/chat` | Agent SSE 流式对话 |
 | POST | `/api/agent/confirm` | 确认/拒绝写操作 |
 
 ## 测试
 
 ```bash
-pytest tests/ -v          # 63 tests
+pytest tests/ -v          # 72 tests
 ```
 
 ## 项目结构
@@ -135,7 +139,7 @@ pytest tests/ -v          # 63 tests
 │   ├── agent.py         # Agent 工具调用 + SSE 流
 │   ├── ai.py            # RAG 搜索 + LLM 流式
 │   ├── config.py        # YAML 配置解析
-│   ├── db.py            # SQLite 索引 + change feed
+│   ├── db.py            # SQLite 索引 + change_log + FTS5 + 图谱
 │   ├── watcher.py       # watchdog 文件系统监听
 │   └── templates/
 │       ├── index.html   # Web UI（单文件，Tailwind CDN）
@@ -156,4 +160,4 @@ pytest tests/ -v          # 63 tests
 
 ## 技术栈
 
-Python 3.10+ · FastAPI · uvicorn · SQLite · watchdog · httpx · openai SDK · Tailwind CSS · Flowbite · marked.js · highlight.js · mermaid
+Python 3.10+ · FastAPI · uvicorn · SQLite (FTS5) · jieba · watchdog · httpx · openai SDK · Tailwind CSS · Flowbite · marked.js · highlight.js · mermaid
