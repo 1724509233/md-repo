@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 import openai
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, ValidationError
 
 logger = logging.getLogger("md-vault.agent")
 
@@ -62,59 +62,126 @@ def sse(event_type: str, data: dict) -> str:
     return f"data: {json.dumps({'type': event_type, **data}, ensure_ascii=False)}\n\n"
 
 
-class ReadDoc(BaseModel):
+# ── Shared path validators ──────────────────────────────────────────────
+
+def _check_md_path(v: str) -> str:
+    """Validate a required .md file path (boundary + extension + .sync)."""
+    if ".." in v or v.startswith("/"):
+        raise ValueError(f"path outside vault: '{v}'")
+    if not v.endswith(".md"):
+        raise ValueError(f"only .md files are supported, got '{v}'")
+    if ".sync" in v:
+        raise ValueError("cannot access .sync/ internal files")
+    return v
+
+
+def _check_optional_path(v: str | None) -> str | None:
+    """Validate an optional path (boundary only, no .md requirement)."""
+    if v is None:
+        return v
+    if ".." in v or v.startswith("/"):
+        raise ValueError(f"path outside vault: '{v}'")
+    return v
+
+
+# ── Tool argument models ────────────────────────────────────────────────
+
+class ReadDocArgs(BaseModel):
     """Read a markdown document. By default returns the full content. Use offset/limit to read a specific line range (e.g. after an edit failure, re-read the affected section)."""
     path: str = Field(description="Relative path, e.g. 'notes/Skill-Scanner.md'")
     offset: int = Field(default=1, description="Line number to start from (1-indexed). Default 1.")
     limit: int | None = Field(default=None, description="Number of lines to read. Default: all remaining lines.")
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_md_path(v)
 
-class SearchDocs(BaseModel):
+
+class SearchDocsArgs(BaseModel):
     """Full-text search using FTS5 + jieba. Supports Chinese and English keywords. Returns matching paths with snippets."""
     query: str = Field(description="Search keywords")
     top_k: int = Field(default=5, description="Number of results")
 
 
-class ListFiles(BaseModel):
+class ListFilesArgs(BaseModel):
     """List all .md files in the vault. Returns relative paths only (no size or date metadata)."""
     dir: str = Field(default="", description="Subdirectory path, defaults to root")
 
 
-class WriteDoc(BaseModel):
+class WriteDocArgs(BaseModel):
     """Create a new document or fully overwrite an existing one. Use edit_doc for small changes instead."""
     path: str = Field(description="Relative path")
     content: str = Field(description="Full document content (markdown)")
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_md_path(v)
 
-class DeleteDoc(BaseModel):
+
+class DeleteDocArgs(BaseModel):
     """Permanently delete a document. Irreversible — confirm with user before calling."""
     path: str = Field(description="Relative path")
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_md_path(v)
 
-class MoveDoc(BaseModel):
+
+class MoveDocArgs(BaseModel):
     """Move or rename a document. Changes the path, which may break links in other documents. Check get_related_docs first."""
     from_path: str = Field(description="Original path")
     to_path: str = Field(description="Destination path")
 
+    @field_validator("from_path", "to_path")
+    @classmethod
+    def validate_paths(cls, v): return _check_md_path(v)
 
-class EditDoc(BaseModel):
+
+class EditDocArgs(BaseModel):
     """Replace exact text in a document. The old_string must match exactly once in the file. Use this for small edits instead of rewriting the whole document."""
     path: str = Field(description="Relative path")
     old_string: str = Field(description="Exact text to find (must be unique in the file)")
     new_string: str = Field(description="Replacement text (empty string deletes the matched text)")
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_md_path(v)
 
-class GetRelatedDocs(BaseModel):
+
+class GetRelatedDocsArgs(BaseModel):
     """Get documents linked to the given document via [[wikilinks]], #tags, or frontmatter related field. Use for relationship/exploration queries."""
     path: str = Field(description="Document path, e.g. 'notes/fastapi.md'")
 
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_md_path(v)
 
-class RecentChanges(BaseModel):
+
+class RecentChangesArgs(BaseModel):
     """Query the vault change log. Shows who modified what and when (agent/web/watchdog/mcp). All params optional."""
     path: str | None = Field(default=None, description="Filter by document path")
     since: str | None = Field(default=None, description='Time filter: "5m", "1h", "2d", or ISO timestamp')
     source: str | None = Field(default=None, description="Filter by source: agent/web/watchdog/mcp")
     limit: int = Field(default=20, description="Max results")
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, v): return _check_optional_path(v)
+
+
+# ── Tool registry ───────────────────────────────────────────────────────
+
+TOOL_ARGS: dict[str, type[BaseModel]] = {
+    "read_doc": ReadDocArgs,
+    "search_docs": SearchDocsArgs,
+    "list_files": ListFilesArgs,
+    "write_doc": WriteDocArgs,
+    "delete_doc": DeleteDocArgs,
+    "move_doc": MoveDocArgs,
+    "edit_doc": EditDocArgs,
+    "get_related_docs": GetRelatedDocsArgs,
+    "recent_changes": RecentChangesArgs,
+}
 
 
 def _tool(model: type[BaseModel], name: str) -> dict:
@@ -123,38 +190,30 @@ def _tool(model: type[BaseModel], name: str) -> dict:
     return t
 
 
-TOOLS = [
-    _tool(ReadDoc, "read_doc"),
-    _tool(SearchDocs, "search_docs"),
-    _tool(ListFiles, "list_files"),
-    _tool(WriteDoc, "write_doc"),
-    _tool(DeleteDoc, "delete_doc"),
-    _tool(MoveDoc, "move_doc"),
-    _tool(EditDoc, "edit_doc"),
-    _tool(GetRelatedDocs, "get_related_docs"),
-    _tool(RecentChanges, "recent_changes"),
-]
+TOOLS = [_tool(TOOL_ARGS[name], name) for name in TOOL_ARGS]
 
 READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
 WRITE_TOOLS = {"write_doc", "edit_doc", "delete_doc", "move_doc"}
 
 
 def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
-    """Returns error string if invalid, None if OK."""
-    path_keys = ["path", "from_path", "to_path"]
-    for key in path_keys:
-        if key not in args:
+    """Validate args against the tool's Pydantic model + vault boundary check."""
+    model = TOOL_ARGS.get(name)
+    if model is None:
+        return f"Error: unknown tool '{name}'"
+    try:
+        model(**args)
+    except ValidationError as e:
+        errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
+        return f"Error: {'; '.join(errors)}"
+    # vault_dir boundary check (needs filesystem context)
+    for key in ("path", "from_path", "to_path"):
+        p = args.get(key)
+        if p is None:
             continue
-        p = args[key]
-        if ".." in p or p.startswith("/"):
-            return f"Error: path '{p}' is outside vault boundary"
         full = (vault_dir / p).resolve()
         if not str(full).startswith(str(vault_dir.resolve())):
             return f"Error: path '{p}' resolves outside vault"
-        if not p.endswith(".md"):
-            return f"Error: only .md files are supported, got '{p}'"
-        if ".sync" in p:
-            return "Error: cannot modify .sync/ internal files"
     return None
 
 
