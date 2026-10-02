@@ -546,3 +546,29 @@ def apply_change(
                 graph_delete_file(conn, from_path)
             fts_index_file(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
+
+
+def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:
+    """Exact string replacement in a vault file. Returns confirmation or error string.
+
+    - If old_string not found: returns error string
+    - If old_string appears multiple times: returns error string (no replace_all)
+    - If found exactly once: replaces and writes back, returns confirmation
+    - Empty new_string deletes the matched text
+    """
+    fp = vault_dir / path
+    content = fp.read_bytes().decode("utf-8", errors="replace")
+    count = content.count(old_string)
+    if count == 0:
+        return f"Error: old_string not found in {path}"
+    if count > 1:
+        return (
+            f"Error: old_string found {count} times in {path}, "
+            "provide more context to make it unique"
+        )
+    new_content = content.replace(old_string, new_string)
+    fp.write_bytes(new_content.encode("utf-8"))
+    return (
+        f"Edited: {path} (replaced {len(old_string)} chars "
+        f"with {len(new_string)} chars)"
+    )

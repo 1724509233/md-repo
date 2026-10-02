@@ -7,6 +7,7 @@ import time
 from server.db import (
     clear_changes,
     delete_file,
+    edit_file,
     get_all_files,
     get_changes,
     init_db,
@@ -158,3 +159,51 @@ def test_migration_from_old_schema(tmp_path):
         assert changes[0]["source"] == "unknown"
     finally:
         conn.close()
+
+
+def test_edit_file_basic(tmp_path) -> None:
+    fp = tmp_path / "notes" / "a.md"
+    fp.parent.mkdir(parents=True)
+    fp.write_bytes(b"hello world\n")
+    result = edit_file(tmp_path, "notes/a.md", "world", "there")
+    assert result == "Edited: notes/a.md (replaced 5 chars with 5 chars)"
+    assert fp.read_bytes() == b"hello there\n"
+
+
+def test_edit_file_not_found(tmp_path) -> None:
+    fp = tmp_path / "notes" / "a.md"
+    fp.parent.mkdir(parents=True)
+    fp.write_bytes(b"hello world\n")
+    result = edit_file(tmp_path, "notes/a.md", "absent", "x")
+    assert result == "Error: old_string not found in notes/a.md"
+    assert fp.read_bytes() == b"hello world\n"
+
+
+def test_edit_file_multiple(tmp_path) -> None:
+    fp = tmp_path / "notes" / "a.md"
+    fp.parent.mkdir(parents=True)
+    fp.write_bytes(b"foo bar foo\n")
+    result = edit_file(tmp_path, "notes/a.md", "foo", "baz")
+    assert result == (
+        "Error: old_string found 2 times in notes/a.md, "
+        "provide more context to make it unique"
+    )
+    assert fp.read_bytes() == b"foo bar foo\n"
+
+
+def test_edit_file_empty_new_string(tmp_path) -> None:
+    fp = tmp_path / "notes" / "a.md"
+    fp.parent.mkdir(parents=True)
+    fp.write_bytes(b"hello world\n")
+    result = edit_file(tmp_path, "notes/a.md", "world\n", "")
+    assert result == "Edited: notes/a.md (replaced 6 chars with 0 chars)"
+    assert fp.read_bytes() == b"hello "
+
+
+def test_edit_file_preserves_rest(tmp_path) -> None:
+    fp = tmp_path / "notes" / "a.md"
+    fp.parent.mkdir(parents=True)
+    fp.write_bytes(b"line one\nline two\nline three\n")
+    result = edit_file(tmp_path, "notes/a.md", "two", "TWO")
+    assert result == "Edited: notes/a.md (replaced 3 chars with 3 chars)"
+    assert fp.read_bytes() == b"line one\nline TWO\nline three\n"

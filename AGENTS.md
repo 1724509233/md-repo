@@ -56,3 +56,20 @@ Web UI lives in `server/templates/index.html` + `server/templates/style.css`, se
 - `flex-basis` transitions cause content reflow (text rewrapping) during animation. Use `transform: translateX()` instead for GPU-accelerated, zero-reflow slides.
 - Scroll position is not preserved when container height changes during a transition. If this matters, anchor an element and adjust `scrollTop` per frame via `requestAnimationFrame`.
 - Tailwind Play CDN generates styles at runtime — class names in JS `classList.add()` work, but dynamically constructed class strings must be complete (no partial matching).
+
+<!-- MDVAULT_START -->
+## MD Vault
+
+A personal knowledge base synced across devices. Use the `md-vault` MCP tools
+BEFORE web search or memory recall when you need project context, prior
+decisions, or development notes:
+
+- **search_docs**: Find relevant documents by keyword (FTS5 + Chinese support)
+- **read_doc**: Read full document content
+- **get_related_docs**: Discover related documents via wikilinks/tags
+- **write_doc**: Create or update a knowledge note
+- **edit_doc**: Precise text replacement in an existing document
+
+If the MCP server is not available, skip vault access — do not fall back to
+reading vault files directly.
+<!-- MDVAULT_END -->
