@@ -74,22 +74,21 @@ Expose the md-vault knowledge base as an MCP (Model Context Protocol) stdio serv
 | `get_related_docs` | `path: str, hops: int = 1` | Related docs + relation type (str) | `graph_get_related()` |
 | `read_doc` | `path: str` | Full document content (str) | Direct file read |
 | `write_doc` | `path: str, content: str` | Confirmation (str) | File write + `apply_change(source="mcp")` |
-| `edit_doc` | `path: str, old_string: str, new_string: str, replace_all: bool = false` | Confirmation (str) | Read → string replace → write + `apply_change(source="mcp")` |
+| `edit_doc` | `path: str, old_string: str, new_string: str` | Confirmation (str) | `edit_file()` → read/replace/write + `apply_change(source="mcp")` |
 
 ### edit_doc Behavior
 
 - Reads the file, finds `old_string` (exact match), replaces with `new_string`, writes back
 - If `old_string` not found → return error: `"Error: old_string not found in {path}"`
-- If `old_string` appears multiple times and `replace_all=False` → return error: `"Error: old_string found {n} times, use replace_all=true or provide more context"`
-- If `replace_all=True` → replace all occurrences
+- If `old_string` appears multiple times → return error: `"Error: old_string found {n} times, provide more context to make it unique"`
 - Empty `new_string` → deletes the matched text (acts as a targeted delete)
 
 ### Shared Implementation
 
-The edit logic lives in `server/db.py` as `edit_file(vault_dir, path, old_string, new_string, replace_all=False) -> str`:
+The edit logic lives in `server/db.py` as `edit_file(vault_dir, path, old_string, new_string) -> str`:
 
 ```python
-def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:
     """Exact string replacement in a vault file. Returns confirmation or error string."""
 ```
 
@@ -114,11 +113,29 @@ Reuse `server/agent.py:validate_tool_call()`:
 
 ## Configuration & Entry Point
 
-### Vault Path Resolution (priority order)
+### Config Source
 
-1. CLI argument: `python -m mcp_server /path/to/vault`
-2. Environment variable: `MD_VAULT_DIR=/path/to/vault`
-3. Default: `~/md-vault`
+MCP server reads the same `config.yaml` as the FastAPI server. Vault path comes from `server.vault_dir` in the config file. Config file is auto-discovered: CWD → project root (where `mcp_server.py` lives).
+
+```python
+from server.config import load_server_config
+
+config = load_server_config(_find_config())  # auto-discovered
+db_conn = init_db(config.vault_dir / ".sync" / "index.db")
+```
+
+`config.vault_dir` is captured by closure in tool functions — agent only sees `path`, never `vault_dir`.
+
+### Entry Point
+
+Registered as a console script in `pyproject.toml`:
+
+```toml
+[project.scripts]
+md-vault-mcp = "mcp_server:main"
+```
+
+After `pip install -e .`, the command `md-vault-mcp` is available on PATH. No arguments needed — config is auto-discovered.
 
 ### SQLite Connection
 
@@ -140,7 +157,7 @@ MCP server calls `init_db()` to open `vault/.sync/index.db` with WAL mode. Concu
   "mcp": {
     "md-vault": {
       "type": "local",
-      "command": ["python", "-m", "mcp_server", "D:\\md-vault"],
+      "command": ["md-vault-mcp"],
       "enabled": true
     }
   }
@@ -152,11 +169,33 @@ MCP server calls `init_db()` to open `vault/.sync/index.db` with WAL mode. Concu
 {
   "mcpServers": {
     "md-vault": {
-      "command": "python",
-      "args": ["-m", "mcp_server", "D:\\md-vault"]
+      "command": "md-vault-mcp"
     }
   }
 }
+```
+
+### AGENTS.md Prompt
+
+A prompt block is added to `AGENTS.md` (similar to CodeGraph's) telling the agent when and how to use the vault:
+
+```markdown
+<!-- MDVAULT_START -->
+## MD Vault
+
+A personal knowledge base synced across devices. Use the `md-vault` MCP tools
+BEFORE web search or memory recall when you need project context, prior
+decisions, or development notes:
+
+- **search_docs**: Find relevant documents by keyword (FTS5 + Chinese support)
+- **read_doc**: Read full document content
+- **get_related_docs**: Discover related documents via wikilinks/tags
+- **write_doc**: Create or update a knowledge note
+- **edit_doc**: Precise text replacement in an existing document
+
+If the MCP server is not available, skip vault access — do not fall back to
+reading vault files directly.
+<!-- MDVAULT_END -->
 ```
 
 ## Testing
@@ -191,10 +230,11 @@ Write operations (`write_doc`, `edit_doc`) call `apply_change()` with `source="m
 
 On process start, before accepting tool calls:
 
-1. **Resolve vault path** (CLI arg → env var → default)
-2. **Open SQLite**: `init_db(vault/.sync/index.db)` with WAL mode
-3. **Warm up jieba**: `import jieba; jieba.cut("warmup")` in a background thread (~0.4s first load). Prevents first `search_docs` call from stalling.
-4. **Ensure FTS + graph indexes**: If `docs_fts` table is empty, call `fts_rebuild_all()` + `graph_rebuild_all()`. Same logic as `server/main.py` startup.
+1. **Find config**: CWD `config.yaml` → project root `config.yaml`
+2. **Load config**: `load_server_config()` → `vault_dir` from `server.vault_dir`
+3. **Open SQLite**: `init_db(vault/.sync/index.db)` with WAL mode
+4. **Warm up jieba**: `import jieba; jieba.cut("warmup")` in a background thread (~0.4s first load). Prevents first `search_docs` call from stalling.
+5. **Ensure FTS + graph indexes**: If `docs_fts` table is empty, call `fts_rebuild_all()` + `graph_rebuild_all()`. Same logic as `server/main.py` startup.
 
 ## Constraints
 
