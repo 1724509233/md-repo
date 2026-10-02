@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 from pathlib import Path
@@ -79,8 +80,14 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         return {"status": "ok", "file_count": len(files)}
 
     @app.get("/api/docs")
-    async def list_docs() -> list[dict]:
-        return get_all_files(db_conn)
+    async def list_docs(request: Request) -> JSONResponse:
+        files = get_all_files(db_conn)
+        etag = hashlib.sha256(
+            json.dumps(files, sort_keys=True).encode()
+        ).hexdigest()
+        if request.headers.get("if-none-match") == f'"{etag}"':
+            return JSONResponse(content=[], status_code=304, headers={"ETag": f'"{etag}"'})
+        return JSONResponse(content=files, headers={"ETag": f'"{etag}"'})
 
     @app.get("/api/docs/changes")
     async def get_changes(since: float = 0.0) -> list[dict]:

@@ -148,7 +148,7 @@ def get_changes(
     source: str | None = None,
     limit: int = 50,
 ) -> list[dict]:
-    """Return change events with ts > since, ordered by seq.
+    """Return change events with ts > since, ordered by seq DESC.
 
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
     and new keys (``seq``, ``source``, ``new_hash``).

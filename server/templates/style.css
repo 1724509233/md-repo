@@ -14,6 +14,20 @@
 .chev{transition:transform .2s ease}
 input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!important}
 
+/* Code block token colors (no hljs theme CSS — we control colors here) */
+pre code.hljs{background:transparent;padding:0}
+.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-meta{color:#c084fc}
+.hljs-string,.hljs-selector-attr,.hljs-selector-class{color:#86efac}
+.hljs-title,.hljs-title.function_,.hljs-title.class_{color:#93c5fd}
+.hljs-comment,.hljs-quote{color:#6b7280;font-style:italic}
+.hljs-number,.hljs-operator{color:#fbbf24}
+.hljs-built_in,.hljs-type{color:#67e8f9}
+.hljs-attr,.hljs-attribute,.hljs-variable{color:#fca5a5}
+.hljs-regexp,.hljs-symbol{color:#f0abfc}
+.hljs-bullet,.hljs-link,.hljs-section{color:#93c5fd}
+.hljs-emphasis{font-style:italic}
+.hljs-strong{font-weight:700}
+
 /* Tool cards in AI chat */
 .tool-card {
     border-radius: 8px;

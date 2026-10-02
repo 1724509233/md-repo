@@ -13,9 +13,7 @@ tailwind.config={darkMode:'class',theme:{extend:{colors:{primary:{50:'#eff6ff',1
 <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
-<link id="hljs-dark" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css" disabled>
-<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/highlight.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 h-screen overflow-hidden antialiased">
@@ -136,20 +134,21 @@ function buildTree(files){
     if(name.toLowerCase().endsWith('.md'))name=name.slice(0,-3);
     node.files.push({path:f.path,name:name});
   });
-  function renderNode(node,depth){
+  function renderNode(node,depth,pathPrefix){
     var html='';
     var dirNames=Object.keys(node.dirs).sort();
     dirNames.forEach(function(dn){
       var child=node.dirs[dn];
       var count=0;
       (function c(n){n.files.forEach(function(){count++});Object.keys(n.dirs).forEach(function(k){c(n.dirs[k])})})(child);
-      html+='<div class="tree-group open">';
+      var dirPath=pathPrefix?pathPrefix+'/'+dn:dn;
+      html+='<div class="tree-group open" data-dir="'+esc(dirPath)+'">';
       html+='<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-left">';
       html+='<svg class="chev w-3.5 h-3.5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
       html+='<span>📁</span><span class="font-medium">'+esc(dn)+'</span><span class="ml-auto text-xs text-gray-400 bg-gray-100 dark:bg-gray-800 rounded-full px-2 py-0.5">'+count+'</span>';
       html+='</button>';
       html+='<div class="tree-children ml-2 pl-1.5 border-l border-gray-200 dark:border-gray-800 space-y-0.5 py-0.5">';
-      html+=renderNode(child,depth+1);
+      html+=renderNode(child,depth+1,dirPath);
       html+='</div></div>';
     });
     node.files.sort(function(a,b){return a.name<b.name?-1:1}).forEach(function(it){
@@ -157,13 +156,39 @@ function buildTree(files){
     });
     return html;
   }
-  return renderNode(root,0);
+  return renderNode(root,0,'');
 }
+var lastTreeHash = '';
+
 async function loadDocs(){
   try{
-    var res=await fetch('/api/docs');
-    var files=await res.json();
-    treeEl.innerHTML=buildTree(files);
+    var headers = lastTreeHash ? {'If-None-Match': lastTreeHash} : {};
+    var res = await fetch('/api/docs', {headers: headers});
+    if(res.status === 304) return; // no changes, skip re-render
+    var files = await res.json();
+    lastTreeHash = res.headers.get('ETag') || '';
+
+    // Save expanded directory paths
+    var openPaths = new Set();
+    treeEl.querySelectorAll('.tree-group.open').forEach(function(g){
+      var d = g.getAttribute('data-dir');
+      if(d) openPaths.add(d);
+    });
+
+    treeEl.innerHTML = buildTree(files);
+
+    // Restore expand state
+    treeEl.querySelectorAll('.tree-group').forEach(function(g){
+      var d = g.getAttribute('data-dir');
+      if(d && openPaths.has(d)){
+        g.classList.add('open');
+      } else {
+        g.classList.remove('open');
+        var c = g.querySelector(':scope > .tree-children');
+        if(c) c.classList.add('hidden');
+      }
+    });
+
     treeEl.querySelectorAll('.tree-row').forEach(function(btn){
       btn.addEventListener('click',function(){
         var g=btn.closest('.tree-group');
@@ -186,30 +211,44 @@ async function loadDocs(){
 }
 
 /* ---------- change polling ---------- */
-var lastChangeTs = 0;
+var lastChangeTs = Date.now() / 1000;
 
 async function pollChanges(){
   try{
     var res = await fetch('/api/docs/changes?since=' + lastChangeTs);
     var changes = await res.json();
     if(!changes.length) return;
-    for(var i=0;i<changes.length;i++){
-      lastChangeTs = changes[i].ts;
+    // DESC order: changes[0] is newest → advance cursor
+    lastChangeTs = changes[0].ts;
+
+    // Classify: tree structure changed?
+    var treeChanged = changes.some(function(c){
+      return c.action==='created' || c.action==='deleted' || c.action==='moved';
+    });
+    if(treeChanged){
+      await loadDocs();
     }
-    loadDocs();
+
+    // Current doc affected?
     var curAffected = changes.some(function(c){
       return c.path === currentPath || (c.action==='moved' && c.from_path===currentPath);
     });
     if(curAffected && currentPath){
-      var stillExists = changes.every(function(c){
-        return !(c.path===currentPath && c.action==='deleted');
+      var deleted = changes.some(function(c){
+        return c.path===currentPath && c.action==='deleted';
       });
-      if(!stillExists){
+      var moved = changes.find(function(c){
+        return c.action==='moved' && c.from_path===currentPath;
+      });
+      if(deleted){
         editor.value='';
         document.getElementById('current-file').textContent='(已删除)';
         if(previewMode)renderPreview();
       } else {
-        // Re-fetch content and update preview if in preview mode
+        if(moved){
+          currentPath = moved.path;
+          document.getElementById('current-file').textContent=currentPath;
+        }
         fetch('/api/docs/'+encodeURIComponent(currentPath)).then(function(r){return r.text()}).then(function(text){
           editor.value=text;
           if(previewMode)renderPreview();
@@ -284,13 +323,11 @@ document.getElementById('search-input').addEventListener('input',function(){
 });
 
 /* ---------- theme ---------- */
-function applyTheme(dark){document.getElementById('hljs-light').disabled=dark;document.getElementById('hljs-dark').disabled=!dark}
 document.getElementById('theme-toggle').addEventListener('click',function(){
   var h=document.documentElement;var d=h.classList.contains('dark');
-  h.classList.toggle('dark');applyTheme(!d);
+  h.classList.toggle('dark');
   this.textContent=d?'🌙':'☀️';
 });
-applyTheme(document.documentElement.classList.contains('dark'));
 
 /* ---------- AI chat (SSE streaming) ---------- */
 var aiBtn=document.getElementById('ai-btn'),aiPanel=document.getElementById('ai-panel');
