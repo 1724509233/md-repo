@@ -18,6 +18,12 @@ def test_health(client) -> None:
     assert r.json() == {"status": "ok", "file_count": 1}
 
 
+def test_index_page(client) -> None:
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+
+
 def test_list_docs(client) -> None:
     r = client.get("/api/docs")
     assert r.status_code == 200

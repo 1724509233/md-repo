@@ -71,7 +71,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse("index.html", {"request": request})
+        return templates.TemplateResponse(request, "index.html")
 
     @app.get("/api/health")
     async def health() -> dict:
