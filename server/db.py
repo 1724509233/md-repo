@@ -31,7 +31,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     ``file_changes`` table into the new ``change_log`` table if present.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         """
