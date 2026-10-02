@@ -22,7 +22,7 @@ dev = [
 mcp = ["mcp[cli]>=2.0"]
 
 [project.scripts]
-md-vault-mcp = "mcp_server:main"
+md-vault-mcp = "server.mcp_server:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]

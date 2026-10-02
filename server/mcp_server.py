@@ -11,7 +11,7 @@ def _find_config() -> Path:
     cwd = Path.cwd() / "config.yaml"
     if cwd.is_file():
         return cwd
-    project_root = Path(__file__).parent / "config.yaml"
+    project_root = Path(__file__).parent.parent / "config.yaml"
     if project_root.is_file():
         return project_root
     raise FileNotFoundError("config.yaml not found in CWD or project root")
