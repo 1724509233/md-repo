@@ -59,14 +59,14 @@ html, body { background: var(--bg); color: var(--text); }
 @media (max-width: 1023px) {
   #ai-panel{
     position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;
-    height:50vh;transform:translateY(100%);
+    height:80vh;transform:translateY(100%);
     border-left:none;border-top:1px solid var(--border);
     /* Clear visual distinction from the desktop side panel:
        rounded top corners, a soft accent glow along the top edge, and a deep shadow. */
     border-radius:24px 24px 0 0;
     box-shadow:0 -16px 48px rgba(0,0,0,.45),0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
     z-index:20;
-    transition:transform .38s cubic-bezier(.32,.72,0,1),height .25s ease;
+    transition:transform .38s cubic-bezier(.32,.72,0,1);
   }
   #ai-panel.open{transform:translateY(0)}
   #ai-sheet-handle{display:flex}
@@ -83,7 +83,7 @@ html, body { background: var(--bg); color: var(--text); }
   #ai-btn:hover{background:color-mix(in srgb, var(--accent) 12%, var(--surface-2));color:var(--accent)}
   /* Lift via transform (GPU, no reflow): bottom stays at Tailwind's `bottom-5`
      (20px); open translates up by the delta to the sheet's top edge + 4px gap. */
-  #ai-btn.open{transform:translateY(calc(50vh + 4px))}
+   #ai-btn.open{transform:translateY(calc(80vh + 4px))}
   /* Chevron: base points UP (toward the closed sheet); open rotates to DOWN. */
   #ai-btn #ai-chevron{transform:rotate(0deg)}
   #ai-btn.open #ai-chevron{transform:rotate(180deg)}

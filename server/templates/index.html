@@ -1,797 +1,867 @@
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>md-vault · AI 工作台</title>
-<script>
-(function(){var t=localStorage.getItem('mdvault-theme')||'dark';document.documentElement.setAttribute('data-theme',t);})();
-</script>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-tailwind.config={darkMode:'class',theme:{extend:{colors:{bg:'var(--bg)',surface:'var(--surface)',surface2:'var(--surface-2)',border:'var(--border)',text:'var(--text)',muted:'var(--text-muted)',accent:'var(--accent)',accent2:'var(--accent-2)'},fontFamily:{sans:['Inter','-apple-system','PingFang SC','Microsoft YaHei','sans-serif'],mono:['JetBrains Mono','ui-monospace','monospace']}}}}
-</script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.css">
-<script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
-<link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>md-vault · AI 工作台</title>
+  <script>
+    (function () { var t = localStorage.getItem('mdvault-theme') || 'dark'; document.documentElement.setAttribute('data-theme', t); })();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = { darkMode: 'class', theme: { extend: { colors: { bg: 'var(--bg)', surface: 'var(--surface)', surface2: 'var(--surface-2)', border: 'var(--border)', text: 'var(--text)', muted: 'var(--text-muted)', accent: 'var(--accent)', accent2: 'var(--accent-2)' }, fontFamily: { sans: ['Inter', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'], mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] } } } }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body class="bg-bg text-text h-screen overflow-hidden antialiased font-sans">
-<div class="flex h-screen">
-<aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-surface border-r border-border flex flex-col transform transition-transform duration-300 -translate-x-full lg:translate-x-0">
-<div class="flex items-center gap-2.5 px-4 h-14 border-b border-border shrink-0">
-<div class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white font-bold text-sm">M</div>
-<span class="font-semibold text-[15px]">md-vault</span>
-<button id="sidebar-close" aria-label="关闭侧边栏" class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden">✕</button>
-</div>
-<div class="px-3 pt-3 pb-2 shrink-0">
-<div class="relative">
-<span class="absolute inset-y-0 left-0 flex items-center pl-3"><svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>
-<input id="search-input" type="text" class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-surface2 focus:ring-2 focus:ring-accent/40 focus:border-accent outline-none" placeholder="搜索文档…">
-</div>
-</div>
-<nav id="file-tree" class="flex-1 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
-<div class="text-muted text-xs px-2 py-3 text-center">加载中…</div>
-</nav>
-</aside>
-<div id="overlay" class="fixed inset-0 bg-black/30 z-30 hidden"></div>
-<div class="flex-1 flex overflow-hidden relative">
-<main id="main-area" class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
-<div class="flex items-center gap-3 px-4 h-14 border-b border-border bg-surface shrink-0">
-<button id="hamburger" aria-label="打开侧边栏" class="lg:hidden w-11 h-11 flex items-center justify-center text-muted hover:text-text">☰</button>
-<span id="current-file" class="font-medium text-sm flex-1 truncate">未选择文档</span>
-<div class="hidden lg:flex rounded-lg overflow-hidden border border-border text-xs">
-<button id="btn-edit" class="px-3 py-1.5 bg-surface text-muted hover:bg-surface2">✏️ 编辑</button>
-<button id="btn-preview" class="px-3 py-1.5 bg-accent text-white font-medium">👁 预览</button>
-</div>
-<button id="btn-download" class="hidden lg:block text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-surface2">↓ 下载</button>
-<button id="btn-save" class="hidden lg:block text-xs px-3 py-1.5 bg-accent text-white rounded-lg hover:opacity-90">保存</button>
-<div class="lg:hidden relative">
-<button id="btn-more" aria-label="更多操作" class="w-11 h-11 flex items-center justify-center border border-border rounded-lg text-muted hover:bg-surface2">⋯</button>
-<div id="more-menu" class="hidden absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50 py-1">
-<button id="more-edit" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">✏️ 编辑</button>
-<button id="more-preview" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">👁 预览</button>
-<button id="more-save" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">💾 保存</button>
-<button id="more-download" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">↓ 下载</button>
-</div>
-</div>
-<button id="theme-toggle" aria-label="切换主题" class="w-11 h-11 flex items-center justify-center border border-border rounded-lg hover:bg-surface2">☾</button>
-</div>
-<div id="content-area" class="flex-1 overflow-y-auto p-4 md:p-6">
-<div class="max-w-[720px] mx-auto min-h-full flex flex-col">
-<textarea id="editor" class="hidden w-full flex-1 border-0 bg-transparent resize-none focus:outline-none font-mono text-sm leading-relaxed" placeholder="从左侧选择一个文档..."></textarea>
-<div id="preview" class="w-full flex-1"></div>
-</div>
-</div>
-</main>
-<button id="ai-btn" aria-label="打开/关闭 AI 助手" class="fixed bottom-5 right-4 flex items-center justify-center">
-<svg id="ai-chevron" class="w-5 h-5 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/></svg>
-</button>
-<div id="ai-sheet-backdrop"></div>
-<div id="ai-panel" class="bg-surface border-border flex flex-col">
-<div id="ai-sheet-handle"></div>
-<div class="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
-<div class="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white">🤖</div>
-<div class="flex-1 min-w-0"><div class="font-semibold text-sm">AI 助手</div><div id="ai-status" class="text-xs text-muted flex items-center gap-2">就绪</div></div>
-<span id="ai-mode" class="text-xs px-2.5 py-1 bg-accent/10 text-accent rounded-md cursor-pointer font-medium whitespace-nowrap">当前文档</span>
-<button id="btn-new-session" onclick="startNewSession()" class="text-[11px] px-2 py-1 border border-border rounded bg-surface hover:bg-surface2 cursor-pointer text-text">新会话</button>
-<button id="ai-close" aria-label="关闭 AI 助手" class="w-11 h-11 flex items-center justify-center text-muted hover:text-text">✕</button>
-</div>
-<div id="ai-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
-<div id="token-wrap" class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0">
-<span id="token-text" class="text-[11px] text-muted whitespace-nowrap">Token 0K / ?K</span>
-<div class="flex-1 h-1 bg-surface2 rounded-full overflow-hidden"><div id="token-fill" class="h-full rounded-full transition-all duration-300" style="width:0%;background:#22c55e"></div></div>
-</div>
-<div class="p-3 border-t border-border shrink-0">
-<div class="flex items-end gap-2 bg-surface2 rounded-xl p-3 focus-within:ring-2 focus-within:ring-accent/40">
-<textarea id="ai-input" rows="1" class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm" placeholder="输入消息，Enter 发送..."></textarea>
-<button id="ai-send" aria-label="发送消息" class="w-9 h-9 rounded-full bg-accent hover:opacity-90 text-white flex items-center justify-center shrink-0">↑</button>
-<button id="ai-stop" aria-label="中止" class="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shrink-0 hidden">■</button>
-</div>
-</div>
-</div>
-</div>
-</div>
-<script>
-(function(){
-var currentPath=null;
-var previewMode=true;
-var btnEdit=document.getElementById('btn-edit'),btnPrev=document.getElementById('btn-preview');
-var editor=document.getElementById('editor'),preview=document.getElementById('preview');
-var treeEl=document.getElementById('file-tree');
+  <div class="flex h-screen">
+    <aside id="sidebar"
+      class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-surface border-r border-border flex flex-col transform transition-transform duration-300 -translate-x-full lg:translate-x-0">
+      <div class="flex items-center gap-2.5 px-4 h-14 border-b border-border shrink-0">
+        <div
+          class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white font-bold text-sm">
+          M</div>
+        <span class="font-semibold text-[15px]">md-vault</span>
+        <button id="sidebar-close" aria-label="关闭侧边栏"
+          class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden">✕</button>
+      </div>
+      <div class="px-3 pt-3 pb-2 shrink-0">
+        <div class="relative">
+          <span class="absolute inset-y-0 left-0 flex items-center pl-3"><svg class="w-4 h-4 text-muted" fill="none"
+              stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg></span>
+          <input id="search-input" type="text"
+            class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-surface2 focus:ring-2 focus:ring-accent/40 focus:border-accent outline-none"
+            placeholder="搜索文档…">
+        </div>
+      </div>
+      <nav id="file-tree" class="flex-1 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
+        <div class="text-muted text-xs px-2 py-3 text-center">加载中…</div>
+      </nav>
+    </aside>
+    <div id="overlay" class="fixed inset-0 bg-black/30 z-30 hidden"></div>
+    <div class="flex-1 flex overflow-hidden relative">
+      <main id="main-area" class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
+        <div class="flex items-center gap-3 px-4 h-14 border-b border-border bg-surface shrink-0">
+          <button id="hamburger" aria-label="打开侧边栏"
+            class="lg:hidden w-11 h-11 flex items-center justify-center text-muted hover:text-text">☰</button>
+          <span id="current-file" class="font-medium text-sm flex-1 truncate">未选择文档</span>
+          <div class="hidden lg:flex rounded-lg overflow-hidden border border-border text-xs">
+            <button id="btn-edit" class="px-3 py-1.5 bg-surface text-muted hover:bg-surface2">✏️ 编辑</button>
+            <button id="btn-preview" class="px-3 py-1.5 bg-accent text-white font-medium">👁 预览</button>
+          </div>
+          <button id="btn-download"
+            class="hidden lg:block text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-surface2">↓ 下载</button>
+          <button id="btn-save"
+            class="hidden lg:block text-xs px-3 py-1.5 bg-accent text-white rounded-lg hover:opacity-90">保存</button>
+          <div class="lg:hidden relative">
+            <button id="btn-more" aria-label="更多操作"
+              class="w-11 h-11 flex items-center justify-center border border-border rounded-lg text-muted hover:bg-surface2">⋯</button>
+            <div id="more-menu"
+              class="hidden absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50 py-1">
+              <button id="more-edit" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">✏️ 编辑</button>
+              <button id="more-preview" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">👁 预览</button>
+              <button id="more-save" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">💾 保存</button>
+              <button id="more-download" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">↓ 下载</button>
+            </div>
+          </div>
+          <button id="theme-toggle" aria-label="切换主题"
+            class="w-11 h-11 flex items-center justify-center border border-border rounded-lg hover:bg-surface2">☾</button>
+        </div>
+        <div id="content-area" class="flex-1 overflow-y-auto p-4 md:p-6">
+          <div class="max-w-[720px] mx-auto min-h-full flex flex-col">
+            <textarea id="editor"
+              class="hidden w-full flex-1 border-0 bg-transparent resize-none focus:outline-none font-mono text-sm leading-relaxed"
+              placeholder="从左侧选择一个文档..."></textarea>
+            <div id="preview" class="w-full flex-1"></div>
+          </div>
+        </div>
+      </main>
+      <button id="ai-btn" aria-label="打开/关闭 AI 助手" class="fixed bottom-5 right-4 flex items-center justify-center">
+        <svg id="ai-chevron" class="w-5 h-5 transition-transform duration-300" fill="none" stroke="currentColor"
+          viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+        </svg>
+      </button>
+      <div id="ai-sheet-backdrop"></div>
+      <div id="ai-panel" class="bg-surface border-border flex flex-col">
+        <div id="ai-sheet-handle"></div>
+        <div class="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
+          <div
+            class="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white">
+            🤖</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm">AI 助手</div>
+            <div id="ai-status" class="text-xs text-muted flex items-center gap-2">就绪</div>
+          </div>
+          <span id="ai-mode"
+            class="text-xs px-2.5 py-1 bg-accent/10 text-accent rounded-md cursor-pointer font-medium whitespace-nowrap">当前文档</span>
+          <button id="btn-new-session" onclick="startNewSession()"
+            class="text-[11px] px-2 py-1 border border-border rounded bg-surface hover:bg-surface2 cursor-pointer text-text">新会话</button>
+          <button id="ai-close" aria-label="关闭 AI 助手"
+            class="w-11 h-11 flex items-center justify-center text-muted hover:text-text">✕</button>
+        </div>
+        <div id="ai-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
+        <div id="token-wrap" class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0">
+          <span id="token-text" class="text-[11px] text-muted whitespace-nowrap">Token 0K / ?K</span>
+          <div class="flex-1 h-1 bg-surface2 rounded-full overflow-hidden">
+            <div id="token-fill" class="h-full rounded-full transition-all duration-300"
+              style="width:0%;background:#22c55e"></div>
+          </div>
+        </div>
+        <div class="p-3 border-t border-border shrink-0">
+          <div class="flex items-end gap-2 bg-surface2 rounded-xl p-3 focus-within:ring-2 focus-within:ring-accent/40">
+            <textarea id="ai-input" rows="1"
+              class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
+              placeholder="输入消息，Enter 发送..."></textarea>
+            <button id="ai-send" aria-label="发送消息"
+              class="w-9 h-9 rounded-full bg-accent hover:opacity-90 text-white flex items-center justify-center shrink-0">↑</button>
+            <button id="ai-stop" aria-label="中止"
+              class="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shrink-0 hidden">■</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+      (function () {
+        var currentPath = null;
+        var previewMode = true;
+        var btnEdit = document.getElementById('btn-edit'), btnPrev = document.getElementById('btn-preview');
+        var editor = document.getElementById('editor'), preview = document.getElementById('preview');
+        var treeEl = document.getElementById('file-tree');
 
-/* ---------- theme toggle (dark → blue → paper) ---------- */
-var THEMES=['dark','blue','paper'];
-var THEME_ICONS={dark:'☾',blue:'☀',paper:'📄'};
-function applyTheme(t){
-  document.documentElement.setAttribute('data-theme',t);
-  localStorage.setItem('mdvault-theme',t);
-  var btn=document.getElementById('theme-toggle');
-  if(btn)btn.textContent=THEME_ICONS[t]||'☾';
-}
-applyTheme(document.documentElement.getAttribute('data-theme')||'dark');
-document.getElementById('theme-toggle').addEventListener('click',function(){
-  var cur=document.documentElement.getAttribute('data-theme')||'dark';
-  var next=THEMES[(THEMES.indexOf(cur)+1)%THEMES.length];
-  applyTheme(next);
-});
-
-/* ---------- mobile "更多" dropdown ---------- */
-var btnMore=document.getElementById('btn-more'),moreMenu=document.getElementById('more-menu');
-btnMore.addEventListener('click',function(e){e.stopPropagation();moreMenu.classList.toggle('hidden')});
-document.addEventListener('click',function(){moreMenu.classList.add('hidden')});
-document.getElementById('more-edit').addEventListener('click',function(){setMode('edit');moreMenu.classList.add('hidden')});
-document.getElementById('more-preview').addEventListener('click',function(){setMode('preview');moreMenu.classList.add('hidden')});
-document.getElementById('more-save').addEventListener('click',function(){saveDoc();moreMenu.classList.add('hidden')});
-document.getElementById('more-download').addEventListener('click',function(){
-  if(!currentPath)return;
-  var blob=new Blob([editor.value],{type:'text/markdown'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=currentPath.split('/').pop();a.click();URL.revokeObjectURL(a.href);
-  moreMenu.classList.add('hidden');
-});
-
-/* ---------- marked renderer (Tailwind classes) ---------- */
-var renderer=new marked.Renderer();
-renderer.heading=function(text,level){return '<h'+level+' class="font-bold text-text '+(level===1?'text-2xl mt-8 mb-4 border-b border-border pb-2':level===2?'text-xl mt-6 mb-3':level===3?'text-lg mt-5 mb-2':'text-base mt-4 mb-2')+'">'+text+'</h'+level+'>'};
-renderer.list=function(body,ordered,start){var tag=ordered?'ol':'ul';return '<'+tag+' class="'+(ordered?'list-decimal':'list-disc')+' pl-5 space-y-1.5 my-3">'+body+'</'+tag+'>'};
-renderer.listitem=function(text){return '<li class="leading-relaxed">'+text+'</li>'};
-renderer.code=function(code,lang){
-  var langLabel=lang||'text';
-  var cls=lang?' class="language-'+lang+'"':'';
-  return '<div class="code-block"><div class="code-block-header"><span>'+langLabel+'</span><button class="code-copy-btn" type="button">复制</button></div><pre><code'+cls+'>'+code+'</code></pre></div>';
-};
-renderer.blockquote=function(quote){return '<blockquote class="border-l-[3px] border-accent pl-4 my-3 text-muted italic">'+quote+'</blockquote>'};
-renderer.table=function(header,body){return '<div class="overflow-x-auto my-3"><table class="w-full text-sm border-collapse"><thead><tr>'+header+'</tr></thead><tbody>'+body+'</tbody></table></div>'};
-renderer.tablerow=function(content){return '<tr class="border-b border-border hover:bg-surface2">'+content+'</tr>'};
-renderer.tablecell=function(content,header){var tag=header?'th':'td';return '<'+tag+' class="'+(header?'bg-surface2 font-semibold text-left':'')+' px-3 py-2 border border-border">'+content+'</'+tag+'>'};
-renderer.paragraph=function(text){return '<p class="my-4 leading-[1.75]">'+text+'</p>'};
-renderer.strong=function(text){return '<strong class="font-semibold text-text">'+text+'</strong>'};
-renderer.em=function(text){return '<em class="italic">'+text+'</em>'};
-renderer.codespan=function(text){return '<code class="bg-surface2 text-accent px-1.5 py-0.5 rounded text-xs font-mono">'+text+'</code>'};
-renderer.hr=function(){return '<hr class="my-6 border-border">'};
-renderer.link=function(href,text){return '<a href="'+href+'" class="text-accent underline hover:no-underline">'+text+'</a>'};
-marked.setOptions({renderer:renderer});
-
-/* ---------- copy buttons for code blocks (delegated) ---------- */
-document.addEventListener('click',function(e){
-  var btn=e.target.closest('.code-copy-btn');
-  if(!btn)return;
-  var pre=btn.closest('.code-block').querySelector('pre code');
-  if(!pre)return;
-  var text=pre.textContent;
-  function done(){btn.textContent='✓';setTimeout(function(){btn.textContent='复制'},1500)}
-  if(navigator.clipboard&&navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(done).catch(function(){fallbackCopy(text);done()});
-  }else{fallbackCopy(text);done()}
-});
-function fallbackCopy(text){
-  var ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';
-  document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(e){}
-  document.body.removeChild(ta);
-}
-
-/* ---------- preview rendering (DOMPurify + highlight + mermaid) ---------- */
-function renderPreview(){
-  var raw=marked.parse(editor.value);
-  preview.innerHTML=window.DOMPurify?DOMPurify.sanitize(raw):raw;
-  preview.querySelectorAll('pre code').forEach(function(el){if(window.hljs)hljs.highlightElement(el)});
-  var mermaidBlocks=preview.querySelectorAll('pre code.language-mermaid');
-  if(mermaidBlocks.length&&window.mermaid){
-    mermaidBlocks.forEach(function(block){
-      var div=document.createElement('div');
-      div.className='mermaid';
-      div.textContent=block.textContent;
-      block.parentElement.replaceWith(div);
-    });
-    mermaid.run({nodes:preview.querySelectorAll('.mermaid')});
-  }
-}
-
-/* ---------- file tree (recursive) ---------- */
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function buildTree(files){
-  var root={dirs:{},files:[]};
-  files.forEach(function(f){
-    var parts=f.path.split('/');
-    var node=root;
-    for(var i=0;i<parts.length-1;i++){
-      if(!node.dirs[parts[i]])node.dirs[parts[i]]={dirs:{},files:[]};
-      node=node.dirs[parts[i]];
-    }
-    var name=parts[parts.length-1];
-    if(name.toLowerCase().endsWith('.md'))name=name.slice(0,-3);
-    node.files.push({path:f.path,name:name});
-  });
-  function renderNode(node,depth,pathPrefix){
-    var html='';
-    var dirNames=Object.keys(node.dirs).sort();
-    dirNames.forEach(function(dn){
-      var child=node.dirs[dn];
-      var count=0;
-      (function c(n){n.files.forEach(function(){count++});Object.keys(n.dirs).forEach(function(k){c(n.dirs[k])})})(child);
-      var dirPath=pathPrefix?pathPrefix+'/'+dn:dn;
-      html+='<div class="tree-group open" data-dir="'+esc(dirPath)+'">';
-      html+='<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-surface2 text-left">';
-      html+='<svg class="chev w-3.5 h-3.5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
-      html+='<span>📁</span><span class="font-medium">'+esc(dn)+'</span><span class="ml-auto text-xs text-muted bg-surface2 rounded-full px-2 py-0.5">'+count+'</span>';
-      html+='</button>';
-      html+='<div class="tree-children ml-2 pl-1.5 border-l border-border space-y-0.5 py-0.5">';
-      html+=renderNode(child,depth+1,dirPath);
-      html+='</div></div>';
-    });
-    node.files.sort(function(a,b){return a.name<b.name?-1:1}).forEach(function(it){
-      html+='<button class="tree-file w-full text-left px-2 py-1.5 rounded-md hover:bg-surface2" data-path="'+esc(it.path)+'">'+esc(it.name)+'</button>';
-    });
-    return html;
-  }
-  return renderNode(root,0,'');
-}
-var lastTreeHash = '';
-
-async function loadDocs(){
-  try{
-    var headers = lastTreeHash ? {'If-None-Match': lastTreeHash} : {};
-    var res = await fetch('/api/docs', {headers: headers});
-    if(res.status === 304) return; // no changes, skip re-render
-    var files = await res.json();
-    lastTreeHash = res.headers.get('ETag') || '';
-
-    // Save expanded directory paths
-    var openPaths = new Set();
-    treeEl.querySelectorAll('.tree-group.open').forEach(function(g){
-      var d = g.getAttribute('data-dir');
-      if(d) openPaths.add(d);
-    });
-
-    treeEl.innerHTML = buildTree(files);
-
-    // Restore expand state
-    treeEl.querySelectorAll('.tree-group').forEach(function(g){
-      var d = g.getAttribute('data-dir');
-      if(d && openPaths.has(d)){
-        g.classList.add('open');
-      } else {
-        g.classList.remove('open');
-        var c = g.querySelector(':scope > .tree-children');
-        if(c) c.classList.add('hidden');
-      }
-    });
-
-    treeEl.querySelectorAll('.tree-row').forEach(function(btn){
-      btn.addEventListener('click',function(){
-        var g=btn.closest('.tree-group');
-        if(!g)return;
-        g.classList.toggle('open');
-        var c=g.querySelector(':scope > .tree-children');
-        if(c)c.classList.toggle('hidden');
-      });
-    });
-    treeEl.querySelectorAll('.tree-file').forEach(function(btn){
-      btn.addEventListener('click',function(){
-        treeEl.querySelectorAll('.tree-file.active').forEach(function(el){el.classList.remove('active','bg-accent/10','text-accent')});
-        btn.classList.add('active','bg-accent/10','text-accent');
-        openDoc(btn.dataset.path);
-        document.getElementById('sidebar').classList.add('-translate-x-full');
-        document.getElementById('overlay').classList.add('hidden');
-      });
-    });
-  }catch(e){treeEl.innerHTML='<div class="text-red-400 text-xs px-2 py-3">加载失败: '+esc(e.message)+'</div>'}
-}
-
-/* ---------- change polling ---------- */
-var lastChangeTs = Date.now() / 1000;
-
-async function pollChanges(){
-  try{
-    var res = await fetch('/api/docs/changes?since=' + lastChangeTs);
-    var changes = await res.json();
-    if(!changes.length) return;
-    // DESC order: changes[0] is newest → advance cursor
-    lastChangeTs = changes[0].ts;
-
-    // Classify: tree structure changed?
-    var treeChanged = changes.some(function(c){
-      return c.action==='created' || c.action==='deleted' || c.action==='moved';
-    });
-    if(treeChanged){
-      await loadDocs();
-    }
-
-    // Current doc affected?
-    var curAffected = changes.some(function(c){
-      return c.path === currentPath || (c.action==='moved' && c.from_path===currentPath);
-    });
-    if(curAffected && currentPath){
-      var deleted = changes.some(function(c){
-        return c.path===currentPath && c.action==='deleted';
-      });
-      var moved = changes.find(function(c){
-        return c.action==='moved' && c.from_path===currentPath;
-      });
-      if(deleted){
-        editor.value='';
-        document.getElementById('current-file').textContent='(已删除)';
-        if(previewMode)renderPreview();
-      } else {
-        if(moved){
-          currentPath = moved.path;
-          document.getElementById('current-file').textContent=currentPath;
+        /* ---------- theme toggle (dark → blue → paper) ---------- */
+        var THEMES = ['dark', 'blue', 'paper'];
+        var THEME_ICONS = { dark: '☾', blue: '☀', paper: '📄' };
+        function applyTheme(t) {
+          document.documentElement.setAttribute('data-theme', t);
+          localStorage.setItem('mdvault-theme', t);
+          var btn = document.getElementById('theme-toggle');
+          if (btn) btn.textContent = THEME_ICONS[t] || '☾';
         }
-        fetch('/api/docs/'+encodeURIComponent(currentPath)).then(function(r){return r.text()}).then(function(text){
-          editor.value=text;
-          if(previewMode)renderPreview();
-        }).catch(function(){});
-      }
-    }
-  }catch(e){}
-}
+        applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+        document.getElementById('theme-toggle').addEventListener('click', function () {
+          var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+          var next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
+          applyTheme(next);
+        });
 
-setInterval(pollChanges, 10000);
+        /* ---------- mobile "更多" dropdown ---------- */
+        var btnMore = document.getElementById('btn-more'), moreMenu = document.getElementById('more-menu');
+        btnMore.addEventListener('click', function (e) { e.stopPropagation(); moreMenu.classList.toggle('hidden') });
+        document.addEventListener('click', function () { moreMenu.classList.add('hidden') });
+        document.getElementById('more-edit').addEventListener('click', function () { setMode('edit'); moreMenu.classList.add('hidden') });
+        document.getElementById('more-preview').addEventListener('click', function () { setMode('preview'); moreMenu.classList.add('hidden') });
+        document.getElementById('more-save').addEventListener('click', function () { saveDoc(); moreMenu.classList.add('hidden') });
+        document.getElementById('more-download').addEventListener('click', function () {
+          if (!currentPath) return;
+          var blob = new Blob([editor.value], { type: 'text/markdown' });
+          var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = currentPath.split('/').pop(); a.click(); URL.revokeObjectURL(a.href);
+          moreMenu.classList.add('hidden');
+        });
 
-/* ---------- doc load / save ---------- */
-var dirty=false;
+        /* ---------- marked renderer (Tailwind classes) ---------- */
+        var renderer = new marked.Renderer();
+        renderer.heading = function (text, level) { return '<h' + level + ' class="font-bold text-text ' + (level === 1 ? 'text-2xl mt-8 mb-4 border-b border-border pb-2' : level === 2 ? 'text-xl mt-6 mb-3' : level === 3 ? 'text-lg mt-5 mb-2' : 'text-base mt-4 mb-2') + '">' + text + '</h' + level + '>' };
+        renderer.list = function (body, ordered, start) { var tag = ordered ? 'ol' : 'ul'; return '<' + tag + ' class="' + (ordered ? 'list-decimal' : 'list-disc') + ' pl-5 space-y-1.5 my-3">' + body + '</' + tag + '>' };
+        renderer.listitem = function (text) { return '<li class="leading-relaxed">' + text + '</li>' };
+        renderer.code = function (code, lang) {
+          var langLabel = lang || 'text';
+          var cls = lang ? ' class="language-' + lang + '"' : '';
+          return '<div class="code-block"><div class="code-block-header"><span>' + langLabel + '</span><button class="code-copy-btn" type="button">复制</button></div><pre><code' + cls + '>' + code + '</code></pre></div>';
+        };
+        renderer.blockquote = function (quote) { return '<blockquote class="border-l-[3px] border-accent pl-4 my-3 text-muted italic">' + quote + '</blockquote>' };
+        renderer.table = function (header, body) { return '<div class="overflow-x-auto my-3"><table class="w-full text-sm border-collapse"><thead><tr>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' };
+        renderer.tablerow = function (content) { return '<tr class="border-b border-border hover:bg-surface2">' + content + '</tr>' };
+        renderer.tablecell = function (content, header) { var tag = header ? 'th' : 'td'; return '<' + tag + ' class="' + (header ? 'bg-surface2 font-semibold text-left' : '') + ' px-3 py-2 border border-border">' + content + '</' + tag + '>' };
+        renderer.paragraph = function (text) { return '<p class="my-4 leading-[1.75]">' + text + '</p>' };
+        renderer.strong = function (text) { return '<strong class="font-semibold text-text">' + text + '</strong>' };
+        renderer.em = function (text) { return '<em class="italic">' + text + '</em>' };
+        renderer.codespan = function (text) { return '<code class="bg-surface2 text-accent px-1.5 py-0.5 rounded text-xs font-mono">' + text + '</code>' };
+        renderer.hr = function () { return '<hr class="my-6 border-border">' };
+        renderer.link = function (href, text) { return '<a href="' + href + '" class="text-accent underline hover:no-underline">' + text + '</a>' };
+        marked.setOptions({ renderer: renderer });
 
-async function openDoc(path){
-  // Auto-save if current doc has unsaved edits
-  if(dirty && currentPath){
-    await saveDoc();
-  }
-  currentPath=path;
-  dirty=false;
-  document.getElementById('current-file').textContent=path;
-  try{
-    var res=await fetch('/api/docs/'+encodeURIComponent(path));
-    editor.value=await res.text();
-    if(previewMode)renderPreview();
-  }catch(e){editor.value='加载失败: '+e.message}
-}
-async function saveDoc(){
-  if(!currentPath)return;
-  try{
-    var res=await fetch('/api/docs/'+encodeURIComponent(currentPath),{method:'PUT',headers:{'Content-Type':'text/plain'},body:editor.value});
-    if(res.ok){dirty=false;document.getElementById('btn-save').textContent='✓ 已保存';setTimeout(function(){document.getElementById('btn-save').textContent='保存'},1500)}
-    else{alert('保存失败: '+res.status)}
-  }catch(e){alert('保存失败: '+e.message)}
-}
-editor.addEventListener('input',function(){dirty=true});
+        /* ---------- copy buttons for code blocks (delegated) ---------- */
+        document.addEventListener('click', function (e) {
+          var btn = e.target.closest('.code-copy-btn');
+          if (!btn) return;
+          var pre = btn.closest('.code-block').querySelector('pre code');
+          if (!pre) return;
+          var text = pre.textContent;
+          function done() { btn.textContent = '✓'; setTimeout(function () { btn.textContent = '复制' }, 1500) }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done() });
+          } else { fallbackCopy(text); done() }
+        });
+        function fallbackCopy(text) {
+          var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+          document.body.appendChild(ta); ta.select(); try { document.execCommand('copy') } catch (e) { }
+          document.body.removeChild(ta);
+        }
 
-/* ---------- edit / preview toggle ---------- */
-var MODE_ACTIVE='px-3 py-1.5 bg-accent text-white font-medium';
-var MODE_INACTIVE='px-3 py-1.5 bg-surface text-muted hover:bg-surface2';
-function setMode(mode){
-  if(mode==='edit'){
-    btnEdit.className=MODE_ACTIVE;
-    btnPrev.className=MODE_INACTIVE;
-    editor.classList.remove('hidden');preview.classList.add('hidden');
-    previewMode=false;
-  }else{
-    btnPrev.className=MODE_ACTIVE;
-    btnEdit.className=MODE_INACTIVE;
-    renderPreview();
-    editor.classList.add('hidden');preview.classList.remove('hidden');
-    previewMode=true;
-  }
-}
-btnEdit.addEventListener('click',function(){setMode('edit')});
-btnPrev.addEventListener('click',function(){setMode('preview')});
-document.getElementById('btn-save').addEventListener('click',saveDoc);
-document.getElementById('btn-download').addEventListener('click',function(){
-  if(!currentPath)return;
-  var blob=new Blob([editor.value],{type:'text/markdown'});
-  var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=currentPath.split('/').pop();a.click();URL.revokeObjectURL(a.href);
-});
+        /* ---------- preview rendering (DOMPurify + highlight + mermaid) ---------- */
+        function renderPreview() {
+          var raw = marked.parse(editor.value);
+          preview.innerHTML = window.DOMPurify ? DOMPurify.sanitize(raw) : raw;
+          preview.querySelectorAll('pre code').forEach(function (el) { if (window.hljs) hljs.highlightElement(el) });
+          var mermaidBlocks = preview.querySelectorAll('pre code.language-mermaid');
+          if (mermaidBlocks.length && window.mermaid) {
+            mermaidBlocks.forEach(function (block) {
+              var div = document.createElement('div');
+              div.className = 'mermaid';
+              div.textContent = block.textContent;
+              block.parentElement.replaceWith(div);
+            });
+            mermaid.run({ nodes: preview.querySelectorAll('.mermaid') });
+          }
+        }
 
-/* ---------- sidebar mobile ---------- */
-document.getElementById('hamburger').addEventListener('click',function(){document.getElementById('sidebar').classList.remove('-translate-x-full');document.getElementById('overlay').classList.remove('hidden')});
-document.getElementById('sidebar-close').addEventListener('click',function(){document.getElementById('sidebar').classList.add('-translate-x-full');document.getElementById('overlay').classList.add('hidden')});
-document.getElementById('overlay').addEventListener('click',function(){document.getElementById('sidebar').classList.add('-translate-x-full');this.classList.add('hidden')});
-
-/* ---------- search filter ---------- */
-document.getElementById('search-input').addEventListener('input',function(){
-  var q=this.value.toLowerCase();
-  treeEl.querySelectorAll('.tree-file').forEach(function(el){el.style.display=!q||el.textContent.toLowerCase().indexOf(q)>=0?'':'none'});
-});
-
-/* ---------- AI chat (SSE streaming) ---------- */
-var aiBtn=document.getElementById('ai-btn'),aiPanel=document.getElementById('ai-panel');
-var mainArea=document.getElementById('main-area');
-function toggleAI(open){
-  aiPanel.classList.toggle('open',open);
-  if(window.innerWidth>=1024){
-    mainArea.style.paddingRight=open?'40%':'0';
-    aiBtn.style.right=open?'40%':'0';
-  }else{
-    var bd=document.getElementById('ai-sheet-backdrop');
-    bd.classList.toggle('hidden',!open);
-    bd.classList.toggle('show',open);
-    /* Clear any inline `right` left over from a desktop session so the mobile
-       Tailwind `right-4` class takes effect after a desktop→mobile resize. */
-    aiBtn.style.right='';
-  }
-  /* Chevron direction is driven entirely by CSS: the base rotation is set per
-     breakpoint (desktop → left, mobile → up) and `.open` adds rotate(180deg).
-     Toggling the class here is all JS needs to do; resize across the breakpoint
-     re-evaluates the CSS base automatically. */
-  aiBtn.classList.toggle('open',open);
-}
-aiBtn.addEventListener('click',function(){toggleAI(!aiPanel.classList.contains('open'))});
-document.getElementById('ai-close').addEventListener('click',function(){toggleAI(false)});
-var aiMode='当前文档';
-var sessionId = 'web-' + Date.now();
-var abortCtrl=null;
-document.getElementById('ai-mode').addEventListener('click',function(){
-  aiMode=aiMode==='当前文档'?'全库搜索':'当前文档';
-  this.textContent=aiMode;
-});
-
-/* ---------- status text ---------- */
-function setStatus(state){
-  var el=document.getElementById('ai-status');
-  if(state==='thinking'){
-    el.innerHTML='思考中<span class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
-  }else{
-    el.textContent='就绪';
-  }
-}
-
-/* ---------- messages ---------- */
-function addMsg(role,text){
-  var m=document.getElementById('ai-messages');
-  var d=document.createElement('div');
-  d.className='msg-in flex '+(role==='user'?'justify-end':'');
-  var b=document.createElement('div');
-  if(role==='user'){b.className='max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-accent text-white text-sm'}
-  else{b.className='max-w-[85%] flex-1 ai-turn bg-surface2 rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm'}
-  b.textContent=text;d.appendChild(b);m.appendChild(d);m.scrollTop=m.scrollHeight;return b;
-}
-
-/* ---------- tool summary (inline in AI message) ---------- */
-var toolShortNames={
-  read_doc:'📖 读取',search_docs:'🔍 搜索',list_files:'📁 列出文件',
-  write_doc:'✏️ 写入',edit_doc:'✂️ 编辑',delete_doc:'🗑 删除',
-  move_doc:'📦 移动',get_related_docs:'🔗 关联'
-};
-function escapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
-function getToolSummary(turn){
-  var s=turn.querySelector('.tool-summary');
-  if(!s){
-    s=document.createElement('div');
-    s.className='tool-summary';
-    s.innerHTML='<span class="ts-icons"></span><span class="ts-count"></span>';
-    s.addEventListener('click',function(e){
-      if(e.target.closest('.confirm-btns'))return;
-      var det=turn.querySelector('.tool-details');
-      if(det)det.open=!det.open;
-    });
-    turn.appendChild(s);
-  }
-  return s;
-}
-function getToolDetails(turn){
-  var det=turn.querySelector('.tool-details');
-  if(!det){
-    det=document.createElement('details');
-    det.className='tool-details';
-    det.innerHTML='<summary>参数与结果</summary><div class="tool-body"></div>';
-    turn.appendChild(det);
-  }
-  return det;
-}
-function insertToolCall(turn,id,name,args){
-  var label=toolShortNames[name]||name;
-  var entry=document.createElement('div');
-  entry.className='tool-entry';
-  entry.dataset.toolId=id;
-  entry.innerHTML='<div class="flex items-center gap-2"><span class="ts-icon">⏳</span><span>'+escapeHtml(label)+'</span></div>'
-    +'<pre class="tool-pre">'+escapeHtml(JSON.stringify(args,null,2))+'</pre>';
-  getToolDetails(turn).querySelector('.tool-body').appendChild(entry);
-  var s=getToolSummary(turn);
-  var icons=s.querySelector('.ts-icons');
-  var ic=document.createElement('span');
-  ic.className='ts-icon';ic.dataset.toolId=id;ic.textContent=label.split(' ')[0];
-  icons.appendChild(ic);
-  var count=s.querySelector('.ts-count');
-  var n=icons.querySelectorAll('.ts-icon').length;
-  count.textContent='（'+n+' 个工具）';
-  var chat=document.getElementById('ai-messages');
-  chat.scrollTop=chat.scrollHeight;
-}
-function updateToolCall(id,status,result){
-  var icon=document.querySelector('.ts-icon[data-tool-id="'+id+'"]');
-  if(!icon)return;
-  var turn=icon.closest('.ai-turn');
-  if(!turn)return;
-  var entry=turn.querySelector('.tool-entry[data-tool-id="'+id+'"]');
-  if(entry){
-    var ic=entry.querySelector('.ts-icon');
-    if(status==='done'){ic.textContent='✓';ic.classList.add('text-green-500')}
-    else if(status==='confirm'){ic.textContent='⚠';ic.classList.add('text-amber-500')}
-    else if(status==='rejected'||status==='error'){ic.textContent='✕';ic.classList.add('err')}
-  }
-  if(status==='confirm'){
-    var btns=document.createElement('div');
-    btns.className='confirm-btns';
-    btns.innerHTML='<button class="confirm-yes" onclick="sendConfirm(\''+id+'\',true)">✓ 确认</button>'
-      +'<button class="confirm-no" onclick="sendConfirm(\''+id+'\',false)">✕ 取消</button>';
-    turn.appendChild(btns);
-  }
-  if(result&&entry){
-    var pre=document.createElement('div');
-    pre.className='tool-result-label';pre.textContent='结果';
-    var rp=document.createElement('pre');
-    rp.className='tool-pre tool-result-pre';
-    rp.textContent=result;
-    entry.appendChild(pre);
-    entry.appendChild(rp);
-  }
-}
-function sendConfirm(id, approved) {
-  fetch('/api/agent/confirm', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id: id, approved: approved, session_id: sessionId})
-  });
-}
-
-/* ---------- token usage (status row above input) ---------- */
-function resetTokenUsage(){
-  document.getElementById('token-text').textContent='Token 0K / ?K';
-  var fill=document.getElementById('token-fill');
-  fill.style.width='0%';
-  fill.style.background='#22c55e';
-}
-function updateTokenUsage(evt){
-  var usedK=(evt.used/1000).toFixed(1);
-  var totalK=Math.round(evt.total/1000);
-  document.getElementById('token-text').textContent='Token '+usedK+'K / '+totalK+'K';
-  var fill=document.getElementById('token-fill');
-  fill.style.width=evt.percent+'%';
-  fill.style.background=evt.percent>80?'#ef4444':(evt.percent>50?'#eab308':'#22c55e');
-}
-
-/* ---------- new session ---------- */
-async function startNewSession(){
-  var resp=await fetch('/api/agent/new-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_session_id:sessionId})});
-  if(!resp.ok)return;
-  var data=await resp.json();
-  sessionId=data.session_id;
-  resetTokenUsage();
-  var chatEl=document.getElementById('ai-messages');
-  if(chatEl){
-    chatEl.innerHTML='';
-    var div=document.createElement('div');
-    div.className='text-xs text-muted text-center py-1';
-    div.textContent='新会话已开启';
-    chatEl.appendChild(div);
-  }
-}
-
-/* ---------- send chat (SSE) ---------- */
-async function ragSearch(query){
-  var res=await fetch('/api/ai/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,top_k:5})});
-  var data=await res.json();
-  return data.results||[];
-}
-async function sendChat(){
-  var inp=document.getElementById('ai-input');
-  var text=inp.value.trim();
-  if(!text)return;
-  if(abortCtrl){abortCtrl.abort();abortCtrl=null}
-  inp.value='';
-  addMsg('user',text);
-  setStatus('thinking');
-  var turn=null, textEl=null;
-  abortCtrl=new AbortController();
-  setBtnState('busy');
-  try{
-    var body={message:text,session_id:sessionId,doc_path:currentPath};
-    if(aiMode==='全库搜索'){
-      var results=await ragSearch(text);
-      body.context=(results||[]).map(function(r){return '【'+r.path+'】\n'+(r.snippet||'')}).join('\n\n');
-    }
-    var resp=await fetch('/api/agent/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:abortCtrl.signal});
-    if(!resp.ok){var eb=addMsg('ai','');eb.textContent='错误: '+resp.status;setBtnState('idle');setStatus('ready');return}
-    var reader=resp.body.getReader();
-    var decoder=new TextDecoder();
-    var buffer='';
-    while(true){
-      var chunk=await reader.read();
-      if(chunk.done)break;
-      buffer+=decoder.decode(chunk.value,{stream:true});
-      var lines=buffer.split('\n');
-      buffer=lines.pop();
-      for(var i=0;i<lines.length;i++){
-        var line=lines[i].trim();
-        if(line.startsWith('data: ')){
-          try{
-            var evt=JSON.parse(line.slice(6));
-            switch(evt.type){
-              case 'token':
-                if(!turn){turn=addMsg('ai','');turn.classList.add('stream-cursor')}
-                if(!textEl){textEl=document.createElement('div');textEl.className='turn-text';textEl.style.whiteSpace='pre-wrap';turn.appendChild(textEl)}
-                if(!textEl._tn){textEl._tn=document.createTextNode('');textEl.appendChild(textEl._tn)}
-                textEl._tn.data+=evt.text;
-                break;
-              case 'tool_call':
-                if(!turn){turn=addMsg('ai','');turn.classList.add('stream-cursor')}
-                textEl=null;
-                insertToolCall(turn,evt.id,evt.name,evt.args);
-                break;
-              case 'confirm_request':
-                updateToolCall(evt.id,'confirm',null);
-                break;
-              case 'tool_result':
-                updateToolCall(evt.id,evt.rejected?'rejected':(evt.error?'error':'done'),evt.result);
-                pollChanges();
-                break;
-              case 'token_usage':
-                updateTokenUsage(evt);
-                break;
-              case 'done':
-                finishTurn(turn);
-                break;
+        /* ---------- file tree (recursive) ---------- */
+        function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
+        function buildTree(files) {
+          var root = { dirs: {}, files: [] };
+          files.forEach(function (f) {
+            var parts = f.path.split('/');
+            var node = root;
+            for (var i = 0; i < parts.length - 1; i++) {
+              if (!node.dirs[parts[i]]) node.dirs[parts[i]] = { dirs: {}, files: [] };
+              node = node.dirs[parts[i]];
             }
-          }catch(e){}
+            var name = parts[parts.length - 1];
+            if (name.toLowerCase().endsWith('.md')) name = name.slice(0, -3);
+            node.files.push({ path: f.path, name: name });
+          });
+          function renderNode(node, depth, pathPrefix) {
+            var html = '';
+            var dirNames = Object.keys(node.dirs).sort();
+            dirNames.forEach(function (dn) {
+              var child = node.dirs[dn];
+              var count = 0;
+              (function c(n) { n.files.forEach(function () { count++ }); Object.keys(n.dirs).forEach(function (k) { c(n.dirs[k]) }) })(child);
+              var dirPath = pathPrefix ? pathPrefix + '/' + dn : dn;
+              html += '<div class="tree-group open" data-dir="' + esc(dirPath) + '">';
+              html += '<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-surface2 text-left">';
+              html += '<svg class="chev w-3.5 h-3.5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
+              html += '<span>📁</span><span class="font-medium">' + esc(dn) + '</span><span class="ml-auto text-xs text-muted bg-surface2 rounded-full px-2 py-0.5">' + count + '</span>';
+              html += '</button>';
+              html += '<div class="tree-children ml-2 pl-1.5 border-l border-border space-y-0.5 py-0.5">';
+              html += renderNode(child, depth + 1, dirPath);
+              html += '</div></div>';
+            });
+            node.files.sort(function (a, b) { return a.name < b.name ? -1 : 1 }).forEach(function (it) {
+              html += '<button class="tree-file w-full text-left px-2 py-1.5 rounded-md hover:bg-surface2" data-path="' + esc(it.path) + '">' + esc(it.name) + '</button>';
+            });
+            return html;
+          }
+          return renderNode(root, 0, '');
         }
-      }
-      var chatEl=document.getElementById('ai-messages');
-      if(chatEl.scrollHeight-chatEl.scrollTop-chatEl.clientHeight<80)chatEl.scrollTop=chatEl.scrollHeight;
-    }
-  }catch(e){
-    if(e.name==='AbortError'){
-      finishTurn(turn);
-    }else{
-      if(!turn)turn=addMsg('ai','');
-      turn.textContent='请求失败: '+e.message;
-    }
-  }
-  abortCtrl=null;
-  setBtnState('idle');
-  setStatus('ready');
-}
+        var lastTreeHash = '';
 
-/* ---------- finish turn (render markdown) ---------- */
-function finishTurn(turn){
-  if(!turn)return;
-  turn.classList.remove('stream-cursor');
-  var texts=turn.querySelectorAll('.turn-text');
-  for(var i=0;i<texts.length;i++){
-    var el=texts[i];
-    var raw=el._tn?el._tn.data:'';
-    if(raw){
-      var html=marked.parse(raw);
-      var clean=window.DOMPurify?DOMPurify.sanitize(html):html;
-      el.innerHTML=clean;
-      el.style.whiteSpace='';
-    }else{
-      el.remove();
-    }
-  }
-  turn.querySelectorAll('pre code').forEach(function(el){if(window.hljs)hljs.highlightElement(el)});
-}
+        async function loadDocs() {
+          try {
+            var headers = lastTreeHash ? { 'If-None-Match': lastTreeHash } : {};
+            var res = await fetch('/api/docs', { headers: headers });
+            if (res.status === 304) return; // no changes, skip re-render
+            var files = await res.json();
+            lastTreeHash = res.headers.get('ETag') || '';
 
-/* ---------- send / stop buttons ---------- */
-function setBtnState(state){
-  var send=document.getElementById('ai-send');
-  var stop=document.getElementById('ai-stop');
-  if(state==='busy'){
-    send.classList.add('hidden');
-    stop.classList.remove('hidden');
-  }else{
-    send.classList.remove('hidden');
-    stop.classList.add('hidden');
-  }
-}
-document.getElementById('ai-send').addEventListener('click',sendChat);
-document.getElementById('ai-stop').addEventListener('click',function(){
-  if(abortCtrl){abortCtrl.abort();abortCtrl=null}
-  setBtnState('idle');
-  setStatus('ready');
-});
-document.getElementById('ai-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendChat()}});
+            // Save expanded directory paths
+            var openPaths = new Set();
+            treeEl.querySelectorAll('.tree-group.open').forEach(function (g) {
+              var d = g.getAttribute('data-dir');
+              if (d) openPaths.add(d);
+            });
 
-/* ---------- mobile bottom sheet: drag to resize / close ---------- */
-(function(){
-  var handle=document.getElementById('ai-sheet-handle');
-  var backdrop=document.getElementById('ai-sheet-backdrop');
-  var dragging=false,startY=0,startH=0;
-  function sheetHeight(){return aiPanel.offsetHeight}
-  function isDesktop(){return window.innerWidth>=1024}
-  handle.addEventListener('touchstart',function(e){
-    if(isDesktop())return;
-    dragging=true;startY=e.touches[0].clientY;startH=sheetHeight();
-    aiPanel.style.transition='none';
-  },{passive:true});
-  handle.addEventListener('touchmove',function(e){
-    if(!dragging||isDesktop())return;
-    var dy=e.touches[0].clientY-startY;
-    /* Handle is at the TOP of a bottom-anchored sheet: finger DOWN (dy>0) shrinks. */
-    var h=Math.min(window.innerHeight*0.85,Math.max(0,startH-dy));
-    aiPanel.style.height=h+'px';
-  },{passive:true});
-  function endDrag(){
-    if(!dragging)return;
-    dragging=false;
-    aiPanel.style.transition='';
-    var h=sheetHeight();
-    if(h<window.innerHeight*0.35){
-      toggleAI(false);
-      aiPanel.style.height='';
-    }else{
-      aiPanel.style.height=h>window.innerHeight*0.67?'85vh':'50vh';
-    }
-  }
-  handle.addEventListener('touchend',function(){if(isDesktop())return;endDrag()});
-  handle.addEventListener('touchcancel',function(){if(isDesktop())return;endDrag()});
-  backdrop.addEventListener('click',function(){toggleAI(false)});
-})();
+            treeEl.innerHTML = buildTree(files);
 
-/* ---------- sidebar swipe-down-to-close (mobile) ---------- */
-(function(){
-  var sidebar=document.getElementById('sidebar');
-  var dragging=false,startY=0,dy=0;
-  sidebar.addEventListener('touchstart',function(e){
-    if(window.innerWidth>=1024)return;
-    if(sidebar.classList.contains('-translate-x-full'))return;
-    dragging=true;startY=e.touches[0].clientY;dy=0;
-    sidebar.style.transition='none';
-  },{passive:true});
-  sidebar.addEventListener('touchmove',function(e){
-    if(!dragging)return;
-    dy=Math.max(0,e.touches[0].clientY-startY);
-    sidebar.style.transform='translateX('+dy+'px)';
-  },{passive:true});
-  sidebar.addEventListener('touchend',function(){
-    if(!dragging)return;
-    dragging=false;
-    sidebar.style.transition='';
-    sidebar.style.transform='';
-    if(dy>80){
-      sidebar.classList.add('-translate-x-full');
-      document.getElementById('overlay').classList.add('hidden');
-    }
-  });
-})();
+            // Restore expand state
+            treeEl.querySelectorAll('.tree-group').forEach(function (g) {
+              var d = g.getAttribute('data-dir');
+              if (d && openPaths.has(d)) {
+                g.classList.add('open');
+              } else {
+                g.classList.remove('open');
+                var c = g.querySelector(':scope > .tree-children');
+                if (c) c.classList.add('hidden');
+              }
+            });
 
-/* ---------- visualViewport: keep AI input visible above keyboard ---------- */
-(function(){
-  var inp=document.getElementById('ai-input');
-  if(!window.visualViewport)return;
-  inp.addEventListener('focus',function(){
-    function adjust(){
-      if(window.innerWidth>=1024)return;
-      if(!aiPanel.classList.contains('open'))return;
-      var vv=window.visualViewport;
-      var panelBottom=aiPanel.getBoundingClientRect().bottom;
-      var keyboardGap=vv.height+vv.offsetTop-panelBottom;
-      if(keyboardGap<0){
-        aiPanel.style.height=Math.max(120,aiPanel.offsetHeight+keyboardGap)+'px';
-      }
-    }
-    window.visualViewport.addEventListener('resize',adjust);
-    inp._vvAdjust=adjust;
-  });
-  inp.addEventListener('blur',function(){
-    if(inp._vvAdjust){
-      window.visualViewport.removeEventListener('resize',inp._vvAdjust);
-      inp._vvAdjust=null;
-    }
-    if(window.innerWidth<1024)aiPanel.style.height='';
-  });
-})();
+            treeEl.querySelectorAll('.tree-row').forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                var g = btn.closest('.tree-group');
+                if (!g) return;
+                g.classList.toggle('open');
+                var c = g.querySelector(':scope > .tree-children');
+                if (c) c.classList.toggle('hidden');
+              });
+            });
+            treeEl.querySelectorAll('.tree-file').forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                treeEl.querySelectorAll('.tree-file.active').forEach(function (el) { el.classList.remove('active', 'bg-accent/10', 'text-accent') });
+                btn.classList.add('active', 'bg-accent/10', 'text-accent');
+                openDoc(btn.dataset.path);
+                document.getElementById('sidebar').classList.add('-translate-x-full');
+                document.getElementById('overlay').classList.add('hidden');
+              });
+            });
+          } catch (e) { treeEl.innerHTML = '<div class="text-red-400 text-xs px-2 py-3">加载失败: ' + esc(e.message) + '</div>' }
+        }
 
-/* ---------- init ---------- */
-loadDocs();
-window.sendConfirm=sendConfirm;
-window.startNewSession=startNewSession;
-addMsg('ai','你好！我可以帮你总结文档、回答问题、改写内容。试试问我"总结这篇文档"。');
-})();
-</script>
+        /* ---------- change polling ---------- */
+        var lastChangeTs = Date.now() / 1000;
+
+        async function pollChanges() {
+          try {
+            var res = await fetch('/api/docs/changes?since=' + lastChangeTs);
+            var changes = await res.json();
+            if (!changes.length) return;
+            // DESC order: changes[0] is newest → advance cursor
+            lastChangeTs = changes[0].ts;
+
+            // Classify: tree structure changed?
+            var treeChanged = changes.some(function (c) {
+              return c.action === 'created' || c.action === 'deleted' || c.action === 'moved';
+            });
+            if (treeChanged) {
+              await loadDocs();
+            }
+
+            // Current doc affected?
+            var curAffected = changes.some(function (c) {
+              return c.path === currentPath || (c.action === 'moved' && c.from_path === currentPath);
+            });
+            if (curAffected && currentPath) {
+              var deleted = changes.some(function (c) {
+                return c.path === currentPath && c.action === 'deleted';
+              });
+              var moved = changes.find(function (c) {
+                return c.action === 'moved' && c.from_path === currentPath;
+              });
+              if (deleted) {
+                editor.value = '';
+                document.getElementById('current-file').textContent = '(已删除)';
+                if (previewMode) renderPreview();
+              } else {
+                if (moved) {
+                  currentPath = moved.path;
+                  document.getElementById('current-file').textContent = currentPath;
+                }
+                fetch('/api/docs/' + encodeURIComponent(currentPath)).then(function (r) { return r.text() }).then(function (text) {
+                  editor.value = text;
+                  if (previewMode) renderPreview();
+                }).catch(function () { });
+              }
+            }
+          } catch (e) { }
+        }
+
+        setInterval(pollChanges, 10000);
+
+        /* ---------- doc load / save ---------- */
+        var dirty = false;
+
+        async function openDoc(path) {
+          // Auto-save if current doc has unsaved edits
+          if (dirty && currentPath) {
+            await saveDoc();
+          }
+          currentPath = path;
+          dirty = false;
+          document.getElementById('current-file').textContent = path;
+          try {
+            var res = await fetch('/api/docs/' + encodeURIComponent(path));
+            editor.value = await res.text();
+            if (previewMode) renderPreview();
+          } catch (e) { editor.value = '加载失败: ' + e.message }
+        }
+        async function saveDoc() {
+          if (!currentPath) return;
+          try {
+            var res = await fetch('/api/docs/' + encodeURIComponent(currentPath), { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: editor.value });
+            if (res.ok) { dirty = false; document.getElementById('btn-save').textContent = '✓ 已保存'; setTimeout(function () { document.getElementById('btn-save').textContent = '保存' }, 1500) }
+            else { alert('保存失败: ' + res.status) }
+          } catch (e) { alert('保存失败: ' + e.message) }
+        }
+        editor.addEventListener('input', function () { dirty = true });
+
+        /* ---------- edit / preview toggle ---------- */
+        var MODE_ACTIVE = 'px-3 py-1.5 bg-accent text-white font-medium';
+        var MODE_INACTIVE = 'px-3 py-1.5 bg-surface text-muted hover:bg-surface2';
+        function setMode(mode) {
+          if (mode === 'edit') {
+            btnEdit.className = MODE_ACTIVE;
+            btnPrev.className = MODE_INACTIVE;
+            editor.classList.remove('hidden'); preview.classList.add('hidden');
+            previewMode = false;
+          } else {
+            btnPrev.className = MODE_ACTIVE;
+            btnEdit.className = MODE_INACTIVE;
+            renderPreview();
+            editor.classList.add('hidden'); preview.classList.remove('hidden');
+            previewMode = true;
+          }
+        }
+        btnEdit.addEventListener('click', function () { setMode('edit') });
+        btnPrev.addEventListener('click', function () { setMode('preview') });
+        document.getElementById('btn-save').addEventListener('click', saveDoc);
+        document.getElementById('btn-download').addEventListener('click', function () {
+          if (!currentPath) return;
+          var blob = new Blob([editor.value], { type: 'text/markdown' });
+          var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = currentPath.split('/').pop(); a.click(); URL.revokeObjectURL(a.href);
+        });
+
+        /* ---------- sidebar mobile ---------- */
+        document.getElementById('hamburger').addEventListener('click', function () { document.getElementById('sidebar').classList.remove('-translate-x-full'); document.getElementById('overlay').classList.remove('hidden') });
+        document.getElementById('sidebar-close').addEventListener('click', function () { document.getElementById('sidebar').classList.add('-translate-x-full'); document.getElementById('overlay').classList.add('hidden') });
+        document.getElementById('overlay').addEventListener('click', function () { document.getElementById('sidebar').classList.add('-translate-x-full'); this.classList.add('hidden') });
+
+        /* ---------- search filter ---------- */
+        document.getElementById('search-input').addEventListener('input', function () {
+          var q = this.value.toLowerCase();
+          treeEl.querySelectorAll('.tree-file').forEach(function (el) { el.style.display = !q || el.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none' });
+        });
+
+        /* ---------- AI chat (SSE streaming) ---------- */
+        var aiBtn = document.getElementById('ai-btn'), aiPanel = document.getElementById('ai-panel');
+        var mainArea = document.getElementById('main-area');
+        function toggleAI(open) {
+          aiPanel.classList.toggle('open', open);
+          if (window.innerWidth >= 1024) {
+            mainArea.style.paddingRight = open ? '40%' : '0';
+            aiBtn.style.right = open ? '40%' : '0';
+          } else {
+            var bd = document.getElementById('ai-sheet-backdrop');
+            bd.classList.toggle('hidden', !open);
+            bd.classList.toggle('show', open);
+            /* Clear any inline `right` left over from a desktop session so the mobile
+               Tailwind `right-4` class takes effect after a desktop→mobile resize. */
+            aiBtn.style.right = '';
+          }
+          /* Chevron direction is driven entirely by CSS: the base rotation is set per
+             breakpoint (desktop → left, mobile → up) and `.open` adds rotate(180deg).
+             Toggling the class here is all JS needs to do; resize across the breakpoint
+             re-evaluates the CSS base automatically. */
+          aiBtn.classList.toggle('open', open);
+        }
+        aiBtn.addEventListener('click', function () { toggleAI(!aiPanel.classList.contains('open')) });
+        document.getElementById('ai-close').addEventListener('click', function () { toggleAI(false) });
+        var aiMode = '当前文档';
+        var sessionId = 'web-' + Date.now();
+        var abortCtrl = null;
+        document.getElementById('ai-mode').addEventListener('click', function () {
+          aiMode = aiMode === '当前文档' ? '全库搜索' : '当前文档';
+          this.textContent = aiMode;
+        });
+
+        /* ---------- status text ---------- */
+        function setStatus(state) {
+          var el = document.getElementById('ai-status');
+          if (state === 'thinking') {
+            el.innerHTML = '思考中<span class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>';
+          } else {
+            el.textContent = '就绪';
+          }
+        }
+
+        /* ---------- messages ---------- */
+        function addMsg(role, text) {
+          var m = document.getElementById('ai-messages');
+          var d = document.createElement('div');
+          d.className = 'msg-in flex ' + (role === 'user' ? 'justify-end' : '');
+          var b = document.createElement('div');
+          if (role === 'user') { b.className = 'max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-accent text-white text-sm' }
+          else { b.className = 'max-w-[85%] flex-1 ai-turn bg-surface2 rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm' }
+          b.textContent = text; d.appendChild(b); m.appendChild(d); m.scrollTop = m.scrollHeight; return b;
+        }
+
+        /* ---------- tool summary (inline in AI message) ---------- */
+        var toolShortNames = {
+          read_doc: '📖 读取', search_docs: '🔍 搜索', list_files: '📁 列出文件',
+          write_doc: '✏️ 写入', edit_doc: '✂️ 编辑', delete_doc: '🗑 删除',
+          move_doc: '📦 移动', get_related_docs: '🔗 关联'
+        };
+        function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
+        function getToolSummary(turn) {
+          var s = turn.querySelector('.tool-summary');
+          if (!s) {
+            s = document.createElement('div');
+            s.className = 'tool-summary';
+            s.innerHTML = '<span class="ts-icons"></span><span class="ts-count"></span>';
+            s.addEventListener('click', function (e) {
+              if (e.target.closest('.confirm-btns')) return;
+              var det = turn.querySelector('.tool-details');
+              if (det) det.open = !det.open;
+            });
+            turn.appendChild(s);
+          }
+          return s;
+        }
+        function getToolDetails(turn) {
+          var det = turn.querySelector('.tool-details');
+          if (!det) {
+            det = document.createElement('details');
+            det.className = 'tool-details';
+            det.innerHTML = '<summary>参数与结果</summary><div class="tool-body"></div>';
+            turn.appendChild(det);
+          }
+          return det;
+        }
+        function insertToolCall(turn, id, name, args) {
+          var label = toolShortNames[name] || name;
+          var entry = document.createElement('div');
+          entry.className = 'tool-entry';
+          entry.dataset.toolId = id;
+          entry.innerHTML = '<div class="flex items-center gap-2"><span class="ts-icon">⏳</span><span>' + escapeHtml(label) + '</span></div>'
+            + '<pre class="tool-pre">' + escapeHtml(JSON.stringify(args, null, 2)) + '</pre>';
+          getToolDetails(turn).querySelector('.tool-body').appendChild(entry);
+          var s = getToolSummary(turn);
+          var icons = s.querySelector('.ts-icons');
+          var ic = document.createElement('span');
+          ic.className = 'ts-icon'; ic.dataset.toolId = id; ic.textContent = label.split(' ')[0];
+          icons.appendChild(ic);
+          var count = s.querySelector('.ts-count');
+          var n = icons.querySelectorAll('.ts-icon').length;
+          count.textContent = '（' + n + ' 个工具）';
+          var chat = document.getElementById('ai-messages');
+          chat.scrollTop = chat.scrollHeight;
+        }
+        function updateToolCall(id, status, result) {
+          var icon = document.querySelector('.ts-icon[data-tool-id="' + id + '"]');
+          if (!icon) return;
+          var turn = icon.closest('.ai-turn');
+          if (!turn) return;
+          var entry = turn.querySelector('.tool-entry[data-tool-id="' + id + '"]');
+          if (entry) {
+            var ic = entry.querySelector('.ts-icon');
+            if (status === 'done') { ic.textContent = '✓'; ic.classList.add('text-green-500') }
+            else if (status === 'confirm') { ic.textContent = '⚠'; ic.classList.add('text-amber-500') }
+            else if (status === 'rejected' || status === 'error') { ic.textContent = '✕'; ic.classList.add('err') }
+          }
+          if (status === 'confirm') {
+            var btns = document.createElement('div');
+            btns.className = 'confirm-btns';
+            btns.innerHTML = '<button class="confirm-yes" onclick="sendConfirm(\'' + id + '\',true)">✓ 确认</button>'
+              + '<button class="confirm-no" onclick="sendConfirm(\'' + id + '\',false)">✕ 取消</button>';
+            turn.appendChild(btns);
+          }
+          if (result && entry) {
+            var pre = document.createElement('div');
+            pre.className = 'tool-result-label'; pre.textContent = '结果';
+            var rp = document.createElement('pre');
+            rp.className = 'tool-pre tool-result-pre';
+            rp.textContent = result;
+            entry.appendChild(pre);
+            entry.appendChild(rp);
+          }
+        }
+        function sendConfirm(id, approved) {
+          fetch('/api/agent/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: id, approved: approved, session_id: sessionId })
+          });
+        }
+
+        /* ---------- token usage (status row above input) ---------- */
+        function resetTokenUsage() {
+          document.getElementById('token-text').textContent = 'Token 0K / ?K';
+          var fill = document.getElementById('token-fill');
+          fill.style.width = '0%';
+          fill.style.background = '#22c55e';
+        }
+        function updateTokenUsage(evt) {
+          var usedK = (evt.used / 1000).toFixed(1);
+          var totalK = Math.round(evt.total / 1000);
+          document.getElementById('token-text').textContent = 'Token ' + usedK + 'K / ' + totalK + 'K';
+          var fill = document.getElementById('token-fill');
+          fill.style.width = evt.percent + '%';
+          fill.style.background = evt.percent > 80 ? '#ef4444' : (evt.percent > 50 ? '#eab308' : '#22c55e');
+        }
+
+        /* ---------- new session ---------- */
+        async function startNewSession() {
+          var resp = await fetch('/api/agent/new-session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ old_session_id: sessionId }) });
+          if (!resp.ok) return;
+          var data = await resp.json();
+          sessionId = data.session_id;
+          resetTokenUsage();
+          var chatEl = document.getElementById('ai-messages');
+          if (chatEl) {
+            chatEl.innerHTML = '';
+            var div = document.createElement('div');
+            div.className = 'text-xs text-muted text-center py-1';
+            div.textContent = '新会话已开启';
+            chatEl.appendChild(div);
+          }
+        }
+
+        /* ---------- send chat (SSE) ---------- */
+        async function ragSearch(query) {
+          var res = await fetch('/api/ai/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: query, top_k: 5 }) });
+          var data = await res.json();
+          return data.results || [];
+        }
+        async function sendChat() {
+          var inp = document.getElementById('ai-input');
+          var text = inp.value.trim();
+          if (!text) return;
+          if (abortCtrl) { abortCtrl.abort(); abortCtrl = null }
+          inp.value = '';
+          addMsg('user', text);
+          setStatus('thinking');
+          var turn = null, textEl = null;
+          abortCtrl = new AbortController();
+          setBtnState('busy');
+          try {
+            var body = { message: text, session_id: sessionId, doc_path: currentPath };
+            if (aiMode === '全库搜索') {
+              var results = await ragSearch(text);
+              body.context = (results || []).map(function (r) { return '【' + r.path + '】\n' + (r.snippet || '') }).join('\n\n');
+            }
+            var resp = await fetch('/api/agent/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: abortCtrl.signal });
+            if (!resp.ok) { var eb = addMsg('ai', ''); eb.textContent = '错误: ' + resp.status; setBtnState('idle'); setStatus('ready'); return }
+            var reader = resp.body.getReader();
+            var decoder = new TextDecoder();
+            var buffer = '';
+            while (true) {
+              var chunk = await reader.read();
+              if (chunk.done) break;
+              buffer += decoder.decode(chunk.value, { stream: true });
+              var lines = buffer.split('\n');
+              buffer = lines.pop();
+              for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].trim();
+                if (line.startsWith('data: ')) {
+                  try {
+                    var evt = JSON.parse(line.slice(6));
+                    switch (evt.type) {
+                      case 'token':
+                        if (!turn) { turn = addMsg('ai', ''); turn.classList.add('stream-cursor') }
+                        if (!textEl) { textEl = document.createElement('div'); textEl.className = 'turn-text'; textEl.style.whiteSpace = 'pre-wrap'; turn.appendChild(textEl) }
+                        if (!textEl._tn) { textEl._tn = document.createTextNode(''); textEl.appendChild(textEl._tn) }
+                        textEl._tn.data += evt.text;
+                        break;
+                      case 'tool_call':
+                        if (!turn) { turn = addMsg('ai', ''); turn.classList.add('stream-cursor') }
+                        textEl = null;
+                        insertToolCall(turn, evt.id, evt.name, evt.args);
+                        break;
+                      case 'confirm_request':
+                        updateToolCall(evt.id, 'confirm', null);
+                        break;
+                      case 'tool_result':
+                        updateToolCall(evt.id, evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done'), evt.result);
+                        pollChanges();
+                        break;
+                      case 'token_usage':
+                        updateTokenUsage(evt);
+                        break;
+                      case 'done':
+                        finishTurn(turn);
+                        break;
+                    }
+                  } catch (e) { }
+                }
+              }
+              var chatEl = document.getElementById('ai-messages');
+              if (chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 80) chatEl.scrollTop = chatEl.scrollHeight;
+            }
+          } catch (e) {
+            if (e.name === 'AbortError') {
+              finishTurn(turn);
+            } else {
+              if (!turn) turn = addMsg('ai', '');
+              turn.textContent = '请求失败: ' + e.message;
+            }
+          }
+          abortCtrl = null;
+          setBtnState('idle');
+          setStatus('ready');
+        }
+
+        /* ---------- finish turn (render markdown) ---------- */
+        function finishTurn(turn) {
+          if (!turn) return;
+          turn.classList.remove('stream-cursor');
+          var texts = turn.querySelectorAll('.turn-text');
+          for (var i = 0; i < texts.length; i++) {
+            var el = texts[i];
+            var raw = el._tn ? el._tn.data : '';
+            if (raw) {
+              var html = marked.parse(raw);
+              var clean = window.DOMPurify ? DOMPurify.sanitize(html) : html;
+              el.innerHTML = clean;
+              el.style.whiteSpace = '';
+            } else {
+              el.remove();
+            }
+          }
+          turn.querySelectorAll('pre code').forEach(function (el) { if (window.hljs) hljs.highlightElement(el) });
+        }
+
+        /* ---------- send / stop buttons ---------- */
+        function setBtnState(state) {
+          var send = document.getElementById('ai-send');
+          var stop = document.getElementById('ai-stop');
+          if (state === 'busy') {
+            send.classList.add('hidden');
+            stop.classList.remove('hidden');
+          } else {
+            send.classList.remove('hidden');
+            stop.classList.add('hidden');
+          }
+        }
+        document.getElementById('ai-send').addEventListener('click', sendChat);
+        document.getElementById('ai-stop').addEventListener('click', function () {
+          if (abortCtrl) { abortCtrl.abort(); abortCtrl = null }
+          setBtnState('idle');
+          setStatus('ready');
+        });
+        document.getElementById('ai-input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat() } });
+
+        /* ---------- mobile bottom sheet: drag to resize / close ---------- */
+        (function () {
+          var handle = document.getElementById('ai-sheet-handle');
+          var backdrop = document.getElementById('ai-sheet-backdrop');
+          var dragging = false, startY = 0, startH = 0;
+          function sheetHeight() { return aiPanel.offsetHeight }
+          function isDesktop() { return window.innerWidth >= 1024 }
+          handle.addEventListener('touchstart', function (e) {
+            if (isDesktop()) return;
+            dragging = true; startY = e.touches[0].clientY; startH = sheetHeight();
+            aiPanel.style.transition = 'none';
+          }, { passive: true });
+          handle.addEventListener('touchmove', function (e) {
+            if (!dragging || isDesktop()) return;
+            var dy = e.touches[0].clientY - startY;
+            /* Handle is at the TOP of a bottom-anchored sheet: finger DOWN (dy>0) shrinks. */
+            var h = Math.min(window.innerHeight * 0.85, Math.max(0, startH - dy));
+            aiPanel.style.height = h + 'px';
+          }, { passive: true });
+          function endDrag() {
+            if (!dragging) return;
+            dragging = false;
+            aiPanel.style.transition = '';
+            var h = sheetHeight();
+            if (h < window.innerHeight * 0.35) {
+              toggleAI(false);
+              aiPanel.style.height = '';
+            } else {
+              aiPanel.style.height = h > window.innerHeight * 0.67 ? '85vh' : '50vh';
+            }
+          }
+          handle.addEventListener('touchend', function () { if (isDesktop()) return; endDrag() });
+          handle.addEventListener('touchcancel', function () { if (isDesktop()) return; endDrag() });
+          backdrop.addEventListener('click', function () { toggleAI(false) });
+        })();
+
+        /* ---------- sidebar swipe-down-to-close (mobile) ---------- */
+        (function () {
+          var sidebar = document.getElementById('sidebar');
+          var dragging = false, startY = 0, dy = 0;
+          sidebar.addEventListener('touchstart', function (e) {
+            if (window.innerWidth >= 1024) return;
+            if (sidebar.classList.contains('-translate-x-full')) return;
+            dragging = true; startY = e.touches[0].clientY; dy = 0;
+            sidebar.style.transition = 'none';
+          }, { passive: true });
+          sidebar.addEventListener('touchmove', function (e) {
+            if (!dragging) return;
+            dy = Math.max(0, e.touches[0].clientY - startY);
+            sidebar.style.transform = 'translateX(' + dy + 'px)';
+          }, { passive: true });
+          sidebar.addEventListener('touchend', function () {
+            if (!dragging) return;
+            dragging = false;
+            sidebar.style.transition = '';
+            sidebar.style.transform = '';
+            if (dy > 80) {
+              sidebar.classList.add('-translate-x-full');
+              document.getElementById('overlay').classList.add('hidden');
+            }
+          });
+        })();
+
+        /* ---------- visualViewport: sync panel position on keyboard open/close ---------- */
+        (function () {
+          var inp = document.getElementById('ai-input');
+          if (!window.visualViewport) return;
+          var isMobile = function () { return window.innerWidth < 1024 };
+
+          /* Central function: read visualViewport, set panel height + bottom. */
+          function syncPanelPosition() {
+            if (!isMobile()) {
+              aiPanel.style.height = '';
+              aiPanel.style.bottom = '';
+              return;
+            }
+            var vv = window.visualViewport;
+            if (!aiPanel.classList.contains('open')) return;
+
+            var panelRect = aiPanel.getBoundingClientRect();
+            var keyboardTop = vv.height + vv.offsetTop;
+            var panelBottom = panelRect.bottom;
+            var gap = keyboardTop - panelBottom;
+
+            if (gap < 0) {
+              /* Keyboard visible: lock height, push panel up */
+              var h = aiPanel.offsetHeight;
+              aiPanel.style.height = h + 'px';
+              aiPanel.style.bottom = Math.max(0, -gap) + 'px';
+            } else {
+              /* Keyboard hidden: restore to bottom */
+              aiPanel.style.height = '';
+              aiPanel.style.bottom = '0';
+            }
+          }
+
+          /* On focus: register listener, then sync immediately */
+          inp.addEventListener('focus', function () {
+            if (!isMobile()) return;
+            window.visualViewport.addEventListener('resize', syncPanelPosition);
+            /* Also listen for scroll (some browsers fire scroll instead of resize) */
+            window.visualViewport.addEventListener('scroll', syncPanelPosition);
+            /* Defer to let the browser settle the keyboard animation */
+            requestAnimationFrame(function () {
+              requestAnimationFrame(syncPanelPosition);
+            });
+          });
+
+          /* On blur: remove listeners, do one final sync */
+          inp.addEventListener('blur', function () {
+            if (!isMobile()) return;
+            window.visualViewport.removeEventListener('resize', syncPanelPosition);
+            window.visualViewport.removeEventListener('scroll', syncPanelPosition);
+            /* Final sync: if keyboard is still up (e.g. tapped another input), keep it;
+               otherwise restore panel to bottom */
+            requestAnimationFrame(syncPanelPosition);
+          });
+        })();
+
+        /* ---------- init ---------- */
+        loadDocs();
+        window.sendConfirm = sendConfirm;
+        window.startNewSession = startNewSession;
+        addMsg('ai', '你好！我可以帮你总结文档、回答问题、改写内容。试试问我"总结这篇文档"。');
+      })();
+  </script>
 </body>
+
 </html>
