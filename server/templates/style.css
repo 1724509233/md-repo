@@ -1,59 +1,179 @@
-*{scrollbar-width:thin;scrollbar-color:rgba(120,120,140,.3) transparent}
+/* ============ Theme tokens ============ */
+:root, [data-theme="blue"] {
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --text: #1e293b;
+  --text-muted: #64748b;
+  --accent: #3b82f6;
+  --accent-2: #6366f1;
+}
+[data-theme="paper"] {
+  --bg: #faf9f7;
+  --surface: #ffffff;
+  --surface-2: #f0ede6;
+  --border: #e8e4dc;
+  --text: #1c1917;
+  --text-muted: #78716c;
+  --accent: #292524;
+  --accent-2: #57534e;
+}
+[data-theme="dark"] {
+  --bg: #0a0a0b;
+  --surface: #131316;
+  --surface-2: #18181b;
+  --border: #26262b;
+  --text: #f4f4f5;
+  --text-muted: #a1a1aa;
+  --accent: #8b5cf6;
+  --accent-2: #ec4899;
+}
+
+html, body { background: var(--bg); color: var(--text); }
+
+/* ============ Scrollbars ============ */
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--text-muted) 35%, transparent) transparent}
 *::-webkit-scrollbar{width:5px;height:5px}
 *::-webkit-scrollbar-track{background:transparent}
-*::-webkit-scrollbar-thumb{background:rgba(120,120,140,.3);border-radius:9999px}
-*::-webkit-scrollbar-thumb:hover{background:rgba(120,120,140,.5)}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb, var(--text-muted) 35%, transparent);border-radius:9999px}
+*::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb, var(--text-muted) 55%, transparent)}
 *::-webkit-scrollbar-button{display:none;width:0;height:0}
-#ai-panel{position:absolute;right:0;top:0;bottom:0;width:40%;transform:translateX(100%);transition:transform .35s cubic-bezier(.32,.72,0,1);z-index:15}
+
+/* ============ AI panel (desktop slide-in) ============ */
+#ai-panel{position:absolute;right:0;top:0;bottom:0;width:40%;transform:translateX(100%);transition:transform .35s cubic-bezier(.32,.72,0,1);z-index:15;background:var(--surface);border-left:1px solid var(--border)}
 #ai-panel.open{transform:translateX(0)}
+/* Desktop toggle tab: anchored to #main-area's right edge (no flex width consumed).
+   When the panel opens, main-area's padding-right shrinks ITS content box, so the tab
+   (right:0) slides left in sync with the panel to sit at the panel's left edge.
+   `right` transitions with the same .35s easing as the panel slide. */
+@media (min-width: 1024px) {
+  #ai-btn{position:absolute;right:0;top:50%;transform:translateY(-50%);z-index:25;width:32px;height:64px;border-radius:8px 0 0 8px;background:var(--surface-2);border:1px solid var(--border);color:var(--text-muted);transition:right .35s cubic-bezier(.32,.72,0,1),background-color .15s,color .15s}
+  #ai-btn:hover{background:color-mix(in srgb, var(--accent) 12%, var(--surface-2));color:var(--accent)}
+  /* Chevron: base points LEFT (toward the closed panel); open rotates to RIGHT. */
+  #ai-btn #ai-chevron{transform:rotate(-90deg)}
+  #ai-btn.open #ai-chevron{transform:rotate(90deg)}
+}
+
+/* ============ Mobile bottom sheet (< lg) ============ */
+@media (max-width: 1023px) {
+  #ai-panel{
+    position:fixed;left:0;right:0;top:auto;bottom:0;width:100%;
+    height:50vh;transform:translateY(100%);
+    border-left:none;border-top:1px solid var(--border);
+    /* Clear visual distinction from the desktop side panel:
+       rounded top corners, a soft accent glow along the top edge, and a deep shadow. */
+    border-radius:24px 24px 0 0;
+    box-shadow:0 -16px 48px rgba(0,0,0,.45),0 -1px 0 color-mix(in srgb, var(--accent) 35%, transparent);
+    z-index:20;
+    transition:transform .38s cubic-bezier(.32,.72,0,1),height .25s ease;
+  }
+  #ai-panel.open{transform:translateY(0)}
+  #ai-sheet-handle{display:flex}
+  #ai-sheet-backdrop{display:block}
+  /* Mobile toggle: wide, short pill (bottom-right) — its horizontal proportions
+     match the bottom sheet it controls and the up/down arrow. Sits above the sheet
+     (z-35 > panel z-20) so it stays tappable; lifts above the sheet's top edge when
+     open so it reads as "tap to collapse". */
+  #ai-btn{
+    width:48px;height:40px;border-radius:9999px;z-index:35;
+    background:var(--surface-2);border:1px solid var(--border);color:var(--text-muted);
+    transition:transform .38s cubic-bezier(.32,.72,0,1),background-color .15s,color .15s;
+  }
+  #ai-btn:hover{background:color-mix(in srgb, var(--accent) 12%, var(--surface-2));color:var(--accent)}
+  /* Lift via transform (GPU, no reflow): bottom stays at Tailwind's `bottom-5`
+     (20px); open translates up by the delta to the sheet's top edge + 4px gap. */
+  #ai-btn.open{transform:translateY(calc(50vh + 4px))}
+  /* Chevron: base points UP (toward the closed sheet); open rotates to DOWN. */
+  #ai-btn #ai-chevron{transform:rotate(0deg)}
+  #ai-btn.open #ai-chevron{transform:rotate(180deg)}
+}
+#ai-sheet-handle{display:none;align-items:center;justify-content:center;height:40px;cursor:grab;touch-action:none;flex-shrink:0}
+#ai-sheet-handle:active{cursor:grabbing}
+#ai-sheet-handle::before{content:'';width:44px;height:5px;border-radius:9999px;background:var(--border);transition:background .15s}
+#ai-sheet-handle:active::before{background:var(--text-muted)}
+/* Backdrop fades in/out via opacity (display toggled by JS `hidden` class).
+   pointer-events:none so the full-viewport layer never intercepts clicks meant
+   for the toggle button (which sits at a lower z-index on desktop). */
+#ai-sheet-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:14;opacity:0;pointer-events:none;transition:opacity .3s ease}
+#ai-sheet-backdrop.show{opacity:1;pointer-events:auto}
+
+/* ============ Message animations ============ */
 @keyframes msgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 .msg-in{animation:msgIn .25s ease-out both}
-.stream-cursor::after{content:'▍';color:#3b82f6;animation:blink .9s steps(1) infinite}
+.stream-cursor::after{content:'▍';color:var(--accent);animation:blink .9s steps(1) infinite}
 @keyframes blink{50%{opacity:0}}
+
+/* ============ Thinking dots ============ */
+.thinking-dots::after{content:'…';display:inline-block;min-width:1.2em;text-align:left}
+.thinking-dots .dot{animation:dotPulse 1.2s ease-in-out infinite}
+.thinking-dots .dot:nth-child(2){animation-delay:.2s}
+.thinking-dots .dot:nth-child(3){animation-delay:.4s}
+@keyframes dotPulse{0%,60%,100%{opacity:.25}30%{opacity:1}}
+
+/* ============ File tree ============ */
 .tree-group.open>.tree-row .chev{transform:rotate(90deg)}
 .chev{transition:transform .2s ease}
-input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!important}
 
-/* Code block token colors (no hljs theme CSS — we control colors here) */
+/* ============ Code blocks ============ */
+.code-block{background:var(--surface-2);border-radius:8px;margin:12px 0;overflow:hidden;border:1px solid var(--border)}
+.code-block-header{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-muted)}
+.code-copy-btn{opacity:0;transition:opacity .15s;background:none;border:1px solid var(--border);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--text-muted);cursor:pointer}
+.code-block:hover .code-copy-btn{opacity:1}
+.code-copy-btn:hover{color:var(--text);background:var(--surface)}
+.code-block pre{margin:0;padding:12px;overflow-x:auto;font-size:13px;line-height:1.6}
 pre code.hljs{background:transparent;padding:0}
-.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-meta{color:#c084fc}
-.hljs-string,.hljs-selector-attr,.hljs-selector-class{color:#86efac}
-.hljs-title,.hljs-title.function_,.hljs-title.class_{color:#93c5fd}
-.hljs-comment,.hljs-quote{color:#6b7280;font-style:italic}
-.hljs-number,.hljs-operator{color:#fbbf24}
-.hljs-built_in,.hljs-type{color:#67e8f9}
-.hljs-attr,.hljs-attribute,.hljs-variable{color:#fca5a5}
-.hljs-regexp,.hljs-symbol{color:#f0abfc}
-.hljs-bullet,.hljs-link,.hljs-section{color:#93c5fd}
+
+/* hljs palette — dark (default) */
+[data-theme="dark"] .hljs-keyword,[data-theme="dark"] .hljs-selector-tag,[data-theme="dark"] .hljs-literal,[data-theme="dark"] .hljs-meta{color:#c084fc}
+[data-theme="dark"] .hljs-string,[data-theme="dark"] .hljs-selector-attr,[data-theme="dark"] .hljs-selector-class{color:#86efac}
+[data-theme="dark"] .hljs-title,[data-theme="dark"] .hljs-title.function_,[data-theme="dark"] .hljs-title.class_{color:#93c5fd}
+[data-theme="dark"] .hljs-comment,[data-theme="dark"] .hljs-quote{color:#6b7280;font-style:italic}
+[data-theme="dark"] .hljs-number,[data-theme="dark"] .hljs-operator{color:#fbbf24}
+[data-theme="dark"] .hljs-built_in,[data-theme="dark"] .hljs-type{color:#67e8f9}
+[data-theme="dark"] .hljs-attr,[data-theme="dark"] .hljs-attribute,[data-theme="dark"] .hljs-variable{color:#fca5a5}
+[data-theme="dark"] .hljs-regexp,[data-theme="dark"] .hljs-symbol{color:#f0abfc}
+[data-theme="dark"] .hljs-bullet,[data-theme="dark"] .hljs-link,[data-theme="dark"] .hljs-section{color:#93c5fd}
+/* hljs palette — light (blue / paper) */
+[data-theme="blue"] .hljs-keyword,[data-theme="blue"] .hljs-selector-tag,[data-theme="blue"] .hljs-literal,[data-theme="blue"] .hljs-meta,
+[data-theme="paper"] .hljs-keyword,[data-theme="paper"] .hljs-selector-tag,[data-theme="paper"] .hljs-literal,[data-theme="paper"] .hljs-meta{color:#7c3aed}
+[data-theme="blue"] .hljs-string,[data-theme="blue"] .hljs-selector-attr,[data-theme="blue"] .hljs-selector-class,
+[data-theme="paper"] .hljs-string,[data-theme="paper"] .hljs-selector-attr,[data-theme="paper"] .hljs-selector-class{color:#16a34a}
+[data-theme="blue"] .hljs-title,[data-theme="blue"] .hljs-title.function_,[data-theme="blue"] .hljs-title.class_,
+[data-theme="paper"] .hljs-title,[data-theme="paper"] .hljs-title.function_,[data-theme="paper"] .hljs-title.class_{color:#2563eb}
+[data-theme="blue"] .hljs-comment,[data-theme="blue"] .hljs-quote,
+[data-theme="paper"] .hljs-comment,[data-theme="paper"] .hljs-quote{color:#94a3b8;font-style:italic}
+[data-theme="blue"] .hljs-number,[data-theme="blue"] .hljs-operator,
+[data-theme="paper"] .hljs-number,[data-theme="paper"] .hljs-operator{color:#d97706}
+[data-theme="blue"] .hljs-built_in,[data-theme="blue"] .hljs-type,
+[data-theme="paper"] .hljs-built_in,[data-theme="paper"] .hljs-type{color:#0891b2}
+[data-theme="blue"] .hljs-attr,[data-theme="blue"] .hljs-attribute,[data-theme="blue"] .hljs-variable,
+[data-theme="paper"] .hljs-attr,[data-theme="paper"] .hljs-attribute,[data-theme="paper"] .hljs-variable{color:#dc2626}
+[data-theme="blue"] .hljs-regexp,[data-theme="blue"] .hljs-symbol,
+[data-theme="paper"] .hljs-regexp,[data-theme="paper"] .hljs-symbol{color:#c026d3}
+[data-theme="blue"] .hljs-bullet,[data-theme="blue"] .hljs-link,[data-theme="blue"] .hljs-section,
+[data-theme="paper"] .hljs-bullet,[data-theme="paper"] .hljs-link,[data-theme="paper"] .hljs-section{color:#2563eb}
 .hljs-emphasis{font-style:italic}
 .hljs-strong{font-weight:700}
 
-/* Tool cards in AI chat */
-.tool-card {
-    border-radius: 8px;
-    padding: 8px 12px;
-    margin: 6px 0;
-    font-size: 12px;
-    border: 1px solid #e5e7eb;
-}
-.dark .tool-card { border-color: #374151; }
-.tool-pending { background: #f9fafb; }
-.dark .tool-pending { background: #1f2937; }
-.tool-done { background: #f0fdf4; border-color: #bbf7d0; }
-.dark .tool-done { background: #052e16; border-color: #166534; }
-.tool-confirm { background: #fef3c7; border-color: #fde68a; }
-.dark .tool-confirm { background: #422006; border-color: #a16207; }
-.tool-rejected, .tool-error { background: #fef2f2; border-color: #fecaca; }
-.dark .tool-rejected, .dark .tool-error { background: #450a0a; border-color: #991b1b; }
-.tool-header { display: flex; align-items: center; gap: 6px; }
-.tool-path { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
-.dark .tool-path { background: #374151; }
-.tool-details { margin-top: 6px; font-size: 11px; }
-.tool-details summary { cursor: pointer; color: #6b7280; user-select: none; }
-.dark .tool-details summary { color: #9ca3af; }
-.tool-pre { background: #f3f4f6; border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 200px; overflow-y: auto; }
-.dark .tool-pre { background: #1f2937; color: #d1d5db; }
-.tool-result-label { margin-top: 6px; font-weight: 600; color: #6b7280; }
-.dark .tool-result-label { color: #9ca3af; }
-.tool-result-pre { border-left: 2px solid #d1d5db; }
-.dark .tool-result-pre { border-left-color: #4b5563; }
+/* ============ Tool summary line (inline in AI message) ============ */
+.tool-summary{font-size:11px;color:var(--text-muted);margin-top:8px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.tool-summary .ts-icon{font-size:12px}
+.tool-summary .ts-icon.err{color:#ef4444}
+.tool-summary .ts-count{opacity:.7}
+.tool-details{margin-top:6px;font-size:11px}
+.tool-details summary{cursor:pointer;color:var(--text-muted);user-select:none;font-size:11px}
+.tool-pre{background:var(--surface-2);border-radius:4px;padding:8px;margin-top:4px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:200px;overflow-y:auto;color:var(--text)}
+.tool-result-label{margin-top:6px;font-weight:600;color:var(--text-muted);font-size:11px}
+.tool-result-pre{border-left:2px solid var(--border);padding-left:8px}
+.tool-path{background:var(--surface-2);padding:1px 5px;border-radius:4px;font-size:11px;color:var(--text-muted)}
+
+/* ============ Confirm buttons (inline in message) ============ */
+.confirm-btns{display:flex;gap:8px;margin-top:8px}
+.confirm-yes{font-size:12px;padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:500}
+.confirm-yes:hover{opacity:.9}
+.confirm-no{font-size:12px;padding:6px 14px;background:none;color:var(--text);border:1px solid var(--border);border-radius:8px;cursor:pointer}
+.confirm-no:hover{background:var(--surface-2)}
+
+/* ============ Misc ============ */
+input:focus,textarea:focus,button:focus{outline:none!important;box-shadow:none!important}
