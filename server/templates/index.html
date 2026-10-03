@@ -772,33 +772,6 @@
           backdrop.addEventListener('click', function () { toggleAI(false) });
         })();
 
-        /* ---------- sidebar swipe-down-to-close (mobile) ---------- */
-        (function () {
-          var sidebar = document.getElementById('sidebar');
-          var dragging = false, startY = 0, dy = 0;
-          sidebar.addEventListener('touchstart', function (e) {
-            if (window.innerWidth >= 1024) return;
-            if (sidebar.classList.contains('-translate-x-full')) return;
-            dragging = true; startY = e.touches[0].clientY; dy = 0;
-            sidebar.style.transition = 'none';
-          }, { passive: true });
-          sidebar.addEventListener('touchmove', function (e) {
-            if (!dragging) return;
-            dy = Math.max(0, e.touches[0].clientY - startY);
-            sidebar.style.transform = 'translateX(' + dy + 'px)';
-          }, { passive: true });
-          sidebar.addEventListener('touchend', function () {
-            if (!dragging) return;
-            dragging = false;
-            sidebar.style.transition = '';
-            sidebar.style.transform = '';
-            if (dy > 80) {
-              sidebar.classList.add('-translate-x-full');
-              document.getElementById('overlay').classList.add('hidden');
-            }
-          });
-        })();
-
         /* ---------- visualViewport: sync panel position on keyboard open/close ---------- */
         (function () {
           var inp = document.getElementById('ai-input');
