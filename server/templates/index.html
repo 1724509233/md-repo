@@ -575,7 +575,8 @@ async function startNewSession(){
 /* ---------- send chat (SSE) ---------- */
 async function ragSearch(query){
   var res=await fetch('/api/ai/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,top_k:5})});
-  return res.json();
+  var data=await res.json();
+  return data.results||[];
 }
 async function sendChat(){
   var inp=document.getElementById('ai-input');
