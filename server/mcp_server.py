@@ -18,7 +18,7 @@ def _find_config() -> Path:
 
 def main():
     from server.config import load_server_config
-    from server.db import init_db, fts_rebuild_all, graph_rebuild_all, apply_change, edit_file
+    from server.db import init_db, fts_rebuild_all, graph_rebuild_all, edit_file
     from server.ai import rag_search
     from server.agent import validate_tool_call
     
@@ -82,10 +82,8 @@ def main():
         if error:
             return error
         fp = vault_dir / path
-        existed = fp.is_file()
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_bytes(content.encode("utf-8"))
-        apply_change(db_conn, vault_dir, path, "modified" if existed else "created", source="mcp")
         return f"Saved: {path} ({len(content)} chars)"
     
     @mcp.tool()
@@ -95,9 +93,6 @@ def main():
         if error:
             return error
         result = edit_file(vault_dir, path, old_string, new_string)
-        if result.startswith("Error"):
-            return result
-        apply_change(db_conn, vault_dir, path, "modified", source="mcp")
         return result
     
     mcp.run(transport="stdio")

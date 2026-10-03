@@ -10,51 +10,8 @@ from pydantic import BaseModel, Field, field_validator, ValidationError
 
 logger = logging.getLogger("md-vault.agent")
 
-
-SYSTEM_PROMPT = """\
-# Role: md-vault-agent
-你是 md-vault-os 中负责管理 Markdown 知识库（vault）的智能代理。你的目标不是简单地存取文件，
-而是将这个 vault 维护为一个**有机生长的知识网络**——而非一堆孤立文档的集合。
-
-## 核心理念
-1. **原子化**：理想的笔记应当"一念一档"（one note, one idea）。在创建或协助组织内容时，
-   倾向于拆分过大的文档，而非继续膨胀单一文件。
-2. **链接优先于层级**：目录结构提供粗粒度导航，但知识的真正价值在于文档间的链接关系。
-   你应主动发现、建立和维护文档间的显式关联。
-3. **结构涌现而非强加**：不要预设知识应该属于哪个分类；当发现某主题下的笔记数量增长时，
-   建议用户创建 MOC（Map of Content，内容地图）作为主题枢纽，而不是大规模移动文件。
-4. **双向可追溯**：每次建立链接时，考虑反向视角——被链接的文档是否也应该链接回来，
-   以及这条链接对从任意一方出发的读者是否有意义。
-
-## 工具使用策略
-**搜索策略**：
-- 用户查询**具体事实/关键词**（"某次会议的结论是什么"）→ 优先 `search_docs`（FTS5 + jieba，支持中文）。
-- 用户查询**关系性/探索性问题**（"和 X 概念相关的笔记"、"这个主题下有哪些内容"）→ 优先 `get_related_docs`。
-- 复杂问题 → 两阶段检索：先 `search_docs` 定位锚点笔记，再 `get_related_docs` 展开关联网络。
-- 搜索结果为空时，尝试：同义词、英文/中文互换、更短的关键词、放宽限定条件。
-
-**读取与编辑**：
-- 编辑前**必须先 `read_doc` 读取目标文档**，理解上下文后再修改，避免破坏既有内容。
-- 小改动用 `edit_doc`（精确替换），大改动或新建用 `write_doc`（全文覆盖）。
-- 编辑时保持文档原有格式约定（frontmatter、标签体系、链接风格 `[[wiki-link]]` 或 markdown 链接）。
-
-**删除与移动**：
-- 删除是不可逆操作：执行前明确告知用户将删除什么，并向用户确认。
-- 移动文件会改变路径，可能破坏其他文档中的链接。移动前先用 `get_related_docs` 找出引用该文档的笔记，
-  移动后提示这些链接是否需要更新。
-- 遵循"链接优先于层级"原则：**不要**主动建议大规模按主题重排目录；仅当用户明确要求、
-  或存在明确的命名/路径混乱时才建议移动。
-
-## 行为准则
-- 涉及**不可逆操作**（删除、批量移动、大范围编辑）时，先展示操作预览并获得用户确认。
-- 回答基于 vault 内容的问题时，注明信息来源的文档路径，保证可追溯。
-- 用户的 vault 组织方式（PARA、Zettelkasten、GTD 等）优先于你的通用偏好——先观察、后建议。
-- 不确定用户的意图时，先用搜索工具收集上下文，再做判断，而非凭空假设。
-
-## 响应风格
-简洁、面向行动。提供操作结果和相关文档路径；涉及知识结构建议时，
-简要说明理由（如"这 7 篇笔记均与机器学习相关且互相引用，建议创建 MOC"）。
-"""
+_PROMPT_PATH = Path(__file__).parent / "prompts" / "system.md"
+SYSTEM_PROMPT = _PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def sse(event_type: str, data: dict) -> str:
@@ -247,17 +204,35 @@ def parse_since(s: str) -> float:
         return 0.0
 
 
-def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
+def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_chars: int = 4000) -> str:
     """Execute a tool call, return result string for LLM."""
     if name == "read_doc":
         fp = vault_dir / args["path"]
         if not fp.is_file():
+            # Check change_log for recent move/delete of this path
+            if db_conn is not None:
+                from .db import get_changes
+                all_changes = get_changes(db_conn, limit=50)
+                moved_to = None
+                deleted = False
+                for c in all_changes:
+                    if c.get("from_path") == args["path"] and c["action"] in ("moved", "move"):
+                        moved_to = c["path"]
+                        break
+                    if c["path"] == args["path"] and c["action"] in ("deleted", "delete"):
+                        deleted = True
+                if moved_to:
+                    return f"Error: file not found: {args['path']}\nHint: 文件已移动到 {moved_to}，请用 read_doc(path=\"{moved_to}\") 读取。"
+                if deleted:
+                    return f"Error: file not found: {args['path']}\nHint: 文件已被删除。"
             return f"Error: file not found: {args['path']}"
         content = fp.read_bytes().decode("utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total = len(lines)
-        offset = max(args.get("offset", 1), 1)
+        offset = max(int(args.get("offset", 1)), 1)
         limit = args.get("limit")
+        if limit is not None:
+            limit = int(limit)
         if offset > total:
             return f"Error: offset {offset} exceeds file length ({total} lines)"
         if limit is not None:
@@ -266,7 +241,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
             selected = lines[offset - 1:]
 
         # Truncate by char budget (tail truncation, no partial lines)
-        MAX_CHARS = 8000
+        MAX_CHARS = read_doc_max_chars
         char_count = 0
         cut = len(selected)
         truncated = False
@@ -313,28 +288,24 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
         fp = vault_dir / args["path"]
         existed = fp.is_file()
         fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_bytes(args["content"].encode("utf-8"))
-        if db_conn:
-            from .db import apply_change
+        from .watcher import register_write
 
-            apply_change(
-                db_conn,
-                vault_dir,
-                args["path"],
-                "modified" if existed else "created",
-                source="agent",
-            )
+        register_write(args["path"], "agent")
+        fp.write_bytes(args["content"].encode("utf-8"))
         return f"Saved: {args['path']} ({len(args['content'])} chars)"
 
     elif name == "delete_doc":
         fp = vault_dir / args["path"]
         if not fp.is_file():
             return f"Error: file not found: {args['path']}"
-        fp.unlink()
-        if db_conn:
-            from .db import apply_change
+        from .watcher import register_write
+        from .db import _remove_dead_links
 
-            apply_change(db_conn, vault_dir, args["path"], "deleted", source="agent")
+        register_write(args["path"], "agent")
+        fp.unlink()
+        ref_count = _remove_dead_links(vault_dir, args["path"])
+        if ref_count > 0:
+            return f"Deleted: {args['path']} (removed dead links in {ref_count} files)"
         return f"Deleted: {args['path']}"
 
     elif name == "move_doc":
@@ -343,29 +314,22 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
         if not src.is_file():
             return f"Error: file not found: {args['from_path']}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        src.rename(dst)
-        if db_conn:
-            from .db import apply_change
+        from .watcher import register_write
+        from .db import _update_references
 
-            apply_change(
-                db_conn,
-                vault_dir,
-                args["to_path"],
-                "moved",
-                source="agent",
-                from_path=args["from_path"],
-            )
+        register_write(args["to_path"], "agent")
+        src.rename(dst)
+        ref_count = _update_references(vault_dir, args["from_path"], args["to_path"])
+        if ref_count > 0:
+            return f"Moved: {args['from_path']} → {args['to_path']} (updated refs in {ref_count} files)"
         return f"Moved: {args['from_path']} → {args['to_path']}"
 
     elif name == "edit_doc":
         from .db import edit_file
+        from .watcher import register_write
 
+        register_write(args["path"], "agent")
         result = edit_file(vault_dir, args["path"], args["old_string"], args["new_string"])
-        if not result.startswith("Error"):
-            if db_conn:
-                from .db import apply_change
-
-                apply_change(db_conn, vault_dir, args["path"], "modified", source="agent")
         return result
 
     elif name == "get_related_docs":
@@ -407,22 +371,34 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn) -> str:
 from openai import AsyncOpenAI
 
 
-async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn, last_read_ts=None):
+async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn, last_read_ts=None, context_window: int = 16384, max_rounds: int = 15, read_doc_max_chars: int = 4000):
     """Core agent loop. Yields SSE events."""
     client = AsyncOpenAI(base_url=ai_config.base_url, api_key=ai_config.api_key)
 
-    for _round in range(50):
+    for _round in range(max_rounds):
+        # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
+        if _round >= max_rounds - 3:
+            call_messages = messages + [{"role": "system", "content": "You are approaching the round limit. Summarize your progress and provide a final answer."}]
+        else:
+            call_messages = messages
+
         stream = await client.chat.completions.create(
             model=ai_config.model,
-            messages=messages,
+            messages=call_messages,
             tools=tools if tools else None,
             stream=True,
+            stream_options={"include_usage": True},
         )
 
         content = ""
         tool_calls = {}
+        usage = None
 
         async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                usage = chunk.usage
+            if not chunk.choices:
+                continue
             delta = chunk.choices[0].delta
 
             if delta.content:
@@ -440,6 +416,18 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
                         acc["name"] = tc.function.name
                     if tc.function and tc.function.arguments:
                         acc["arguments"] += tc.function.arguments
+
+        # Emit token usage from the API response (prompt_tokens = current context size)
+        if usage is not None:
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+            if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+                current_tokens = prompt_tokens + completion_tokens
+                yield sse("token_usage", {
+                    "used": current_tokens,
+                    "total": context_window,
+                    "percent": round(current_tokens / context_window * 100, 1) if context_window else 0,
+                })
 
         if not tool_calls:
             yield sse("done", {})
@@ -500,7 +488,7 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
                     yield sse("tool_result", {"id": tc["id"], "result": result, "rejected": True})
                     continue
 
-            result = execute_tool(tc["name"], args, vault_dir, db_conn)
+            result = execute_tool(tc["name"], args, vault_dir, db_conn, read_doc_max_chars=read_doc_max_chars)
             logger.info("tool_result %s => %s", tc["name"], result[:500])
             yield sse("tool_result", {"id": tc["id"], "result": result})
             messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})

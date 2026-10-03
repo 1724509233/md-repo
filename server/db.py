@@ -61,6 +61,17 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_changelog_path ON change_log(path)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            messages TEXT NOT NULL,
+            token_count INTEGER NOT NULL DEFAULT 0,
+            last_active REAL NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
 
     # Ensure the FTS5 search index exists.
     init_fts(conn)
@@ -116,6 +127,45 @@ def delete_file(conn: sqlite3.Connection, path: str) -> None:
     """Remove a file entry from the index."""
     conn.execute("DELETE FROM files WHERE path = ?", (path,))
     conn.commit()
+
+
+def save_session(conn: sqlite3.Connection, session_id: str, messages: list, token_count: int = 0) -> None:
+    """Upsert a session into the sessions table."""
+    import json
+
+    conn.execute(
+        """INSERT OR REPLACE INTO sessions (id, messages, token_count, last_active, created_at)
+           VALUES (?, ?, ?, ?, COALESCE(
+               (SELECT created_at FROM sessions WHERE id = ?), ?))""",
+        (session_id, json.dumps(messages, ensure_ascii=False), token_count, time.time(), session_id, time.time()),
+    )
+    conn.commit()
+
+
+def load_session(conn: sqlite3.Connection, session_id: str) -> dict | None:
+    """Load a session by id. Returns {"messages": [...], "token_count": int, "last_active": float} or None."""
+    import json
+
+    row = conn.execute(
+        "SELECT messages, token_count, last_active FROM sessions WHERE id = ?", (session_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return {"messages": json.loads(row[0]), "token_count": row[1], "last_active": row[2]}
+
+
+def get_recent_sessions(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
+    """Return recent sessions ordered by last_active DESC."""
+    import json
+
+    rows = conn.execute(
+        "SELECT id, messages, token_count, last_active FROM sessions ORDER BY last_active DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [
+        {"id": r[0], "messages": json.loads(r[1]), "token_count": r[2], "last_active": r[3]}
+        for r in rows
+    ]
 
 
 def log_change(
@@ -248,6 +298,28 @@ def fts_search(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[dic
     ]
 
 
+def _expand_wikilinks(content: str) -> str:
+    """Expand wikilinks into plain text for FTS indexing.
+
+    [[notes/target|alias]] → "notes target alias"
+    [[target]] → "target"
+    """
+    import re
+
+    def _replace(m):
+        target = m.group(1).strip()
+        alias = m.group(2)
+        # Strip .md extension, split path into components
+        if target.endswith(".md"):
+            target = target[:-3]
+        parts = target.replace("/", " ").split()
+        if alias:
+            parts.append(alias.strip())
+        return " ".join(parts)
+
+    return re.sub(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", _replace, content)
+
+
 def fts_index_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
     """Read a file from vault, tokenize with jieba, upsert into FTS index."""
     import jieba
@@ -259,7 +331,8 @@ def fts_index_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None
 
     content = fp.read_bytes().decode("utf-8", errors="replace")
     title = _extract_title(content)
-    tokens = " ".join(jieba.cut(content))
+    expanded = _expand_wikilinks(content)
+    tokens = " ".join(jieba.cut(expanded))
     fts_upsert(conn, path, title, tokens)
 
 
@@ -289,7 +362,8 @@ def fts_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
             rel = md_file.relative_to(vault_dir).as_posix()
             content = md_file.read_bytes().decode("utf-8", errors="replace")
             title = _extract_title(content)
-            tokens = " ".join(jieba.cut(content))
+            expanded = _expand_wikilinks(content)
+            tokens = " ".join(jieba.cut(expanded))
             conn.execute(
                 "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
                 (rel, title, tokens),
@@ -352,6 +426,35 @@ def graph_add_edge(conn: sqlite3.Connection, src_id: int, dst_id: int, type: str
     )
 
 
+def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
+    """Resolve a wikilink target to a vault-relative path.
+
+    Resolution order:
+    1. Exact relative path (e.g. 'notes/a.md')
+    2. Same-directory relative (e.g. './a.md' from the linking file's dir)
+    3. Vault-wide search by filename (e.g. 'a.md' → find 'notes/a.md')
+
+    Returns the vault-relative path, or None if not found.
+    """
+    # Normalize: add .md if no extension
+    if not target.endswith(".md"):
+        target += ".md"
+
+    # 1. Exact relative path from vault root
+    if (vault_dir / target).is_file():
+        return target
+
+    # 2. Vault-wide search by filename (handles Obsidian short names like [[MOC]])
+    filename = Path(target).name
+    for f in vault_dir.rglob(filename):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if f.is_file():
+            return f.relative_to(vault_dir).as_posix()
+
+    return None
+
+
 def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
     """Extract wikilinks, tags, and related from a markdown file into the graph.
 
@@ -372,13 +475,9 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
     # 1. Wikilinks: [[target]] or [[target|alias]]
     for match in re.finditer(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", content):
         target = match.group(1).strip()
-        # Normalize: add .md if no extension
-        if not target.endswith(".md"):
-            target += ".md"
-        # Check if target exists in vault
-        target_fp = vault_dir / target
-        if target_fp.is_file():
-            dst_id = graph_upsert_entity(conn, target, "doc", target)
+        resolved = _resolve_wikilink(vault_dir, target)
+        if resolved:
+            dst_id = graph_upsert_entity(conn, resolved, "doc", resolved)
             graph_add_edge(conn, doc_id, dst_id, "wikilink", path)
 
     # 2. Tags: #tag (word boundary, not in code blocks)
@@ -398,11 +497,9 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
         if rel_match:
             for item in rel_match.group(1).split(","):
                 target = item.strip().strip("'\"")
-                if not target.endswith(".md"):
-                    target += ".md"
-                target_fp = vault_dir / target
-                if target_fp.is_file():
-                    dst_id = graph_upsert_entity(conn, target, "doc", target)
+                resolved = _resolve_wikilink(vault_dir, target)
+                if resolved:
+                    dst_id = graph_upsert_entity(conn, resolved, "doc", resolved)
                     graph_add_edge(conn, doc_id, dst_id, "related", path)
 
     conn.commit()
@@ -485,24 +582,18 @@ def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> lis
 def graph_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
     """Full rebuild of graph from vault. Returns count of processed files.
 
-    Runs inside a single transaction: if any extraction fails, the DELETEs are
-    rolled back so the graph is never left empty.
+    Deletes all edges/entities, then re-extracts every .md file.
     """
-    try:
-        conn.execute("BEGIN")
-        conn.execute("DELETE FROM edges")
-        conn.execute("DELETE FROM entities")
-        count = 0
-        for md_file in vault_dir.rglob("*.md"):
-            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-                continue
-            rel = md_file.relative_to(vault_dir).as_posix()
-            graph_extract_file(conn, vault_dir, rel)
-            count += 1
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+    conn.execute("DELETE FROM edges")
+    conn.execute("DELETE FROM entities")
+    count = 0
+    for md_file in vault_dir.rglob("*.md"):
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+            continue
+        rel = md_file.relative_to(vault_dir).as_posix()
+        graph_extract_file(conn, vault_dir, rel)
+        count += 1
+    conn.commit()
     return count
 
 
@@ -537,6 +628,7 @@ def apply_change(
             log_change(conn, path, action, source=source)
             fts_delete(conn, path)
             graph_delete_file(conn, path)
+            _remove_dead_links(vault_dir, path)
         elif action in ("moved", "move"):
             src = vault_dir / from_path
             dst = vault_dir / path
@@ -589,3 +681,99 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
         f"Edited: {path} (replaced {len(old_string)} chars "
         f"with {len(new_string)} chars)"
     )
+
+
+def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
+    """Scan all .md files in vault and replace references to old_path with new_path.
+
+    Handles:
+    - Wikilinks: [[old_path]] → [[new_path]], [[old_path|alias]] → [[new_path|alias]]
+    - Plain text paths: old_path → new_path (only when old_path contains '/')
+
+    Returns the number of files modified.
+    """
+    import re
+
+    modified_count = 0
+    for md_file in vault_dir.rglob("*.md"):
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+            continue
+        try:
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+
+        original = content
+
+        # 1. Wikilink replacement: [[old_path]] or [[old_path|alias]]
+        # Escape regex special chars in old_path
+        escaped_old = re.escape(old_path)
+        content = re.sub(
+            r"\[\[(" + escaped_old + r")(\|[^\]]+)?\]\]",
+            lambda m: "[[" + new_path + (m.group(2) or "") + "]]",
+            content,
+        )
+
+        # 2. Plain text path replacement (only if old_path contains '/')
+        if "/" in old_path:
+            content = content.replace(old_path, new_path)
+
+        if content != original:
+            md_file.write_bytes(content.encode("utf-8"))
+            modified_count += 1
+
+    return modified_count
+
+
+def _remove_dead_links(vault_dir: Path, deleted_path: str) -> int:
+    """Remove wikilinks pointing to a deleted file from all vault .md files.
+
+    Handles:
+    - [[deleted_path]] / [[deleted_path_without_ext]] → removed
+    - [[deleted_path|alias]] → removed
+    - Short-name wikilinks: if deleted_path is 'notes/a.md', also removes [[a]]
+      when no other file named 'a.md' exists in the vault.
+
+    Returns the number of files modified.
+    """
+    import re
+
+    filename = Path(deleted_path).name  # e.g. "a.md"
+    stem = Path(deleted_path).stem      # e.g. "a"
+    no_ext = deleted_path[:-3] if deleted_path.endswith(".md") else deleted_path  # e.g. "notes/a"
+
+    # Check if the short name is unique (no other file with same name)
+    short_name_unique = True
+    for f in vault_dir.rglob(filename):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if f.is_file() and f.relative_to(vault_dir).as_posix() != deleted_path:
+            short_name_unique = False
+            break
+
+    # Build patterns: full path (with/without .md) + short name if unique
+    patterns = [re.escape(deleted_path), re.escape(no_ext)]
+    if short_name_unique:
+        patterns.append(re.escape(stem))
+
+    modified_count = 0
+    for md_file in vault_dir.rglob("*.md"):
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+            continue
+        if md_file.relative_to(vault_dir).as_posix() == deleted_path:
+            continue
+        try:
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+
+        original = content
+        for pat in patterns:
+            # Remove [[target]] or [[target|alias]]
+            content = re.sub(r"\[\[" + pat + r"(\|[^\]]+)?\]\]", "", content)
+
+        if content != original:
+            md_file.write_bytes(content.encode("utf-8"))
+            modified_count += 1
+
+    return modified_count

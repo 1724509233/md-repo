@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -80,14 +80,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         return {"status": "ok", "file_count": len(files)}
 
     @app.get("/api/docs")
-    async def list_docs(request: Request) -> JSONResponse:
+    async def list_docs(request: Request):
         files = get_all_files(db_conn)
-        etag = hashlib.sha256(
-            json.dumps(files, sort_keys=True).encode()
-        ).hexdigest()
+        body = json.dumps(files, sort_keys=True).encode()
+        etag = hashlib.sha256(body).hexdigest()
         if request.headers.get("if-none-match") == f'"{etag}"':
-            return JSONResponse(content=[], status_code=304, headers={"ETag": f'"{etag}"'})
-        return JSONResponse(content=files, headers={"ETag": f'"{etag}"'})
+            return Response(content=b"", status_code=304, headers={"ETag": f'"{etag}"'})
+        return Response(content=body, media_type="application/json", headers={"ETag": f'"{etag}"'})
 
     @app.get("/api/docs/changes")
     async def get_changes(since: float = 0.0) -> list[dict]:
@@ -132,9 +131,10 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
         rel_str = rel.as_posix()
-        from .db import apply_change
+        from .watcher import register_write
 
-        apply_change(db_conn, vault_dir, rel_str, "created", source="web")
+        register_write(rel_str, "web")
+        upsert_file(db_conn, rel_str, digest, time.time())
         return {"path": rel_str, "hash": digest}
 
     @app.post("/api/sync")
@@ -244,17 +244,27 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         _cleanup_sessions()
 
-        # Get or create session
+        # Get or create session (restore from SQLite if persisted)
         if session_id not in _agent_sessions:
             from .agent import SYSTEM_PROMPT
+            from .db import load_session
 
-            _agent_sessions[session_id] = {
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT}
-                ],
-                "confirm_queue": asyncio.Queue(),
-                "last_active": time.time(),
-            }
+            saved = load_session(db_conn, session_id) if db_conn else None
+            if saved:
+                _agent_sessions[session_id] = {
+                    "messages": saved["messages"],
+                    "confirm_queue": asyncio.Queue(),
+                    "last_active": saved["last_active"],
+                    "token_count": saved.get("token_count", 0),
+                }
+            else:
+                _agent_sessions[session_id] = {
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT}
+                    ],
+                    "confirm_queue": asyncio.Queue(),
+                    "last_active": time.time(),
+                }
         session = _agent_sessions[session_id]
         session["last_active"] = time.time()
 
@@ -295,8 +305,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     vault_dir=vault_dir,
                     db_conn=db_conn,
                     last_read_ts=session.setdefault("last_read_ts", {}),
+                    context_window=ai_config.context_window,
+                    max_rounds=ai_config.max_rounds,
+                    read_doc_max_chars=ai_config.read_doc_max_chars,
                 ):
                     yield event
+                # Persist session after agent_loop completes
+                from .db import save_session
+
+                save_session(db_conn, session_id, session["messages"], session.get("token_count", 0))
             except (GeneratorExit, asyncio.CancelledError):
                 return
 
@@ -317,6 +334,32 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         session["confirm_queue"].put_nowait(approved)
         return {"ok": True}
 
+    @app.post("/api/agent/new-session")
+    async def agent_new_session(request: Request) -> dict:
+        import uuid
+
+        body = await request.json()
+        old_session_id = body.get("old_session_id", "")
+
+        new_id = str(uuid.uuid4())
+
+        from .db import load_session, save_session
+        from .agent import SYSTEM_PROMPT
+
+        new_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+        _agent_sessions[new_id] = {
+            "messages": new_messages,
+            "confirm_queue": asyncio.Queue(),
+            "last_active": time.time(),
+            "token_count": 0,
+        }
+
+        if db_conn:
+            save_session(db_conn, new_id, new_messages, token_count=0)
+
+        return {"session_id": new_id}
+
     @app.put("/api/docs/{path:path}")
     async def save_doc(path: str, request: Request) -> dict:
         rel = _safe_rel_path(path)
@@ -330,15 +373,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        from .db import apply_change
+        from .watcher import register_write
 
-        apply_change(
-            db_conn,
-            vault_dir,
-            rel.as_posix(),
-            "modified" if existed else "created",
-            source="web",
-        )
+        register_write(rel.as_posix(), "web")
+        digest = _hash_bytes(content)
+        upsert_file(db_conn, rel.as_posix(), digest, time.time())
         return {"ok": True}
 
     return app

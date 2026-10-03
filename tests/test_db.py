@@ -209,3 +209,318 @@ def test_edit_file_preserves_rest(tmp_path) -> None:
     result = edit_file(tmp_path, "notes/a.md", "two", "TWO")
     assert result == "Edited: notes/a.md (replaced 3 chars with 3 chars)"
     assert fp.read_bytes() == b"line one\nline TWO\nline three\n"
+
+
+def test_save_and_load_session(db_conn):
+    from server.db import save_session, load_session
+
+    msgs = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
+    save_session(db_conn, "test-sess", msgs, token_count=100)
+    result = load_session(db_conn, "test-sess")
+    assert result is not None
+    assert result["messages"] == msgs
+    assert result["token_count"] == 100
+
+
+def test_load_session_not_found(db_conn):
+    from server.db import load_session
+
+    assert load_session(db_conn, "nonexistent") is None
+
+
+def test_get_recent_sessions(db_conn):
+    from server.db import save_session, get_recent_sessions
+
+    save_session(db_conn, "s1", [{"role": "user", "content": "a"}])
+    save_session(db_conn, "s2", [{"role": "user", "content": "b"}])
+    sessions = get_recent_sessions(db_conn, limit=10)
+    assert len(sessions) >= 2
+    ids = [s["id"] for s in sessions]
+    assert "s1" in ids and "s2" in ids
+
+
+def test_save_session_updates_existing(db_conn):
+    from server.db import save_session, load_session
+
+    save_session(db_conn, "upd", [{"role": "user", "content": "v1"}], token_count=10)
+    save_session(db_conn, "upd", [{"role": "user", "content": "v2"}], token_count=20)
+    result = load_session(db_conn, "upd")
+    assert result is not None
+    assert result["messages"][0]["content"] == "v2"
+    assert result["token_count"] == 20
+
+
+def test_update_references_wikilink(vault_dir):
+    from server.db import _update_references
+
+    # Create the target file
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old")
+
+    # Create a file that references it via wikilink
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for details.")
+
+    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[notes/new.md]]" in content
+    assert "[[notes/old.md]]" not in content
+
+
+def test_update_references_wikilink_alias(vault_dir):
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md|my alias]] for details.")
+
+    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[notes/new.md|my alias]]" in content
+
+
+def test_update_references_plain_path(vault_dir):
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old")
+    (vault_dir / "notes" / "ref.md").write_text("Check notes/old.md for info.")
+
+    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "notes/new.md" in content
+    assert "notes/old.md" not in content
+
+
+def test_update_references_multiple_files(vault_dir):
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old")
+    for i in range(3):
+        (vault_dir / "notes" / f"ref{i}.md").write_text(f"See [[notes/old.md]] from file {i}.")
+
+    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    assert count == 3
+
+
+def test_update_references_no_refs(vault_dir):
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old")
+    (vault_dir / "notes" / "unrelated.md").write_text("No references here.")
+
+    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    assert count == 0
+
+
+def test_update_references_short_name_no_slash(vault_dir):
+    """Short filenames without '/' should NOT be replaced in plain text."""
+    from server.db import _update_references
+
+    (vault_dir / "a.md").write_text("# A")
+    (vault_dir / "ref.md").write_text("The word a.md appears in text but is not a path ref.")
+
+    # old_path="a.md" has no '/', so plain text replacement should NOT happen
+    count = _update_references(vault_dir, "a.md", "b.md")
+    # Wikilink [[a.md]] would be replaced, but plain "a.md" in text should not
+    content = (vault_dir / "ref.md").read_text()
+    assert "a.md" in content  # plain text NOT replaced
+
+
+def test_move_doc_updates_references(vault_dir):
+    """Integration: move_doc automatically updates references."""
+    from server.agent import execute_tool
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "old.md").write_text("# Old doc")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for info.")
+
+    result = execute_tool(
+        "move_doc",
+        {"from_path": "notes/old.md", "to_path": "notes/new.md"},
+        vault_dir,
+        None,
+    )
+
+    assert "Moved" in result
+    assert "updated refs in 1 files" in result
+
+    # Verify the reference was updated
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[notes/new.md]]" in content
+
+    # Verify the file was moved
+    assert (vault_dir / "notes" / "new.md").is_file()
+    assert not (vault_dir / "notes" / "old.md").exists()
+
+
+def test_resolve_wikilink_exact_path(vault_dir):
+    """_resolve_wikilink resolves exact relative paths."""
+    from server.db import _resolve_wikilink
+
+    (vault_dir / "notes" / "a.md").write_text("# A")
+
+    assert _resolve_wikilink(vault_dir, "notes/a.md") == "notes/a.md"
+    assert _resolve_wikilink(vault_dir, "notes/a") == "notes/a.md"
+
+
+def test_resolve_wikilink_short_name(vault_dir):
+    """_resolve_wikilink resolves Obsidian short names via vault-wide search."""
+    from server.db import _resolve_wikilink
+
+    (vault_dir / "notes" / "MOC.md").write_text("# MOC")
+
+    # Short name should resolve to the vault-wide file
+    assert _resolve_wikilink(vault_dir, "MOC") == "notes/MOC.md"
+    assert _resolve_wikilink(vault_dir, "MOC.md") == "notes/MOC.md"
+
+
+def test_resolve_wikilink_not_found(vault_dir):
+    """_resolve_wikilink returns None for non-existent targets."""
+    from server.db import _resolve_wikilink
+
+    assert _resolve_wikilink(vault_dir, "nonexistent") is None
+
+
+def test_graph_extract_short_name_wikilink(vault_dir):
+    """graph_extract_file creates edges for short-name wikilinks."""
+    from server.db import init_db, graph_extract_file, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_text("See [[MOC]] for overview.")
+        (vault_dir / "notes" / "MOC.md").write_text("# MOC\n- [[a]]")
+
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+        graph_extract_file(conn, vault_dir, "notes/MOC.md")
+
+        # a.md should link to MOC.md (short name resolved)
+        related = graph_get_related(conn, "notes/a.md")
+        paths = [r["path"] for r in related]
+        assert "notes/MOC.md" in paths
+
+        # MOC.md should link back to a.md
+        related_moc = graph_get_related(conn, "notes/MOC.md")
+        paths_moc = [r["path"] for r in related_moc]
+        assert "notes/a.md" in paths_moc
+    finally:
+        conn.close()
+
+
+def test_remove_dead_links_full_path(vault_dir):
+    """_remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
+    from server.db import _remove_dead_links
+
+    (vault_dir / "notes" / "target.md").write_text("# Target")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for details.")
+
+    count = _remove_dead_links(vault_dir, "notes/target.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[notes/target]]" not in content
+
+
+def test_remove_dead_links_short_name(vault_dir):
+    """_remove_dead_links removes short-name wikilinks when target is unique."""
+    from server.db import _remove_dead_links
+
+    (vault_dir / "notes" / "unique.md").write_text("# Unique")
+    (vault_dir / "notes" / "ref.md").write_text("See [[unique]] for details.")
+
+    count = _remove_dead_links(vault_dir, "notes/unique.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[unique]]" not in content
+
+
+def test_remove_dead_links_alias(vault_dir):
+    """_remove_dead_links removes wikilinks with aliases."""
+    from server.db import _remove_dead_links
+
+    (vault_dir / "notes" / "target.md").write_text("# Target")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/target|my alias]] for details.")
+
+    count = _remove_dead_links(vault_dir, "notes/target.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[notes/target" not in content
+
+
+def test_remove_dead_links_no_match(vault_dir):
+    """_remove_dead_links returns 0 when no references exist."""
+    from server.db import _remove_dead_links
+
+    (vault_dir / "notes" / "target.md").write_text("# Target")
+    (vault_dir / "notes" / "ref.md").write_text("No links here.")
+
+    count = _remove_dead_links(vault_dir, "notes/target.md")
+    assert count == 0
+
+
+def test_expand_wikilinks_basic():
+    """_expand_wikilinks converts [[target]] to plain text."""
+    from server.db import _expand_wikilinks
+
+    assert _expand_wikilinks("See [[target]] here") == "See target here"
+    assert _expand_wikilinks("See [[notes/target]] here") == "See notes target here"
+    assert _expand_wikilinks("See [[notes/target|my alias]] here") == "See notes target my alias here"
+    assert _expand_wikilinks("No links") == "No links"
+
+
+def test_expand_wikilinks_md_extension():
+    """_expand_wikilinks strips .md extension."""
+    from server.db import _expand_wikilinks
+
+    assert _expand_wikilinks("See [[target.md]] here") == "See target here"
+    assert _expand_wikilinks("See [[notes/target.md|alias]] here") == "See notes target alias here"
+
+
+def test_fts_search_wikilink_target(vault_dir):
+    """FTS search finds documents by wikilink target name."""
+    from server.db import init_db, fts_index_file, fts_search
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target Doc\nContent here.")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for details.")
+
+        fts_index_file(conn, vault_dir, "notes/target.md")
+        fts_index_file(conn, vault_dir, "notes/ref.md")
+
+        # Search for "target" should find both docs
+        results = fts_search(conn, "target")
+        paths = [r["path"] for r in results]
+        assert "notes/target.md" in paths
+        assert "notes/ref.md" in paths
+    finally:
+        conn.close()
+
+
+def test_fts_search_wikilink_alias(vault_dir):
+    """FTS search finds documents by wikilink alias."""
+    from server.db import init_db, fts_index_file, fts_search
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target Doc")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target|my special alias]] for details.")
+
+        fts_index_file(conn, vault_dir, "notes/target.md")
+        fts_index_file(conn, vault_dir, "notes/ref.md")
+
+        # Search for the alias should find ref.md
+        results = fts_search(conn, "special")
+        paths = [r["path"] for r in results]
+        assert "notes/ref.md" in paths
+    finally:
+        conn.close()

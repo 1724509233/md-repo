@@ -14,6 +14,9 @@ class AIConfig:
     model: str = "qwen2.5:14b"
     max_tokens: int = 4096
     temperature: float = 0.7
+    context_window: int = 16384
+    max_rounds: int = 15
+    read_doc_max_chars: int = 4000
 
 
 @dataclass
@@ -49,6 +52,9 @@ def load_server_config(config_path: str) -> ServerConfig:
             model=ai_raw.get("model", "qwen2.5:14b"),
             max_tokens=int(ai_raw.get("max_tokens", 4096)),
             temperature=float(ai_raw.get("temperature", 0.7)),
+            context_window=int(ai_raw.get("context_window", 16384)),
+            max_rounds=int(ai_raw.get("max_rounds", 15)),
+            read_doc_max_chars=int(ai_raw.get("read_doc_max_chars", 4000)),
         )
 
     return ServerConfig(

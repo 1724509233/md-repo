@@ -286,3 +286,52 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
     )
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
+
+
+def test_new_session_clean(client, db_conn):
+    """New session is always clean — no old messages injected."""
+    from server.db import save_session, load_session
+
+    old_msgs = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi there"},
+    ]
+    save_session(db_conn, "old-sess", old_msgs, token_count=100)
+    r = client.post("/api/agent/new-session", json={"old_session_id": "old-sess"})
+    assert r.status_code == 200
+    new_id = r.json()["session_id"]
+    assert new_id != "old-sess"
+    loaded = load_session(db_conn, new_id)
+    assert loaded is not None
+    assert len(loaded["messages"]) == 1
+    assert loaded["messages"][0]["role"] == "system"
+
+
+def test_new_session_no_old(client, db_conn):
+    from server.db import load_session
+
+    r = client.post("/api/agent/new-session", json={"old_session_id": ""})
+    assert r.status_code == 200
+    new_id = r.json()["session_id"]
+    loaded = load_session(db_conn, new_id)
+    assert loaded is not None
+    assert len(loaded["messages"]) == 1
+    assert loaded["messages"][0]["role"] == "system"
+
+
+def test_new_session_no_injection_even_with_history(client, db_conn):
+    """Even with extensive old history, new session has zero non-system messages."""
+    from server.db import save_session, load_session
+
+    old_msgs = [{"role": "system", "content": "sys"}]
+    for i in range(10):
+        old_msgs.append({"role": "user", "content": f"msg{i}"})
+        old_msgs.append({"role": "assistant", "content": f"reply{i}"})
+    save_session(db_conn, "big-sess", old_msgs)
+    r = client.post("/api/agent/new-session", json={"old_session_id": "big-sess"})
+    new_id = r.json()["session_id"]
+    loaded = load_session(db_conn, new_id)
+    assert loaded is not None
+    non_system = [m for m in loaded["messages"] if m["role"] != "system"]
+    assert len(non_system) == 0

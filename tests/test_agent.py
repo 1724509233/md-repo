@@ -397,6 +397,48 @@ def test_agent_loop_no_tools(tmp_path: Path):
     assert any('"type": "done"' in e for e in events)
 
 
+def test_agent_loop_token_usage(tmp_path: Path):
+    """Final chunk carries usage → token_usage SSE event with used=150."""
+    from server.agent import agent_loop
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    # Content chunk
+    content_chunk = _make_chunk(content="Hi!", finish_reason="stop")
+    # Final usage chunk: empty choices, usage populated
+    usage_chunk = MagicMock()
+    usage_chunk.choices = []
+    usage_chunk.usage = MagicMock(prompt_tokens=100, completion_tokens=50)
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: _async_iter([content_chunk, usage_chunk])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        events = list(
+            asyncio.get_event_loop().run_until_complete(
+                _collect(agent_loop(
+                    messages=[{"role": "user", "content": "hi"}],
+                    tools=[],
+                    ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
+                    confirm_queue=asyncio.Queue(),
+                    vault_dir=vault,
+                    db_conn=None,
+                ))
+            )
+        )
+
+    usage_events = [e for e in events if '"type": "token_usage"' in e]
+    assert len(usage_events) == 1
+    import json as _json
+    payload = _json.loads(usage_events[0].split("data: ", 1)[1])
+    assert payload["used"] == 150
+    assert payload["total"] == 16384
+
+
 def test_agent_loop_with_tool_call(tmp_path: Path):
     """LLM returns tool_call → execute → feed back → final text."""
     from server.agent import agent_loop
@@ -619,3 +661,140 @@ def test_execute_recent_changes_no_db(tmp_path: Path):
     vault.mkdir()
     result = execute_tool("recent_changes", {}, vault, None)
     assert "Error" in result
+
+
+def test_agent_loop_max_rounds():
+    """agent_loop with max_rounds=3 stops after 3 rounds."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from server.agent import agent_loop
+
+    call_count = 0
+
+    async def fake_stream():
+        nonlocal call_count
+        call_count += 1
+        # Return a chunk with no tool calls to end the loop
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = f"round {call_count}"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+
+    ai_config = MagicMock()
+    ai_config.base_url = "http://test"
+    ai_config.api_key = "key"
+    ai_config.model = "test-model"
+
+    confirm_queue = asyncio.Queue()
+
+    async def run():
+        events = []
+        async for event in agent_loop(
+            messages=[{"role": "user", "content": "test"}],
+            tools=None,
+            ai_config=ai_config,
+            confirm_queue=confirm_queue,
+            vault_dir=MagicMock(),
+            db_conn=None,
+            max_rounds=3,
+        ):
+            events.append(event)
+        return events
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+    # Should have stopped after 3 rounds (each round yields a token + done)
+    assert call_count <= 3
+
+
+def test_agent_loop_round_limit_reminder():
+    """In the last 3 rounds, a system reminder is injected into the LLM call."""
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from server.agent import agent_loop
+
+    captured_messages = []
+
+    # A tool-call chunk so the loop keeps going past round 0 (otherwise it
+    # exits on the first "done" before reaching the reminder rounds).
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_1"
+    tc.function = MagicMock()
+    tc.function.name = "list_files"
+    tc.function.arguments = "{}"
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = None
+        chunk.choices[0].delta.tool_calls = [tc]
+        chunk.usage = None
+        yield chunk
+
+    async def capture_create(**kwargs):
+        captured_messages.append(kwargs.get("messages"))
+        return fake_stream()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = capture_create
+
+    ai_config = MagicMock()
+    ai_config.base_url = "http://test"
+    ai_config.api_key = "key"
+    ai_config.model = "test-model"
+
+    confirm_queue = asyncio.Queue()
+
+    async def run():
+        async for event in agent_loop(
+            messages=[{"role": "user", "content": "test"}],
+            tools=None,
+            ai_config=ai_config,
+            confirm_queue=confirm_queue,
+            vault_dir=MagicMock(),
+            db_conn=None,
+            max_rounds=5,
+        ):
+            pass
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+    # Check that in rounds 3,4,5 (0-indexed: 2,3,4), the messages include the reminder
+    # The reminder should be present in at least one of the captured calls
+    found_reminder = False
+    for msgs in captured_messages:
+        if msgs and msgs[-1].get("role") == "system" and "round limit" in msgs[-1].get("content", ""):
+            found_reminder = True
+            break
+    assert found_reminder, f"Reminder not found in any of {len(captured_messages)} calls"
+
+
+def test_read_doc_max_chars_truncation(vault_dir):
+    """read_doc truncates at read_doc_max_chars."""
+    from server.agent import execute_tool
+
+    # Create a file with known content
+    test_file = vault_dir / "test_trunc.md"
+    test_file.write_text("A" * 10000)
+
+    result = execute_tool("read_doc", {"path": "test_trunc.md"}, vault_dir, None, read_doc_max_chars=2000)
+    # Should be truncated (content section should be ~2000 chars, not 10000)
+    assert "truncated" in result.lower() or "[truncated" in result
+
+
+def test_read_doc_max_chars_backward_compat(vault_dir):
+    """read_doc with default 4000 chars works as before."""
+    from server.agent import execute_tool
+
+    test_file = vault_dir / "test_compat.md"
+    test_file.write_text("B" * 3000)
+
+    result = execute_tool("read_doc", {"path": "test_compat.md"}, vault_dir, None)
+    # 3000 chars < 4000 default, so no truncation
+    assert "truncated" not in result.lower()

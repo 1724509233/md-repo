@@ -63,7 +63,14 @@ tailwind.config={darkMode:'class',theme:{extend:{colors:{primary:{50:'#eff6ff',1
 <div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white">🤖</div>
 <div class="flex-1"><div class="font-semibold text-sm">AI 助手</div><div id="ai-status" class="text-xs text-gray-400">就绪</div></div>
 <span id="ai-mode" class="text-xs px-2.5 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-md cursor-pointer font-medium">当前文档</span>
+<button id="btn-new-session" onclick="startNewSession()" style="font-size:11px; padding:2px 8px; border:1px solid #d1d5db; border-radius:4px; background:white; cursor:pointer; color:#374151;">新会话</button>
 <button id="ai-close" aria-label="关闭 AI 助手" class="text-gray-400 hover:text-gray-600">✕</button>
+</div>
+<div id="token-bar" style="display:none; align-items:center; gap:4px;" class="px-4 py-1.5 border-b border-gray-200 dark:border-gray-800 shrink-0">
+    <span id="token-text" style="font-size:11px; color:#6b7280;">Token: 0K / 16K (0%)</span>
+    <div style="flex:1; height:4px; background:#e5e7eb; border-radius:2px;">
+        <div id="token-fill" style="height:100%; width:0%; border-radius:2px; background:#22c55e; transition:width 0.3s, background 0.3s;"></div>
+    </div>
 </div>
 <div id="ai-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
 <div class="p-3 border-t border-gray-200 dark:border-gray-800 shrink-0">
@@ -363,6 +370,22 @@ async function ragSearch(query){
   var res=await fetch('/api/ai/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,top_k:5})});
   return res.json();
 }
+async function startNewSession(){
+  var resp=await fetch('/api/agent/new-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({old_session_id:sessionId})});
+  if(!resp.ok)return;
+  var data=await resp.json();
+  sessionId=data.session_id;
+  var bar=document.getElementById('token-bar');
+  if(bar)bar.style.display='none';
+  var chatEl=document.getElementById('ai-messages');
+  if(chatEl){
+    chatEl.innerHTML='';
+    var div=document.createElement('div');
+    div.style.cssText='font-size:12px; color:#6b7280; padding:4px 8px; text-align:center;';
+    div.textContent='新会话已开启';
+    chatEl.appendChild(div);
+  }
+}
 async function sendChat(){
   var inp=document.getElementById('ai-input');
   var text=inp.value.trim();
@@ -414,6 +437,15 @@ async function sendChat(){
               case 'tool_result':
                 updateToolCard(evt.id,evt.rejected?'rejected':(evt.error?'error':'done'),evt.result);
                 pollChanges();
+                break;
+              case 'token_usage':
+                document.getElementById('token-bar').style.display = 'flex';
+                var usedK = (evt.used / 1000).toFixed(1);
+                var totalK = (evt.total / 1000).toFixed(0);
+                document.getElementById('token-text').textContent = 'Token: ' + usedK + 'K / ' + totalK + 'K (' + evt.percent + '%)';
+                var fill = document.getElementById('token-fill');
+                fill.style.width = evt.percent + '%';
+                fill.style.background = evt.percent > 80 ? '#ef4444' : evt.percent > 50 ? '#eab308' : '#22c55e';
                 break;
               case 'done':
                 finishTurn(turn);
@@ -559,6 +591,7 @@ addMsg('ai','你好！我可以帮你总结文档、回答问题、改写内容�
 /* ---------- init ---------- */
 loadDocs();
 window.sendConfirm=sendConfirm;
+window.startNewSession=startNewSession;
 })();
 </script>
 </body>
