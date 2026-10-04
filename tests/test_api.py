@@ -304,8 +304,9 @@ def test_new_session_clean(client, db_conn):
     assert new_id != "old-sess"
     loaded = load_session(db_conn, new_id)
     assert loaded is not None
-    assert len(loaded["messages"]) == 1
+    assert len(loaded["messages"]) == 2
     assert loaded["messages"][0]["role"] == "system"
+    assert loaded["messages"][1]["role"] == "system"
 
 
 def test_new_session_no_old(client, db_conn):
@@ -316,8 +317,9 @@ def test_new_session_no_old(client, db_conn):
     new_id = r.json()["session_id"]
     loaded = load_session(db_conn, new_id)
     assert loaded is not None
-    assert len(loaded["messages"]) == 1
+    assert len(loaded["messages"]) == 2
     assert loaded["messages"][0]["role"] == "system"
+    assert loaded["messages"][1]["role"] == "system"
 
 
 def test_new_session_no_injection_even_with_history(client, db_conn):

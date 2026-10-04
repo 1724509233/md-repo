@@ -246,7 +246,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         # Get or create session (restore from SQLite if persisted)
         if session_id not in _agent_sessions:
-            from .agent import SYSTEM_PROMPT
+            from .agent import SYSTEM_PROMPT, _build_time_block
             from .db import load_session
 
             saved = load_session(db_conn, session_id) if db_conn else None
@@ -260,7 +260,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             else:
                 _agent_sessions[session_id] = {
                     "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT}
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": _build_time_block()},
                     ],
                     "confirm_queue": asyncio.Queue(),
                     "last_active": time.time(),
@@ -344,9 +345,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         new_id = str(uuid.uuid4())
 
         from .db import load_session, save_session
-        from .agent import SYSTEM_PROMPT
+        from .agent import SYSTEM_PROMPT, _build_time_block
 
-        new_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        new_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _build_time_block()},
+        ]
 
         _agent_sessions[new_id] = {
             "messages": new_messages,
