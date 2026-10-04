@@ -16,6 +16,14 @@ def _find_config() -> Path:
         return project_root
     raise FileNotFoundError("config.yaml not found in CWD or project root")
 
+from server.responses import (
+    _file_not_found_hint,
+    search_no_match,
+    fts_syntax_error,
+    related_no_file,
+    related_no_links,
+)
+
 def main():
     from server.config import load_server_config
     from server.db import init_db, fts_rebuild_all, graph_rebuild_all, edit_file
@@ -46,9 +54,14 @@ def main():
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5) -> str:
         """Search vault documents by keyword using FTS5 + jieba Chinese tokenization. Returns matching file paths with relevance scores and snippets."""
-        results = rag_search(str(vault_dir), query, top_k=top_k)
+        try:
+            results = rag_search(str(vault_dir), query, top_k=top_k)
+        except Exception as e:
+            if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
+                return fts_syntax_error(query)
+            raise
         if not results:
-            return "No matching documents found."
+            return search_no_match(query)
         return "\n".join(
             f"{r['path']} (score: {r['score']:.2f}): {r['snippet']}" for r in results
         )
@@ -57,9 +70,12 @@ def main():
     async def get_related_docs(path: str, hops: int = 1) -> str:
         """Get documents related to the given document via wikilinks, tags, or frontmatter related field."""
         from server.db import graph_get_related
+        fp = vault_dir / path
+        if not fp.is_file():
+            return related_no_file(path)
         results = graph_get_related(db_conn, path, hops=hops)
         if not results:
-            return f"No related documents found for {path}."
+            return related_no_links(path)
         lines = [f"{r['path']} (via {r['type']})" for r in results]
         return f"Related documents for {path}:\n" + "\n".join(lines)
     
@@ -71,7 +87,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return f"Error: file not found: {path}"
+            return _file_not_found_hint(path, db_conn, tool="read_doc")
         content = fp.read_bytes().decode("utf-8", errors="replace")
         return f"File: {path} ({len(content)} chars)\n\n{content}"
     
@@ -83,7 +99,10 @@ def main():
             return error
         fp = vault_dir / path
         fp.parent.mkdir(parents=True, exist_ok=True)
+        existed = fp.is_file()
         fp.write_bytes(content.encode("utf-8"))
+        if existed:
+            return f"Saved: {path} ({len(content)} chars, overwritten)"
         return f"Saved: {path} ({len(content)} chars)"
     
     @mcp.tool()
@@ -92,6 +111,9 @@ def main():
         error = validate_tool_call("edit_doc", {"path": path}, vault_dir)
         if error:
             return error
+        fp = vault_dir / path
+        if not fp.is_file():
+            return _file_not_found_hint(path, db_conn, tool="edit_doc")
         result = edit_file(vault_dir, path, old_string, new_string)
         return result
     

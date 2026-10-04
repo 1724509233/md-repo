@@ -207,6 +207,8 @@ import re
 import time
 from datetime import datetime
 
+from . import responses
+
 
 def parse_since(s: str) -> float:
     """Parse a human-friendly time string to a Unix timestamp.
@@ -237,23 +239,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
     if name == "read_doc":
         fp = vault_dir / args["path"]
         if not fp.is_file():
-            # Check change_log for recent move/delete of this path
-            if db_conn is not None:
-                from .db import get_changes
-                all_changes = get_changes(db_conn, limit=50)
-                moved_to = None
-                deleted = False
-                for c in all_changes:
-                    if c.get("from_path") == args["path"] and c["action"] in ("moved", "move"):
-                        moved_to = c["path"]
-                        break
-                    if c["path"] == args["path"] and c["action"] in ("deleted", "delete"):
-                        deleted = True
-                if moved_to:
-                    return f"Error: file not found: {args['path']}\nHint: 文件已移动到 {moved_to}，请用 read_doc(path=\"{moved_to}\") 读取。"
-                if deleted:
-                    return f"Error: file not found: {args['path']}\nHint: 文件已被删除。"
-            return f"Error: file not found: {args['path']}"
+            return responses._file_not_found_hint(args["path"], db_conn, tool="read_doc")
         content = fp.read_bytes().decode("utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total = len(lines)
@@ -262,7 +248,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         if limit is not None:
             limit = int(limit)
         if offset > total:
-            return f"Error: offset {offset} exceeds file length ({total} lines)"
+            return responses.read_offset_exceeds(offset, total)
         if limit is not None:
             selected = lines[offset - 1: offset - 1 + limit]
         else:
@@ -297,9 +283,14 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
     elif name == "search_docs":
         from .ai import rag_search
 
-        results = rag_search(str(vault_dir), args["query"], top_k=args.get("top_k", 5))
+        try:
+            results = rag_search(str(vault_dir), args["query"], top_k=args.get("top_k", 5))
+        except Exception as e:
+            if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
+                return responses.fts_syntax_error(args["query"])
+            raise
         if not results:
-            return "No matching documents found."
+            return responses.search_no_match(args["query"])
         return "\n".join(
             f"{r['path']} (score: {r['score']:.2f}): {r['snippet']}" for r in results
         )
@@ -310,7 +301,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
             f.relative_to(vault_dir).as_posix()
             for f in base.rglob("*.md") if ".sync" not in f.parts
         ]
-        return "\n".join(sorted(files)) if files else "No markdown files found."
+        return "\n".join(sorted(files)) if files else responses.list_empty(args.get("dir", ""))
 
     elif name == "write_doc":
         fp = vault_dir / args["path"]
@@ -320,12 +311,14 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 
         register_write(args["path"], "agent")
         fp.write_bytes(args["content"].encode("utf-8"))
+        if existed:
+            return f"Saved: {args['path']} ({len(args['content'])} chars, overwritten)"
         return f"Saved: {args['path']} ({len(args['content'])} chars)"
 
     elif name == "delete_doc":
         fp = vault_dir / args["path"]
         if not fp.is_file():
-            return f"Error: file not found: {args['path']}"
+            return responses._file_not_found_hint(args["path"], db_conn, tool="delete_doc")
         from .watcher import register_write
         from .db import _remove_dead_links
 
@@ -340,7 +333,9 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         src = vault_dir / args["from_path"]
         dst = vault_dir / args["to_path"]
         if not src.is_file():
-            return f"Error: file not found: {args['from_path']}"
+            return responses._file_not_found_hint(args["from_path"], db_conn, tool="move_doc")
+        if dst.is_file():
+            return responses.move_dest_exists(args["to_path"])
         dst.parent.mkdir(parents=True, exist_ok=True)
         from .watcher import register_write
         from .db import _update_references
@@ -356,6 +351,10 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         from .db import edit_file
         from .watcher import register_write
 
+        fp = vault_dir / args["path"]
+        if not fp.is_file():
+            return responses._file_not_found_hint(args["path"], db_conn, tool="edit_doc")
+
         register_write(args["path"], "agent")
         result = edit_file(vault_dir, args["path"], args["old_string"], args["new_string"])
         return result
@@ -363,9 +362,13 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
     elif name == "get_related_docs":
         from .db import graph_get_related
 
+        fp = vault_dir / args["path"]
+        if not fp.is_file():
+            return responses.related_no_file(args["path"])
+
         results = graph_get_related(db_conn, args["path"], hops=1)
         if not results:
-            return f"No related documents found for {args['path']}."
+            return responses.related_no_links(args["path"])
         lines = [f"{r['path']} (via {r['type']})" for r in results]
         return f"Related documents for {args['path']}:\n" + "\n".join(lines)
 
@@ -383,7 +386,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
             limit=args.get("limit", 20),
         )
         if not changes:
-            return "No recent changes found."
+            return responses.changes_empty()
         lines = []
         for c in changes:
             ts_str = time.strftime("%H:%M", time.localtime(c["ts"]))
