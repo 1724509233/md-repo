@@ -476,6 +476,7 @@ async def agent_loop(messages, tools, ai_config, pending_confirms, vault_dir, db
                 })
 
         if not tool_calls:
+            messages.append({"role": "assistant", "content": content})
             yield sse("done", {})
             return
 

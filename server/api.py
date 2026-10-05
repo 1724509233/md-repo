@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from pathlib import Path
@@ -15,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 
 from .db import get_all_files, upsert_file
 from .sync import compare_files
+
+logger = logging.getLogger("md-vault.api")
 
 # In-memory sync lock: {"locked_at": float} or None
 _sync_lock: dict | None = None
@@ -64,6 +67,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     _agent_sessions: dict[str, dict] = {}
     _SESSION_TTL = 1800  # 30 minutes
 
+    # FIXME: 清理时应排除当前活跃 session_id，避免用户 30min 未发消息后回来时
+    # 误清除其内存缓存（功能等价但多一次 DB 恢复 IO）。
     def _cleanup_sessions():
         now = time.time()
         expired = [sid for sid, s in _agent_sessions.items() if now - s.get("last_active", 0) > _SESSION_TTL]
@@ -279,10 +284,14 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         # Inject current doc context: one-line path + change signal (not full content)
         if doc_path:
             rel = _safe_rel_path(doc_path)
-            if rel:
+            if rel is None:
+                logger.info("doc_context skipped: _safe_rel_path rejected %r", doc_path)
+            elif rel:
                 rel_str = rel.as_posix()
                 fp = vault_dir / rel
-                if fp.is_file():
+                if not fp.is_file():
+                    raise HTTPException(status_code=409, detail=f"doc_path '{rel_str}' exists in index but not on disk (stale DB?)")
+                else:
                     # Check for external changes since agent last read this doc
                     last_read_ts = session.get("last_read_ts", {}).get(rel_str, 0)
                     warning = ""
@@ -298,6 +307,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                         if not (m.get("role") == "user" and m.get("content", "").startswith("[当前打开:"))
                     ]
                     session["messages"].append({"role": "user", "content": doc_context})
+                    logger.info("doc_context injected: %s (msgs=%d)", doc_context, len(session["messages"]))
+            else:
+                logger.info("doc_context skipped: _safe_rel_path returned empty for %r", doc_path)
+        else:
+            logger.info("doc_context skipped: no doc_path in request")
 
         session["messages"].append({"role": "user", "content": message})
 
