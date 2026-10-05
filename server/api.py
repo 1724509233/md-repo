@@ -60,7 +60,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
 
-    # Agent session store: session_id -> {"messages": [...], "confirm_queue": asyncio.Queue, "last_active": float}
+    # Agent session store: session_id -> {"messages": [...], "pending_confirms": dict, "last_active": float}
     _agent_sessions: dict[str, dict] = {}
     _SESSION_TTL = 1800  # 30 minutes
 
@@ -260,7 +260,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             if saved:
                 _agent_sessions[session_id] = {
                     "messages": saved["messages"],
-                    "confirm_queue": asyncio.Queue(),
+                    "pending_confirms": {},
                     "last_active": saved["last_active"],
                     "token_count": saved.get("token_count", 0),
                 }
@@ -270,7 +270,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "system", "content": _build_time_block()},
                     ],
-                    "confirm_queue": asyncio.Queue(),
+                    "pending_confirms": {},
                     "last_active": time.time(),
                 }
         session = _agent_sessions[session_id]
@@ -309,7 +309,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     messages=session["messages"],
                     tools=TOOLS,
                     ai_config=ai_config,
-                    confirm_queue=session["confirm_queue"],
+                    pending_confirms=session["pending_confirms"],
                     vault_dir=vault_dir,
                     db_conn=db_conn,
                     last_read_ts=session.setdefault("last_read_ts", {}),
@@ -333,13 +333,19 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     async def agent_confirm(request: Request) -> dict:
         body = await request.json()
         session_id = body.get("session_id", "default")
+        tool_call_id = body.get("id", "")
         approved = bool(body.get("approved", False))
 
         session = _agent_sessions.get(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
 
-        session["confirm_queue"].put_nowait(approved)
+        entry = session["pending_confirms"].get(tool_call_id)
+        if entry is None:
+            raise HTTPException(status_code=404, detail="no pending confirm for this tool call")
+
+        entry["approved"] = approved
+        entry["event"].set()
         return {"ok": True}
 
     @app.post("/api/agent/new-session")
@@ -361,7 +367,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         _agent_sessions[new_id] = {
             "messages": new_messages,
-            "confirm_queue": asyncio.Queue(),
+            "pending_confirms": {},
             "last_active": time.time(),
             "token_count": 0,
         }

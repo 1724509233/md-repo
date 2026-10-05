@@ -1,6 +1,7 @@
 """Agent tool calling: schemas, safety guard, execution, agent loop."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime
@@ -416,7 +417,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 from openai import AsyncOpenAI
 
 
-async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_conn, last_read_ts=None, context_window: int = 16384, max_rounds: int = 15, read_doc_max_chars: int = 4000):
+async def agent_loop(messages, tools, ai_config, pending_confirms, vault_dir, db_conn, last_read_ts=None, context_window: int = 16384, max_rounds: int = 15, read_doc_max_chars: int = 4000):
     """Core agent loop. Yields SSE events."""
     client = AsyncOpenAI(base_url=ai_config.base_url, api_key=ai_config.api_key)
 
@@ -522,10 +523,14 @@ async def agent_loop(messages, tools, ai_config, confirm_queue, vault_dir, db_co
                     continue
 
             if tc["name"] in WRITE_TOOLS:
+                entry = {"event": asyncio.Event(), "approved": None}
+                pending_confirms[tc["id"]] = entry
                 yield sse("confirm_request", {
                     "id": tc["id"], "name": tc["name"], "args": args,
                 })
-                approved = await confirm_queue.get()
+                await entry["event"].wait()
+                del pending_confirms[tc["id"]]
+                approved = entry["approved"]
                 if not approved:
                     result = "User rejected this operation."
                     logger.info("tool_call %s rejected by user", tc["name"])

@@ -243,7 +243,7 @@ def test_graph_related_endpoint(client, vault_dir, db_conn):
 
 
 def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
-    """Agent confirm endpoint accepts approval."""
+    """Agent confirm endpoint: non-pending id returns 404, unknown session returns 404."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from server.api import create_app
@@ -280,12 +280,64 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
         )
     assert resp.status_code == 200
 
+    # No pending confirm for this id → 404
     resp = tc.post(
         "/api/agent/confirm",
         json={"id": "call_1", "approved": True, "session_id": "test1"},
     )
+    assert resp.status_code == 404
+
+    # Unknown session → 404
+    resp = tc.post(
+        "/api/agent/confirm",
+        json={"id": "call_1", "approved": True, "session_id": "no-such-session"},
+    )
+    assert resp.status_code == 404
+
+
+def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
+    """Confirming a tool_call id that is not pending returns 404."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from server.api import create_app
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    from fastapi.testclient import TestClient
+
+    tc = TestClient(app)
+
+    # Create a session (no pending confirms)
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "ok"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        resp = tc.post(
+            "/api/agent/chat",
+            json={"message": "hi", "session_id": "test-404"},
+        )
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+
+    # No pending confirm for this id → 404
+    resp = tc.post(
+        "/api/agent/confirm",
+        json={"id": "nonexistent-call", "approved": True, "session_id": "test-404"},
+    )
+    assert resp.status_code == 404
 
 
 def test_new_session_clean(client, db_conn):

@@ -386,7 +386,7 @@ def test_agent_loop_no_tools(tmp_path: Path):
                     messages=[{"role": "user", "content": "hi"}],
                     tools=[],
                     ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    confirm_queue=asyncio.Queue(),
+                    pending_confirms={},
                     vault_dir=vault,
                     db_conn=None,
                 ))
@@ -424,7 +424,7 @@ def test_agent_loop_token_usage(tmp_path: Path):
                     messages=[{"role": "user", "content": "hi"}],
                     tools=[],
                     ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    confirm_queue=asyncio.Queue(),
+                    pending_confirms={},
                     vault_dir=vault,
                     db_conn=None,
                 ))
@@ -477,7 +477,7 @@ def test_agent_loop_with_tool_call(tmp_path: Path):
                     messages=[{"role": "user", "content": "read test.md"}],
                     tools=[],
                     ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    confirm_queue=asyncio.Queue(),
+                    pending_confirms={},
                     vault_dir=vault,
                     db_conn=None,
                 ))
@@ -517,27 +517,176 @@ def test_agent_loop_write_requires_confirm(tmp_path: Path):
         side_effect=[mock_stream1, mock_stream2]
     )
 
-    confirm_q = asyncio.Queue()
-    # Pre-approve
-    confirm_q.put_nowait(True)
+    pending = {}
+
+    async def run():
+        events = []
+        async for event in agent_loop(
+            messages=[{"role": "user", "content": "create new.md"}],
+            tools=[],
+            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
+            pending_confirms=pending,
+            vault_dir=vault,
+            db_conn=None,
+        ):
+            events.append(event)
+            if '"type": "confirm_request"' in event and "call_w" in event:
+                entry = pending["call_w"]
+                entry["approved"] = True
+                entry["event"].set()
+        return events
 
     with patch("server.agent.AsyncOpenAI", return_value=mock_client):
-        events = list(
-            asyncio.get_event_loop().run_until_complete(
-                _collect(agent_loop(
-                    messages=[{"role": "user", "content": "create new.md"}],
-                    tools=[],
-                    ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    confirm_queue=confirm_q,
-                    vault_dir=vault,
-                    db_conn=None,
-                ))
-            )
-        )
+        events = asyncio.get_event_loop().run_until_complete(run())
 
     assert any('"type": "confirm_request"' in e for e in events)
     assert any('"type": "tool_result"' in e for e in events)
     assert (vault / "new.md").is_file()
+
+
+def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
+    """A confirm value left over from a previous request must NOT be consumed
+    by the next tool_call. Each confirm is matched by tool_call_id."""
+    from server.agent import agent_loop
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    # Round 1: write_doc tool call (will wait for confirm)
+    tc1 = MagicMock()
+    tc1.index = 0
+    tc1.id = "call_1"
+    tc1.function = MagicMock()
+    tc1.function.name = "write_doc"
+    tc1.function.arguments = '{"path": "a.md", "content": "# A"}'
+    chunk1 = _make_chunk(tool_calls=[tc1], finish_reason="tool_calls")
+
+    # Round 2: another write_doc tool call (must NOT consume stale confirm)
+    tc2 = MagicMock()
+    tc2.index = 0
+    tc2.id = "call_2"
+    tc2.function = MagicMock()
+    tc2.function.name = "write_doc"
+    tc2.function.arguments = '{"path": "b.md", "content": "# B"}'
+    chunk2 = _make_chunk(tool_calls=[tc2], finish_reason="tool_calls")
+
+    # Round 3: final text
+    chunk3 = _make_chunk(content="Done.", finish_reason="stop")
+
+    mock_stream1 = AsyncMock()
+    mock_stream1.__aiter__ = lambda s: _async_iter([chunk1])
+    mock_stream2 = AsyncMock()
+    mock_stream2.__aiter__ = lambda s: _async_iter([chunk2])
+    mock_stream3 = AsyncMock()
+    mock_stream3.__aiter__ = lambda s: _async_iter([chunk3])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=[mock_stream1, mock_stream2, mock_stream3]
+    )
+
+    pending = {}  # new API: dict of tool_call_id -> {"event": Event, "approved": bool|None}
+
+    async def run():
+        events = []
+        async for event in agent_loop(
+            messages=[{"role": "user", "content": "write two files"}],
+            tools=[],
+            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
+            pending_confirms=pending,
+            vault_dir=vault,
+            db_conn=None,
+        ):
+            events.append(event)
+            # After first confirm_request, simulate user approving call_1
+            if '"type": "confirm_request"' in event and "call_1" in event:
+                entry = pending["call_1"]
+                entry["approved"] = True
+                entry["event"].set()
+            # After second confirm_request, do NOT approve — task will be cancelled
+        return events
+
+    import asyncio as aio
+
+    async def driver():
+        task = aio.ensure_future(run())
+        # Give the loop time to reach the first confirm and process it
+        await aio.sleep(0.1)
+        # Now approve call_1 if not already done (race-safe)
+        if "call_1" in pending and not pending["call_1"]["event"].is_set():
+            pending["call_1"]["approved"] = True
+            pending["call_1"]["event"].set()
+        await aio.sleep(0.1)
+        # The loop should now be waiting on call_2's confirm.
+        # Simulate: user does NOT click anything. Cancel the task (page refresh).
+        task.cancel()
+        try:
+            await task
+        except aio.CancelledError:
+            pass
+
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        aio.run(driver())
+
+    # call_1 was approved → a.md should exist
+    assert (vault / "a.md").is_file()
+    # call_2 was NOT approved → b.md should NOT exist
+    assert not (vault / "b.md").exists()
+
+
+def test_agent_loop_confirm_reject_by_id(tmp_path: Path):
+    """Rejecting a specific tool_call by id does not affect other calls."""
+    from server.agent import agent_loop
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    tc1 = MagicMock()
+    tc1.index = 0
+    tc1.id = "call_r"
+    tc1.function = MagicMock()
+    tc1.function.name = "write_doc"
+    tc1.function.arguments = '{"path": "r.md", "content": "# R"}'
+    chunk1 = _make_chunk(tool_calls=[tc1], finish_reason="tool_calls")
+
+    chunk2 = _make_chunk(content="OK.", finish_reason="stop")
+
+    mock_stream1 = AsyncMock()
+    mock_stream1.__aiter__ = lambda s: _async_iter([chunk1])
+    mock_stream2 = AsyncMock()
+    mock_stream2.__aiter__ = lambda s: _async_iter([chunk2])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=[mock_stream1, mock_stream2]
+    )
+
+    pending = {}
+
+    async def run():
+        events = []
+        async for event in agent_loop(
+            messages=[{"role": "user", "content": "write r.md"}],
+            tools=[],
+            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
+            pending_confirms=pending,
+            vault_dir=vault,
+            db_conn=None,
+        ):
+            events.append(event)
+            if '"type": "confirm_request"' in event and "call_r" in event:
+                entry = pending["call_r"]
+                entry["approved"] = False  # reject
+                entry["event"].set()
+        return events
+
+    import asyncio as aio
+    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+        events = aio.run(run())
+
+    assert any('"type": "confirm_request"' in e for e in events)
+    assert any('"rejected": true' in e for e in events)
+    assert not (vault / "r.md").exists()
 
 
 async def _collect(async_gen):
@@ -690,15 +839,13 @@ def test_agent_loop_max_rounds():
     ai_config.api_key = "key"
     ai_config.model = "test-model"
 
-    confirm_queue = asyncio.Queue()
-
     async def run():
         events = []
         async for event in agent_loop(
             messages=[{"role": "user", "content": "test"}],
             tools=None,
             ai_config=ai_config,
-            confirm_queue=confirm_queue,
+            pending_confirms={},
             vault_dir=MagicMock(),
             db_conn=None,
             max_rounds=3,
@@ -749,14 +896,12 @@ def test_agent_loop_round_limit_reminder():
     ai_config.api_key = "key"
     ai_config.model = "test-model"
 
-    confirm_queue = asyncio.Queue()
-
     async def run():
         async for event in agent_loop(
             messages=[{"role": "user", "content": "test"}],
             tools=None,
             ai_config=ai_config,
-            confirm_queue=confirm_queue,
+            pending_confirms={},
             vault_dir=MagicMock(),
             db_conn=None,
             max_rounds=5,
