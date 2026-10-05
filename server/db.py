@@ -808,6 +808,9 @@ def apply_change(
                 graph_delete_file(conn, from_path)
             index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
+            # Rewrite references in other docs so links survive the rename.
+            if from_path:
+                _update_references(vault_dir, from_path, path)
 
 
 def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:

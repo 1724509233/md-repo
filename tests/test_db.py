@@ -523,3 +523,81 @@ def test_segments_search_wikilink_alias(vault_dir):
         assert "notes/ref.md" in paths
     finally:
         conn.close()
+
+
+def test_apply_change_moved_updates_references(vault_dir):
+    """apply_change('moved') rewrites wikilinks in other docs."""
+    from server.db import init_db, apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_bytes(b"# Old doc\n")
+        (vault_dir / "notes" / "ref.md").write_bytes(b"See [[notes/old.md]] for info.\n")
+
+        # Simulate the rename on disk, then apply the move
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "notes" / "new.md")
+        apply_change(conn, vault_dir, "notes/new.md", "moved", source="watchdog", from_path="notes/old.md")
+
+        content = (vault_dir / "notes" / "ref.md").read_bytes().decode()
+        assert "[[notes/new.md]]" in content
+        assert "[[notes/old.md]]" not in content
+    finally:
+        conn.close()
+
+
+def test_apply_change_moved_migrates_db_indexes(vault_dir):
+    """apply_change('moved') migrates files, segments and graph to the new path."""
+    from server.db import init_db, apply_change, index_segments, graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        # Content with a heading + body so segment_markdown produces segments.
+        (vault_dir / "notes" / "old.md").write_bytes(b"# Old doc\n\nSome body text.\n")
+        index_segments(conn, vault_dir, "notes/old.md")
+        graph_extract_file(conn, vault_dir, "notes/old.md")
+
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "notes" / "new.md")
+        apply_change(conn, vault_dir, "notes/new.md", "moved", source="watchdog", from_path="notes/old.md")
+
+        # files table: old path gone, new path present
+        rows = conn.execute("SELECT path FROM files").fetchall()
+        paths = {r[0] for r in rows}
+        assert "notes/new.md" in paths
+        assert "notes/old.md" not in paths
+
+        # segments: migrated (old path gone, new path present)
+        segs = conn.execute("SELECT path FROM segments WHERE path LIKE 'notes/%'").fetchall()
+        assert {r[0] for r in segs} == {"notes/new.md"}
+
+        # graph: entity renamed
+        ents = conn.execute("SELECT name FROM entities WHERE type='doc'").fetchall()
+        assert "notes/new.md" in {r[0] for r in ents}
+        assert "notes/old.md" not in {r[0] for r in ents}
+
+        # change_log: recorded as a move
+        changes = conn.execute("SELECT op, path, old_path FROM change_log").fetchall()
+        assert ("move", "notes/new.md", "notes/old.md") in changes
+    finally:
+        conn.close()
+
+
+def test_apply_change_moved_plain_text_path_rewrite(vault_dir):
+    """apply_change('moved') rewrites plain-text path references (paths containing '/')."""
+    from server.db import init_db, apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_bytes(b"# Old\n")
+        (vault_dir / "notes" / "ref.md").write_bytes(b"Backup at notes/old.md\n")
+
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "notes" / "new.md")
+        apply_change(conn, vault_dir, "notes/new.md", "moved", source="watchdog", from_path="notes/old.md")
+
+        content = (vault_dir / "notes" / "ref.md").read_bytes().decode()
+        assert "notes/new.md" in content
+        assert "notes/old.md" not in content
+    finally:
+        conn.close()
