@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _registry: dict[str, tuple[str, float]] = {}
 _registry_lock = threading.Lock()
 _REGISTRY_TTL = 10.0  # seconds; stale entries are cleaned up
+_MOVE_DEBOUNCE = 1.5  # seconds to wait for a rename burst to settle (fallback pairing)
 
 
 def register_write(rel_path: str, source: str) -> None:
@@ -60,6 +61,9 @@ class _VaultHandler(FileSystemEventHandler):
         super().__init__()
         self._vault = vault_dir
         self._conn = conn
+        # Fallback rename pairing: deleted paths awaiting a matching created event.
+        self._pending_deletes: dict[str, float] = {}  # rel -> timestamp
+        self._move_timer: threading.Timer | None = None
 
     def _rel(self, path: str) -> str | None:
         try:
@@ -98,16 +102,86 @@ class _VaultHandler(FileSystemEventHandler):
         logger.info("removed %s (source=%s)", rel, source)
 
     def on_created(self, event) -> None:
-        if not event.is_directory:
-            self._index(event.src_path, action="created")
+        if event.is_directory:
+            return
+        rel = self._rel(event.src_path)
+        if rel is None:
+            return
+        # Fallback pairing: a recent delete of the SAME path means the file was
+        # replaced in place (e.g. editor save) — treat as modify, not create.
+        with _registry_lock:
+            self._pending_deletes.pop(rel, None)
+        self._index(event.src_path, action="modified")
 
     def on_modified(self, event) -> None:
         if not event.is_directory:
             self._index(event.src_path, action="modified")
 
     def on_deleted(self, event) -> None:
-        if not event.is_directory:
-            self._remove(event.src_path)
+        if event.is_directory:
+            return
+        rel = self._rel(event.src_path)
+        if rel is None:
+            return
+        # Buffer the delete briefly; if a matching moved/create arrives within the
+        # window, it's a rename. Otherwise it flushes as a real delete.
+        with _registry_lock:
+            self._pending_deletes[rel] = time.time()
+        self._schedule_move_flush()
+
+    def on_moved(self, event) -> None:
+        """Handle rename/move events (file or directory)."""
+        from .db import apply_change
+
+        if event.is_directory:
+            # Directory rename: expand to every .md file under the new dir.
+            try:
+                old_dir = Path(event.src_path).relative_to(self._vault).as_posix()
+                new_dir = Path(event.dest_path).relative_to(self._vault).as_posix()
+            except ValueError:
+                return
+            if ".sync" in Path(old_dir).parts or ".obsidian" in Path(old_dir).parts:
+                return
+            new_root = Path(event.dest_path)
+            for md in new_root.rglob("*.md"):
+                if ".sync" in md.parts or ".obsidian" in md.parts:
+                    continue
+                new_rel = md.relative_to(self._vault).as_posix()
+                suffix = new_rel[len(new_dir):]  # e.g. "/a.md"
+                old_rel = old_dir + suffix       # e.g. "notes/a.md"
+                source = _pop_source(new_rel)
+                apply_change(self._conn, self._vault, new_rel, "moved", source=source, from_path=old_rel)
+                logger.info("indexed move %s -> %s (dir rename)", old_rel, new_rel)
+            # Drop any buffered deletes for files that were part of this rename.
+            with _registry_lock:
+                for rel in list(self._pending_deletes):
+                    if rel.startswith(old_dir + "/"):
+                        del self._pending_deletes[rel]
+            return
+
+        # File rename: src -> dst directly.
+        old_rel = self._rel(event.src_path)
+        new_rel = self._rel(event.dest_path)
+        if old_rel is None or new_rel is None:
+            return
+        source = _pop_source(new_rel)
+        apply_change(self._conn, self._vault, new_rel, "moved", source=source, from_path=old_rel)
+        logger.info("indexed move %s -> %s", old_rel, new_rel)
+
+    def _schedule_move_flush(self) -> None:
+        if self._move_timer is not None:
+            self._move_timer.cancel()
+        self._move_timer = threading.Timer(_MOVE_DEBOUNCE, self._flush_pending_deletes)
+        self._move_timer.daemon = True
+        self._move_timer.start()
+
+    def _flush_pending_deletes(self) -> None:
+        """After the debounce window, unpaired deletes are real deletes."""
+        with _registry_lock:
+            pending = list(self._pending_deletes.items())
+            self._pending_deletes.clear()
+        for rel, _ts in pending:
+            self._remove(str(self._vault / rel))
 
 
 def start_watcher(vault_dir: Path, conn) -> Observer:
