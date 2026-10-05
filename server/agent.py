@@ -83,9 +83,10 @@ class ReadDocArgs(BaseModel):
 
 
 class SearchDocsArgs(BaseModel):
-    """Full-text search using FTS5 + jieba. Supports Chinese and English keywords. Returns matching paths with snippets."""
+    """Segments-based search using FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content."""
     query: str = Field(description="Search keywords")
-    top_k: int = Field(default=5, description="Number of results")
+    top_k: int = Field(default=5, description="Number of files to return")
+    expand: bool = Field(default=True, description="Include segment content (False for location-only)")
 
 
 class ListFilesArgs(BaseModel):
@@ -281,19 +282,32 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         return f"{header}\n<content>\n{text}</content>"
 
     elif name == "search_docs":
+        import html as _html
         from .ai import rag_search
 
+        expand = args.get("expand", True)
         try:
-            results = rag_search(str(vault_dir), args["query"], top_k=args.get("top_k", 5))
+            results = rag_search(str(vault_dir), args["query"], top_k=args.get("top_k", 5), expand=expand)
         except Exception as e:
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
                 return responses.fts_syntax_error(args["query"])
             raise
         if not results:
             return responses.search_no_match(args["query"])
-        return "\n".join(
-            f"{r['path']} (score: {r['score']:.2f}): {r['snippet']}" for r in results
-        )
+        lines = [f'<results count="{len(results)}" query="{_html.escape(args["query"], quote=False)}">']
+        for r in results:
+            lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')
+            for seg in r["segments"]:
+                heading = _html.escape(seg["heading_path"], quote=False) if seg["heading_path"] else ""
+                kind = seg["kind"]
+                if expand and seg["content"]:
+                    content = _html.escape(seg["content"].replace("\n", " "), quote=False)
+                    lines.append(f'    <segment heading="{heading}" kind="{kind}">{content}</segment>')
+                else:
+                    lines.append(f'    <segment heading="{heading}" kind="{kind}"/>')
+            lines.append('  </result>')
+        lines.append('</results>')
+        return "\n".join(lines)
 
     elif name == "list_files":
         base = vault_dir / args.get("dir", "")

@@ -11,7 +11,7 @@ import uvicorn
 
 from .api import create_app
 from .config import load_server_config
-from .db import fts_rebuild_all, graph_rebuild_all, init_db, upsert_file
+from .db import graph_rebuild_all, init_db, upsert_file
 from .logrotate import start_logrotate
 from .watcher import start_watcher
 
@@ -57,7 +57,6 @@ def main(argv: list[str] | None = None) -> None:
     # version of the server never built it), so rebuild whenever it is.
     fts_count = conn.execute("SELECT count(*) FROM docs_fts").fetchone()[0]
     if fts_count == 0:
-        fts_rebuild_all(conn, vault_dir)
         graph_rebuild_all(conn, vault_dir)
 
     app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai)

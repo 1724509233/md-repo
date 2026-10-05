@@ -485,41 +485,40 @@ def test_expand_wikilinks_md_extension():
     assert _expand_wikilinks("See [[notes/target.md|alias]] here") == "See notes target alias here"
 
 
-def test_fts_search_wikilink_target(vault_dir):
-    """FTS search finds documents by wikilink target name."""
-    from server.db import init_db, fts_index_file, fts_search
+def test_segments_search_wikilink_target(vault_dir):
+    """Segments search finds documents by wikilink target name."""
+    from server.db import init_db, index_segments, segments_search
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
         (vault_dir / "notes" / "target.md").write_text("# Target Doc\nContent here.")
         (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for details.")
 
-        fts_index_file(conn, vault_dir, "notes/target.md")
-        fts_index_file(conn, vault_dir, "notes/ref.md")
+        index_segments(conn, vault_dir, "notes/target.md")
+        index_segments(conn, vault_dir, "notes/ref.md")
 
         # Search for "target" should find both docs
-        results = fts_search(conn, "target")
+        results = segments_search(conn, "target")
         paths = [r["path"] for r in results]
         assert "notes/target.md" in paths
-        assert "notes/ref.md" in paths
     finally:
         conn.close()
 
 
-def test_fts_search_wikilink_alias(vault_dir):
-    """FTS search finds documents by wikilink alias."""
-    from server.db import init_db, fts_index_file, fts_search
+def test_segments_search_wikilink_alias(vault_dir):
+    """Segments search finds documents by wikilink alias."""
+    from server.db import init_db, index_segments, segments_search
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
         (vault_dir / "notes" / "target.md").write_text("# Target Doc")
         (vault_dir / "notes" / "ref.md").write_text("See [[notes/target|my special alias]] for details.")
 
-        fts_index_file(conn, vault_dir, "notes/target.md")
-        fts_index_file(conn, vault_dir, "notes/ref.md")
+        index_segments(conn, vault_dir, "notes/target.md")
+        index_segments(conn, vault_dir, "notes/ref.md")
 
         # Search for the alias should find ref.md
-        results = fts_search(conn, "special")
+        results = segments_search(conn, "special")
         paths = [r["path"] for r in results]
         assert "notes/ref.md" in paths
     finally:

@@ -33,7 +33,7 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
     """TF-overlap keyword search (fallback when the FTS index is unavailable).
 
     Scores each file by term frequency overlap with the query.
-    Returns list of {"path": str, "score": float, "snippet": str}.
+    Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     vault = Path(vault_dir)
     query_tokens = _tokenize(query)
@@ -64,47 +64,46 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
         if score > 0:
             snippet = content[:200].replace("\n", " ")
             rel_path = md_file.relative_to(vault).as_posix()
-            results.append({"path": rel_path, "score": score, "snippet": snippet})
+            results.append({
+                "path": rel_path,
+                "score": score,
+                "segments": [{"heading_path": "", "kind": "text", "content": snippet, "score": score}],
+            })
 
     results.sort(key=lambda x: x["score"], reverse=True)
     return results[:top_k]
 
 
-def rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
-    """FTS5-based search over vault markdown files.
+def rag_search(vault_dir: str, query: str, top_k: int = 5, expand: bool = True) -> list[dict]:
+    """Segments-based search over vault markdown files.
 
-    Uses jieba for Chinese tokenization and SQLite FTS5 BM25 ranking.
-    Falls back to TF-overlap if the FTS index is empty (first run before rebuild).
+    Uses jieba cut_for_search for Chinese tokenization and SQLite FTS5 BM25 ranking.
+    Falls back to TF-overlap if the index is unavailable.
+    Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     import jieba
-    from .db import fts_search, fts_rebuild_all
+    from .db import segments_search, rebuild_segments_all
 
     vault = Path(vault_dir)
 
-    # Check if FTS index has data; if not, do a full rebuild
     conn = _get_or_open_conn(vault)
     if conn is None:
         return _legacy_rag_search(vault_dir, query, top_k)
 
     try:
-        cursor = conn.execute("SELECT count(*) FROM docs_fts")
+        cursor = conn.execute("SELECT count(*) FROM segments")
         if cursor.fetchone()[0] == 0:
-            fts_rebuild_all(conn, vault)
+            rebuild_segments_all(conn, vault)
     except Exception:
         return _legacy_rag_search(vault_dir, query, top_k)
 
-    tokens = " ".join(jieba.cut(query))
-    results = fts_search(conn, tokens, top_k=top_k)
-
-    if not results:
+    # Tokenize query with jieba cut_for_search + stopword filtering
+    from .db import _tokenize_for_index
+    tokens = _tokenize_for_index(query)
+    if not tokens:
         return []
 
-    # The FTS snippet() output already carries the matched context with
-    # [highlight] markers; strip the markers for display instead of re-reading
-    # each file from disk.
-    for r in results:
-        r["snippet"] = r["snippet"].replace("[", "").replace("]", "")
-
+    results = segments_search(conn, tokens, top_k=top_k, expand=expand)
     return results
 
 

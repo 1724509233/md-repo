@@ -26,7 +26,7 @@ from server.responses import (
 
 def main():
     from server.config import load_server_config
-    from server.db import init_db, fts_rebuild_all, graph_rebuild_all, edit_file
+    from server.db import init_db, rebuild_segments_all, graph_rebuild_all, edit_file
     from server.ai import rag_search
     from server.agent import validate_tool_call
     
@@ -40,10 +40,10 @@ def main():
         jieba.cut("warmup")
     threading.Thread(target=_warmup, daemon=True).start()
     
-    # Ensure FTS + graph indexes exist
-    cursor = db_conn.execute("SELECT count(*) FROM docs_fts")
+    # Ensure segments + graph indexes exist
+    cursor = db_conn.execute("SELECT count(*) FROM segments")
     if cursor.fetchone()[0] == 0:
-        fts_rebuild_all(db_conn, vault_dir)
+        rebuild_segments_all(db_conn, vault_dir)
         graph_rebuild_all(db_conn, vault_dir)
     
     from mcp.server import MCPServer
@@ -52,19 +52,31 @@ def main():
     # --- Tools ---
     
     @mcp.tool()
-    async def search_docs(query: str, top_k: int = 5) -> str:
-        """Search vault documents by keyword using FTS5 + jieba Chinese tokenization. Returns matching file paths with relevance scores and snippets."""
+    async def search_docs(query: str, top_k: int = 5, expand: bool = True) -> str:
+        """Search vault documents by keyword using segments-based FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content."""
+        import html as _html
         try:
-            results = rag_search(str(vault_dir), query, top_k=top_k)
+            results = rag_search(str(vault_dir), query, top_k=top_k, expand=expand)
         except Exception as e:
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
                 return fts_syntax_error(query)
             raise
         if not results:
             return search_no_match(query)
-        return "\n".join(
-            f"{r['path']} (score: {r['score']:.2f}): {r['snippet']}" for r in results
-        )
+        lines = [f'<results count="{len(results)}" query="{_html.escape(query, quote=False)}">']
+        for r in results:
+            lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')
+            for seg in r["segments"]:
+                heading = _html.escape(seg["heading_path"], quote=False) if seg["heading_path"] else ""
+                kind = seg["kind"]
+                if expand and seg["content"]:
+                    content = _html.escape(seg["content"].replace("\n", " "), quote=False)
+                    lines.append(f'    <segment heading="{heading}" kind="{kind}">{content}</segment>')
+                else:
+                    lines.append(f'    <segment heading="{heading}" kind="{kind}"/>')
+            lines.append('  </result>')
+        lines.append('</results>')
+        return "\n".join(lines)
     
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:

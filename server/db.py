@@ -73,8 +73,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         """
     )
 
-    # Ensure the FTS5 search index exists.
-    init_fts(conn)
+    # Ensure the segments search index exists.
+    init_segments(conn)
 
     # Ensure the knowledge graph tables exist.
     init_graph(conn)
@@ -234,68 +234,271 @@ def clear_changes(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def init_fts(conn: sqlite3.Connection) -> None:
-    """Create the FTS5 virtual table if it doesn't exist."""
+# --- Segments-based search index ---
+
+import re as _re
+from collections import defaultdict
+
+# 50-100 most common Chinese function words for stopword filtering
+_STOPWORDS = frozenset(
+    "的 了 在 是 我 有 和 就 不 人 都 一 一个 上 也 很 到 说 要 去 你 会 着 没有 看 好 "
+    "自己 这 他 她 它 们 那 些 什么 怎么 可以 这个 那个 但是 因为 所以 如果 虽然 "
+    "然后 还是 或者 而且 以及 对于 关于 通过 根据 按照 由于 除了".split()
+)
+
+
+def init_segments(conn: sqlite3.Connection) -> None:
+    """Create the segments table and FTS5 virtual table if they don't exist."""
     conn.execute(
         """
-        CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(
-            path,
-            title,
-            body,
-            tokenize='unicode61 remove_diacritics 2'
+        CREATE TABLE IF NOT EXISTS segments(
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            mtime REAL,
+            seg_index INTEGER,
+            heading_path TEXT,
+            kind TEXT,
+            content TEXT,
+            body TEXT,
+            meta TEXT,
+            code TEXT
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_path ON segments(path)")
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+            body, meta, code,
+            content='segments', content_rowid='id'
         )
         """
     )
     conn.commit()
 
 
-def fts_upsert(conn: sqlite3.Connection, path: str, title: str, body: str) -> None:
-    """Insert or replace a document in the FTS index.
+def _tokenize_for_index(text: str) -> str:
+    """Tokenize text with jieba cut_for_search, filter stopwords, return space-joined."""
+    import jieba
+    tokens = []
+    for t in jieba.cut_for_search(text):
+        t = t.strip().lower()
+        if not t:
+            continue
+        if len(t) > 1 and t not in _STOPWORDS:
+            tokens.append(t)
+    return " ".join(tokens)
 
-    body should be pre-tokenized (jieba-cut, space-joined).
+
+def segment_markdown(content: str) -> list[dict]:
+    """Split markdown content into segments.
+
+    Returns list of {"kind": str, "content": str, "heading_path": str}
+    - kind: "meta" (frontmatter), "code" (code blocks), "text" (body)
+    - heading_path: full breadcrumb like "Python 异步编程 > 事件循环"
     """
-    conn.execute("DELETE FROM docs_fts WHERE path = ?", (path,))
-    conn.execute(
-        "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
-        (path, title, body),
-    )
+    segments = []
+
+    fm_match = _re.match(r'^---\n(.*?)\n---\n', content, _re.DOTALL)
+    body = content
+    if fm_match:
+        segments.append({"kind": "meta", "content": fm_match.group(1), "heading_path": ""})
+        body = content[fm_match.end():]
+
+    heading_stack: list[str] = []
+    parts = _re.split(r'^(#{1,6})\s+(.+)$', body, flags=_re.MULTILINE)
+
+    i = 0
+    while i < len(parts):
+        if i == 0:
+            text = parts[0].strip()
+            if text:
+                _split_long_text(text, "", segments)
+            i = 1
+        else:
+            level = len(parts[i])
+            title = parts[i + 1].strip()
+            content_block = parts[i + 2] if i + 2 < len(parts) else ""
+
+            while len(heading_stack) >= level:
+                heading_stack.pop()
+            heading_stack.append(title)
+            current_heading_path = " > ".join(heading_stack)
+
+            code_pattern = _re.compile(r'```[\s\S]*?```')
+            code_blocks = code_pattern.findall(content_block)
+            text_parts = code_pattern.split(content_block)
+
+            for j, text in enumerate(text_parts):
+                text = text.strip()
+                if text:
+                    _split_long_text(text, current_heading_path, segments)
+                if j < len(code_blocks):
+                    segments.append({
+                        "kind": "code",
+                        "content": code_blocks[j],
+                        "heading_path": current_heading_path
+                    })
+            i += 3
+
+    return segments
+
+
+def _split_long_text(text: str, heading_path: str, segments: list[dict], max_len: int = 400) -> None:
+    """Split long text by blank lines if it exceeds max_len."""
+    if len(text) <= max_len:
+        segments.append({"kind": "text", "content": text, "heading_path": heading_path})
+        return
+
+    paragraphs = _re.split(r'\n\s*\n', text)
+    current = ""
+    for para in paragraphs:
+        if len(current) + len(para) + 2 > max_len and current:
+            segments.append({"kind": "text", "content": current.strip(), "heading_path": heading_path})
+            current = para
+        else:
+            current = current + "\n\n" + para if current else para
+    if current.strip():
+        segments.append({"kind": "text", "content": current.strip(), "heading_path": heading_path})
+
+
+def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
+    """Read a file, segment it, tokenize, and upsert into segments table."""
+    fp = vault_dir / path
+    if not fp.is_file():
+        delete_segments(conn, path)
+        return
+
+    content = fp.read_bytes().decode("utf-8", errors="replace")
+    mtime = fp.stat().st_mtime
+
+    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
+
+    segs = segment_markdown(content)
+    for i, seg in enumerate(segs):
+        kind = seg["kind"]
+        heading_path = seg["heading_path"]
+        text = seg["content"]
+
+        if kind == "meta":
+            meta_text = text + " " + heading_path if heading_path else text
+            body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
+        elif kind == "code":
+            body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
+        else:
+            # text: include heading_path in body tokens (title is searchable content)
+            body_text = text + " " + heading_path if heading_path else text
+            body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
+
+        conn.execute(
+            "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
+        )
+
+    conn.commit()
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
     conn.commit()
 
 
-def fts_delete(conn: sqlite3.Connection, path: str) -> None:
-    """Remove a document from the FTS index."""
-    conn.execute("DELETE FROM docs_fts WHERE path = ?", (path,))
+def delete_segments(conn: sqlite3.Connection, path: str) -> None:
+    """Remove all segments for a path."""
+    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
+    conn.commit()
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
     conn.commit()
 
 
-def fts_search(conn: sqlite3.Connection, query: str, top_k: int = 5) -> list[dict]:
-    """Search the FTS index. query should be pre-tokenized (jieba-cut, space-joined).
+def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
+    """Full rebuild of segments index from vault. Returns count of indexed files."""
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM segments")
+        count = 0
+        for md_file in vault_dir.rglob("*.md"):
+            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+                continue
+            rel = md_file.relative_to(vault_dir).as_posix()
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+            mtime = md_file.stat().st_mtime
+            segs = segment_markdown(content)
+            for i, seg in enumerate(segs):
+                kind = seg["kind"]
+                heading_path = seg["heading_path"]
+                text = seg["content"]
+                if kind == "meta":
+                    meta_text = text + " " + heading_path if heading_path else text
+                    body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
+                elif kind == "code":
+                    body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
+                else:
+                    body_text = text + " " + heading_path if heading_path else text
+                    body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
+                conn.execute(
+                    "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rel, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
+                )
+            count += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+    return count
 
-    Each whitespace-separated token is quoted as a literal FTS5 string so that
-    special characters (quotes, parens, operators) cannot inject FTS5 query
-    syntax. Returns list of {"path": str, "score": float, "snippet": str}.
+
+def segments_search(conn: sqlite3.Connection, query: str, top_k: int = 5, expand: bool = True) -> list[dict]:
+    """Search segments using FTS5 with BM25 ranking.
+
+    query should be pre-tokenized (jieba cut_for_search, space-joined).
+    Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     tokens = [t for t in query.split() if t.strip()]
     if not tokens:
         return []
-    # Quote each token as a literal FTS5 string so special characters (quotes,
-    # parens, operators) cannot inject FTS5 query syntax. Strip embedded double
-    # quotes (which would terminate the quoted string) and join with explicit
-    # AND to preserve the implicit-AND semantics of a plain multi-word query.
+
     quoted = ['"' + t.replace('"', "") + '"' for t in tokens]
-    safe_query = " AND ".join(quoted)
-    try:
-        cursor = conn.execute(
-            "SELECT path, snippet(docs_fts, 2, '[', ']', '...', 64), rank "
-            "FROM docs_fts WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
-            (safe_query, top_k),
-        )
-    except sqlite3.OperationalError:
-        return []
-    return [
-        {"path": row[0], "score": -row[2], "snippet": row[1]}
-        for row in cursor.fetchall()
-    ]
+
+    for op in ("AND", "OR"):
+        safe_query = f" {op} ".join(quoted)
+        try:
+            cursor = conn.execute(
+                """SELECT s.path, s.heading_path, s.kind, s.content,
+                          bm25(segments_fts, 1.0, 0.4, 0.1) as score
+                   FROM segments_fts f
+                   JOIN segments s ON s.id = f.rowid
+                   WHERE segments_fts MATCH ?
+                   ORDER BY score LIMIT ?""",
+                (safe_query, top_k * 3),
+            )
+            rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            continue
+
+        if rows or op == "OR":
+            files: dict[str, list[dict]] = defaultdict(list)
+            for path, heading_path, kind, content, score in rows:
+                files[path].append({
+                    "heading_path": heading_path,
+                    "kind": kind,
+                    "content": content if expand else None,
+                    "score": -score,
+                })
+
+            sorted_files = sorted(files.items(), key=lambda x: max(s["score"] for s in x[1]), reverse=True)
+            results = []
+            for path, segs in sorted_files[:top_k]:
+                segs.sort(key=lambda s: s["score"], reverse=True)
+                results.append({
+                    "path": path,
+                    "score": max(s["score"] for s in segs),
+                    "segments": segs[:3],
+                })
+            return results
+
+    return []
 
 
 def _expand_wikilinks(content: str) -> str:
@@ -320,22 +523,6 @@ def _expand_wikilinks(content: str) -> str:
     return re.sub(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", _replace, content)
 
 
-def fts_index_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
-    """Read a file from vault, tokenize with jieba, upsert into FTS index."""
-    import jieba
-
-    fp = vault_dir / path
-    if not fp.is_file():
-        fts_delete(conn, path)
-        return
-
-    content = fp.read_bytes().decode("utf-8", errors="replace")
-    title = _extract_title(content)
-    expanded = _expand_wikilinks(content)
-    tokens = " ".join(jieba.cut(expanded))
-    fts_upsert(conn, path, title, tokens)
-
-
 def _extract_title(content: str) -> str:
     """Extract the first markdown heading as title."""
     for line in content.split("\n"):
@@ -344,36 +531,7 @@ def _extract_title(content: str) -> str:
     return ""
 
 
-def fts_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
-    """Full rebuild of FTS index from vault. Returns count of indexed files.
 
-    Runs inside a single transaction: if any insert fails, the DELETE is rolled
-    back so the index is never left empty.
-    """
-    import jieba
-
-    try:
-        conn.execute("BEGIN")
-        conn.execute("DELETE FROM docs_fts")
-        count = 0
-        for md_file in vault_dir.rglob("*.md"):
-            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-                continue
-            rel = md_file.relative_to(vault_dir).as_posix()
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
-            title = _extract_title(content)
-            expanded = _expand_wikilinks(content)
-            tokens = " ".join(jieba.cut(expanded))
-            conn.execute(
-                "INSERT INTO docs_fts (path, title, body) VALUES (?, ?, ?)",
-                (rel, title, tokens),
-            )
-            count += 1
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    return count
 
 
 def init_graph(conn: sqlite3.Connection) -> None:
@@ -621,12 +779,12 @@ def apply_change(
                 mtime = fp.stat().st_mtime
                 upsert_file(conn, path, digest, mtime)
             log_change(conn, path, action, from_path=from_path, source=source, new_hash=new_hash)
-            fts_index_file(conn, vault_dir, path)
+            index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
             delete_file(conn, path)
             log_change(conn, path, action, source=source)
-            fts_delete(conn, path)
+            delete_segments(conn, path)
             graph_delete_file(conn, path)
             _remove_dead_links(vault_dir, path)
         elif action in ("moved", "move"):
@@ -646,9 +804,9 @@ def apply_change(
                 delete_file(conn, from_path)
             log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
             if from_path:
-                fts_delete(conn, from_path)
+                delete_segments(conn, from_path)
                 graph_delete_file(conn, from_path)
-            fts_index_file(conn, vault_dir, path)
+            index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
 
 

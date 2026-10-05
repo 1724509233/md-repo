@@ -212,7 +212,14 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             from .ai import rag_search
             results = rag_search(str(vault_dir), message, top_k=3)
             if results:
-                context = "\n\n".join(f"[{r['path']}]: {r['snippet']}" for r in results)
+                parts = []
+                for r in results:
+                    segs = "\n".join(
+                        f"  [{seg['heading_path'] or 'no heading'}] {seg['content'][:200]}"
+                        for seg in r["segments"] if seg["content"]
+                    )
+                    parts.append(f"[{r['path']}]:\n{segs}")
+                context = "\n\n".join(parts)
                 messages.append({"role": "system", "content": f"Relevant documents:\n\n{context}"})
 
         messages.append({"role": "user", "content": message})
