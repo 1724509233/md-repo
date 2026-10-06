@@ -4,6 +4,14 @@ The watchdog is the SOLE caller of apply_change. Other writers (api, agent)
 register their writes via register_write() so the watchdog can attribute the
 correct source. Unregistered writes (external editors, MCP stdio, direct disk)
 are attributed to "watchdog" as the fallback.
+
+All filesystem events are queued and processed in a single debounce window
+(_DEBOUNCE seconds).  This:
+  - suppresses duplicate events that Windows ReadDirectoryChangesW emits
+    (see gorakhargosh/watchdog issues)
+  - batches directory-rename expansion with per-file move events regardless
+    of arrival order
+  - reduces DB writes by merging N events into one flush cycle
 """
 from __future__ import annotations
 
@@ -23,7 +31,7 @@ logger = logging.getLogger(__name__)
 _registry: dict[str, tuple[str, float]] = {}
 _registry_lock = threading.Lock()
 _REGISTRY_TTL = 10.0  # seconds; stale entries are cleaned up
-_MOVE_DEBOUNCE = 1.5  # seconds to wait for a rename burst to settle (fallback pairing)
+_DEBOUNCE = 1.5       # seconds; debounce window for batching events
 
 
 def register_write(rel_path: str, source: str) -> None:
@@ -55,51 +63,56 @@ def _pop_source(rel_path: str) -> str:
 
 
 class _VaultHandler(FileSystemEventHandler):
-    """Handles .md file create/modify/delete events in the vault."""
+    """Handles .md file events in the vault via a unified debounce queue.
+
+    All on_created / on_modified / on_deleted / on_moved callbacks enqueue
+    the event and reset a single debounce timer.  When the timer fires,
+    _flush() processes the entire queue in one batch:
+
+      1. Deduplicate by (path, action) — last event wins.
+      2. Expand directory moves into per-file moves.
+      3. Pair unpaired deletes with creates/moves (rename detection).
+      4. Single-pass reference update for all moves.
+      5. Apply each change via apply_change().
+    """
 
     def __init__(self, vault_dir: Path, conn) -> None:
         super().__init__()
         self._vault = vault_dir
         self._conn = conn
-        # Fallback rename pairing: deleted paths awaiting a matching created event.
-        self._pending_deletes: dict[str, float] = {}  # rel -> timestamp
-        self._move_timer: threading.Timer | None = None
+        # Event queue: list of (action, path, dest_path) tuples.
+        #   action: "modified" | "deleted" | "moved" | "dir_moved"
+        #   path:   source path (absolute)
+        #   dest_path: destination (only for moved / dir_moved), else None
+        self._queue: list[tuple[str, str, str | None]] = []
+        self._queue_lock = threading.Lock()
+        self._timer: threading.Timer | None = None
+
+    # ── path helpers ──────────────────────────────────────────────────────
 
     def _rel(self, path: str) -> str | None:
+        """Convert absolute path to vault-relative, or None if not a .md file."""
         try:
             p = Path(path)
             if ".sync" in p.parts or ".obsidian" in p.parts:
                 return None
             if not p.suffix == ".md":
                 return None
-            rel = p.relative_to(self._vault).as_posix()
-            return rel
+            return p.relative_to(self._vault).as_posix()
         except (ValueError, OSError):
             return None
 
-    def _index(self, path: str, action: str = "modified") -> None:
-        rel = self._rel(path)
-        if rel is None:
-            return
+    def _rel_dir(self, path: str) -> str | None:
+        """Convert absolute dir path to vault-relative, or None if unsafe."""
         try:
-            Path(path).read_bytes()
-        except OSError:
-            return
-        from .db import apply_change
+            p = Path(path)
+            if ".sync" in p.parts or ".obsidian" in p.parts:
+                return None
+            return p.relative_to(self._vault).as_posix()
+        except (ValueError, OSError):
+            return None
 
-        source = _pop_source(rel)
-        apply_change(self._conn, self._vault, rel, action, source=source)
-        logger.info("indexed %s (%s, source=%s)", rel, action, source)
-
-    def _remove(self, path: str) -> None:
-        rel = self._rel(path)
-        if rel is None:
-            return
-        from .db import apply_change
-
-        source = _pop_source(rel)
-        apply_change(self._conn, self._vault, rel, "deleted", source=source)
-        logger.info("removed %s (source=%s)", rel, source)
+    # ── event callbacks (enqueue only) ────────────────────────────────────
 
     def on_created(self, event) -> None:
         if event.is_directory:
@@ -107,15 +120,11 @@ class _VaultHandler(FileSystemEventHandler):
         rel = self._rel(event.src_path)
         if rel is None:
             return
-        # Fallback pairing: a recent delete of the SAME path means the file was
-        # replaced in place (e.g. editor save) — treat as modify, not create.
-        with _registry_lock:
-            self._pending_deletes.pop(rel, None)
-        self._index(event.src_path, action="modified")
+        self._enqueue("modified", event.src_path, None)
 
     def on_modified(self, event) -> None:
         if not event.is_directory:
-            self._index(event.src_path, action="modified")
+            self._enqueue("modified", event.src_path, None)
 
     def on_deleted(self, event) -> None:
         if event.is_directory:
@@ -123,73 +132,171 @@ class _VaultHandler(FileSystemEventHandler):
         rel = self._rel(event.src_path)
         if rel is None:
             return
-        # Buffer the delete briefly; if a matching moved/create arrives within the
-        # window, it's a rename. Otherwise it flushes as a real delete.
-        with _registry_lock:
-            self._pending_deletes[rel] = time.time()
-        self._schedule_move_flush()
+        self._enqueue("deleted", event.src_path, None)
 
     def on_moved(self, event) -> None:
-        """Handle rename/move events (file or directory)."""
+        if event.is_directory:
+            old_dir = self._rel_dir(event.src_path)
+            new_dir = self._rel_dir(event.dest_path)
+            if old_dir is None or new_dir is None:
+                return
+            self._enqueue("dir_moved", event.src_path, event.dest_path)
+        else:
+            old_rel = self._rel(event.src_path)
+            new_rel = self._rel(event.dest_path)
+            if old_rel is None or new_rel is None:
+                return
+            self._enqueue("moved", event.src_path, event.dest_path)
+
+    # ── queue management ──────────────────────────────────────────────────
+
+    def _enqueue(self, action: str, path: str, dest: str | None) -> None:
+        with self._queue_lock:
+            self._queue.append((action, path, dest))
+        self._reset_timer()
+
+    def _reset_timer(self) -> None:
+        with self._queue_lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(_DEBOUNCE, self._flush)
+            self._timer.daemon = True
+            self._timer.start()
+
+    # ── flush (single-thread batch processing) ────────────────────────────
+
+    def _flush(self) -> None:
+        with self._queue_lock:
+            queue = self._queue
+            self._queue = []
+            self._timer = None
+
+        if not queue:
+            return
+
         from .db import apply_change, _update_references_batch
 
-        if event.is_directory:
-            # Directory rename: expand to every .md file under the new dir.
-            try:
-                old_dir = Path(event.src_path).relative_to(self._vault).as_posix()
-                new_dir = Path(event.dest_path).relative_to(self._vault).as_posix()
-            except ValueError:
-                return
-            if ".sync" in Path(old_dir).parts or ".obsidian" in Path(old_dir).parts:
-                return
-            new_root = Path(event.dest_path)
-            moves: list[tuple[str, str]] = []
+        # Phase 1: deduplicate by (rel_path, action). Last event wins.
+        # For "moved" the key includes dest so a file moved to two different
+        # locations within the window keeps only the latest.
+        deduped: dict[tuple[str, str], tuple[str, str, str | None]] = {}
+        for action, path, dest in queue:
+            if action == "dir_moved":
+                key = ("dir_moved", path, dest or "")
+            elif action == "moved":
+                key = ("moved", self._rel(path) or path, self._rel(dest) if dest else "")
+            else:
+                key = (action, self._rel(path) or path)
+            deduped[key] = (action, path, dest)
+
+        events = list(deduped.values())
+
+        # Phase 2: expand directory moves into per-file moves.
+        # Collect dir_moved entries first; their files will be added as "moved".
+        dir_moves: list[tuple[str, str]] = []  # (old_dir, new_dir)
+        file_events: list[tuple[str, str, str | None]] = []
+
+        for action, path, dest in events:
+            if action == "dir_moved":
+                old_dir = self._rel_dir(path)
+                new_dir = self._rel_dir(dest) if dest else None
+                if old_dir and new_dir:
+                    dir_moves.append((old_dir, new_dir))
+            else:
+                file_events.append((action, path, dest))
+
+        # Expand each dir move into per-file moves.
+        expanded_moves: list[tuple[str, str]] = []  # (old_rel, new_rel)
+        for old_dir, new_dir in dir_moves:
+            new_root = self._vault / new_dir
+            if not new_root.is_dir():
+                continue
             for md in new_root.rglob("*.md"):
                 if ".sync" in md.parts or ".obsidian" in md.parts:
                     continue
                 new_rel = md.relative_to(self._vault).as_posix()
-                suffix = new_rel[len(new_dir):]  # e.g. "/a.md"
-                old_rel = old_dir + suffix       # e.g. "notes/a.md"
+                suffix = new_rel[len(new_dir):]
+                old_rel = old_dir + suffix
+                expanded_moves.append((old_rel, new_rel))
+
+        # Build the set of new_rels handled by dir expansion (for dedup).
+        dir_handled: set[str] = {new for _, new in expanded_moves}
+
+        # Phase 3: pair unpaired deletes with creates/moves (rename detection).
+        # A delete of path X followed by a create/modify of the same path X
+        # means the file was replaced in place (editor save) → treat as modify.
+        # A delete of path X with no matching create → real delete.
+        deletes: list[str] = []  # rel paths to delete
+        modifies: list[str] = []  # rel paths to index as modified
+
+        for action, path, dest in file_events:
+            rel = self._rel(path)
+            if rel is None:
+                continue
+            if action == "deleted":
+                deletes.append(rel)
+            elif action == "modified":
+                modifies.append(rel)
+            elif action == "moved":
+                new_rel = self._rel(dest) if dest else None
+                if new_rel is None:
+                    continue
+                # Suppress per-file moves already covered by dir expansion.
+                if new_rel in dir_handled:
+                    continue
+                # Store as (action, path, dest) for later processing.
+                modifies.append(f"__move__{rel}→{new_rel}")
+
+        # Pair deletes with modifies: if a delete and a modify share the same
+        # path, it's an in-place replace → keep as modify, drop the delete.
+        modify_set = set(modifies)
+        real_deletes = [d for d in deletes if d not in modify_set]
+
+        # Phase 4: single-pass reference update for all moves.
+        all_moves = list(expanded_moves)
+        # Add per-file moves (from modifies that are "__move__" entries).
+        for m in modifies:
+            if m.startswith("__move__"):
+                old_rel, new_rel = m[len("__move__"):].split("→")
+                all_moves.append((old_rel, new_rel))
+
+        if all_moves:
+            _update_references_batch(self._vault, all_moves)
+
+        # Phase 5: apply changes.
+        # Apply expanded dir moves first (they were already ref-updated in Phase 4).
+        for old_rel, new_rel in expanded_moves:
+            source = _pop_source(new_rel)
+            apply_change(
+                self._conn, self._vault, new_rel, "moved",
+                source=source, from_path=old_rel, update_refs=False,
+            )
+            logger.info("indexed move %s -> %s (dir rename)", old_rel, new_rel)
+
+        for m in modifies:
+            if m.startswith("__move__"):
+                old_rel, new_rel = m[len("__move__"):].split("→")
                 source = _pop_source(new_rel)
                 apply_change(
                     self._conn, self._vault, new_rel, "moved",
                     source=source, from_path=old_rel, update_refs=False,
                 )
-                moves.append((old_rel, new_rel))
-                logger.info("indexed move %s -> %s (dir rename)", old_rel, new_rel)
-            # Single-pass reference update for all moves (avoids N full-vault scans).
-            if moves:
-                _update_references_batch(self._vault, moves)
-            # Drop any buffered deletes for files that were part of this rename.
-            with _registry_lock:
-                for rel in list(self._pending_deletes):
-                    if rel.startswith(old_dir + "/"):
-                        del self._pending_deletes[rel]
-            return
+                logger.info("indexed move %s -> %s", old_rel, new_rel)
+            else:
+                fp = self._vault / m
+                if not fp.is_file():
+                    continue
+                source = _pop_source(m)
+                apply_change(self._conn, self._vault, m, "modified", source=source)
+                logger.info("indexed %s (modified, source=%s)", m, source)
 
-        # File rename: src -> dst directly.
-        old_rel = self._rel(event.src_path)
-        new_rel = self._rel(event.dest_path)
-        if old_rel is None or new_rel is None:
-            return
-        source = _pop_source(new_rel)
-        apply_change(self._conn, self._vault, new_rel, "moved", source=source, from_path=old_rel)
-        logger.info("indexed move %s -> %s", old_rel, new_rel)
-
-    def _schedule_move_flush(self) -> None:
-        if self._move_timer is not None:
-            self._move_timer.cancel()
-        self._move_timer = threading.Timer(_MOVE_DEBOUNCE, self._flush_pending_deletes)
-        self._move_timer.daemon = True
-        self._move_timer.start()
-
-    def _flush_pending_deletes(self) -> None:
-        """After the debounce window, unpaired deletes are real deletes."""
-        with _registry_lock:
-            pending = list(self._pending_deletes.items())
-            self._pending_deletes.clear()
-        for rel, _ts in pending:
-            self._remove(str(self._vault / rel))
+        for rel in real_deletes:
+            fp = self._vault / rel
+            if fp.is_file():
+                continue  # file came back (rename pairing) — skip
+            source = _pop_source(rel)
+            apply_change(self._conn, self._vault, rel, "deleted", source=source)
+            logger.info("removed %s (source=%s)", rel, source)
 
 
 def start_watcher(vault_dir: Path, conn) -> Observer:

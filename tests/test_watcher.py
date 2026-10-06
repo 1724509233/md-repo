@@ -33,6 +33,11 @@ class _FakeEvent:
         self.dest_path = dest_path
 
 
+def _flush(handler: _VaultHandler) -> None:
+    """Trigger the debounce flush immediately (bypass the timer)."""
+    handler._flush()
+
+
 def test_on_moved_file_applies_move(tmp_path):
     """A file moved event is applied as a single 'moved' change."""
     vault = _make_vault(tmp_path)
@@ -41,6 +46,7 @@ def test_on_moved_file_applies_move(tmp_path):
 
     (vault / "notes" / "a.md").rename(vault / "notes" / "b.md")
     handler.on_moved(_FakeEvent(str(vault / "notes" / "a.md"), dest_path=str(vault / "notes" / "b.md")))
+    _flush(handler)
 
     paths = {r[0] for r in conn.execute("SELECT path FROM files")}
     assert "notes/b.md" in paths
@@ -62,6 +68,7 @@ def test_on_moved_directory_expands_to_files(tmp_path):
 
     (vault / "notes").rename(vault / "archive")
     handler.on_moved(_FakeEvent(str(vault / "notes"), is_directory=True, dest_path=str(vault / "archive")))
+    _flush(handler)
 
     paths = {r[0] for r in conn.execute("SELECT path FROM files")}
     assert "archive/a.md" in paths
@@ -86,6 +93,7 @@ def test_on_moved_directory_batch_ref_update(tmp_path):
 
     (vault / "notes").rename(vault / "archive")
     handler.on_moved(_FakeEvent(str(vault / "notes"), is_directory=True, dest_path=str(vault / "archive")))
+    _flush(handler)
 
     # All references should be updated to the new directory
     c_content = (vault / "archive" / "c.md").read_bytes().decode()
@@ -110,11 +118,50 @@ def test_unpaired_delete_still_removes(tmp_path):
 
     (vault / "notes" / "a.md").unlink()
     handler.on_deleted(_FakeEvent(str(vault / "notes" / "a.md")))
-
-    # Delete is buffered; flush after the debounce window
-    time.sleep(1.6)
-    handler._flush_pending_deletes()
+    _flush(handler)
 
     paths = {r[0] for r in conn.execute("SELECT path FROM files")}
     assert "notes/a.md" not in paths
+    conn.close()
+
+
+def test_duplicate_modified_events_deduped(tmp_path):
+    """Two identical modified events within the debounce window produce one apply_change."""
+    vault = _make_vault(tmp_path)
+    conn = _make_conn(vault)
+    handler = _VaultHandler(vault, conn)
+
+    # Simulate Windows emitting the same modified event twice
+    handler.on_modified(_FakeEvent(str(vault / "notes" / "a.md")))
+    handler.on_modified(_FakeEvent(str(vault / "notes" / "a.md")))
+    _flush(handler)
+
+    # Should appear exactly once in change_log
+    changes = conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path = 'notes/a.md' AND op = 'update'"
+    ).fetchone()[0]
+    assert changes == 1
+    conn.close()
+
+
+def test_dir_rename_suppresses_per_file_moves(tmp_path):
+    """Per-file move events that overlap with a dir rename are suppressed."""
+    vault = _make_vault(tmp_path)
+    conn = _make_conn(vault)
+    handler = _VaultHandler(vault, conn)
+
+    (vault / "notes").rename(vault / "archive")
+    # Dir rename event
+    handler.on_moved(_FakeEvent(str(vault / "notes"), is_directory=True, dest_path=str(vault / "archive")))
+    # Per-file move events (Windows emits these too)
+    handler.on_moved(_FakeEvent(str(vault / "notes" / "a.md"), dest_path=str(vault / "archive" / "a.md")))
+    handler.on_moved(_FakeEvent(str(vault / "notes" / "ref.md"), dest_path=str(vault / "archive" / "ref.md")))
+    _flush(handler)
+
+    # Each file should appear exactly once in change_log as a move
+    for rel in ("archive/a.md", "archive/ref.md"):
+        count = conn.execute(
+            "SELECT COUNT(*) FROM change_log WHERE path = ? AND op = 'move'", (rel,)
+        ).fetchone()[0]
+        assert count == 1, f"{rel} should have exactly 1 move entry, got {count}"
     conn.close()
