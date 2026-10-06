@@ -909,8 +909,14 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
             )
 
         # 3. Plain text path replacement (only if old_path contains '/')
+        #    Negative lookahead prevents partial matches: notes/a won't
+        #    match inside notes/abc.
         if "/" in old_path:
-            content = content.replace(old_path, new_path)
+            content = re.sub(
+                re.escape(old_path) + r"(?![\w./])",
+                new_path,
+                content,
+            )
 
         if content != original:
             md_file.write_bytes(content.encode("utf-8"))
@@ -951,7 +957,10 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> i
                 if old_name_unique and old_stem != new_stem else None
             ),
             "short_new": new_stem,
-            "plain_old": old_path if "/" in old_path else None,
+            "plain_re": (
+                re.compile(re.escape(old_path) + r"(?![\w./])")
+                if "/" in old_path else None
+            ),
             "plain_new": new_path if "/" in old_path else None,
         })
 
@@ -975,8 +984,8 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> i
                     lambda m, ns=p["short_new"]: "[[" + ns + (m.group(2) or "") + "]]",
                     content,
                 )
-            if p["plain_old"]:
-                content = content.replace(p["plain_old"], p["plain_new"])
+            if p["plain_re"]:
+                content = p["plain_re"].sub(p["plain_new"], content)
 
         if content != original:
             md_file.write_bytes(content.encode("utf-8"))

@@ -472,6 +472,44 @@ def test_update_references_batch_short_name(vault_dir):
     assert "[[b]]" in content
 
 
+def test_update_references_plain_text_boundary(vault_dir):
+    """Plain text replacement must not match partial paths (notes/a inside notes/abc)."""
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "abc.md").write_text("# ABC")
+    (vault_dir / "notes" / "ref.md").write_text(
+        "See notes/a.md and notes/abc.md for details."
+    )
+
+    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "docs/b.md" in content       # notes/a.md replaced
+    assert "notes/abc.md" in content    # notes/abc.md NOT touched
+
+
+def test_update_references_plain_text_boundary_batch(vault_dir):
+    """Batch plain text replacement also respects boundaries."""
+    from server.db import _update_references_batch
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "abc.md").write_text("# ABC")
+    (vault_dir / "notes" / "ref.md").write_text(
+        "See notes/a.md and notes/abc.md for details."
+    )
+
+    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "docs/b.md" in content
+    assert "notes/abc.md" in content
+
+
 def test_move_doc_updates_references(vault_dir):
     """Integration: move_doc automatically updates references."""
     from server.agent import execute_tool
