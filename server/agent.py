@@ -353,13 +353,11 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
             return responses.move_dest_exists(args["to_path"])
         dst.parent.mkdir(parents=True, exist_ok=True)
         from .watcher import register_write
-        from .db import _update_references
 
         register_write(args["to_path"], "agent")
         src.rename(dst)
-        ref_count = _update_references(vault_dir, args["from_path"], args["to_path"])
-        if ref_count > 0:
-            return f"Moved: {args['from_path']} → {args['to_path']} (updated refs in {ref_count} files)"
+        # Reference updates are handled by the watchdog (on_moved → apply_change),
+        # which fires within milliseconds. No need to scan the vault here.
         return f"Moved: {args['from_path']} → {args['to_path']}"
 
     elif name == "edit_doc":
