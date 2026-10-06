@@ -36,19 +36,42 @@ def test_self_heal_migrates_renamed_file(tmp_path):
     conn.close()
 
 
-def test_self_heal_ignores_unmatched(tmp_path):
-    """Stale DB paths with no hash match are left alone (logged, not deleted)."""
+def test_self_heal_cleans_deleted_file(tmp_path):
+    """Stale DB path with no matching file on disk is cleaned up."""
     vault = tmp_path / "vault"
     (vault / ".sync").mkdir(parents=True)
     _seed(vault, "notes/a.md", b"# A\n")
     conn = init_db(vault / ".sync" / "index.db")
-    upsert_file(conn, "notes/gone.md", hashlib.sha256(b"other").hexdigest(), 1000.0)
+    # gone.md was deleted while server was down: in DB but not on disk,
+    # and no other file has the same content hash.
+    upsert_file(conn, "notes/gone.md", hashlib.sha256(b"deleted content").hexdigest(), 1000.0)
 
     _self_heal(vault, conn)
 
-    # gone.md stays in DB (no match found); a.md is untouched
+    # gone.md is removed from DB; a.md is untouched
     paths = {r[0] for r in conn.execute("SELECT path FROM files")}
-    assert "notes/gone.md" in paths
+    assert "notes/gone.md" not in paths
+    assert "notes/a.md" not in paths  # a.md was never in DB
+    conn.close()
+
+
+def test_self_heal_ambiguous_match_skipped(tmp_path):
+    """Stale DB path with multiple hash matches is skipped (logged)."""
+    vault = tmp_path / "vault"
+    (vault / ".sync").mkdir(parents=True)
+    content = b"# Same content\n"
+    # Two files with identical content, neither in DB
+    _seed(vault, "notes/a.md", content)
+    _seed(vault, "projects/b.md", content)
+    conn = init_db(vault / ".sync" / "index.db")
+    # old.md was renamed, but we can't tell which of a.md/b.md it became
+    upsert_file(conn, "notes/old.md", hashlib.sha256(content).hexdigest(), 1000.0)
+
+    _self_heal(vault, conn)
+
+    # old.md stays in DB (ambiguous); a.md and b.md are not migrated
+    paths = {r[0] for r in conn.execute("SELECT path FROM files")}
+    assert "notes/old.md" in paths
     conn.close()
 
 

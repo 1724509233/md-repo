@@ -64,27 +64,42 @@ def _self_heal(vault_dir: Path, conn) -> int:
             continue
         live_by_hash.setdefault(digest, []).append(rel)
 
-    # 3. Match stale -> live by hash; migrate unambiguous matches
-    from .db import apply_change
+    # 3. Match stale -> live by hash; migrate unambiguous matches,
+    #    clean up entries with no matching file on disk.
+    from .db import apply_change, delete_file, delete_segments, graph_delete_file
 
     migrated = 0
+    cleaned = 0
     for old in stale:
         row = conn.execute("SELECT hash FROM files WHERE path = ?", (old,)).fetchone()
         if row is None:
             continue
         candidates = live_by_hash.get(row[0], [])
-        if len(candidates) != 1:
-            logger.warning("self-heal: no unique match for %s (%d candidates)", old, len(candidates))
-            continue
-        new = candidates[0]
-        apply_change(conn, vault_dir, new, "moved", source="self-heal", from_path=old)
-        live_by_hash[row[0]].remove(new)
-        migrated += 1
-        logger.info("self-heal: migrated %s -> %s", old, new)
+        if len(candidates) == 1:
+            new = candidates[0]
+            apply_change(conn, vault_dir, new, "moved", source="self-heal", from_path=old)
+            live_by_hash[row[0]].remove(new)
+            migrated += 1
+            logger.info("self-heal: migrated %s -> %s", old, new)
+        elif len(candidates) == 0:
+            # File was deleted while the server was down. Remove the stale
+            # DB entry so it stops appearing in get_all_files / sync.
+            delete_file(conn, old)
+            delete_segments(conn, old)
+            graph_delete_file(conn, old)
+            cleaned += 1
+            logger.info("self-heal: removed stale entry %s (no matching file on disk)", old)
+        else:
+            logger.warning(
+                "self-heal: ambiguous match for %s (%d candidates: %s)",
+                old, len(candidates), ", ".join(sorted(candidates)),
+            )
 
     if migrated:
         logger.info("self-heal: migrated %d path(s)", migrated)
-    return migrated
+    if cleaned:
+        logger.info("self-heal: cleaned %d stale entr(ies)", cleaned)
+    return migrated + cleaned
 
 
 def _detect_duplicates(vault_dir: Path) -> int:
