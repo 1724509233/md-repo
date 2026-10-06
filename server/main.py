@@ -109,8 +109,11 @@ def main(argv: list[str] | None = None) -> None:
     # Ensure the FTS and graph indexes are populated. On first run they are
     # empty; on later runs the FTS table may also be empty (e.g. an older
     # version of the server never built it), so rebuild whenever it is.
-    fts_count = conn.execute("SELECT count(*) FROM docs_fts").fetchone()[0]
+    fts_count = conn.execute("SELECT count(*) FROM segments_fts").fetchone()[0]
     if fts_count == 0:
+        from .db import rebuild_segments_all
+
+        rebuild_segments_all(conn, vault_dir)
         graph_rebuild_all(conn, vault_dir)
 
     app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai)
