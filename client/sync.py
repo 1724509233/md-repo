@@ -12,6 +12,16 @@ import httpx
 from .config import ClientConfig
 from .state import load_state, save_state
 
+
+def _iso_to_ts(iso_str: str) -> float:
+    """Convert an ISO 8601 string to a Unix timestamp. Returns 0.0 on failure."""
+    if not iso_str:
+        return 0.0
+    try:
+        return datetime.fromisoformat(iso_str).timestamp()
+    except (ValueError, TypeError):
+        return 0.0
+
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -96,6 +106,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
     try:
         vault_dir = config.vault_dir
         local_files = scan_local_files(vault_dir)
+        last_sync_ts = _iso_to_ts(state.get("last_sync", ""))
 
         with httpx.Client(timeout=60) as client:
             resp = client.post(
@@ -104,6 +115,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                     "device_name": config.device_name,
                     "local_files": local_files,
                     "logs": collector.entries,
+                    "last_sync": last_sync_ts,
                 },
             )
 
@@ -116,6 +128,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
 
         to_pull: list[str] = result.get("to_pull", [])
         to_push: list[str] = result.get("to_push", [])
+        to_delete: list[str] = result.get("to_delete", [])
         conflicts: list[str] = result.get("conflicts", [])
 
         with httpx.Client(timeout=60) as client:
@@ -162,15 +175,26 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                 except (httpx.HTTPError, OSError) as e:
                     logger.error("failed to save conflict %s: %s", path, e)
 
+        # Delete local files that were renamed on the server (stale pre-rename copies).
+        for path in to_delete:
+            try:
+                fp = vault_dir / path
+                if fp.is_file():
+                    fp.unlink()
+                    logger.info("deleted local %s (renamed on server)", path)
+            except OSError as e:
+                logger.error("failed to delete %s: %s", path, e)
+
         new_files = scan_local_files(vault_dir)
         updated_state = {
             "last_sync": _now_iso(),
             "files": new_files,
         }
         logger.info(
-            "sync complete: %d pulled, %d pushed, %d conflicts",
+            "sync complete: %d pulled, %d pushed, %d deleted, %d conflicts",
             len(to_pull),
             len(to_push),
+            len(to_delete),
             len(conflicts),
         )
         return updated_state

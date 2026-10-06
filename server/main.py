@@ -87,6 +87,37 @@ def _self_heal(vault_dir: Path, conn) -> int:
     return migrated
 
 
+def _detect_duplicates(vault_dir: Path) -> int:
+    """Scan vault for duplicate content (same SHA-256, different paths).
+
+    Logs a warning for each duplicate group. Does NOT auto-delete.
+    Returns total duplicate file count (excluding the first occurrence).
+    """
+    logger = logging.getLogger(__name__)
+    hash_map: dict[str, list[str]] = {}
+    for f in vault_dir.rglob("*.md"):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        try:
+            digest = hashlib.sha256(f.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        rel = f.relative_to(vault_dir).as_posix()
+        hash_map.setdefault(digest, []).append(rel)
+
+    dup_count = 0
+    for digest, paths in hash_map.items():
+        if len(paths) > 1:
+            dup_count += len(paths) - 1
+            logger.warning(
+                "duplicate content: %d files share hash %s: %s",
+                len(paths), digest[:12], ", ".join(sorted(paths)),
+            )
+    if dup_count:
+        logger.warning("total duplicate files: %d", dup_count)
+    return dup_count
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     config_path = argv[0] if argv else "config.yaml"
@@ -105,6 +136,9 @@ def main(argv: list[str] | None = None) -> None:
 
     # Self-heal: migrate DB paths that were renamed while the server was down.
     _self_heal(vault_dir, conn)
+
+    # Detect duplicate content (e.g. from stale pre-rename copies pushed by clients).
+    _detect_duplicates(vault_dir)
 
     # Ensure the FTS and graph indexes are populated. On first run they are
     # empty; on later runs the FTS table may also be empty (e.g. an older

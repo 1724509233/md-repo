@@ -152,6 +152,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         device_name = body.get("device_name")
         local_files = body.get("local_files")
         logs = body.get("logs", [])
+        last_sync = body.get("last_sync", 0.0)
 
         if not isinstance(device_name, str) or not device_name:
             raise HTTPException(status_code=400, detail="device_name is required")
@@ -165,7 +166,21 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         try:
             server_files = {f["path"]: f["hash"] for f in get_all_files(db_conn)}
-            result = compare_files(local_files, server_files)
+
+            # Fetch recent moved events since the client's last sync to
+            # detect renames (prevents the client from pushing back a stale
+            # pre-rename copy, which would recreate the old path).
+            recent_moves = None
+            if last_sync:
+                from .db import get_changes as _get_changes
+
+                all_changes = _get_changes(db_conn, since=float(last_sync), limit=200)
+                recent_moves = [
+                    c for c in all_changes
+                    if c["action"] == "moved" and c.get("from_path")
+                ]
+
+            result = compare_files(local_files, server_files, recent_moves=recent_moves)
 
             # Save client logs to vault_dir/.sync/logs/{device_name}.log
             safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", device_name)
