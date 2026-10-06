@@ -106,7 +106,7 @@ def main():
     @mcp.tool()
     async def write_doc(path: str, content: str) -> str:
         """Create or overwrite a markdown document in the vault."""
-        error = validate_tool_call("write_doc", {"path": path}, vault_dir)
+        error = validate_tool_call("write_doc", {"path": path, "content": content}, vault_dir)
         if error:
             return error
         fp = vault_dir / path
@@ -120,7 +120,7 @@ def main():
     @mcp.tool()
     async def edit_doc(path: str, old_string: str, new_string: str) -> str:
         """Replace exact text in a document. The old_string must match exactly once in the file."""
-        error = validate_tool_call("edit_doc", {"path": path}, vault_dir)
+        error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, vault_dir)
         if error:
             return error
         fp = vault_dir / path

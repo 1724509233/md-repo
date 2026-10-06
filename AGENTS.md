@@ -8,13 +8,14 @@ pytest tests/ -v                 # run all tests
 pytest tests/test_api.py::test_health -v  # single test
 python -m server.main config.yaml   # start server (default port 9888)
 python -m client.main config.yaml   # start client polling loop
+md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 ```
 
 ## Architecture
 
-- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn)` factory; all routes are closures inside it. `main.py` is the entry point that wires config → db → app → uvicorn.
+- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ai_config)` factory; all routes are closures inside it. `main.py` is the entry point that wires config → db → app → uvicorn.
 - **client/** — Python polling client. `sync.py` has `scan_local_files()`, `sync_once()`, `run_polling_loop()`. `main.py` is the entry point.
-- **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn`, `app`, `client` fixtures.
+- **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn`, `app`, `client`, `ai_config` fixtures.
 
 The vault directory is both the data store and the Obsidian vault. `.sync/` inside it holds `index.db` (SQLite) and `logs/`.
 
@@ -27,6 +28,7 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 - **Conflict files**: saved as `{stem}.conflict-{device_name}{suffix}` (e.g. `notes/test.conflict-mac.md`). The local version is kept untouched.
 - **Config**: both server and client read a single `config.yaml` with both `server:` and `client:` sections. Each side only reads its own section. Copy `config.example.yaml` to `config.yaml` and edit.
 - **First-run indexing**: `server/main.py` scans the vault for `.md` files and populates the SQLite db only if the db is empty. Subsequent runs skip this.
+- **Self-heal**: on startup, `_self_heal()` in `server/main.py` matches stale DB paths (files renamed while server was down) to live files by SHA-256 content hash and migrates them. Only unambiguous 1:1 matches are migrated.
 - **No auth, no HTTPS**: LAN-only by design. Don't add authentication unless the spec changes.
 
 ## Design Spec
@@ -72,4 +74,16 @@ decisions, or development notes:
 
 If the MCP server is not available, skip vault access — do not fall back to
 reading vault files directly.
+
+### MCP Server Restart
+
+The `md-vault` MCP server is a long-running stdio process launched by OpenCode
+(`command: ["md-vault-mcp"]` in `~/.config/opencode/opencode.json`). Code changes
+to `server/mcp_server.py` or `server/agent.py` do NOT take effect until the
+process is restarted. To restart:
+
+1. Run `/mcp` in OpenCode to see the server list and reconnect, OR
+2. Restart the OpenCode session entirely.
+
+After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
 <!-- MDVAULT_END -->
