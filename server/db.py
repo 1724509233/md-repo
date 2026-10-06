@@ -763,12 +763,17 @@ def apply_change(
     source: str = "unknown",
     from_path: str = "",
     new_hash: str = "",
+    update_refs: bool = True,
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
     Thread-safe via the module-level ``_db_lock``. Replaces the duplicated
     upsert/log/fts/graph logic that previously lived in agent.py, api.py and
     watcher.py.
+
+    ``update_refs`` controls whether ``_update_references`` is called for
+    moved actions. Set to False when the caller will handle reference
+    updates in batch (e.g. directory rename with many files).
     """
     with _db_lock:
         if action in ("created", "modified", "create", "update"):
@@ -809,7 +814,7 @@ def apply_change(
             index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
             # Rewrite references in other docs so links survive the rename.
-            if from_path:
+            if from_path and update_refs:
                 _update_references(vault_dir, from_path, path)
 
 
@@ -906,6 +911,72 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
         # 3. Plain text path replacement (only if old_path contains '/')
         if "/" in old_path:
             content = content.replace(old_path, new_path)
+
+        if content != original:
+            md_file.write_bytes(content.encode("utf-8"))
+            modified_count += 1
+
+    return modified_count
+
+
+def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> int:
+    """Single-pass scan: replace references for multiple moves at once.
+
+    Used by directory rename to avoid N separate full-vault scans.
+    Each file is read once, all replacements applied in memory, written once.
+
+    Args:
+        vault_dir: root of the vault
+        moves: list of (old_path, new_path) tuples
+
+    Returns the number of files modified.
+    """
+    import re
+
+    if not moves:
+        return 0
+
+    # Pre-compile patterns for each move
+    patterns = []
+    for old_path, new_path in moves:
+        escaped_old = re.escape(old_path)
+        old_stem = Path(old_path).stem
+        new_stem = Path(new_path).stem
+        old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
+        patterns.append({
+            "full_re": re.compile(r"\[\[(" + escaped_old + r")(\|[^\]]+)?\]\]"),
+            "full_new": new_path,
+            "short_re": (
+                re.compile(r"\[\[(" + re.escape(old_stem) + r")(\|[^\]]+)?\]\]")
+                if old_name_unique and old_stem != new_stem else None
+            ),
+            "short_new": new_stem,
+            "plain_old": old_path if "/" in old_path else None,
+            "plain_new": new_path if "/" in old_path else None,
+        })
+
+    modified_count = 0
+    for md_file in vault_dir.rglob("*.md"):
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
+            continue
+        try:
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+
+        original = content
+        for p in patterns:
+            content = p["full_re"].sub(
+                lambda m, np=p["full_new"]: "[[" + np + (m.group(2) or "") + "]]",
+                content,
+            )
+            if p["short_re"]:
+                content = p["short_re"].sub(
+                    lambda m, ns=p["short_new"]: "[[" + ns + (m.group(2) or "") + "]]",
+                    content,
+                )
+            if p["plain_old"]:
+                content = content.replace(p["plain_old"], p["plain_new"])
 
         if content != original:
             md_file.write_bytes(content.encode("utf-8"))

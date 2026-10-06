@@ -131,7 +131,7 @@ class _VaultHandler(FileSystemEventHandler):
 
     def on_moved(self, event) -> None:
         """Handle rename/move events (file or directory)."""
-        from .db import apply_change
+        from .db import apply_change, _update_references_batch
 
         if event.is_directory:
             # Directory rename: expand to every .md file under the new dir.
@@ -143,6 +143,7 @@ class _VaultHandler(FileSystemEventHandler):
             if ".sync" in Path(old_dir).parts or ".obsidian" in Path(old_dir).parts:
                 return
             new_root = Path(event.dest_path)
+            moves: list[tuple[str, str]] = []
             for md in new_root.rglob("*.md"):
                 if ".sync" in md.parts or ".obsidian" in md.parts:
                     continue
@@ -150,8 +151,15 @@ class _VaultHandler(FileSystemEventHandler):
                 suffix = new_rel[len(new_dir):]  # e.g. "/a.md"
                 old_rel = old_dir + suffix       # e.g. "notes/a.md"
                 source = _pop_source(new_rel)
-                apply_change(self._conn, self._vault, new_rel, "moved", source=source, from_path=old_rel)
+                apply_change(
+                    self._conn, self._vault, new_rel, "moved",
+                    source=source, from_path=old_rel, update_refs=False,
+                )
+                moves.append((old_rel, new_rel))
                 logger.info("indexed move %s -> %s (dir rename)", old_rel, new_rel)
+            # Single-pass reference update for all moves (avoids N full-vault scans).
+            if moves:
+                _update_references_batch(self._vault, moves)
             # Drop any buffered deletes for files that were part of this rename.
             with _registry_lock:
                 for rel in list(self._pending_deletes):

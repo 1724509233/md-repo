@@ -411,6 +411,67 @@ def test_is_filename_unique(vault_dir):
     assert _is_filename_unique(vault_dir, "nonexistent.md") is False
 
 
+def test_update_references_batch_single_move(vault_dir):
+    """Batch with one move works same as _update_references."""
+    from server.db import _update_references_batch
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]]")
+
+    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[docs/b.md]]" in content
+
+
+def test_update_references_batch_multiple_moves(vault_dir):
+    """Batch with multiple moves updates all references in one scan."""
+    from server.db import _update_references_batch
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "b.md").write_text("# B")
+    (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]] and [[notes/b.md]]")
+
+    count = _update_references_batch(vault_dir, [
+        ("notes/a.md", "docs/x.md"),
+        ("notes/b.md", "docs/y.md"),
+    ])
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[docs/x.md]]" in content
+    assert "[[docs/y.md]]" in content
+    assert "[[notes/a.md]]" not in content
+    assert "[[notes/b.md]]" not in content
+
+
+def test_update_references_batch_empty(vault_dir):
+    """Empty moves list is a no-op."""
+    from server.db import _update_references_batch
+
+    (vault_dir / "a.md").write_text("# A")
+    count = _update_references_batch(vault_dir, [])
+    assert count == 0
+
+
+def test_update_references_batch_short_name(vault_dir):
+    """Batch handles short-name wikilinks when filename is unique."""
+    from server.db import _update_references_batch
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "ref.md").write_text("See [[a]]")
+
+    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[b]]" in content
+
+
 def test_move_doc_updates_references(vault_dir):
     """Integration: move_doc automatically updates references."""
     from server.agent import execute_tool
