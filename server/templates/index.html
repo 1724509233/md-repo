@@ -1,21 +1,18 @@
 <!DOCTYPE html>
-<html lang="zh-CN" data-theme="dark">
+<html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>md-vault · AI 工作台</title>
-  <script>
-    (function () { var t = localStorage.getItem('mdvault-theme') || 'dark'; document.documentElement.setAttribute('data-theme', t); })();
-  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
-    tailwind.config = { darkMode: 'class', theme: { extend: { colors: { bg: 'var(--bg)', surface: 'var(--surface)', surface2: 'var(--surface-2)', border: 'var(--border)', text: 'var(--text)', muted: 'var(--text-muted)', accent: 'var(--accent)', accent2: 'var(--accent-2)' }, fontFamily: { sans: ['Inter', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'], mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] } } } }
+    tailwind.config = { theme: { extend: { colors: { bg: 'var(--paper)', surface: 'var(--surface)', border: 'var(--line)', text: 'var(--ink)', muted: 'var(--ink-soft)' }, fontFamily: { sans: ['Inter', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'], mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] } } } }
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
     rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.css">
   <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
@@ -31,12 +28,10 @@
     <aside id="sidebar"
       class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-surface border-r border-border flex flex-col transform transition-transform duration-300 -translate-x-full lg:translate-x-0">
       <div class="flex items-center gap-2.5 px-4 h-14 border-b border-border shrink-0">
-        <div
-          class="w-8 h-8 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white font-bold text-sm">
-          M</div>
-        <span class="font-semibold text-[15px]">md-vault</span>
+        <div class="logo-mark">M</div>
+        <span class="logo-word">md-vault</span>
         <button id="sidebar-close" aria-label="关闭侧边栏"
-          class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden">✕</button>
+          class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden"><svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
       </div>
       <div class="px-3 pt-3 pb-2 shrink-0">
         <div class="relative">
@@ -46,7 +41,7 @@
                 d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg></span>
           <input id="search-input" type="text"
-            class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-surface2 focus:ring-2 focus:ring-accent/40 focus:border-accent outline-none"
+            class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg outline-none"
             placeholder="搜索文档…">
         </div>
       </div>
@@ -59,34 +54,32 @@
       <main id="main-area" class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
         <div class="flex items-center gap-3 px-4 h-14 border-b border-border bg-surface shrink-0">
           <button id="hamburger" aria-label="打开侧边栏"
-            class="lg:hidden w-11 h-11 flex items-center justify-center text-muted hover:text-text">☰</button>
-          <span id="current-file" class="font-medium text-sm flex-1 truncate">未选择文档</span>
+            class="lg:hidden w-11 h-11 flex items-center justify-center text-muted hover:text-text"><svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+          <span id="current-file" class="flex-1 truncate">未选择文档</span>
           <div class="hidden lg:flex rounded-lg overflow-hidden border border-border text-xs">
-            <button id="btn-edit" class="px-3 py-1.5 bg-surface text-muted hover:bg-surface2">✏️ 编辑</button>
-            <button id="btn-preview" class="px-3 py-1.5 bg-accent text-white font-medium">👁 预览</button>
+            <button id="btn-edit" class="mode-btn flex items-center gap-1.5 px-3 py-1.5"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑</button>
+            <button id="btn-preview" class="mode-btn active flex items-center gap-1.5 px-3 py-1.5"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览</button>
           </div>
           <button id="btn-download"
-            class="hidden lg:block text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-surface2">↓ 下载</button>
+            class="hidden lg:block topbar-btn flex items-center gap-1.5 text-xs px-3 py-1.5 border border-border rounded-lg"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载</button>
           <button id="btn-save"
-            class="hidden lg:block text-xs px-3 py-1.5 bg-accent text-white rounded-lg hover:opacity-90">保存</button>
+            class="hidden lg:block btn-save flex items-center gap-1.5 px-3 py-1.5 rounded-lg"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存</button>
           <div class="lg:hidden relative">
             <button id="btn-more" aria-label="更多操作"
-              class="w-11 h-11 flex items-center justify-center border border-border rounded-lg text-muted hover:bg-surface2">⋯</button>
+              class="w-11 h-11 flex items-center justify-center border border-border rounded-lg text-muted topbar-btn"><svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
             <div id="more-menu"
-              class="hidden absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50 py-1">
-              <button id="more-edit" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">✏️ 编辑</button>
-              <button id="more-preview" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">👁 预览</button>
-              <button id="more-save" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">💾 保存</button>
-              <button id="more-download" class="w-full text-left px-3 py-2.5 text-xs hover:bg-surface2">↓ 下载</button>
+              class="hidden absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50 py-1 font-ui">
+              <button id="more-edit" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑</button>
+              <button id="more-preview" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览</button>
+              <button id="more-save" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存</button>
+              <button id="more-download" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载</button>
             </div>
           </div>
-          <button id="theme-toggle" aria-label="切换主题"
-            class="w-11 h-11 flex items-center justify-center border border-border rounded-lg hover:bg-surface2">☾</button>
         </div>
         <div id="content-area" class="flex-1 overflow-y-auto p-4 md:p-6">
-          <div class="max-w-[720px] mx-auto min-h-full flex flex-col">
+          <div id="doc-wrap" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
             <textarea id="editor"
-              class="hidden w-full flex-1 border-0 bg-transparent resize-none focus:outline-none font-mono text-sm leading-relaxed"
+              class="hidden w-full flex-1 border-0 bg-transparent resize-none focus:outline-none"
               placeholder="从左侧选择一个文档..."></textarea>
             <div id="preview" class="w-full flex-1"></div>
           </div>
@@ -103,36 +96,36 @@
         <div id="ai-sheet-handle"></div>
         <div class="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
           <div
-            class="w-9 h-9 rounded-full bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white">
-            🤖</div>
+            class="w-9 h-9 rounded-full border border-border flex items-center justify-center text-brass">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg></div>
           <div class="flex-1 min-w-0">
-            <div class="font-semibold text-sm">AI 助手</div>
-            <div id="ai-status" class="text-xs text-muted flex items-center gap-2">就绪</div>
+            <div class="font-ui font-semibold text-sm">AI 助手</div>
+            <div id="ai-status" class="font-ui text-xs text-muted flex items-center gap-2">就绪</div>
           </div>
           <span id="ai-mode"
-            class="text-xs px-2.5 py-1 bg-accent/10 text-accent rounded-md cursor-pointer font-medium whitespace-nowrap">当前文档</span>
+            class="text-xs px-2.5 py-1 rounded-md cursor-pointer font-medium whitespace-nowrap">当前文档</span>
           <button id="btn-new-session" onclick="startNewSession()"
-            class="text-[11px] px-2 py-1 border border-border rounded bg-surface hover:bg-surface2 cursor-pointer text-text">新会话</button>
+            class="text-[11px] px-2 py-1 border border-border rounded cursor-pointer">新会话</button>
           <button id="ai-close" aria-label="关闭 AI 助手"
-            class="w-11 h-11 flex items-center justify-center text-muted hover:text-text">✕</button>
+            class="w-11 h-11 flex items-center justify-center text-muted hover:text-text"><svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
         </div>
         <div id="ai-messages" class="flex-1 overflow-y-auto p-4 space-y-3"></div>
         <div id="token-wrap" class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0">
           <span id="token-text" class="text-[11px] text-muted whitespace-nowrap">Token 0K / ?K</span>
-          <div class="flex-1 h-1 bg-surface2 rounded-full overflow-hidden">
+          <div class="flex-1 h-1 bg-[color-mix(in_srgb,var(--ink)_8%,transparent)] rounded-full overflow-hidden">
             <div id="token-fill" class="h-full rounded-full transition-all duration-300"
               style="width:0%;background:#22c55e"></div>
           </div>
         </div>
         <div class="p-3 border-t border-border shrink-0">
-          <div class="flex items-end gap-2 bg-surface2 rounded-xl p-3 focus-within:ring-2 focus-within:ring-accent/40">
+          <div class="flex items-end gap-2 border border-border rounded-xl p-3">
             <textarea id="ai-input" rows="1"
               class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
               placeholder="输入消息，Enter 发送..."></textarea>
             <button id="ai-send" aria-label="发送消息"
-              class="w-9 h-9 rounded-full bg-accent hover:opacity-90 text-white flex items-center justify-center shrink-0">↑</button>
+              class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"><svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg></button>
             <button id="ai-stop" aria-label="中止"
-              class="w-9 h-9 rounded-full bg-red-500 hover:bg-red-600 text-white flex items-center justify-center shrink-0 hidden">■</button>
+              class="w-9 h-9 rounded-full flex items-center justify-center shrink-0 hidden"><svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg></button>
           </div>
         </div>
       </div>
@@ -146,21 +139,20 @@
         var editor = document.getElementById('editor'), preview = document.getElementById('preview');
         var treeEl = document.getElementById('file-tree');
 
-        /* ---------- theme toggle (dark → blue → paper) ---------- */
-        var THEMES = ['dark', 'blue', 'paper'];
-        var THEME_ICONS = { dark: '☾', blue: '☀', paper: '📄' };
-        function applyTheme(t) {
-          document.documentElement.setAttribute('data-theme', t);
-          localStorage.setItem('mdvault-theme', t);
-          var btn = document.getElementById('theme-toggle');
-          if (btn) btn.textContent = THEME_ICONS[t] || '☾';
-        }
-        applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
-        document.getElementById('theme-toggle').addEventListener('click', function () {
-          var cur = document.documentElement.getAttribute('data-theme') || 'dark';
-          var next = THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length];
-          applyTheme(next);
-        });
+        /* ---------- 单色线条图标（stroke: currentColor，尺寸由 .icon class 控制）---------- */
+        var ICONS = {
+          folder: '<svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+          book: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>',
+          search: '<svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>',
+          pencil: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>',
+          scissors: '<svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><path d="M8.12 8.12L12 12"/><path d="M20 4L8.12 15.88"/><circle cx="6" cy="18" r="3"/><path d="M14.8 14.8L20 20"/></svg>',
+          trash: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+          box: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="M3.3 7l8.7 5 8.7-5"/><path d="M12 22V12"/></svg>',
+          link: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+          check: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>',
+          alert: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
+          x: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>'
+        };
 
         /* ---------- mobile "更多" dropdown ---------- */
         var btnMore = document.getElementById('btn-more'), moreMenu = document.getElementById('more-menu');
@@ -176,26 +168,14 @@
           moreMenu.classList.add('hidden');
         });
 
-        /* ---------- marked renderer (Tailwind classes) ---------- */
+        /* ---------- marked renderer（纸墨风，排版交给 style.css）---------- */
         var renderer = new marked.Renderer();
-        renderer.heading = function (text, level) { return '<h' + level + ' class="font-bold text-text ' + (level === 1 ? 'text-2xl mt-8 mb-4 border-b border-border pb-2' : level === 2 ? 'text-xl mt-6 mb-3' : level === 3 ? 'text-lg mt-5 mb-2' : 'text-base mt-4 mb-2') + '">' + text + '</h' + level + '>' };
-        renderer.list = function (body, ordered, start) { var tag = ordered ? 'ol' : 'ul'; return '<' + tag + ' class="' + (ordered ? 'list-decimal' : 'list-disc') + ' pl-5 space-y-1.5 my-3">' + body + '</' + tag + '>' };
-        renderer.listitem = function (text) { return '<li class="leading-relaxed">' + text + '</li>' };
         renderer.code = function (code, lang) {
           var langLabel = lang || 'text';
           var cls = lang ? ' class="language-' + lang + '"' : '';
           return '<div class="code-block"><div class="code-block-header"><span>' + langLabel + '</span><button class="code-copy-btn" type="button">复制</button></div><pre><code' + cls + '>' + code + '</code></pre></div>';
         };
-        renderer.blockquote = function (quote) { return '<blockquote class="border-l-[3px] border-accent pl-4 my-3 text-muted italic">' + quote + '</blockquote>' };
-        renderer.table = function (header, body) { return '<div class="overflow-x-auto my-3"><table class="w-full text-sm border-collapse"><thead><tr>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' };
-        renderer.tablerow = function (content) { return '<tr class="border-b border-border hover:bg-surface2">' + content + '</tr>' };
-        renderer.tablecell = function (content, header) { var tag = header ? 'th' : 'td'; return '<' + tag + ' class="' + (header ? 'bg-surface2 font-semibold text-left' : '') + ' px-3 py-2 border border-border">' + content + '</' + tag + '>' };
-        renderer.paragraph = function (text) { return '<p class="my-4 leading-[1.75]">' + text + '</p>' };
-        renderer.strong = function (text) { return '<strong class="font-semibold text-text">' + text + '</strong>' };
-        renderer.em = function (text) { return '<em class="italic">' + text + '</em>' };
-        renderer.codespan = function (text) { return '<code class="bg-surface2 text-accent px-1.5 py-0.5 rounded text-xs font-mono">' + text + '</code>' };
-        renderer.hr = function () { return '<hr class="my-6 border-border">' };
-        renderer.link = function (href, text) { return '<a href="' + href + '" class="text-accent underline hover:no-underline">' + text + '</a>' };
+        renderer.table = function (header, body) { return '<div class="overflow-x-auto"><table><thead><tr>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' };
         marked.setOptions({ renderer: renderer });
 
         /* ---------- copy buttons for code blocks (delegated) ---------- */
@@ -205,7 +185,7 @@
           var pre = btn.closest('.code-block').querySelector('pre code');
           if (!pre) return;
           var text = pre.textContent;
-          function done() { btn.textContent = '✓'; setTimeout(function () { btn.textContent = '复制' }, 1500) }
+          function done() { btn.innerHTML = ICONS.check; setTimeout(function () { btn.textContent = '复制' }, 1500) }
           if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text); done() });
           } else { fallbackCopy(text); done() }
@@ -257,16 +237,16 @@
               (function c(n) { n.files.forEach(function () { count++ }); Object.keys(n.dirs).forEach(function (k) { c(n.dirs[k]) }) })(child);
               var dirPath = pathPrefix ? pathPrefix + '/' + dn : dn;
               html += '<div class="tree-group open" data-dir="' + esc(dirPath) + '">';
-              html += '<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-surface2 text-left">';
+              html += '<button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left">';
               html += '<svg class="chev w-3.5 h-3.5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
-              html += '<span>📁</span><span class="font-medium">' + esc(dn) + '</span><span class="ml-auto text-xs text-muted bg-surface2 rounded-full px-2 py-0.5">' + count + '</span>';
+              html += ICONS.folder + '<span class="font-medium">' + esc(dn) + '</span><span class="ml-auto text-xs text-muted bg-[color-mix(in_srgb,var(--ink)_6%,transparent)] rounded-full px-2 py-0.5">' + count + '</span>';
               html += '</button>';
               html += '<div class="tree-children ml-2 pl-1.5 border-l border-border space-y-0.5 py-0.5">';
               html += renderNode(child, depth + 1, dirPath);
               html += '</div></div>';
             });
             node.files.sort(function (a, b) { return a.name < b.name ? -1 : 1 }).forEach(function (it) {
-              html += '<button class="tree-file w-full text-left px-2 py-1.5 rounded-md hover:bg-surface2" data-path="' + esc(it.path) + '">' + esc(it.name) + '</button>';
+              html += '<button class="tree-file w-full text-left px-2 py-1.5 rounded-md" data-path="' + esc(it.path) + '">' + esc(it.name) + '</button>';
             });
             return html;
           }
@@ -314,8 +294,8 @@
             });
             treeEl.querySelectorAll('.tree-file').forEach(function (btn) {
               btn.addEventListener('click', function () {
-                treeEl.querySelectorAll('.tree-file.active').forEach(function (el) { el.classList.remove('active', 'bg-accent/10', 'text-accent') });
-                btn.classList.add('active', 'bg-accent/10', 'text-accent');
+                treeEl.querySelectorAll('.tree-file.active').forEach(function (el) { el.classList.remove('active') });
+                btn.classList.add('active');
                 openDoc(btn.dataset.path);
                 document.getElementById('sidebar').classList.add('-translate-x-full');
                 document.getElementById('overlay').classList.add('hidden');
@@ -377,6 +357,35 @@
         /* ---------- doc load / save ---------- */
         var dirty = false;
 
+        /* 翻页动效：只在切换文档时触发。时序：旧页淡出(450ms) → 替换内容 → 新页淡入。
+           桌面端翻页，移动端/减弱动效时直接淡入（无淡出阶段）。
+           返回一个 Promise，resolve 在"可以安全替换内容"的时刻（淡出结束 / 立即）。 */
+        var docWrap = document.getElementById('doc-wrap');
+        function triggerPageTurn() {
+          return new Promise(function (resolve) {
+            docWrap.classList.remove('page-turn', 'page-turn-out');
+            void docWrap.offsetWidth; /* 强制 reflow，确保动画可重触发 */
+            var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            var desktop = window.innerWidth >= 1024;
+            if (reduced || !desktop) {
+              /* 移动端 / 减弱动效：无淡出阶段，立即可替换内容，新页淡入 */
+              docWrap.classList.add('page-turn');
+              resolve();
+            } else {
+              /* 桌面端：先淡出旧页，450ms 后才可替换内容，然后新页淡入 */
+              docWrap.classList.add('page-turn-out');
+              setTimeout(function () {
+                docWrap.classList.remove('page-turn-out');
+                void docWrap.offsetWidth;
+                resolve(); /* ← openDoc 在此之后才替换 editor.value */
+              }, 450);
+            }
+          });
+        }
+        docWrap.addEventListener('animationend', function () {
+          docWrap.classList.remove('page-turn', 'page-turn-out');
+        });
+
         async function openDoc(path) {
           // Auto-save if current doc has unsaved edits
           if (dirty && currentPath) {
@@ -385,25 +394,38 @@
           currentPath = path;
           dirty = false;
           document.getElementById('current-file').textContent = path;
+          /* fetch 先行：成功后才播放动画，保证淡入的一定成功。
+             fetch 失败时不播动画，直接显示错误文本。 */
+          var text;
           try {
             var res = await fetch('/api/docs/' + encodeURIComponent(path));
-            editor.value = await res.text();
-            if (previewMode) renderPreview();
-          } catch (e) { editor.value = '加载失败: ' + e.message }
+            text = await res.text();
+          } catch (e) {
+            editor.value = '加载失败: ' + e.message;
+            return;
+          }
+          /* fetch 成功 → 旧页淡出（桌面 450ms / 移动立即） */
+          await triggerPageTurn();
+          /* 淡出完成 → 渲染新内容 + 新页淡入 */
+          editor.value = text;
+          if (previewMode) renderPreview();
+          docWrap.classList.remove('page-turn');
+          void docWrap.offsetWidth;
+          docWrap.classList.add('page-turn');
         }
         async function saveDoc() {
           if (!currentPath) return;
           try {
             var res = await fetch('/api/docs/' + encodeURIComponent(currentPath), { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: editor.value });
-            if (res.ok) { dirty = false; document.getElementById('btn-save').textContent = '✓ 已保存'; setTimeout(function () { document.getElementById('btn-save').textContent = '保存' }, 1500) }
+            if (res.ok) { dirty = false; var bs = document.getElementById('btn-save'); bs.innerHTML = ICONS.check + '已保存'; setTimeout(function () { bs.innerHTML = ICONS.pencil + '保存' }, 1500) }
             else { alert('保存失败: ' + res.status) }
           } catch (e) { alert('保存失败: ' + e.message) }
         }
         editor.addEventListener('input', function () { dirty = true });
 
         /* ---------- edit / preview toggle ---------- */
-        var MODE_ACTIVE = 'px-3 py-1.5 bg-accent text-white font-medium';
-        var MODE_INACTIVE = 'px-3 py-1.5 bg-surface text-muted hover:bg-surface2';
+        var MODE_ACTIVE = 'mode-btn active px-3 py-1.5';
+        var MODE_INACTIVE = 'mode-btn px-3 py-1.5';
         function setMode(mode) {
           if (mode === 'edit') {
             btnEdit.className = MODE_ACTIVE;
@@ -486,16 +508,16 @@
           var d = document.createElement('div');
           d.className = 'msg-in flex ' + (role === 'user' ? 'justify-end' : '');
           var b = document.createElement('div');
-          if (role === 'user') { b.className = 'max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-accent text-white text-sm' }
-          else { b.className = 'max-w-[85%] flex-1 ai-turn bg-surface2 rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm' }
+          if (role === 'user') { b.className = 'msg-user max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md text-sm' }
+          else { b.className = 'msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm' }
           b.textContent = text; d.appendChild(b); m.appendChild(d); m.scrollTop = m.scrollHeight; return b;
         }
 
         /* ---------- tool summary (inline in AI message) ---------- */
         var toolShortNames = {
-          read_doc: '📖 读取', search_docs: '🔍 搜索', list_files: '📁 列出文件',
-          write_doc: '✏️ 写入', edit_doc: '✂️ 编辑', delete_doc: '🗑 删除',
-          move_doc: '📦 移动', get_related_docs: '🔗 关联'
+          read_doc: { icon: ICONS.book, label: '读取' }, search_docs: { icon: ICONS.search, label: '搜索' }, list_files: { icon: ICONS.folder, label: '列出文件' },
+          write_doc: { icon: ICONS.pencil, label: '写入' }, edit_doc: { icon: ICONS.scissors, label: '编辑' }, delete_doc: { icon: ICONS.trash, label: '删除' },
+          move_doc: { icon: ICONS.box, label: '移动' }, get_related_docs: { icon: ICONS.link, label: '关联' }
         };
         function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
         function getToolSummary(turn) {
@@ -524,17 +546,17 @@
           return det;
         }
         function insertToolCall(turn, id, name, args) {
-          var label = toolShortNames[name] || name;
+          var tool = toolShortNames[name] || { icon: '', label: name };
           var entry = document.createElement('div');
           entry.className = 'tool-entry';
           entry.dataset.toolId = id;
-          entry.innerHTML = '<div class="flex items-center gap-2"><span class="ts-icon">⏳</span><span>' + escapeHtml(label) + '</span></div>'
+          entry.innerHTML = '<div class="flex items-center gap-2"><span class="ts-icon">' + tool.icon + '</span><span>' + escapeHtml(tool.label) + '</span></div>'
             + '<pre class="tool-pre">' + escapeHtml(JSON.stringify(args, null, 2)) + '</pre>';
           getToolDetails(turn).querySelector('.tool-body').appendChild(entry);
           var s = getToolSummary(turn);
           var icons = s.querySelector('.ts-icons');
           var ic = document.createElement('span');
-          ic.className = 'ts-icon'; ic.dataset.toolId = id; ic.textContent = label.split(' ')[0];
+          ic.className = 'ts-icon'; ic.dataset.toolId = id; ic.innerHTML = tool.icon;
           icons.appendChild(ic);
           var count = s.querySelector('.ts-count');
           var n = icons.querySelectorAll('.ts-icon').length;
@@ -550,15 +572,15 @@
           var entry = turn.querySelector('.tool-entry[data-tool-id="' + id + '"]');
           if (entry) {
             var ic = entry.querySelector('.ts-icon');
-            if (status === 'done') { ic.textContent = '✓'; ic.classList.add('text-green-500') }
-            else if (status === 'confirm') { ic.textContent = '⚠'; ic.classList.add('text-amber-500') }
-            else if (status === 'rejected' || status === 'error') { ic.textContent = '✕'; ic.classList.add('err') }
+            if (status === 'done') { ic.innerHTML = ICONS.check; ic.classList.add('done') }
+            else if (status === 'confirm') { ic.innerHTML = ICONS.alert; ic.classList.add('confirm') }
+            else if (status === 'rejected' || status === 'error') { ic.innerHTML = ICONS.x; ic.classList.add('err') }
           }
           if (status === 'confirm') {
             var btns = document.createElement('div');
             btns.className = 'confirm-btns';
-            btns.innerHTML = '<button class="confirm-yes" onclick="sendConfirm(\'' + id + '\',true)">✓ 确认</button>'
-              + '<button class="confirm-no" onclick="sendConfirm(\'' + id + '\',false)">✕ 取消</button>';
+            btns.innerHTML = '<button class="confirm-yes flex items-center gap-1.5" onclick="sendConfirm(\'' + id + '\',true)">' + ICONS.check + '确认</button>'
+              + '<button class="confirm-no flex items-center gap-1.5" onclick="sendConfirm(\'' + id + '\',false)">' + ICONS.x + '取消</button>';
             turn.appendChild(btns);
           }
           if (result && entry) {
