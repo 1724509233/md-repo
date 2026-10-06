@@ -165,3 +165,46 @@ def test_dir_rename_suppresses_per_file_moves(tmp_path):
         ).fetchone()[0]
         assert count == 1, f"{rel} should have exactly 1 move entry, got {count}"
     conn.close()
+
+
+def test_spurious_modified_after_move_suppressed(tmp_path):
+    """Windows emits a spurious on_modified after on_moved — it should be suppressed."""
+    vault = _make_vault(tmp_path)
+    conn = _make_conn(vault)
+    handler = _VaultHandler(vault, conn)
+
+    (vault / "notes" / "a.md").rename(vault / "notes" / "b.md")
+    # Move event (real)
+    handler.on_moved(_FakeEvent(str(vault / "notes" / "a.md"), dest_path=str(vault / "notes" / "b.md")))
+    # Spurious modified event (Windows artifact)
+    handler.on_modified(_FakeEvent(str(vault / "notes" / "b.md")))
+    _flush(handler)
+
+    # Should have exactly 1 move entry and 0 modify entries for b.md
+    move_count = conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path = 'notes/b.md' AND op = 'move'"
+    ).fetchone()[0]
+    mod_count = conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path = 'notes/b.md' AND op = 'update'"
+    ).fetchone()[0]
+    assert move_count == 1, f"expected 1 move, got {move_count}"
+    assert mod_count == 0, f"expected 0 modify (spurious), got {mod_count}"
+    conn.close()
+
+
+def test_modified_has_new_hash(tmp_path):
+    """apply_change for modified should record new_hash in change_log."""
+    vault = _make_vault(tmp_path)
+    conn = _make_conn(vault)
+    handler = _VaultHandler(vault, conn)
+
+    (vault / "notes" / "a.md").write_bytes(b"# Updated content\n")
+    handler.on_modified(_FakeEvent(str(vault / "notes" / "a.md")))
+    _flush(handler)
+
+    row = conn.execute(
+        "SELECT new_hash FROM change_log WHERE path = 'notes/a.md' AND op = 'update'"
+    ).fetchone()
+    assert row is not None, "no update entry in change_log"
+    assert row[0], f"new_hash should not be empty, got {row[0]!r}"
+    conn.close()

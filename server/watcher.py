@@ -222,12 +222,15 @@ class _VaultHandler(FileSystemEventHandler):
         # Build the set of new_rels handled by dir expansion (for dedup).
         dir_handled: set[str] = {new for _, new in expanded_moves}
 
-        # Phase 3: pair unpaired deletes with creates/moves (rename detection).
-        # A delete of path X followed by a create/modify of the same path X
-        # means the file was replaced in place (editor save) → treat as modify.
-        # A delete of path X with no matching create → real delete.
+        # Phase 3: classify file events.
+        # - moved: collect new_rels (Windows emits a spurious on_modified
+        #   after on_moved for the same file — suppress it).
+        # - modified: skip if the path was already moved in this batch.
+        # - deleted: pair with modifies (in-place replace → modify wins).
         deletes: list[str] = []  # rel paths to delete
         modifies: list[str] = []  # rel paths to index as modified
+        moves: list[tuple[str, str]] = []  # (old_rel, new_rel) per-file moves
+        moved_new_rels: set[str] = set()  # new_rels from per-file moves
 
         for action, path, dest in file_events:
             rel = self._rel(path)
@@ -244,8 +247,11 @@ class _VaultHandler(FileSystemEventHandler):
                 # Suppress per-file moves already covered by dir expansion.
                 if new_rel in dir_handled:
                     continue
-                # Store as (action, path, dest) for later processing.
-                modifies.append(f"__move__{rel}→{new_rel}")
+                moved_new_rels.add(new_rel)
+                moves.append((rel, new_rel))
+
+        # Suppress spurious modified events that follow a move of the same file.
+        modifies = [m for m in modifies if m not in moved_new_rels]
 
         # Pair deletes with modifies: if a delete and a modify share the same
         # path, it's an in-place replace → keep as modify, drop the delete.
@@ -253,12 +259,7 @@ class _VaultHandler(FileSystemEventHandler):
         real_deletes = [d for d in deletes if d not in modify_set]
 
         # Phase 4: single-pass reference update for all moves.
-        all_moves = list(expanded_moves)
-        # Add per-file moves (from modifies that are "__move__" entries).
-        for m in modifies:
-            if m.startswith("__move__"):
-                old_rel, new_rel = m[len("__move__"):].split("→")
-                all_moves.append((old_rel, new_rel))
+        all_moves = list(expanded_moves) + list(moves)
 
         if all_moves:
             _update_references_batch(self._vault, all_moves)
@@ -273,22 +274,23 @@ class _VaultHandler(FileSystemEventHandler):
             )
             logger.info("indexed move %s -> %s (dir rename)", old_rel, new_rel)
 
+        # Apply per-file moves.
+        for old_rel, new_rel in moves:
+            source = _pop_source(new_rel)
+            apply_change(
+                self._conn, self._vault, new_rel, "moved",
+                source=source, from_path=old_rel, update_refs=False,
+            )
+            logger.info("indexed move %s -> %s", old_rel, new_rel)
+
+        # Apply modifies.
         for m in modifies:
-            if m.startswith("__move__"):
-                old_rel, new_rel = m[len("__move__"):].split("→")
-                source = _pop_source(new_rel)
-                apply_change(
-                    self._conn, self._vault, new_rel, "moved",
-                    source=source, from_path=old_rel, update_refs=False,
-                )
-                logger.info("indexed move %s -> %s", old_rel, new_rel)
-            else:
-                fp = self._vault / m
-                if not fp.is_file():
-                    continue
-                source = _pop_source(m)
-                apply_change(self._conn, self._vault, m, "modified", source=source)
-                logger.info("indexed %s (modified, source=%s)", m, source)
+            fp = self._vault / m
+            if not fp.is_file():
+                continue
+            source = _pop_source(m)
+            apply_change(self._conn, self._vault, m, "modified", source=source)
+            logger.info("indexed %s (modified, source=%s)", m, source)
 
         for rel in real_deletes:
             fp = self._vault / rel

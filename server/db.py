@@ -783,6 +783,8 @@ def apply_change(
                 digest = hashlib.sha256(content).hexdigest()
                 mtime = fp.stat().st_mtime
                 upsert_file(conn, path, digest, mtime)
+                if not new_hash:
+                    new_hash = digest
             log_change(conn, path, action, from_path=from_path, source=source, new_hash=new_hash)
             index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
