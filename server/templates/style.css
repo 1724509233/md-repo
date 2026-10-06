@@ -51,6 +51,10 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .tree-file.active:hover { background: color-mix(in srgb, var(--brass) 18%, transparent); }
 .tree-group.open > .tree-row .chev { transform: rotate(90deg); }
 .chev { transition: transform .2s ease; }
+/* 子项展开/折叠：grid-template-rows 0fr→1fr 过渡（纯 CSS，无需 JS 算高度） */
+.tree-children { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
+.tree-group.open > .tree-children { grid-template-rows: 1fr; }
+.tree-children-inner { overflow: hidden; min-height: 0; }
 
 /* ============ 搜索框 ============ */
 #search-input { background: var(--surface); border-color: var(--line); color: var(--ink); font-family: 'Inter', sans-serif; }
@@ -94,6 +98,10 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #preview th, #preview td { border: 1px solid var(--line); padding: .5rem .75rem; }
 #preview tr:hover td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 
+/* ============ 编辑/预览切换：内容淡入（换视图，非换文档）============ */
+@keyframes viewFade { from { opacity: 0; } to { opacity: 1; } }
+.view-fade { animation: viewFade .15s ease both; }
+
 /* ============ 翻页动效（唯一的花活）============ */
 @keyframes pageOut { from { opacity: 1; transform: translateX(0) rotateY(0deg); } to { opacity: 0; transform: translateX(-12%) rotateY(5deg); } }
 @keyframes pageIn  { from { opacity: 0; transform: translateX(12%) rotateY(-5deg); } to { opacity: 1; transform: translateX(0) rotateY(0deg); } }
@@ -102,6 +110,10 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .doc-wrap.page-turn-out { animation: pageOut .45s cubic-bezier(.32,.72,0,1) both; }
 @media (prefers-reduced-motion: reduce) {
   .doc-wrap.page-turn, .doc-wrap.page-turn-out { animation: pageFade .2s ease both; }
+  /* 文件树展开/折叠、编辑预览切换、工具详情：减弱动效时直接显隐/切换（确认按钮 :active 保留） */
+  .tree-children { transition: none; }
+  .view-fade { animation: none; }
+  .tool-detail { transition: none; }
 }
 
 /* ============ AI 面板（桌面侧滑）============ */
@@ -182,30 +194,44 @@ pre code.hljs { background: transparent; padding: 0; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 
-/* ============ Tool summary（AI 消息内联）============ */
-.tool-summary { font-size: 11px; color: var(--ink-soft); margin-top: 8px; cursor: pointer; user-select: none; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-family: 'Inter', sans-serif; }
-.tool-summary .ts-icon { display: inline-flex; align-items: center; color: var(--ink-soft); }
-.tool-summary .ts-icon.done { color: var(--brass); }
-.tool-summary .ts-icon.confirm { color: var(--brass); }
-.tool-summary .ts-icon.err { color: #ef4444; }
-.tool-entry .ts-icon { color: var(--ink-soft); display: inline-flex; }
-.tool-entry .ts-icon.done { color: var(--brass); }
-.tool-entry .ts-icon.confirm { color: var(--brass); }
-.tool-entry .ts-icon.err { color: #ef4444; }
-.tool-summary .ts-count { opacity: .7; }
-.tool-details { margin-top: 6px; font-size: 11px; }
-.tool-details summary { cursor: pointer; color: var(--brass); user-select: none; font-size: 11px; font-family: 'Inter', sans-serif; }
-.tool-pre { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 200px; overflow-y: auto; color: var(--ink); }
+/* ============ Tool 调用（内联三级：摘要行 / 确认按钮 / 详情）============ */
+.tool-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--ink); }
+.tool-line:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.tool-line .ts-icon { display: inline-flex; align-items: center; color: var(--ink-soft); }
+.tool-line .ts-icon.done { color: var(--brass); }
+.tool-line .ts-icon.confirm { color: var(--brass); }
+.tool-line .ts-icon.err { color: #c0392b; }
+.tool-label { font-weight: 500; color: var(--ink); }
+.tool-param { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--ink-soft); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ts-status { margin-left: auto; display: inline-flex; align-items: center; color: var(--ink-soft); }
+.ts-status.done { color: var(--brass); }
+.ts-status.confirm { color: var(--brass); }
+.ts-status.confirmed { color: var(--ink-soft); }
+.ts-status.rejected { color: var(--ink-soft); }
+.ts-status.err { color: #c0392b; }
+.tool-chev { transition: transform .2s ease; color: var(--ink-soft); }
+.tool-line.open .tool-chev { transform: rotate(90deg); }
+/* 详情展开/折叠：grid-template-rows 0fr→1fr（同文件树） */
+.tool-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
+.tool-detail.open { grid-template-rows: 1fr; }
+.tool-detail-inner { overflow: hidden; min-height: 0; }
+.tool-pre { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 150px; overflow-y: auto; color: var(--ink); }
+.tool-result-pre { max-height: 200px; border-left: 2px solid var(--brass); padding-left: 8px; }
 .tool-result-label { margin-top: 6px; font-weight: 600; color: var(--ink-soft); font-size: 11px; font-family: 'Inter', sans-serif; }
-.tool-result-pre { border-left: 2px solid var(--brass); padding-left: 8px; }
+.tool-result-text { font-size: 11px; margin-top: 4px; font-family: 'JetBrains Mono', monospace; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-result-text.done { color: var(--brass); }
+.tool-result-text.rejected { color: var(--ink-soft); }
+.tool-result-text.error { color: #c0392b; }
 .tool-path { background: color-mix(in srgb, var(--brass) 8%, transparent); padding: 1px 5px; border-radius: 4px; font-size: 11px; color: var(--ink-soft); }
 
 /* ============ Confirm buttons（黄铜强调）============ */
-.confirm-btns { display: flex; gap: 8px; margin-top: 8px; }
-.confirm-yes { font-size: 12px; padding: 6px 14px; background: var(--brass); color: var(--paper); border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-family: 'Inter', sans-serif; }
+.confirm-btns { display: flex; gap: 8px; margin-top: 6px; margin-bottom: 4px; }
+.confirm-yes { font-size: 12px; padding: 6px 14px; background: var(--brass); color: var(--paper); border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-family: 'Inter', sans-serif; transition: transform .1s ease, background-color .15s ease; }
 .confirm-yes:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
-.confirm-no { font-size: 12px; padding: 6px 14px; background: none; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-family: 'Inter', sans-serif; }
+.confirm-yes:active { transform: scale(.95); background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
+.confirm-no { font-size: 12px; padding: 6px 14px; background: none; color: var(--ink); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-family: 'Inter', sans-serif; transition: transform .1s ease, background-color .15s ease; }
 .confirm-no:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.confirm-no:active { transform: scale(.95); background: color-mix(in srgb, var(--ink) 8%, transparent); }
 
 /* ============ AI 面板 chrome ============ */
 #ai-mode { font-family: 'Inter', sans-serif; background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }

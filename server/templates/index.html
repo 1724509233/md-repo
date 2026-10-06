@@ -151,7 +151,8 @@
           link: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
           check: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>',
           alert: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>',
-          x: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>'
+          x: '<svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>',
+          clock: '<svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
         };
 
         /* ---------- mobile "更多" dropdown ---------- */
@@ -241,9 +242,10 @@
               html += '<svg class="chev w-3.5 h-3.5 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>';
               html += ICONS.folder + '<span class="font-medium">' + esc(dn) + '</span><span class="ml-auto text-xs text-muted bg-[color-mix(in_srgb,var(--ink)_6%,transparent)] rounded-full px-2 py-0.5">' + count + '</span>';
               html += '</button>';
-              html += '<div class="tree-children ml-2 pl-1.5 border-l border-border space-y-0.5 py-0.5">';
+              html += '<div class="tree-children ml-2 pl-1.5 border-l border-border">';
+              html += '<div class="tree-children-inner space-y-0.5 py-0.5">';
               html += renderNode(child, depth + 1, dirPath);
-              html += '</div></div>';
+              html += '</div></div></div>';
             });
             node.files.sort(function (a, b) { return a.name < b.name ? -1 : 1 }).forEach(function (it) {
               html += '<button class="tree-file w-full text-left px-2 py-1.5 rounded-md" data-path="' + esc(it.path) + '">' + esc(it.name) + '</button>';
@@ -271,15 +273,13 @@
 
             treeEl.innerHTML = buildTree(files);
 
-            // Restore expand state
+            // Restore expand state（展开/折叠由 .open class 驱动，CSS 控制 grid 过渡）
             treeEl.querySelectorAll('.tree-group').forEach(function (g) {
               var d = g.getAttribute('data-dir');
               if (d && openPaths.has(d)) {
                 g.classList.add('open');
               } else {
                 g.classList.remove('open');
-                var c = g.querySelector(':scope > .tree-children');
-                if (c) c.classList.add('hidden');
               }
             });
 
@@ -287,9 +287,7 @@
               btn.addEventListener('click', function () {
                 var g = btn.closest('.tree-group');
                 if (!g) return;
-                g.classList.toggle('open');
-                var c = g.querySelector(':scope > .tree-children');
-                if (c) c.classList.toggle('hidden');
+                g.classList.toggle('open'); /* 展开/折叠由 CSS grid 过渡驱动 */
               });
             });
             treeEl.querySelectorAll('.tree-file').forEach(function (btn) {
@@ -426,17 +424,27 @@
         /* ---------- edit / preview toggle ---------- */
         var MODE_ACTIVE = 'mode-btn active px-3 py-1.5';
         var MODE_INACTIVE = 'mode-btn px-3 py-1.5';
+        /* 切换视图时给显示的元素加 .view-fade 触发 150ms 淡入，animationend 后移除 */
+        function fadeView(el) {
+          el.classList.remove('view-fade');
+          void el.offsetWidth; /* 强制 reflow，确保动画可重触发 */
+          el.classList.add('view-fade');
+        }
+        editor.addEventListener('animationend', function () { editor.classList.remove('view-fade') });
+        preview.addEventListener('animationend', function () { preview.classList.remove('view-fade') });
         function setMode(mode) {
           if (mode === 'edit') {
             btnEdit.className = MODE_ACTIVE;
             btnPrev.className = MODE_INACTIVE;
             editor.classList.remove('hidden'); preview.classList.add('hidden');
+            fadeView(editor);
             previewMode = false;
           } else {
             btnPrev.className = MODE_ACTIVE;
             btnEdit.className = MODE_INACTIVE;
             renderPreview();
             editor.classList.add('hidden'); preview.classList.remove('hidden');
+            fadeView(preview);
             previewMode = true;
           }
         }
@@ -517,83 +525,163 @@
         var toolShortNames = {
           read_doc: { icon: ICONS.book, label: '读取' }, search_docs: { icon: ICONS.search, label: '搜索' }, list_files: { icon: ICONS.folder, label: '列出文件' },
           write_doc: { icon: ICONS.pencil, label: '写入' }, edit_doc: { icon: ICONS.scissors, label: '编辑' }, delete_doc: { icon: ICONS.trash, label: '删除' },
-          move_doc: { icon: ICONS.box, label: '移动' }, get_related_docs: { icon: ICONS.link, label: '关联' }
+          move_docs: { icon: ICONS.box, label: '移动' }, get_related_docs: { icon: ICONS.link, label: '关联' }, recent_changes: { icon: ICONS.clock, label: '变更记录' }
         };
         function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') }
-        function getToolSummary(turn) {
-          var s = turn.querySelector('.tool-summary');
-          if (!s) {
-            s = document.createElement('div');
-            s.className = 'tool-summary';
-            s.innerHTML = '<span class="ts-icons"></span><span class="ts-count"></span>';
-            s.addEventListener('click', function (e) {
-              if (e.target.closest('.confirm-btns')) return;
-              var det = turn.querySelector('.tool-details');
-              if (det) det.open = !det.open;
-            });
-            turn.appendChild(s);
+        /* 提取每个工具最关键的参数，用于摘要行显示 */
+        function toolKeyParam(name, args) {
+          args = args || {};
+          switch (name) {
+            case 'read_doc': return args.path;
+            case 'search_docs': var q = String(args.query || ''); return q.length > 30 ? q.slice(0, 30) + '…' : q;
+            case 'list_files': return args.dir || '.';
+            case 'write_doc': return args.path;
+            case 'edit_doc': return args.path;
+            case 'delete_doc': return args.path;
+            case 'move_docs': return args.moves ? (args.moves.length + ' 个文件') : '';
+            case 'get_related_docs': return args.path;
+            case 'recent_changes': return args.since || args.source || args.path || '全部';
+            default: return '';
           }
-          return s;
         }
-        function getToolDetails(turn) {
-          var det = turn.querySelector('.tool-details');
-          if (!det) {
-            det = document.createElement('details');
-            det.className = 'tool-details';
-            det.innerHTML = '<summary>参数与结果</summary><div class="tool-body"></div>';
-            turn.appendChild(det);
+        /* 解析后端 result，生成中文自然语句摘要；解析失败 fallback 到 result 第一行（截断 80） */
+        function toolResultSummary(name, args, result) {
+          args = args || {};
+          var r = String(result == null ? '' : result);
+          function fallback() { var f = r.split('\n')[0]; return f.length > 80 ? f.slice(0, 77) + '…' : f; }
+          function num(re) { var m = re.exec(r); return m ? parseInt(m[1], 10) : NaN; }
+          function nonEmptyLines() { return r.split('\n').filter(function (l) { return l.trim().length > 0 }).length; }
+          switch (name) {
+            case 'read_doc': {
+              var chars = num(/(\d+)\s*chars/);
+              if (isNaN(chars)) return fallback();
+              var lines = r.split('\n').length - 2; if (lines < 1) lines = 1;
+              return '读取 ' + (args.path || '') + '，共 ' + lines + ' 行，' + chars + ' 字';
+            }
+            case 'search_docs': {
+              var c = num(/count="(\d+)"/);
+              if (isNaN(c)) { var m2 = r.match(/<result[\s>]/g); c = m2 ? m2.length : NaN; }
+              if (isNaN(c)) return fallback();
+              return '搜索"' + (args.query || '') + '"，找到 ' + c + ' 篇相关文档';
+            }
+            case 'list_files': {
+              var lf = nonEmptyLines(); if (!lf) return fallback();
+              return '列出文件，共 ' + lf + ' 个';
+            }
+            case 'write_doc': {
+              var wc = num(/(\d+)\s*chars/); if (isNaN(wc)) return fallback();
+              return '写入 ' + (args.path || '') + '，共 ' + wc + ' 字';
+            }
+            case 'edit_doc': {
+              var n = num(/(\d+)\s*occurrence/); if (isNaN(n)) return fallback();
+              return '编辑 ' + (args.path || '') + '，替换 ' + n + ' 处';
+            }
+            case 'delete_doc': return '删除 ' + (args.path || '');
+            case 'move_docs': {
+              var mv = args.moves ? args.moves.length : NaN; if (isNaN(mv)) return fallback();
+              return '移动 ' + mv + ' 个文件';
+            }
+            case 'get_related_docs': {
+              var rl = nonEmptyLines() - 1; if (rl < 0) rl = 0;
+              return '关联 ' + (args.path || '') + '，找到 ' + rl + ' 篇相关文档';
+            }
+            case 'recent_changes': {
+              var rc = nonEmptyLines(); if (!rc) return fallback();
+              return '查询变更记录，共 ' + rc + ' 条';
+            }
+            default: return fallback();
           }
-          return det;
         }
         function insertToolCall(turn, id, name, args) {
           var tool = toolShortNames[name] || { icon: '', label: name };
+          var param = toolKeyParam(name, args);
           var entry = document.createElement('div');
           entry.className = 'tool-entry';
           entry.dataset.toolId = id;
-          entry.innerHTML = '<div class="flex items-center gap-2"><span class="ts-icon">' + tool.icon + '</span><span>' + escapeHtml(tool.label) + '</span></div>'
-            + '<pre class="tool-pre">' + escapeHtml(JSON.stringify(args, null, 2)) + '</pre>';
-          getToolDetails(turn).querySelector('.tool-body').appendChild(entry);
-          var s = getToolSummary(turn);
-          var icons = s.querySelector('.ts-icons');
-          var ic = document.createElement('span');
-          ic.className = 'ts-icon'; ic.dataset.toolId = id; ic.innerHTML = tool.icon;
-          icons.appendChild(ic);
-          var count = s.querySelector('.ts-count');
-          var n = icons.querySelectorAll('.ts-icon').length;
-          count.textContent = '（' + n + ' 个工具）';
+          entry.dataset.toolName = name;
+          entry.dataset.args = JSON.stringify(args); /* 供 toolResultSummary 解析 */
+          /* 摘要行（始终可见）：chevron + 图标 + 标签 + 关键参数 + 状态图标 */
+          entry.innerHTML = '<div class="tool-line" data-tool-id="' + id + '">'
+            + '<svg class="tool-chev icon-xs" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>'
+            + '<span class="ts-icon">' + tool.icon + '</span>'
+            + '<span class="tool-label">' + escapeHtml(tool.label) + '</span>'
+            + (param ? '<span class="tool-param">' + escapeHtml(param) + '</span>' : '')
+            + '<span class="ts-status"></span>'
+            + '</div>'
+            /* 详情（点击摘要行展开）：args pre + result slot */
+            + '<div class="tool-detail"><div class="tool-detail-inner">'
+            + '<pre class="tool-pre">' + escapeHtml(JSON.stringify(args, null, 2)) + '</pre>'
+            + '<div class="tool-result-slot"></div>'
+            + '</div></div>';
+          turn.appendChild(entry);
+          /* 点击摘要行 → 展开/折叠该工具详情（确认按钮区域不触发） */
+          entry.querySelector('.tool-line').addEventListener('click', function (e) {
+            if (e.target.closest('.confirm-btns')) return;
+            this.classList.toggle('open');
+            entry.querySelector('.tool-detail').classList.toggle('open');
+          });
           var chat = document.getElementById('ai-messages');
           chat.scrollTop = chat.scrollHeight;
         }
         function updateToolCall(id, status, result) {
-          var icon = document.querySelector('.ts-icon[data-tool-id="' + id + '"]');
-          if (!icon) return;
-          var turn = icon.closest('.ai-turn');
-          if (!turn) return;
-          var entry = turn.querySelector('.tool-entry[data-tool-id="' + id + '"]');
-          if (entry) {
-            var ic = entry.querySelector('.ts-icon');
-            if (status === 'done') { ic.innerHTML = ICONS.check; ic.classList.add('done') }
-            else if (status === 'confirm') { ic.innerHTML = ICONS.alert; ic.classList.add('confirm') }
-            else if (status === 'rejected' || status === 'error') { ic.innerHTML = ICONS.x; ic.classList.add('err') }
-          }
+          var line = document.querySelector('.tool-line[data-tool-id="' + id + '"]');
+          if (!line) return;
+          var entry = line.closest('.tool-entry');
+          var statusEl = line.querySelector('.ts-status');
+          /* 状态融合到工具行图标（覆盖 sendConfirm 的乐观状态） */
+          if (status === 'done') { statusEl.innerHTML = ICONS.check; statusEl.className = 'ts-status done' }
+          else if (status === 'confirm') { statusEl.innerHTML = ICONS.alert; statusEl.className = 'ts-status confirm' }
+          else if (status === 'rejected') { statusEl.innerHTML = ICONS.x; statusEl.className = 'ts-status rejected' }
+          else if (status === 'error') { statusEl.innerHTML = ICONS.alert; statusEl.className = 'ts-status err' }
           if (status === 'confirm') {
+            /* 确认按钮内联到该工具行下方（明确对应哪个工具） */
             var btns = document.createElement('div');
             btns.className = 'confirm-btns';
             btns.innerHTML = '<button class="confirm-yes flex items-center gap-1.5" onclick="sendConfirm(\'' + id + '\',true)">' + ICONS.check + '确认</button>'
               + '<button class="confirm-no flex items-center gap-1.5" onclick="sendConfirm(\'' + id + '\',false)">' + ICONS.x + '取消</button>';
-            turn.appendChild(btns);
+            line.after(btns);
           }
           if (result && entry) {
-            var pre = document.createElement('div');
-            pre.className = 'tool-result-label'; pre.textContent = '结果';
-            var rp = document.createElement('pre');
-            rp.className = 'tool-pre tool-result-pre';
-            rp.textContent = result;
-            entry.appendChild(pre);
-            entry.appendChild(rp);
+            /* 结果到达：移除确认按钮 + 显示中文摘要（done）/错误信息（error）+ 填充详情 */
+            var cb = entry.querySelector('.confirm-btns');
+            if (cb) cb.remove();
+            var name = entry.dataset.toolName;
+            var args = {}; try { args = JSON.parse(entry.dataset.args || '{}') } catch (e) { }
+            if (status === 'done') {
+              var rt = document.createElement('div');
+              rt.className = 'tool-result-text done';
+              rt.textContent = toolResultSummary(name, args, result);
+              line.after(rt);
+            } else if (status === 'error') {
+              var et = document.createElement('div');
+              et.className = 'tool-result-text error';
+              et.textContent = result || '失败';
+              line.after(et);
+            }
+            /* rejected：不显示文本行（状态已融合到图标） */
+            var slot = entry.querySelector('.tool-result-slot');
+            if (slot) {
+              var lbl = document.createElement('div');
+              lbl.className = 'tool-result-label'; lbl.textContent = '结果';
+              var rp = document.createElement('pre');
+              rp.className = 'tool-pre tool-result-pre';
+              rp.textContent = result;
+              slot.appendChild(lbl);
+              slot.appendChild(rp);
+            }
           }
         }
         function sendConfirm(id, approved) {
+          /* 乐观更新：点击后移除按钮 + 状态融合到工具行图标（灰✓/灰✕），不显示文本行 */
+          var line = document.querySelector('.tool-line[data-tool-id="' + id + '"]');
+          if (line) {
+            var entry = line.closest('.tool-entry');
+            var cb = entry && entry.querySelector('.confirm-btns');
+            if (cb) cb.remove();
+            var statusEl = line.querySelector('.ts-status');
+            if (approved) { statusEl.innerHTML = ICONS.check; statusEl.className = 'ts-status confirmed' }
+            else { statusEl.innerHTML = ICONS.x; statusEl.className = 'ts-status rejected' }
+          }
           fetch('/api/agent/confirm', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
