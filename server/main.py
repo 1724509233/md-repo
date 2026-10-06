@@ -120,9 +120,10 @@ def _detect_duplicates(vault_dir: Path) -> int:
         rel = f.relative_to(vault_dir).as_posix()
         hash_map.setdefault(digest, []).append(rel)
 
+    EMPTY_HASH = hashlib.sha256(b"").hexdigest()
     dup_count = 0
     for digest, paths in hash_map.items():
-        if len(paths) > 1:
+        if len(paths) > 1 and digest != EMPTY_HASH:
             dup_count += len(paths) - 1
             logger.warning(
                 "duplicate content: %d files share hash %s: %s",
