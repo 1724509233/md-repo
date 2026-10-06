@@ -925,7 +925,7 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
     return modified_count
 
 
-def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> int:
+def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
     """Single-pass scan: replace references for multiple moves at once.
 
     Used by directory rename to avoid N separate full-vault scans.
@@ -934,6 +934,8 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> i
     Args:
         vault_dir: root of the vault
         moves: list of (old_path, new_path) tuples
+        pre_rename: if True, the filesystem rename has NOT happened yet.
+            Uniqueness checks use old_path (which still exists on disk).
 
     Returns the number of files modified.
     """
@@ -948,7 +950,18 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]]) -> i
         escaped_old = re.escape(old_path)
         old_stem = Path(old_path).stem
         new_stem = Path(new_path).stem
-        old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
+        if pre_rename:
+            # File still exists at old_path — check uniqueness directly
+            old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
+        else:
+            # File already renamed away — old_path no longer exists.
+            # The name was unique if no OTHER file with the same name exists now.
+            fname = Path(old_path).name
+            count = sum(
+                1 for f in vault_dir.rglob(fname)
+                if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+            )
+            old_name_unique = count <= 1
         patterns.append({
             "full_re": re.compile(r"\[\[(" + escaped_old + r")(\|[^\]]+)?\]\]"),
             "full_new": new_path,

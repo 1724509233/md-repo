@@ -12,14 +12,14 @@ from server.agent import execute_tool
 # ── P0: Data integrity / unhandled exceptions ────────────────────────────
 
 
-def test_move_doc_dest_exists(tmp_path: Path):
-    """move_doc to an existing destination must reject, not overwrite."""
+def test_move_docs_dest_exists(tmp_path: Path):
+    """move_docs to an existing destination must reject, not overwrite."""
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "a.md").write_bytes(b"content A")
     (vault / "b.md").write_bytes(b"content B")
 
-    result = execute_tool("move_doc", {"from_path": "a.md", "to_path": "b.md"}, vault, None)
+    result = execute_tool("move_docs", {"moves": [{"from_path": "a.md", "to_path": "b.md"}]}, vault, None)
     assert "destination already exists" in result
     # b.md must be unchanged
     assert (vault / "b.md").read_bytes() == b"content B"

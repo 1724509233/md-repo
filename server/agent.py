@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-from pydantic import BaseModel, Field, field_validator, ValidationError
+from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
 
 logger = logging.getLogger("md-vault.agent")
 
@@ -114,14 +114,32 @@ class DeleteDocArgs(BaseModel):
     def validate_path(cls, v): return _check_md_path(v)
 
 
-class MoveDocArgs(BaseModel):
-    """Move or rename a document. Changes the path, which may break links in other documents. Check get_related_docs first."""
+class MoveDocItem(BaseModel):
+    """A single move operation within a batch."""
     from_path: str = Field(description="Original path")
     to_path: str = Field(description="Destination path")
 
     @field_validator("from_path", "to_path")
     @classmethod
     def validate_paths(cls, v): return _check_md_path(v)
+
+
+class MoveDocsArgs(BaseModel):
+    """Move or rename multiple documents in one operation. Use for batch moves or directory renames. All moves are applied atomically with a single reference-update pass."""
+    moves: list[MoveDocItem] = Field(description="List of moves to apply", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_unique_paths(self):
+        froms = [m.from_path for m in self.moves]
+        tos = [m.to_path for m in self.moves]
+        if len(set(froms)) != len(froms):
+            raise ValueError("duplicate from_path in moves")
+        if len(set(tos)) != len(tos):
+            raise ValueError("duplicate to_path in moves")
+        overlap = set(froms) & set(tos)
+        if overlap:
+            raise ValueError(f"to_path conflicts with another from_path: {', '.join(sorted(overlap))}")
+        return self
 
 
 class EditDocArgs(BaseModel):
@@ -164,7 +182,7 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {
     "list_files": ListFilesArgs,
     "write_doc": WriteDocArgs,
     "delete_doc": DeleteDocArgs,
-    "move_doc": MoveDocArgs,
+    "move_docs": MoveDocsArgs,
     "edit_doc": EditDocArgs,
     "get_related_docs": GetRelatedDocsArgs,
     "recent_changes": RecentChangesArgs,
@@ -180,7 +198,7 @@ def _tool(model: type[BaseModel], name: str) -> dict:
 TOOLS = [_tool(TOOL_ARGS[name], name) for name in TOOL_ARGS]
 
 READ_TOOLS = {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
-WRITE_TOOLS = {"write_doc", "edit_doc", "delete_doc", "move_doc"}
+WRITE_TOOLS = {"write_doc", "edit_doc", "delete_doc", "move_docs"}
 
 
 def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
@@ -191,8 +209,11 @@ def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
     try:
         model(**args)
     except ValidationError as e:
-        errors = [f"{err['loc'][0]}: {err['msg']}" for err in e.errors()]
-        return f"Error: {'; '.join(errors)}"
+        parts = []
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err["loc"]) if err["loc"] else ""
+            parts.append(f"{loc}: {err['msg']}" if loc else err["msg"])
+        return f"Error: {'; '.join(parts)}"
     # vault_dir boundary check (needs filesystem context)
     for key in ("path", "from_path", "to_path"):
         p = args.get(key)
@@ -344,21 +365,47 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
             return f"Deleted: {args['path']} (removed dead links in {ref_count} files)"
         return f"Deleted: {args['path']}"
 
-    elif name == "move_doc":
-        src = vault_dir / args["from_path"]
-        dst = vault_dir / args["to_path"]
-        if not src.is_file():
-            return responses._file_not_found_hint(args["from_path"], db_conn, tool="move_doc")
-        if dst.is_file():
-            return responses.move_dest_exists(args["to_path"])
-        dst.parent.mkdir(parents=True, exist_ok=True)
+    elif name == "move_docs":
+        from .db import apply_change, _update_references_batch
         from .watcher import register_write
 
-        register_write(args["to_path"], "agent")
-        src.rename(dst)
-        # Reference updates are handled by the watchdog (on_moved → apply_change),
-        # which fires within milliseconds. No need to scan the vault here.
-        return f"Moved: {args['from_path']} → {args['to_path']}"
+        moves = [(m["from_path"], m["to_path"]) for m in args["moves"]]
+
+        # Phase 1: validate all sources exist, no destination conflicts
+        for from_path, to_path in moves:
+            src = vault_dir / from_path
+            if not src.is_file():
+                return responses._file_not_found_hint(from_path, db_conn, tool="move_docs")
+            dst = vault_dir / to_path
+            if dst.is_file():
+                return responses.move_dest_exists(to_path)
+
+        # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
+        ref_count = _update_references_batch(vault_dir, moves, pre_rename=True)
+
+        # Phase 3: perform all filesystem renames
+        for from_path, to_path in moves:
+            src = vault_dir / from_path
+            dst = vault_dir / to_path
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            register_write(to_path, "agent")
+            src.rename(dst)
+
+        # Phase 4: update DB (files, change_log, FTS, graph) for each move
+        if db_conn is not None:
+            for from_path, to_path in moves:
+                apply_change(
+                    conn=db_conn, vault_dir=vault_dir, path=to_path,
+                    action="moved", source="agent", from_path=from_path,
+                    update_refs=False,  # already done in batch above
+                )
+
+        lines = [f"Moved {len(moves)} file(s):"]
+        for from_path, to_path in moves:
+            lines.append(f"  {from_path} → {to_path}")
+        if ref_count:
+            lines.append(f"Updated references in {ref_count} file(s)")
+        return "\n".join(lines)
 
     elif name == "edit_doc":
         from .db import edit_file
@@ -514,9 +561,10 @@ async def agent_loop(messages, tools, ai_config, pending_confirms, vault_dir, db
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": err})
                     yield sse("tool_result", {"id": tc["id"], "result": err, "error": True})
                     continue
-            elif tc["name"] == "move_doc":
-                if not (vault_dir / args["from_path"]).is_file():
-                    err = f"Error: file not found: {args['from_path']}"
+            elif tc["name"] == "move_docs":
+                missing = [m["from_path"] for m in args.get("moves", []) if not (vault_dir / m["from_path"]).is_file()]
+                if missing:
+                    err = f"Error: file(s) not found: {', '.join(missing)}"
                     messages.append({"role": "tool", "tool_call_id": tc["id"], "content": err})
                     yield sse("tool_result", {"id": tc["id"], "result": err, "error": True})
                     continue

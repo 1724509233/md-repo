@@ -91,7 +91,7 @@ def _file_not_found_hint(path: str, db_conn, tool: str) -> str:
     """Query change_log to determine why a file is missing. Returns appropriate error string.
     
     tool="edit_doc" → anti-cementation warnings (edit_not_found_*)
-    tool="read_doc"/"delete_doc"/"move_doc" → pure navigation (file_moved/file_deleted)
+    tool="read_doc"/"delete_doc"/"move_docs" → pure navigation (file_moved/file_deleted)
     """
     if db_conn is None:
         return file_not_found(path)

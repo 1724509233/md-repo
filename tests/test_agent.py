@@ -57,28 +57,6 @@ def test_validate_accepts_valid_path(tmp_path: Path):
     assert result is None
 
 
-def test_validate_accepts_move_doc_paths(tmp_path: Path):
-    from server.agent import validate_tool_call
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    result = validate_tool_call(
-        "move_doc", {"from_path": "a.md", "to_path": "b/c.md"}, vault
-    )
-    assert result is None
-
-
-def test_validate_rejects_move_outside_vault(tmp_path: Path):
-    from server.agent import validate_tool_call
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
-    result = validate_tool_call(
-        "move_doc", {"from_path": "a.md", "to_path": "../outside.md"}, vault
-    )
-    assert result is not None
-
-
 def test_tools_schema_has_nine_tools():
     from server.agent import TOOLS
 
@@ -86,7 +64,7 @@ def test_tools_schema_has_nine_tools():
     assert len(names) == 9
     assert names == {
         "read_doc", "search_docs", "list_files",
-        "write_doc", "edit_doc", "delete_doc", "move_doc",
+        "write_doc", "edit_doc", "delete_doc", "move_docs",
         "get_related_docs", "recent_changes",
     }
 
@@ -95,7 +73,7 @@ def test_read_write_tool_sets():
     from server.agent import READ_TOOLS, WRITE_TOOLS
 
     assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
-    assert WRITE_TOOLS == {"write_doc", "edit_doc", "delete_doc", "move_doc"}
+    assert WRITE_TOOLS == {"write_doc", "edit_doc", "delete_doc", "move_docs"}
     assert READ_TOOLS.isdisjoint(WRITE_TOOLS)
 
 
@@ -303,19 +281,125 @@ def test_execute_delete_doc_not_found(tmp_path: Path):
     assert "not found" in result
 
 
-def test_execute_move_doc(tmp_path: Path):
+def test_execute_move_docs_batch(tmp_path: Path):
     from server.agent import execute_tool
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    (vault / "old.md").write_bytes(b"move me")
+    (vault / "a.md").write_bytes(b"content a")
+    (vault / "b.md").write_bytes(b"content b")
+    (vault / "c.md").write_bytes(b"content c")
 
     result = execute_tool(
-        "move_doc", {"from_path": "old.md", "to_path": "sub/new.md"}, vault, None
+        "move_docs",
+        {"moves": [
+            {"from_path": "a.md", "to_path": "sub/a.md"},
+            {"from_path": "b.md", "to_path": "sub/b.md"},
+            {"from_path": "c.md", "to_path": "other/c.md"},
+        ]},
+        vault, None,
     )
-    assert "Moved" in result
-    assert not (vault / "old.md").exists()
-    assert (vault / "sub" / "new.md").read_bytes() == b"move me"
+    assert "Moved 3 file(s)" in result
+    assert not (vault / "a.md").exists()
+    assert not (vault / "b.md").exists()
+    assert not (vault / "c.md").exists()
+    assert (vault / "sub" / "a.md").read_bytes() == b"content a"
+    assert (vault / "sub" / "b.md").read_bytes() == b"content b"
+    assert (vault / "other" / "c.md").read_bytes() == b"content c"
+
+
+def test_execute_move_docs_updates_references(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "old.md").write_bytes(b"# Old Doc")
+    (vault / "linker.md").write_bytes(b"See [[old]] for details.\nAlso [[old|alias]].")
+
+    result = execute_tool(
+        "move_docs",
+        {"moves": [{"from_path": "old.md", "to_path": "new.md"}]},
+        vault, None,
+    )
+    assert "Moved 1 file(s)" in result
+    # Reference should be updated in linker.md
+    linker_content = (vault / "linker.md").read_bytes().decode()
+    assert "[[new]]" in linker_content
+    assert "[[new|alias]]" in linker_content
+    assert "[[old]]" not in linker_content
+
+
+def test_execute_move_docs_missing_source(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_bytes(b"a")
+
+    result = execute_tool(
+        "move_docs",
+        {"moves": [
+            {"from_path": "a.md", "to_path": "sub/a.md"},
+            {"from_path": "missing.md", "to_path": "sub/missing.md"},
+        ]},
+        vault, None,
+    )
+    assert "not found" in result
+    # No moves should have been performed
+    assert (vault / "a.md").exists()
+
+
+def test_execute_move_docs_dest_conflict(tmp_path: Path):
+    from server.agent import execute_tool
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_bytes(b"a")
+    (vault / "b.md").write_bytes(b"existing b")
+
+    result = execute_tool(
+        "move_docs",
+        {"moves": [{"from_path": "a.md", "to_path": "b.md"}]},
+        vault, None,
+    )
+    assert "already exists" in result
+    # No move should have been performed
+    assert (vault / "a.md").exists()
+
+
+def test_validate_move_docs_rejects_duplicate_from(tmp_path: Path):
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = validate_tool_call(
+        "move_docs",
+        {"moves": [
+            {"from_path": "a.md", "to_path": "x.md"},
+            {"from_path": "a.md", "to_path": "y.md"},
+        ]},
+        vault,
+    )
+    assert result is not None
+    assert "duplicate" in result
+
+
+def test_validate_move_docs_rejects_conflict(tmp_path: Path):
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    # to_path of one move is from_path of another
+    result = validate_tool_call(
+        "move_docs",
+        {"moves": [
+            {"from_path": "a.md", "to_path": "b.md"},
+            {"from_path": "b.md", "to_path": "c.md"},
+        ]},
+        vault,
+    )
+    assert result is not None
+    assert "conflicts" in result
 
 
 def test_execute_list_files(tmp_path: Path):

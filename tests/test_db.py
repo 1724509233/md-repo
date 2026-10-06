@@ -510,23 +510,17 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
     assert "notes/abc.md" in content
 
 
-def test_move_doc_updates_references(vault_dir):
-    """move_doc renames the file; reference updates are handled by watchdog.
-
-    In tests there is no running watchdog, so we verify the rename happened
-    and that _update_references (called by apply_change in production)
-    would fix the reference.
-    """
+def test_move_docs_updates_references(vault_dir):
+    """move_docs renames the file; reference updates are handled inline via _update_references_batch."""
     from server.agent import execute_tool
-    from server.db import _update_references
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "old.md").write_text("# Old doc")
     (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for info.")
 
     result = execute_tool(
-        "move_doc",
-        {"from_path": "notes/old.md", "to_path": "notes/new.md"},
+        "move_docs",
+        {"moves": [{"from_path": "notes/old.md", "to_path": "notes/new.md"}]},
         vault_dir,
         None,
     )
@@ -537,8 +531,7 @@ def test_move_doc_updates_references(vault_dir):
     assert (vault_dir / "notes" / "new.md").is_file()
     assert not (vault_dir / "notes" / "old.md").exists()
 
-    # Simulate what the watchdog would do (apply_change → _update_references)
-    _update_references(vault_dir, "notes/old.md", "notes/new.md")
+    # move_docs updates references inline via _update_references_batch
     content = (vault_dir / "notes" / "ref.md").read_text()
     assert "[[notes/new.md]]" in content
 
