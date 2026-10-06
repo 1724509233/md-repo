@@ -334,6 +334,83 @@ def test_update_references_short_name_no_slash(vault_dir):
     assert "a.md" in content  # plain text NOT replaced
 
 
+def test_update_references_short_name_wikilink_unique(vault_dir):
+    """Short-name wikilink [[a]] → [[b]] when old filename is unique."""
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+
+    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[b]]" in content
+    assert "[[a]]" not in content
+
+
+def test_update_references_short_name_wikilink_alias(vault_dir):
+    """Short-name wikilink with alias: [[a|alias]] → [[b|alias]]."""
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "ref.md").write_text("See [[a|my alias]] for details.")
+
+    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
+    assert count == 1
+
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[b|my alias]]" in content
+
+
+def test_update_references_short_name_wikilink_not_unique(vault_dir):
+    """Short-name wikilink NOT replaced when old filename is ambiguous."""
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "projects").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A in notes")
+    (vault_dir / "projects" / "a.md").write_text("# A in projects")
+    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+
+    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
+    # Full-path wikilink [[notes/a.md]] would be replaced, but short [[a]] should NOT
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[a]]" in content  # short-name NOT replaced (ambiguous)
+
+
+def test_update_references_short_name_same_stem(vault_dir):
+    """Short-name wikilink NOT replaced when only directory changes (same stem)."""
+    from server.db import _update_references
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "docs").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A")
+    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+
+    # notes/a.md → docs/a.md: stem unchanged, short-name link still valid
+    count = _update_references(vault_dir, "notes/a.md", "docs/a.md")
+    content = (vault_dir / "notes" / "ref.md").read_text()
+    assert "[[a]]" in content  # short-name NOT replaced (stem unchanged)
+
+
+def test_is_filename_unique(vault_dir):
+    """_is_filename_unique returns True only when exactly one file matches."""
+    from server.db import _is_filename_unique
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "projects").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_text("# A1")
+    assert _is_filename_unique(vault_dir, "a.md") is True
+
+    (vault_dir / "projects" / "a.md").write_text("# A2")
+    assert _is_filename_unique(vault_dir, "a.md") is False
+
+    assert _is_filename_unique(vault_dir, "nonexistent.md") is False
+
+
 def test_move_doc_updates_references(vault_dir):
     """Integration: move_doc automatically updates references."""
     from server.agent import execute_tool

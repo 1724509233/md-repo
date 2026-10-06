@@ -844,16 +844,34 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
     )
 
 
+def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
+    """Check if exactly one file with this name exists in the vault."""
+    count = 0
+    for f in vault_dir.rglob(filename):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if f.is_file():
+            count += 1
+            if count > 1:
+                return False
+    return count == 1
+
+
 def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
     """Scan all .md files in vault and replace references to old_path with new_path.
 
     Handles:
-    - Wikilinks: [[old_path]] → [[new_path]], [[old_path|alias]] → [[new_path|alias]]
+    - Full-path wikilinks: [[old_path]] → [[new_path]], [[old_path|alias]] → [[new_path|alias]]
+    - Short-name wikilinks: [[old_stem]] → [[new_stem]] (only when old filename is unique)
     - Plain text paths: old_path → new_path (only when old_path contains '/')
 
     Returns the number of files modified.
     """
     import re
+
+    old_stem = Path(old_path).stem
+    new_stem = Path(new_path).stem
+    old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
 
     modified_count = 0
     for md_file in vault_dir.rglob("*.md"):
@@ -866,8 +884,7 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
 
         original = content
 
-        # 1. Wikilink replacement: [[old_path]] or [[old_path|alias]]
-        # Escape regex special chars in old_path
+        # 1. Full-path wikilink replacement: [[old_path]] or [[old_path|alias]]
         escaped_old = re.escape(old_path)
         content = re.sub(
             r"\[\[(" + escaped_old + r")(\|[^\]]+)?\]\]",
@@ -875,7 +892,18 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
             content,
         )
 
-        # 2. Plain text path replacement (only if old_path contains '/')
+        # 2. Short-name wikilink replacement: [[old_stem]] → [[new_stem]]
+        #    Only when the old filename is unique in the vault (no ambiguity)
+        #    and the stem actually changed.
+        if old_name_unique and old_stem != new_stem:
+            escaped_stem = re.escape(old_stem)
+            content = re.sub(
+                r"\[\[(" + escaped_stem + r")(\|[^\]]+)?\]\]",
+                lambda m: "[[" + new_stem + (m.group(2) or "") + "]]",
+                content,
+            )
+
+        # 3. Plain text path replacement (only if old_path contains '/')
         if "/" in old_path:
             content = content.replace(old_path, new_path)
 
