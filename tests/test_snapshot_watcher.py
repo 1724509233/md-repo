@@ -281,16 +281,17 @@ class TestRawHandler:
         from server.snapshot_watcher import _RawHandler
         vault = tmp_path / "vault"
         vault.mkdir(exist_ok=True)
-        dirty: set[str] = set()
-        lock = threading.Lock()
 
         notified = []
-        class _FakeNotifier:
+        class _FakeWatcher:
+            _dirty: set[str] = set()
+            _lock = threading.Lock()
             def notify(self):
                 notified.append(True)
 
-        handler = _RawHandler(vault, dirty, lock, _FakeNotifier())
-        return handler, vault, dirty, notified
+        fake_watcher = _FakeWatcher()
+        handler = _RawHandler(vault, fake_watcher)
+        return handler, vault, fake_watcher._dirty, notified
 
     def test_on_created_md_file(self, tmp_path):
         handler, vault, dirty, notified = self._make_handler(tmp_path)

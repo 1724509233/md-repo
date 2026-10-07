@@ -153,20 +153,21 @@ def _pair_moves(
 
 
 class _RawHandler(FileSystemEventHandler):
-    """Watchdog handler: marks paths as dirty. No semantic logic here."""
+    """Watchdog handler: marks paths as dirty. No semantic logic here.
+
+    Accesses the dirty set through the watcher (not a direct reference)
+    because _swap_dirty() replaces the set object. A stale reference would
+    cause the handler to write to the old set after the first swap.
+    """
 
     def __init__(
         self,
         vault: Path,
-        dirty: set[str],
-        lock: threading.Lock,
-        notifier,  # any object with .notify() — SnapshotWatcher or _Worker
+        watcher,  # SnapshotWatcher — provides _dirty, _lock, notify()
     ) -> None:
         super().__init__()
         self._vault = vault
-        self._dirty = dirty
-        self._lock = lock
-        self._notifier = notifier
+        self._watcher = watcher
 
     def _mark(self, path: str) -> None:
         p = Path(path)
@@ -180,9 +181,9 @@ class _RawHandler(FileSystemEventHandler):
         rel = _norm_rel(path, self._vault)
         if rel is None:
             return
-        with self._lock:
-            self._dirty.add(rel)
-        self._notifier.notify()
+        with self._watcher._lock:
+            self._watcher._dirty.add(rel)
+        self._watcher.notify()
 
     def on_created(self, event) -> None:
         self._mark(event.src_path)
@@ -291,7 +292,7 @@ class SnapshotWatcher:
         """Start watching. Order: watchdog → full scan → worker."""
         # Pass self as the notifier: handler calls .notify() on SnapshotWatcher,
         # which forwards to the worker once it exists.
-        handler = _RawHandler(self._vault, self._dirty, self._lock, self)
+        handler = _RawHandler(self._vault, self)
         self._observer = Observer()
         self._observer.schedule(handler, str(self._vault), recursive=True)
         self._observer.daemon = True
