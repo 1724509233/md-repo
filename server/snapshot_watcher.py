@@ -150,3 +150,49 @@ def _pair_moves(
     creates = [rel for rel in new if rel not in paired_new]
 
     return moves, deletes, creates
+
+
+class _RawHandler(FileSystemEventHandler):
+    """Watchdog handler: marks paths as dirty. No semantic logic here."""
+
+    def __init__(
+        self,
+        vault: Path,
+        dirty: set[str],
+        lock: threading.Lock,
+        notifier,  # any object with .notify() — SnapshotWatcher or _Worker
+    ) -> None:
+        super().__init__()
+        self._vault = vault
+        self._dirty = dirty
+        self._lock = lock
+        self._notifier = notifier
+
+    def _mark(self, path: str) -> None:
+        p = Path(path)
+        # Files: only .md passes. Directories: always pass (expanded in flush).
+        # If the path no longer exists (deleted), is_file() returns False → pass.
+        try:
+            if p.is_file() and p.suffix != ".md":
+                return
+        except OSError:
+            pass
+        rel = _norm_rel(path, self._vault)
+        if rel is None:
+            return
+        with self._lock:
+            self._dirty.add(rel)
+        self._notifier.notify()
+
+    def on_created(self, event) -> None:
+        self._mark(event.src_path)
+
+    def on_modified(self, event) -> None:
+        self._mark(event.src_path)
+
+    def on_deleted(self, event) -> None:
+        self._mark(event.src_path)
+
+    def on_moved(self, event) -> None:
+        self._mark(event.src_path)
+        self._mark(event.dest_path)

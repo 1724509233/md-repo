@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -265,3 +266,86 @@ class TestPairMoves:
         assert moves == [("a/move.md", "b/move.md")]
         assert deletes == ["a/del.md"]
         assert creates == ["b/create.md"]
+
+
+class _FakeEvent:
+    """Minimal watchdog event mock."""
+    def __init__(self, src_path, is_directory=False, dest_path=None):
+        self.src_path = src_path
+        self.is_directory = is_directory
+        self.dest_path = dest_path
+
+
+class TestRawHandler:
+    def _make_handler(self, tmp_path):
+        from server.snapshot_watcher import _RawHandler
+        vault = tmp_path / "vault"
+        vault.mkdir(exist_ok=True)
+        dirty: set[str] = set()
+        lock = threading.Lock()
+
+        notified = []
+        class _FakeNotifier:
+            def notify(self):
+                notified.append(True)
+
+        handler = _RawHandler(vault, dirty, lock, _FakeNotifier())
+        return handler, vault, dirty, notified
+
+    def test_on_created_md_file(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        handler.on_created(_FakeEvent(str(vault / "a.md")))
+        assert "a.md" in dirty
+        assert notified
+
+    def test_on_created_non_md_ignored(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "a.txt").write_bytes(b"text")
+        handler.on_created(_FakeEvent(str(vault / "a.txt")))
+        assert dirty == set()
+
+    def test_on_modified_md_file(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        handler.on_modified(_FakeEvent(str(vault / "a.md")))
+        assert "a.md" in dirty
+
+    def test_on_deleted_md_file(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        handler.on_deleted(_FakeEvent(str(vault / "a.md")))
+        assert "a.md" in dirty
+
+    def test_on_moved_marks_both(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        handler.on_moved(_FakeEvent(str(vault / "a.md"), dest_path=str(vault / "b.md")))
+        assert "a.md" in dirty
+        assert "b.md" in dirty
+
+    def test_on_created_directory_passes(self, tmp_path):
+        """Directories pass the filter (expanded in flush)."""
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / "newdir").mkdir()
+        handler.on_created(_FakeEvent(str(vault / "newdir"), is_directory=True))
+        assert "newdir" in dirty
+
+    def test_on_created_sync_dir_ignored(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        (vault / ".sync").mkdir(exist_ok=True)
+        handler.on_created(_FakeEvent(str(vault / ".sync"), is_directory=True))
+        assert dirty == set()
+
+    def test_deleted_file_not_on_disk(self, tmp_path):
+        """File already deleted: is_file() raises, but we still mark it."""
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        # File doesn't exist — is_file() returns False, not raise
+        handler.on_deleted(_FakeEvent(str(vault / "gone.md")))
+        assert "gone.md" in dirty
+
+    def test_outside_vault_ignored(self, tmp_path):
+        handler, vault, dirty, notified = self._make_handler(tmp_path)
+        outside = tmp_path / "other" / "a.md"
+        handler.on_created(_FakeEvent(str(outside)))
+        assert dirty == set()
