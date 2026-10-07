@@ -192,19 +192,15 @@ class _RawHandler(FileSystemEventHandler):
         self._watcher.notify()
 
     def on_created(self, event) -> None:
-        logger.debug("event: created %s", event.src_path)
         self._mark(event.src_path)
 
     def on_modified(self, event) -> None:
-        logger.debug("event: modified %s", event.src_path)
         self._mark(event.src_path)
 
     def on_deleted(self, event) -> None:
-        logger.debug("event: deleted %s", event.src_path)
         self._mark(event.src_path)
 
     def on_moved(self, event) -> None:
-        logger.debug("event: moved %s -> %s", event.src_path, event.dest_path)
         self._mark(event.src_path)
         self._mark(event.dest_path)
 
