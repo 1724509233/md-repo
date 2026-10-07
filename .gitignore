@@ -1,4 +1,5 @@
 __pycache__/
+.venv/
 *.pyc
 *.egg-info/
 .superpowers/
@@ -9,3 +10,4 @@ config.yaml
 .playwright-mcp/
 .opencode/
 scripts/probe_events.log
+archive/

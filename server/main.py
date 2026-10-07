@@ -16,7 +16,7 @@ from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 from .write_registry import pop_source
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")  # overridden in main()
+# Logging is configured in main() with console + file handlers.
 
 
 def _initial_index(vault_dir: Path, conn) -> int:
@@ -140,9 +140,26 @@ def main(argv: list[str] | None = None) -> None:
     config_path = argv[0] if argv else "config.yaml"
 
     config = load_server_config(config_path)
-    logging.getLogger().setLevel(getattr(logging, config.log_level, logging.INFO))
     vault_dir = config.vault_dir
     vault_dir.mkdir(parents=True, exist_ok=True)
+
+    # Log to both console and file
+    log_level = getattr(logging, config.log_level, logging.INFO)
+    logs_dir = vault_dir / ".sync" / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_file = logs_dir / "server.log"
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(fmt)
+    root_logger.addHandler(console_handler)
+
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setFormatter(fmt)
+    root_logger.addHandler(file_handler)
 
     db_path = vault_dir / ".sync" / "index.db"
     conn = init_db(db_path)

@@ -366,7 +366,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         return f"Deleted: {args['path']}"
 
     elif name == "move_docs":
-        from .db import apply_change, _update_references_batch
+        from .db import _update_references_batch
         from .write_registry import register_write
 
         moves = [(m["from_path"], m["to_path"]) for m in args["moves"]]
@@ -384,21 +384,15 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         ref_count = _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
 
         # Phase 3: perform all filesystem renames
+        # DB update (files, change_log, FTS, graph) is handled by the snapshot
+        # watcher via _on_moved → apply_change. We only register the write so
+        # the watcher attributes the change to "agent" instead of "watchdog".
         for from_path, to_path in moves:
             src = vault_dir / from_path
             dst = vault_dir / to_path
             dst.parent.mkdir(parents=True, exist_ok=True)
             register_write(to_path, "agent")
             src.rename(dst)
-
-        # Phase 4: update DB (files, change_log, FTS, graph) for each move
-        if db_conn is not None:
-            for from_path, to_path in moves:
-                apply_change(
-                    conn=db_conn, vault_dir=vault_dir, path=to_path,
-                    action="moved", source="agent", from_path=from_path,
-                    update_refs=False,  # already done in batch above
-                )
 
         lines = [f"Moved {len(moves)} file(s):"]
         for from_path, to_path in moves:

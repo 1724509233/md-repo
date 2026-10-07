@@ -1,6 +1,7 @@
 """Server configuration loading."""
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,7 +62,7 @@ def load_server_config(config_path: str) -> ServerConfig:
     return ServerConfig(
         host=server["host"],
         port=int(server["port"]),
-        vault_dir=Path(server["vault_dir"]),
+        vault_dir=Path(os.path.expanduser(server["vault_dir"])).resolve(),
         ai=ai_cfg,
         log_level=str(server.get("log_level", "INFO")).upper(),
     )
