@@ -73,3 +73,39 @@ def _full_scan(vault: Path) -> dict[str, _FileEntry]:
             size=len(content),
         )
     return snap
+
+
+def _read_stable(fp: Path, retry_count: dict[str, int]) -> _FileEntry | None:
+    """Read a file and compute its hash with stability check.
+
+    stat → read → stat. If size or mtime changed between the two stats,
+    the file is being written; return None so the caller re-queues it.
+
+    retry_count tracks per-flush-round retries. After 5 unstable reads,
+    force-accept the current state to avoid starvation.
+
+    Returns None on OSError (file deleted, permission error) or instability.
+    """
+    try:
+        st1 = fp.stat()
+        content = fp.read_bytes()
+        st2 = fp.stat()
+    except OSError:
+        return None
+
+    if st1.st_size != st2.st_size or st1.st_mtime != st2.st_mtime:
+        key = str(fp)
+        retry_count[key] = retry_count.get(key, 0) + 1
+        if retry_count[key] > 5:
+            retry_count.pop(key, None)
+            return _FileEntry(
+                hash=hashlib.sha256(content).hexdigest(),
+                size=st1.st_size,
+            )
+        return None
+
+    retry_count.pop(str(fp), None)
+    return _FileEntry(
+        hash=hashlib.sha256(content).hexdigest(),
+        size=st1.st_size,
+    )
