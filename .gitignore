@@ -8,3 +8,4 @@ vault/
 config.yaml
 .playwright-mcp/
 .opencode/
+scripts/probe_events.log
