@@ -37,3 +37,39 @@ def _norm_rel(path: str, vault: Path) -> str | None:
         return rel.as_posix()
     except (ValueError, OSError):
         return None
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class _FileEntry:
+    """Snapshot entry: content hash + size for one file."""
+    hash: str
+    size: int
+
+
+def _full_scan(vault: Path) -> dict[str, _FileEntry]:
+    """Scan vault for .md files and build a snapshot dict.
+
+    Returns {rel_path: _FileEntry(hash, size)}.
+    Skips .sync/, .obsidian/, non-files, and unreadable files.
+    """
+    snap: dict[str, _FileEntry] = {}
+    for f in vault.rglob("*.md"):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if not f.is_file():
+            continue
+        rel = _norm_rel(str(f), vault)
+        if rel is None:
+            continue
+        try:
+            content = f.read_bytes()
+        except OSError:
+            continue
+        snap[rel] = _FileEntry(
+            hash=hashlib.sha256(content).hexdigest(),
+            size=len(content),
+        )
+    return snap
