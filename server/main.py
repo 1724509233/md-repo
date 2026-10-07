@@ -16,7 +16,7 @@ from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 from .write_registry import pop_source
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")  # overridden in main()
 
 
 def _initial_index(vault_dir: Path, conn) -> int:
@@ -140,6 +140,7 @@ def main(argv: list[str] | None = None) -> None:
     config_path = argv[0] if argv else "config.yaml"
 
     config = load_server_config(config_path)
+    logging.getLogger().setLevel(getattr(logging, config.log_level, logging.INFO))
     vault_dir = config.vault_dir
     vault_dir.mkdir(parents=True, exist_ok=True)
 

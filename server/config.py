@@ -25,6 +25,7 @@ class ServerConfig:
     port: int
     vault_dir: Path
     ai: AIConfig | None = None
+    log_level: str = "INFO"
 
 
 def load_server_config(config_path: str) -> ServerConfig:
@@ -62,4 +63,5 @@ def load_server_config(config_path: str) -> ServerConfig:
         port=int(server["port"]),
         vault_dir=Path(server["vault_dir"]),
         ai=ai_cfg,
+        log_level=str(server.get("log_level", "INFO")).upper(),
     )
