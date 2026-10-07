@@ -975,3 +975,55 @@ def test_find_referrers_no_refs(vault_dir):
         assert result == []
     finally:
         conn.close()
+
+
+# --- Integration tests: apply_change with edges-based ref update ---
+
+def test_apply_change_moved_updates_refs_via_edges(vault_dir):
+    """apply_change(moved) updates references using edges, not full scan."""
+    from server.db import init_db, graph_extract_file, apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        # Use full-path wikilink with .md so the regex matches old_path exactly
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for info.")
+
+        # Build graph so edges exist
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        # Simulate a move: old.md → docs/new.md
+        (vault_dir / "docs").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "docs" / "new.md")
+
+        apply_change(conn, vault_dir, "docs/new.md", "moved", source="test", from_path="notes/old.md")
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[docs/new.md]]" in content
+        assert "[[notes/old.md]]" not in content
+    finally:
+        conn.close()
+
+
+def test_apply_change_deleted_removes_dead_links_via_edges(vault_dir):
+    """apply_change(deleted) removes dead links using edges, not full scan."""
+    from server.db import init_db, graph_extract_file, apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for info.")
+
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        # Delete the target file
+        (vault_dir / "notes" / "target.md").unlink()
+
+        apply_change(conn, vault_dir, "notes/target.md", "deleted", source="test")
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[notes/target]]" not in content
+    finally:
+        conn.close()
