@@ -17,4 +17,5 @@ ai:
   api_key: "your-api-key"
   model: "deepseek-chat"
   max_tokens: 4096
+  context_window: 131072
   temperature: 0.7

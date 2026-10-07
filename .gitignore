@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 vault/
 .codegraph/
+config.yaml
+.playwright-mcp/
+.opencode/

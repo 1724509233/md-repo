@@ -208,3 +208,30 @@ def test_modified_has_new_hash(tmp_path):
     assert row is not None, "no update entry in change_log"
     assert row[0], f"new_hash should not be empty, got {row[0]!r}"
     conn.close()
+
+
+def test_dir_rename_suppresses_spurious_modified(tmp_path):
+    """Windows emits spurious on_modified for files inside a renamed directory — suppress them."""
+    vault = _make_vault(tmp_path)
+    conn = _make_conn(vault)
+    handler = _VaultHandler(vault, conn)
+
+    (vault / "notes").rename(vault / "archive")
+    # Dir rename event
+    handler.on_moved(_FakeEvent(str(vault / "notes"), is_directory=True, dest_path=str(vault / "archive")))
+    # Spurious modified events for files inside the renamed dir (Windows artifact)
+    handler.on_modified(_FakeEvent(str(vault / "archive" / "a.md")))
+    handler.on_modified(_FakeEvent(str(vault / "archive" / "ref.md")))
+    _flush(handler)
+
+    # Each file should have exactly 1 move entry and 0 update entries
+    for rel in ("archive/a.md", "archive/ref.md"):
+        move_count = conn.execute(
+            "SELECT COUNT(*) FROM change_log WHERE path = ? AND op = 'move'", (rel,)
+        ).fetchone()[0]
+        mod_count = conn.execute(
+            "SELECT COUNT(*) FROM change_log WHERE path = ? AND op = 'update'", (rel,)
+        ).fetchone()[0]
+        assert move_count == 1, f"{rel} should have exactly 1 move entry, got {move_count}"
+        assert mod_count == 0, f"{rel} should have 0 update entries (spurious), got {mod_count}"
+    conn.close()
