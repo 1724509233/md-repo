@@ -55,7 +55,9 @@ def _full_scan(vault: Path) -> dict[str, _FileEntry]:
     Returns {rel_path: _FileEntry(hash, size)}.
     Skips .sync/, .obsidian/, non-files, and unreadable files.
     """
+    t0 = time.monotonic()
     snap: dict[str, _FileEntry] = {}
+    io_count = 0
     for f in vault.rglob("*.md"):
         if ".sync" in f.parts or ".obsidian" in f.parts:
             continue
@@ -65,6 +67,7 @@ def _full_scan(vault: Path) -> dict[str, _FileEntry]:
         if rel is None:
             continue
         try:
+            io_count += 1
             content = f.read_bytes()
         except OSError:
             continue
@@ -72,6 +75,8 @@ def _full_scan(vault: Path) -> dict[str, _FileEntry]:
             hash=hashlib.sha256(content).hexdigest(),
             size=len(content),
         )
+    elapsed = (time.monotonic() - t0) * 1000
+    logger.debug("full_scan: %d files, %d reads (%.1fms)", len(snap), io_count, elapsed)
     return snap
 
 
@@ -183,18 +188,23 @@ class _RawHandler(FileSystemEventHandler):
             return
         with self._watcher._lock:
             self._watcher._dirty.add(rel)
+        logger.debug("dirty: %s (total=%d)", rel, len(self._watcher._dirty))
         self._watcher.notify()
 
     def on_created(self, event) -> None:
+        logger.debug("event: created %s", event.src_path)
         self._mark(event.src_path)
 
     def on_modified(self, event) -> None:
+        logger.debug("event: modified %s", event.src_path)
         self._mark(event.src_path)
 
     def on_deleted(self, event) -> None:
+        logger.debug("event: deleted %s", event.src_path)
         self._mark(event.src_path)
 
     def on_moved(self, event) -> None:
+        logger.debug("event: moved %s -> %s", event.src_path, event.dest_path)
         self._mark(event.src_path)
         self._mark(event.dest_path)
 
@@ -336,6 +346,7 @@ class SnapshotWatcher:
 
     def _flush(self, processing: set[str]) -> None:
         """Core comparison: read current state, diff against snapshot, emit events."""
+        t0 = time.monotonic()
         vault = self._vault
         # Normalize case + separator: normcase lowercases on Windows and
         # converts / to \. Snapshot keys use as_posix() (forward slash).
@@ -343,11 +354,14 @@ class SnapshotWatcher:
         processing = {os.path.normcase(p).replace("\\", "/") for p in processing}
         current: dict[str, _FileEntry] = {}
         retry_count: dict[str, int] = {}
+        io_count = 0
 
         def _collect(fp: Path) -> None:
+            nonlocal io_count
             rel = _norm_rel(str(fp), vault)
             if rel is None:
                 return
+            io_count += 1
             entry = _read_stable(fp, retry_count)
             if entry is not None:
                 current[rel] = entry
@@ -426,24 +440,44 @@ class SnapshotWatcher:
         for rel in deletes:
             _safe_call(self._cb_deleted, rel)
 
+        elapsed = (time.monotonic() - t0) * 1000
+        logger.info(
+            "flush: %d dirty → %d read, %d create, %d modify, %d move, %d delete (%.1fms)",
+            len(processing), io_count, len(creates), len(modified), len(moves), len(deletes), elapsed,
+        )
+
     def _reconcile(self) -> None:
         """Full scan to catch events watchdog dropped. Adds discrepancies to dirty."""
+        t0 = time.monotonic()
         disk = _full_scan(self._vault)
+
+        missing_on_disk = 0
+        new_on_disk = 0
+        hash_changed = 0
 
         for rel in self._snapshot:
             if rel not in disk:
+                missing_on_disk += 1
                 with self._lock:
                     self._dirty.add(rel)
 
         for rel in disk:
             if rel not in self._snapshot:
+                new_on_disk += 1
                 with self._lock:
                     self._dirty.add(rel)
 
         for rel, entry in disk.items():
             if rel in self._snapshot and self._snapshot[rel].hash != entry.hash:
+                hash_changed += 1
                 with self._lock:
                     self._dirty.add(rel)
 
         if self._dirty:
             self._worker.notify()
+
+        elapsed = (time.monotonic() - t0) * 1000
+        logger.info(
+            "reconcile: %d files scanned, %d missing, %d new, %d changed (%.1fms)",
+            len(disk), missing_on_disk, new_on_disk, hash_changed, elapsed,
+        )
