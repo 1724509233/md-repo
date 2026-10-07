@@ -360,7 +360,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 
         register_write(args["path"], "agent")
         fp.unlink()
-        ref_count = _remove_dead_links(vault_dir, args["path"])
+        ref_count = _remove_dead_links(db_conn, vault_dir, args["path"])
         if ref_count > 0:
             return f"Deleted: {args['path']} (removed dead links in {ref_count} files)"
         return f"Deleted: {args['path']}"

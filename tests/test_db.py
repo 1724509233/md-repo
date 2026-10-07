@@ -656,55 +656,79 @@ def test_graph_extract_short_name_wikilink(vault_dir):
 
 def test_remove_dead_links_full_path(vault_dir):
     """_remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
-    from server.db import _remove_dead_links
+    from server.db import init_db, graph_extract_file, _remove_dead_links
 
-    (vault_dir / "notes" / "target.md").write_text("# Target")
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]] for details.")
 
-    count = _remove_dead_links(vault_dir, "notes/target.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[notes/target]]" not in content
+        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[notes/target]]" not in content
+    finally:
+        conn.close()
 
 
 def test_remove_dead_links_short_name(vault_dir):
     """_remove_dead_links removes short-name wikilinks when target is unique."""
-    from server.db import _remove_dead_links
+    from server.db import init_db, graph_extract_file, _remove_dead_links
 
-    (vault_dir / "notes" / "unique.md").write_text("# Unique")
-    (vault_dir / "notes" / "ref.md").write_text("See [[unique]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "unique.md").write_text("# Unique")
+        (vault_dir / "notes" / "ref.md").write_text("See [[unique]] for details.")
 
-    count = _remove_dead_links(vault_dir, "notes/unique.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[unique]]" not in content
+        count = _remove_dead_links(conn, vault_dir, "notes/unique.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[unique]]" not in content
+    finally:
+        conn.close()
 
 
 def test_remove_dead_links_alias(vault_dir):
     """_remove_dead_links removes wikilinks with aliases."""
-    from server.db import _remove_dead_links
+    from server.db import init_db, graph_extract_file, _remove_dead_links
 
-    (vault_dir / "notes" / "target.md").write_text("# Target")
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/target|my alias]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target|my alias]] for details.")
 
-    count = _remove_dead_links(vault_dir, "notes/target.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[notes/target" not in content
+        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[notes/target" not in content
+    finally:
+        conn.close()
 
 
 def test_remove_dead_links_no_match(vault_dir):
     """_remove_dead_links returns 0 when no references exist."""
-    from server.db import _remove_dead_links
+    from server.db import init_db, graph_extract_file, _remove_dead_links
 
-    (vault_dir / "notes" / "target.md").write_text("# Target")
-    (vault_dir / "notes" / "ref.md").write_text("No links here.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref.md").write_text("No links here.")
 
-    count = _remove_dead_links(vault_dir, "notes/target.md")
-    assert count == 0
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        assert count == 0
+    finally:
+        conn.close()
 
 
 def test_expand_wikilinks_basic():

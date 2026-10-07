@@ -420,18 +420,23 @@ def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
         yield f
 
 
-def _find_referrers(conn: sqlite3.Connection, vault_dir: Path, target_path: str) -> list[str]:
+def _find_referrers(conn: sqlite3.Connection | None, vault_dir: Path, target_path: str) -> list[str]:
     """Find all src paths that have a wikilink edge to target_path.
 
     Resolution: builds candidate names (full path, without .md, short-name
     via rglob) then queries edges for matching dst entities.
 
-    Falls back to full-vault scan if the edges table is empty.
+    Falls back to full-vault scan if conn is None or the edges table is empty.
     """
-    # Check if edges table has any data
+    # Fallback: full scan (no db, or graph not yet built)
+    if conn is None:
+        return [
+            f.relative_to(vault_dir).as_posix()
+            for f in _iter_vault_md(vault_dir)
+        ]
+
     edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
     if edge_count == 0:
-        # Fallback: full scan (first run, graph not yet built)
         return [
             f.relative_to(vault_dir).as_posix()
             for f in _iter_vault_md(vault_dir)
@@ -853,7 +858,7 @@ def apply_change(
             log_change(conn, path, action, source=source)
             delete_segments(conn, path)
             graph_delete_file(conn, path)
-            _remove_dead_links(vault_dir, path)
+            _remove_dead_links(conn, vault_dir, path)
         elif action in ("moved", "move"):
             src = vault_dir / from_path
             dst = vault_dir / path
@@ -1060,9 +1065,10 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_
     return modified_count
 
 
-def _remove_dead_links(vault_dir: Path, deleted_path: str) -> int:
-    """Remove wikilinks pointing to a deleted file from all vault .md files.
+def _remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: str) -> int:
+    """Remove wikilinks pointing to a deleted file from files that link to it.
 
+    Uses edges table to find referrer files (falls back to full scan if empty).
     Handles:
     - [[deleted_path]] / [[deleted_path_without_ext]] → removed
     - [[deleted_path|alias]] → removed
@@ -1091,10 +1097,13 @@ def _remove_dead_links(vault_dir: Path, deleted_path: str) -> int:
     if short_name_unique:
         patterns.append(re.escape(stem))
 
+    src_paths = _find_referrers(conn, vault_dir, deleted_path)
+
     modified_count = 0
-    for md_file in _iter_vault_md(vault_dir):
-        if md_file.relative_to(vault_dir).as_posix() == deleted_path:
+    for rel in src_paths:
+        if rel == deleted_path:
             continue
+        md_file = vault_dir / rel
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
         except OSError:
