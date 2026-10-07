@@ -11,9 +11,10 @@ import uvicorn
 
 from .api import create_app
 from .config import load_server_config
-from .db import graph_rebuild_all, init_db, upsert_file
+from .db import apply_change, graph_rebuild_all, init_db, upsert_file
 from .logrotate import start_logrotate
-from .watcher import start_watcher
+from .snapshot_watcher import SnapshotWatcher
+from .write_registry import pop_source
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
@@ -172,7 +173,31 @@ def main(argv: list[str] | None = None) -> None:
         logs_dir = vault_dir / ".sync" / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         start_logrotate(None, logs_dir)
-        start_watcher(vault_dir, conn)
+
+        def _on_created(path: str) -> None:
+            source = pop_source(path)
+            apply_change(conn, vault_dir, path, "created", source=source)
+
+        def _on_modified(path: str) -> None:
+            source = pop_source(path)
+            apply_change(conn, vault_dir, path, "modified", source=source)
+
+        def _on_moved(old: str, new: str) -> None:
+            source = pop_source(new)
+            apply_change(conn, vault_dir, new, "moved", source=source, from_path=old)
+
+        def _on_deleted(path: str) -> None:
+            source = pop_source(path)
+            apply_change(conn, vault_dir, path, "deleted", source=source)
+
+        watcher = SnapshotWatcher(
+            vault_dir,
+            on_file_created=_on_created,
+            on_file_modified=_on_modified,
+            on_file_moved=_on_moved,
+            on_file_deleted=_on_deleted,
+        )
+        watcher.start()
         await asyncio.sleep(0)  # let the task start
 
     config_obj = uvicorn.Config(

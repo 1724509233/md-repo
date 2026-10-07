@@ -343,7 +343,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         fp = vault_dir / args["path"]
         existed = fp.is_file()
         fp.parent.mkdir(parents=True, exist_ok=True)
-        from .watcher import register_write
+        from .write_registry import register_write
 
         register_write(args["path"], "agent")
         fp.write_bytes(args["content"].encode("utf-8"))
@@ -355,7 +355,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         fp = vault_dir / args["path"]
         if not fp.is_file():
             return responses._file_not_found_hint(args["path"], db_conn, tool="delete_doc")
-        from .watcher import register_write
+        from .write_registry import register_write
         from .db import _remove_dead_links
 
         register_write(args["path"], "agent")
@@ -367,7 +367,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 
     elif name == "move_docs":
         from .db import apply_change, _update_references_batch
-        from .watcher import register_write
+        from .write_registry import register_write
 
         moves = [(m["from_path"], m["to_path"]) for m in args["moves"]]
 
@@ -409,7 +409,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 
     elif name == "edit_doc":
         from .db import edit_file
-        from .watcher import register_write
+        from .write_registry import register_write
 
         fp = vault_dir / args["path"]
         if not fp.is_file():
@@ -437,12 +437,21 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
 
         if not db_conn:
             return "Error: database not available"
-        since_ts = parse_since(args["since"]) if args.get("since") else 0.0
+        since_raw = args.get("since")
+        if isinstance(since_raw, str) and since_raw.strip().lower() == "none":
+            since_raw = None
+        since_ts = parse_since(since_raw) if since_raw else 0.0
+        path_raw = args.get("path")
+        if isinstance(path_raw, str) and path_raw.strip().lower() == "none":
+            path_raw = None
+        source_raw = args.get("source")
+        if isinstance(source_raw, str) and source_raw.strip().lower() == "none":
+            source_raw = None
         changes = get_changes(
             db_conn,
             since=since_ts,
-            path=args.get("path"),
-            source=args.get("source"),
+            path=path_raw,
+            source=source_raw,
             limit=args.get("limit", 20),
         )
         if not changes:

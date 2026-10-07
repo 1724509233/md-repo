@@ -64,9 +64,11 @@ def test_upload_doc(client, vault_dir, db_conn) -> None:
     assert on_disk.is_file()
     assert on_disk.read_bytes() == content
 
-    # File is in the db
-    paths = [f["path"] for f in get_all_files(db_conn)]
-    assert "new/file.md" in paths
+    # DB update is handled asynchronously by the watcher; verify file on disk
+    # and that register_write was called (source attribution).
+    from server.write_registry import _registry, _registry_lock
+    with _registry_lock:
+        assert "new/file.md" in _registry
 
 
 def test_sync_endpoint(client) -> None:

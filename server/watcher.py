@@ -25,41 +25,9 @@ from watchdog.observers import Observer
 
 logger = logging.getLogger(__name__)
 
-# Module-level registry: rel_path -> (source, timestamp)
-# Writers call register_write() BEFORE writing the file. The watchdog pops
-# the entry when the corresponding filesystem event arrives.
-_registry: dict[str, tuple[str, float]] = {}
-_registry_lock = threading.Lock()
-_REGISTRY_TTL = 10.0  # seconds; stale entries are cleaned up
+from .write_registry import register_write, pop_source as _pop_source
+
 _DEBOUNCE = 1.5       # seconds; debounce window for batching events
-
-
-def register_write(rel_path: str, source: str) -> None:
-    """Register an upcoming write so the watchdog can attribute the source.
-
-    Call this BEFORE writing the file. The entry expires after _REGISTRY_TTL
-    seconds if no corresponding filesystem event arrives (e.g. write failed).
-    """
-    with _registry_lock:
-        _cleanup_stale()
-        _registry[rel_path] = (source, time.time())
-
-
-def _cleanup_stale() -> None:
-    """Remove registry entries older than _REGISTRY_TTL. Caller must hold lock."""
-    now = time.time()
-    stale = [p for p, (_, ts) in _registry.items() if now - ts > _REGISTRY_TTL]
-    for p in stale:
-        del _registry[p]
-
-
-def _pop_source(rel_path: str) -> str:
-    """Pop and return the registered source for rel_path, or 'watchdog'."""
-    with _registry_lock:
-        entry = _registry.pop(rel_path, None)
-    if entry is not None:
-        return entry[0]
-    return "watchdog"
 
 
 class _VaultHandler(FileSystemEventHandler):
@@ -225,7 +193,9 @@ class _VaultHandler(FileSystemEventHandler):
         # Phase 3: classify file events.
         # - moved: collect new_rels (Windows emits a spurious on_modified
         #   after on_moved for the same file — suppress it).
-        # - modified: skip if the path was already moved in this batch.
+        # - modified: skip if the path was already moved in this batch (per-file
+        #   or dir expansion). Windows emits spurious on_modified for files inside
+        #   a renamed directory — suppress those too.
         # - deleted: pair with modifies (in-place replace → modify wins).
         deletes: list[str] = []  # rel paths to delete
         modifies: list[str] = []  # rel paths to index as modified
@@ -250,8 +220,10 @@ class _VaultHandler(FileSystemEventHandler):
                 moved_new_rels.add(new_rel)
                 moves.append((rel, new_rel))
 
-        # Suppress spurious modified events that follow a move of the same file.
-        modifies = [m for m in modifies if m not in moved_new_rels]
+        # Suppress spurious modified events that follow a move of the same file
+        # (per-file move or dir expansion).
+        all_moved_new_rels = moved_new_rels | dir_handled
+        modifies = [m for m in modifies if m not in all_moved_new_rels]
 
         # Pair deletes with modifies: if a delete and a modify share the same
         # path, it's an in-place replace → keep as modify, drop the delete.

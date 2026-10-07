@@ -136,10 +136,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
         rel_str = rel.as_posix()
-        from .watcher import register_write
+        from .write_registry import register_write
 
         register_write(rel_str, "web")
-        upsert_file(db_conn, rel_str, digest, time.time())
         return {"path": rel_str, "hash": digest}
 
     @app.post("/api/sync")
@@ -419,11 +418,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        from .watcher import register_write
+        from .write_registry import register_write
 
         register_write(rel.as_posix(), "web")
-        digest = _hash_bytes(content)
-        upsert_file(db_conn, rel.as_posix(), digest, time.time())
         return {"ok": True}
 
     return app
