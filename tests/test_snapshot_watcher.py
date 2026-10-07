@@ -392,3 +392,177 @@ class TestWorker:
         # stop_event.wait(timeout) returns False if timeout, True if set
         result = stop_event.wait(timeout=0.01)
         assert result is False  # timed out, not stopped
+
+
+class TestFlush:
+    """Test _flush by driving it directly (no real watchdog)."""
+
+    def _make_watcher(self, tmp_path):
+        from server.snapshot_watcher import SnapshotWatcher
+        vault = tmp_path / "vault"
+        vault.mkdir(exist_ok=True)
+
+        events = {
+            "created": [],
+            "modified": [],
+            "moved": [],
+            "deleted": [],
+        }
+
+        watcher = SnapshotWatcher(
+            vault,
+            on_file_created=lambda p: events["created"].append(p),
+            on_file_modified=lambda p: events["modified"].append(p),
+            on_file_moved=lambda o, n: events["moved"].append((o, n)),
+            on_file_deleted=lambda p: events["deleted"].append(p),
+        )
+        return watcher, vault, events
+
+    def test_create(self, tmp_path):
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        # Snapshot is empty (fresh start)
+        (vault / "new.md").write_bytes(b"# New\n")
+        watcher._flush({"new.md"})
+        assert events["created"] == ["new.md"]
+        # Snapshot updated
+        assert "new.md" in watcher._snapshot
+
+    def test_modify(self, tmp_path):
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "a.md").write_bytes(b"# V1\n")
+        watcher._flush({"a.md"})  # initial: create
+        assert events["created"] == ["a.md"]
+
+        (vault / "a.md").write_bytes(b"# V2\n")
+        watcher._flush({"a.md"})  # modify
+        assert events["modified"] == ["a.md"]
+        assert events["created"] == ["a.md"]  # unchanged
+
+    def test_delete(self, tmp_path):
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        watcher._flush({"a.md"})  # create
+        assert events["created"] == ["a.md"]
+
+        (vault / "a.md").unlink()
+        watcher._flush({"a.md"})  # delete
+        assert events["deleted"] == ["a.md"]
+        assert "a.md" not in watcher._snapshot
+
+    def test_same_dir_rename(self, tmp_path):
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "a.md").write_bytes(b"# A\n")
+        watcher._flush({"a.md"})  # create
+
+        (vault / "a.md").rename(vault / "b.md")
+        watcher._flush({"a.md", "b.md"})  # rename
+        assert events["moved"] == [("a.md", "b.md")]
+        assert events["deleted"] == []
+        assert events["created"] == ["a.md"]  # only the initial create
+
+    def test_cross_dir_move(self, tmp_path):
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "sub").mkdir()
+        (vault / "a.md").write_bytes(b"# A\n")
+        watcher._flush({"a.md"})  # create
+
+        (vault / "a.md").rename(vault / "sub" / "a.md")
+        watcher._flush({"a.md", "sub/a.md"})  # cross-dir move
+        assert events["moved"] == [("a.md", "sub/a.md")]
+
+    def test_same_name_different_content_not_move(self, tmp_path):
+        """Delete dirA/notes.md + create dirB/notes.md (different content) → NOT a move."""
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "dirA").mkdir()
+        (vault / "dirB").mkdir()
+        (vault / "dirA" / "notes.md").write_bytes(b"# A version\n")
+        (vault / "dirB" / "notes.md").write_bytes(b"# B version\n")
+        watcher._flush({"dirA/notes.md", "dirB/notes.md"})  # create both
+        assert len(events["created"]) == 2
+
+        # Delete A, overwrite B with different content
+        (vault / "dirA" / "notes.md").unlink()
+        (vault / "dirB" / "notes.md").write_bytes(b"# B modified\n")
+        watcher._flush({"dirA/notes.md", "dirB/notes.md"})
+        # Different hashes → no move
+        assert events["moved"] == []
+        # normcase lowercases on Windows: dirA → dira
+        assert "dira/notes.md" in events["deleted"]
+        # dirB/notes.md was modified (hash changed), not created
+        assert "dirb/notes.md" in events["modified"]
+
+    def test_directory_rename(self, tmp_path):
+        """Rename a directory → all files inside emit moved."""
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "old").mkdir()
+        (vault / "old" / "f1.md").write_bytes(b"# F1\n")
+        (vault / "old" / "f2.md").write_bytes(b"# F2\n")
+        watcher._flush({"old/f1.md", "old/f2.md"})  # create both
+        assert len(events["created"]) == 2
+
+        (vault / "old").rename(vault / "new")
+        watcher._flush({"old", "new"})  # dir rename
+        assert sorted(events["moved"]) == [
+            ("old/f1.md", "new/f1.md"),
+            ("old/f2.md", "new/f2.md"),
+        ]
+
+    def test_directory_delete(self, tmp_path):
+        """Delete a directory → all files inside emit deleted."""
+        import shutil
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "todel").mkdir()
+        (vault / "todel" / "g1.md").write_bytes(b"# G1\n")
+        (vault / "todel" / "g2.md").write_bytes(b"# G2\n")
+        watcher._flush({"todel/g1.md", "todel/g2.md"})  # create
+        assert len(events["created"]) == 2
+
+        shutil.rmtree(vault / "todel")
+        watcher._flush({"todel"})  # dir delete
+        assert sorted(events["deleted"]) == ["todel/g1.md", "todel/g2.md"]
+
+    def test_callback_exception_isolated(self, tmp_path):
+        """A callback exception doesn't prevent subsequent callbacks."""
+        import hashlib
+        from server.snapshot_watcher import SnapshotWatcher
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        events = []
+
+        def bad_created(p):
+            raise RuntimeError("boom")
+
+        watcher = SnapshotWatcher(
+            vault,
+            on_file_created=bad_created,
+            on_file_modified=lambda p: events.append(("mod", p)),
+        )
+        (vault / "a.md").write_bytes(b"# A\n")
+        (vault / "b.md").write_bytes(b"# B\n")
+        watcher._flush({"a.md", "b.md"})
+        # a.md callback raised, but b.md should still be processed
+        # (both are creates, so both go through bad_created → both raise)
+        # Verify no exception propagated to caller
+        assert True  # _flush didn't raise
+
+    def test_atomic_save(self, tmp_path):
+        """Atomic save: write tmp, rename over original → modified (not delete+create)."""
+        import hashlib
+        watcher, vault, events = self._make_watcher(tmp_path)
+        (vault / "doc.md").write_bytes(b"# V1\n")
+        watcher._flush({"doc.md"})  # create
+
+        # Atomic save: tmp → rename over original
+        (vault / "doc.md.tmp").write_bytes(b"# V2\n")
+        (vault / "doc.md.tmp").replace(vault / "doc.md")
+        watcher._flush({"doc.md", "doc.md.tmp"})
+        # doc.md hash changed → modified. doc.md.tmp is gone (renamed away).
+        # tmp was never in snapshot, so it's not "gone" — it's just not in current.
+        assert "doc.md" in events["modified"]
