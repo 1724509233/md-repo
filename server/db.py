@@ -877,7 +877,7 @@ def apply_change(
             graph_extract_file(conn, vault_dir, path)
             # Rewrite references in other docs so links survive the rename.
             if from_path and update_refs:
-                _update_references(vault_dir, from_path, path)
+                _update_references(conn, vault_dir, from_path, path)
 
 
 def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:
@@ -924,13 +924,13 @@ def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
     return count == 1
 
 
-def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
-    """Scan all .md files in vault and replace references to old_path with new_path.
+def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str, new_path: str) -> int:
+    """Replace references to old_path with new_path in files that link to it.
 
+    Uses edges table to find referrer files (falls back to full scan if empty).
     Handles:
     - Full-path wikilinks: [[old_path]] → [[new_path]], [[old_path|alias]] → [[new_path|alias]]
     - Short-name wikilinks: [[old_stem]] → [[new_stem]] (only when old filename is unique)
-    - Plain text paths: old_path → new_path (only when old_path contains '/')
 
     Returns the number of files modified.
     """
@@ -940,8 +940,13 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
     new_stem = Path(new_path).stem
     old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
 
+    src_paths = _find_referrers(conn, vault_dir, old_path)
+
     modified_count = 0
-    for md_file in _iter_vault_md(vault_dir):
+    for rel in src_paths:
+        if rel == new_path:
+            continue
+        md_file = vault_dir / rel
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
         except OSError:
@@ -968,19 +973,9 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
                 content,
             )
 
-        # 3. Plain text path replacement (only if old_path contains '/')
-        #    Negative lookahead prevents partial matches: notes/a won't
-        #    match inside notes/abc.
-        # if "/" in old_path:
-        #     content = re.sub(
-        #         re.escape(old_path) + r"(?![\w./])",
-        #         new_path,
-        #         content,
-        #     )
-
-        # if content != original:
-        #     md_file.write_bytes(content.encode("utf-8"))
-        #     modified_count += 1
+        if content != original:
+            md_file.write_bytes(content.encode("utf-8"))
+            modified_count += 1
 
     return modified_count
 

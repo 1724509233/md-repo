@@ -251,149 +251,207 @@ def test_save_session_updates_existing(db_conn):
 
 
 def test_update_references_wikilink(vault_dir):
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    # Create the target file
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "old.md").write_text("# Old")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for details.")
 
-    # Create a file that references it via wikilink
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md]] for details.")
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
-    assert count == 1
+        count = _update_references(conn, vault_dir, "notes/old.md", "notes/new.md")
+        assert count == 1
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[notes/new.md]]" in content
-    assert "[[notes/old.md]]" not in content
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[notes/new.md]]" in content
+        assert "[[notes/old.md]]" not in content
+    finally:
+        conn.close()
 
 
 def test_update_references_wikilink_alias(vault_dir):
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "old.md").write_text("# Old")
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md|my alias]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/old.md|my alias]] for details.")
 
-    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[notes/new.md|my alias]]" in content
+        count = _update_references(conn, vault_dir, "notes/old.md", "notes/new.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[notes/new.md|my alias]]" in content
+    finally:
+        conn.close()
 
 
 def test_update_references_plain_path(vault_dir):
-    from server.db import _update_references
+    """Plain text path replacement is disabled; only wikilinks are updated."""
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "old.md").write_text("# Old")
-    (vault_dir / "notes" / "ref.md").write_text("Check notes/old.md for info.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        (vault_dir / "notes" / "ref.md").write_text("Check notes/old.md for info.")
 
-    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "notes/new.md" in content
-    assert "notes/old.md" not in content
+        count = _update_references(conn, vault_dir, "notes/old.md", "notes/new.md")
+        # Plain text "notes/old.md" is NOT a wikilink, so no replacement
+        assert count == 0
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "notes/old.md" in content  # unchanged
+    finally:
+        conn.close()
 
 
 def test_update_references_multiple_files(vault_dir):
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "old.md").write_text("# Old")
-    for i in range(3):
-        (vault_dir / "notes" / f"ref{i}.md").write_text(f"See [[notes/old.md]] from file {i}.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        for i in range(3):
+            (vault_dir / "notes" / f"ref{i}.md").write_text(f"See [[notes/old.md]] from file {i}.")
 
-    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
-    assert count == 3
+        for i in range(3):
+            graph_extract_file(conn, vault_dir, f"notes/ref{i}.md")
+
+        count = _update_references(conn, vault_dir, "notes/old.md", "notes/new.md")
+        assert count == 3
+    finally:
+        conn.close()
 
 
 def test_update_references_no_refs(vault_dir):
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "old.md").write_text("# Old")
-    (vault_dir / "notes" / "unrelated.md").write_text("No references here.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "old.md").write_text("# Old")
+        (vault_dir / "notes" / "unrelated.md").write_text("No references here.")
 
-    count = _update_references(vault_dir, "notes/old.md", "notes/new.md")
-    assert count == 0
+        graph_extract_file(conn, vault_dir, "notes/unrelated.md")
+
+        count = _update_references(conn, vault_dir, "notes/old.md", "notes/new.md")
+        assert count == 0
+    finally:
+        conn.close()
 
 
 def test_update_references_short_name_no_slash(vault_dir):
     """Short filenames without '/' should NOT be replaced in plain text."""
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "a.md").write_text("# A")
-    (vault_dir / "ref.md").write_text("The word a.md appears in text but is not a path ref.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "a.md").write_text("# A")
+        (vault_dir / "ref.md").write_text("The word a.md appears in text but is not a path ref.")
 
-    # old_path="a.md" has no '/', so plain text replacement should NOT happen
-    count = _update_references(vault_dir, "a.md", "b.md")
-    # Wikilink [[a.md]] would be replaced, but plain "a.md" in text should not
-    content = (vault_dir / "ref.md").read_text()
-    assert "a.md" in content  # plain text NOT replaced
+        graph_extract_file(conn, vault_dir, "ref.md")
+
+        count = _update_references(conn, vault_dir, "a.md", "b.md")
+        # Plain text "a.md" is not a wikilink, so no replacement
+        content = (vault_dir / "ref.md").read_text()
+        assert "a.md" in content  # plain text NOT replaced
+    finally:
+        conn.close()
 
 
 def test_update_references_short_name_wikilink_unique(vault_dir):
     """Short-name wikilink [[a]] → [[b]] when old filename is unique."""
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
 
-    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[b]]" in content
-    assert "[[a]]" not in content
+        count = _update_references(conn, vault_dir, "notes/a.md", "docs/b.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[b]]" in content
+        assert "[[a]]" not in content
+    finally:
+        conn.close()
 
 
 def test_update_references_short_name_wikilink_alias(vault_dir):
     """Short-name wikilink with alias: [[a|alias]] → [[b|alias]]."""
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "ref.md").write_text("See [[a|my alias]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "ref.md").write_text("See [[a|my alias]] for details.")
 
-    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[b|my alias]]" in content
+        count = _update_references(conn, vault_dir, "notes/a.md", "docs/b.md")
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[b|my alias]]" in content
+    finally:
+        conn.close()
 
 
 def test_update_references_short_name_wikilink_not_unique(vault_dir):
     """Short-name wikilink NOT replaced when old filename is ambiguous."""
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "projects").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A in notes")
-    (vault_dir / "projects" / "a.md").write_text("# A in projects")
-    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "projects").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A in notes")
+        (vault_dir / "projects" / "a.md").write_text("# A in projects")
+        (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
 
-    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
-    # Full-path wikilink [[notes/a.md]] would be replaced, but short [[a]] should NOT
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[a]]" in content  # short-name NOT replaced (ambiguous)
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        count = _update_references(conn, vault_dir, "notes/a.md", "docs/b.md")
+        # Full-path wikilink [[notes/a.md]] would be replaced, but short [[a]] should NOT
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[a]]" in content  # short-name NOT replaced (ambiguous)
+    finally:
+        conn.close()
 
 
 def test_update_references_short_name_same_stem(vault_dir):
     """Short-name wikilink NOT replaced when only directory changes (same stem)."""
-    from server.db import _update_references
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "docs").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "docs").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "ref.md").write_text("See [[a]] for details.")
 
-    # notes/a.md → docs/a.md: stem unchanged, short-name link still valid
-    count = _update_references(vault_dir, "notes/a.md", "docs/a.md")
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[a]]" in content  # short-name NOT replaced (stem unchanged)
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        # notes/a.md → docs/a.md: stem unchanged, short-name link still valid
+        count = _update_references(conn, vault_dir, "notes/a.md", "docs/a.md")
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[a]]" in content  # short-name NOT replaced (stem unchanged)
+    finally:
+        conn.close()
 
 
 def test_is_filename_unique(vault_dir):
@@ -473,22 +531,29 @@ def test_update_references_batch_short_name(vault_dir):
 
 
 def test_update_references_plain_text_boundary(vault_dir):
-    """Plain text replacement must not match partial paths (notes/a inside notes/abc)."""
-    from server.db import _update_references
+    """Plain text replacement is disabled; only wikilinks are updated."""
+    from server.db import init_db, graph_extract_file, _update_references
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "abc.md").write_text("# ABC")
-    (vault_dir / "notes" / "ref.md").write_text(
-        "See notes/a.md and notes/abc.md for details."
-    )
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "abc.md").write_text("# ABC")
+        (vault_dir / "notes" / "ref.md").write_text(
+            "See notes/a.md and notes/abc.md for details."
+        )
 
-    count = _update_references(vault_dir, "notes/a.md", "docs/b.md")
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "docs/b.md" in content       # notes/a.md replaced
-    assert "notes/abc.md" in content    # notes/abc.md NOT touched
+        count = _update_references(conn, vault_dir, "notes/a.md", "docs/b.md")
+        # Plain text paths are NOT wikilinks, so no replacement
+        assert count == 0
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "notes/a.md" in content       # unchanged
+        assert "notes/abc.md" in content     # unchanged
+    finally:
+        conn.close()
 
 
 def test_update_references_plain_text_boundary_batch(vault_dir):
@@ -758,8 +823,8 @@ def test_apply_change_moved_migrates_db_indexes(vault_dir):
         conn.close()
 
 
-def test_apply_change_moved_plain_text_path_rewrite(vault_dir):
-    """apply_change('moved') rewrites plain-text path references (paths containing '/')."""
+def test_apply_change_moved_plain_text_path_not_rewritten(vault_dir):
+    """apply_change('moved') does NOT rewrite plain-text path references (only wikilinks)."""
     from server.db import init_db, apply_change
 
     conn = init_db(vault_dir / ".sync" / "index.db")
@@ -772,8 +837,8 @@ def test_apply_change_moved_plain_text_path_rewrite(vault_dir):
         apply_change(conn, vault_dir, "notes/new.md", "moved", source="watchdog", from_path="notes/old.md")
 
         content = (vault_dir / "notes" / "ref.md").read_bytes().decode()
-        assert "notes/new.md" in content
-        assert "notes/old.md" not in content
+        # Plain text path is NOT a wikilink, so it's left unchanged
+        assert "notes/old.md" in content
     finally:
         conn.close()
 
