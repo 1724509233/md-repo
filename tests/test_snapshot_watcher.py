@@ -170,3 +170,98 @@ class TestReadStable:
         retry = {}
         entry = _read_stable(d, retry)
         assert entry is None  # read_bytes on directory raises OSError
+
+
+class TestPairMoves:
+    def test_no_gone_no_new(self):
+        from server.snapshot_watcher import _pair_moves
+        moves, deletes, creates = _pair_moves({}, {})
+        assert moves == []
+        assert deletes == []
+        assert creates == []
+
+    def test_simple_move(self):
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        h = "abc123"
+        gone = {"old/a.md": _FileEntry(h, 10)}
+        new = {"new/a.md": _FileEntry(h, 10)}
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == [("old/a.md", "new/a.md")]
+        assert deletes == []
+        assert creates == []
+
+    def test_same_name_different_hash(self):
+        """Same filename, different content → NOT a move."""
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        gone = {"dirA/notes.md": _FileEntry("hash_a", 10)}
+        new = {"dirB/notes.md": _FileEntry("hash_b", 20)}
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == []
+        assert deletes == ["dirA/notes.md"]
+        assert creates == ["dirB/notes.md"]
+
+    def test_1_to_1_same_hash(self):
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        h = "same_hash"
+        gone = {"a/x.md": _FileEntry(h, 5)}
+        new = {"b/x.md": _FileEntry(h, 5)}
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == [("a/x.md", "b/x.md")]
+
+    def test_2_to_1_same_hash_degrades(self):
+        """Two gone, one new with same hash → no move, all delete+create."""
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        h = "dup_hash"
+        gone = {
+            "a/x.md": _FileEntry(h, 5),
+            "b/x.md": _FileEntry(h, 5),
+        }
+        new = {"c/x.md": _FileEntry(h, 5)}
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == []
+        assert sorted(deletes) == ["a/x.md", "b/x.md"]
+        assert creates == ["c/x.md"]
+
+    def test_1_to_2_same_hash_degrades(self):
+        """One gone, two new with same hash → no move."""
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        h = "dup_hash"
+        gone = {"a/x.md": _FileEntry(h, 5)}
+        new = {
+            "b/x.md": _FileEntry(h, 5),
+            "c/x.md": _FileEntry(h, 5),
+        }
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == []
+        assert deletes == ["a/x.md"]
+        assert sorted(creates) == ["b/x.md", "c/x.md"]
+
+    def test_multiple_independent_moves(self):
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        gone = {
+            "a/1.md": _FileEntry("h1", 1),
+            "a/2.md": _FileEntry("h2", 2),
+        }
+        new = {
+            "b/1.md": _FileEntry("h1", 1),
+            "b/2.md": _FileEntry("h2", 2),
+        }
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert sorted(moves) == [("a/1.md", "b/1.md"), ("a/2.md", "b/2.md")]
+        assert deletes == []
+        assert creates == []
+
+    def test_mixed_move_and_delete_and_create(self):
+        from server.snapshot_watcher import _pair_moves, _FileEntry
+        gone = {
+            "a/move.md": _FileEntry("h_move", 10),
+            "a/del.md": _FileEntry("h_del", 20),
+        }
+        new = {
+            "b/move.md": _FileEntry("h_move", 10),
+            "b/create.md": _FileEntry("h_create", 30),
+        }
+        moves, deletes, creates = _pair_moves(gone, new)
+        assert moves == [("a/move.md", "b/move.md")]
+        assert deletes == ["a/del.md"]
+        assert creates == ["b/create.md"]
