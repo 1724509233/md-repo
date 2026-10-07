@@ -5,6 +5,7 @@ import hashlib
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 # Global lock guarding all mutations of the shared db connection. The same
@@ -409,15 +410,74 @@ def delete_segments(conn: sqlite3.Connection, path: str) -> None:
     conn.commit()
 
 
+def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
+    """Yield all .md files in vault, skipping .sync/ and .obsidian/."""
+    for f in vault_dir.rglob("*.md"):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if not f.is_file():
+            continue
+        yield f
+
+
+def _find_referrers(conn: sqlite3.Connection, vault_dir: Path, target_path: str) -> list[str]:
+    """Find all src paths that have a wikilink edge to target_path.
+
+    Resolution: builds candidate names (full path, without .md, short-name
+    via rglob) then queries edges for matching dst entities.
+
+    Falls back to full-vault scan if the edges table is empty.
+    """
+    # Check if edges table has any data
+    edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+    if edge_count == 0:
+        # Fallback: full scan (first run, graph not yet built)
+        return [
+            f.relative_to(vault_dir).as_posix()
+            for f in _iter_vault_md(vault_dir)
+        ]
+
+    # Build candidate names for the target
+    candidates: set[str] = set()
+    if target_path.endswith(".md"):
+        candidates.add(target_path)
+        candidates.add(target_path[:-3])  # without .md
+    else:
+        candidates.add(target_path + ".md")
+        candidates.add(target_path)
+
+    # Short-name resolution: rglob by filename or stem, if unique
+    tp = Path(target_path)
+    for name in {tp.name, tp.stem + ".md"}:
+        matches = [
+            f for f in vault_dir.rglob(name)
+            if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+        ]
+        if len(matches) == 1:
+            candidates.add(matches[0].relative_to(vault_dir).as_posix())
+
+    # Query edges for src paths that link to any candidate
+    placeholders = ",".join("?" * len(candidates))
+    rows = conn.execute(
+        f"""
+        SELECT DISTINCT src.name FROM edges ed
+        JOIN entities dst ON dst.id = ed.dst_id
+        JOIN entities src ON src.id = ed.src_id
+        WHERE dst.name IN ({placeholders}) AND dst.type = 'doc'
+        """,
+        list(candidates),
+    ).fetchall()
+
+    return [row[0] for row in rows]
+
+
 def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
     """Full rebuild of segments index from vault. Returns count of indexed files."""
     try:
         conn.execute("BEGIN")
         conn.execute("DELETE FROM segments")
         count = 0
-        for md_file in vault_dir.rglob("*.md"):
-            if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-                continue
+        for md_file in _iter_vault_md(vault_dir):
             rel = md_file.relative_to(vault_dir).as_posix()
             content = md_file.read_bytes().decode("utf-8", errors="replace")
             mtime = md_file.stat().st_mtime
@@ -603,12 +663,14 @@ def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
         return target
 
     # 2. Vault-wide search by filename (handles Obsidian short names like [[MOC]])
+    #    Only resolves when the filename is unique; ambiguous matches return None.
     filename = Path(target).name
-    for f in vault_dir.rglob(filename):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
-            continue
-        if f.is_file():
-            return f.relative_to(vault_dir).as_posix()
+    matches = [
+        f for f in vault_dir.rglob(filename)
+        if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+    ]
+    if len(matches) == 1:
+        return matches[0].relative_to(vault_dir).as_posix()
 
     return None
 
@@ -745,9 +807,7 @@ def graph_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
     conn.execute("DELETE FROM edges")
     conn.execute("DELETE FROM entities")
     count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
+    for md_file in _iter_vault_md(vault_dir):
         rel = md_file.relative_to(vault_dir).as_posix()
         graph_extract_file(conn, vault_dir, rel)
         count += 1
@@ -881,9 +941,7 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
     old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
 
     modified_count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
+    for md_file in _iter_vault_md(vault_dir):
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
         except OSError:
@@ -913,16 +971,16 @@ def _update_references(vault_dir: Path, old_path: str, new_path: str) -> int:
         # 3. Plain text path replacement (only if old_path contains '/')
         #    Negative lookahead prevents partial matches: notes/a won't
         #    match inside notes/abc.
-        if "/" in old_path:
-            content = re.sub(
-                re.escape(old_path) + r"(?![\w./])",
-                new_path,
-                content,
-            )
+        # if "/" in old_path:
+        #     content = re.sub(
+        #         re.escape(old_path) + r"(?![\w./])",
+        #         new_path,
+        #         content,
+        #     )
 
-        if content != original:
-            md_file.write_bytes(content.encode("utf-8"))
-            modified_count += 1
+        # if content != original:
+        #     md_file.write_bytes(content.encode("utf-8"))
+        #     modified_count += 1
 
     return modified_count
 
@@ -980,9 +1038,7 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_
         })
 
     modified_count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
+    for md_file in _iter_vault_md(vault_dir):
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
         except OSError:
@@ -1041,9 +1097,7 @@ def _remove_dead_links(vault_dir: Path, deleted_path: str) -> int:
         patterns.append(re.escape(stem))
 
     modified_count = 0
-    for md_file in vault_dir.rglob("*.md"):
-        if ".sync" in md_file.parts or ".obsidian" in md_file.parts:
-            continue
+    for md_file in _iter_vault_md(vault_dir):
         if md_file.relative_to(vault_dir).as_posix() == deleted_path:
             continue
         try:

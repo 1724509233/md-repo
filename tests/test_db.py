@@ -776,3 +776,84 @@ def test_apply_change_moved_plain_text_path_rewrite(vault_dir):
         assert "notes/old.md" not in content
     finally:
         conn.close()
+
+
+# --- _find_referrers tests ---
+
+def test_find_referrers_basic(vault_dir):
+    """_find_referrers returns src paths that have wikilink edges to target."""
+    from server.db import init_db, graph_extract_file, _find_referrers
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref1.md").write_text("See [[notes/target]]")
+        (vault_dir / "notes" / "ref2.md").write_text("Also [[notes/target|alias]]")
+        (vault_dir / "notes" / "unrelated.md").write_text("No links here.")
+
+        graph_extract_file(conn, vault_dir, "notes/ref1.md")
+        graph_extract_file(conn, vault_dir, "notes/ref2.md")
+        graph_extract_file(conn, vault_dir, "notes/unrelated.md")
+
+        result = _find_referrers(conn, vault_dir, "notes/target.md")
+        assert sorted(result) == ["notes/ref1.md", "notes/ref2.md"]
+    finally:
+        conn.close()
+
+
+def test_find_referrers_short_name(vault_dir):
+    """_find_referrers resolves short-name targets via rglob(filename)."""
+    from server.db import init_db, graph_extract_file, _find_referrers
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "MOC.md").write_text("# MOC")
+        (vault_dir / "notes" / "ref.md").write_text("See [[MOC]]")
+
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        # Target given as short name "MOC" — should resolve to notes/MOC.md
+        result = _find_referrers(conn, vault_dir, "MOC")
+        assert result == ["notes/ref.md"]
+    finally:
+        conn.close()
+
+
+def test_find_referrers_empty_edges_fallback(vault_dir):
+    """When edges table is empty, falls back to full-vault scan."""
+    from server.db import init_db, _find_referrers
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/target]]")
+        # Do NOT call graph_extract_file — edges is empty
+
+        result = _find_referrers(conn, vault_dir, "notes/target.md")
+        # Fallback: full scan finds ref.md (it contains the wikilink)
+        assert "notes/ref.md" in result
+    finally:
+        conn.close()
+
+
+def test_find_referrers_no_refs(vault_dir):
+    """Returns empty list when edges is populated but no file links to target."""
+    from server.db import init_db, graph_extract_file, _find_referrers
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "target.md").write_text("# Target")
+        (vault_dir / "notes" / "other.md").write_text("See [[notes/other]]")
+        (vault_dir / "notes" / "ref.md").write_text("No links to target.")
+
+        # Extract other.md (has a self-wikilink → edges is non-empty)
+        graph_extract_file(conn, vault_dir, "notes/other.md")
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
+
+        edge_count = conn.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+        assert edge_count > 0  # ensure we're NOT in fallback mode
+
+        result = _find_referrers(conn, vault_dir, "notes/target.md")
+        assert result == []
+    finally:
+        conn.close()
