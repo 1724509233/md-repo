@@ -381,7 +381,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
                 return responses.move_dest_exists(to_path)
 
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
-        ref_count = _update_references_batch(vault_dir, moves, pre_rename=True)
+        ref_count = _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
 
         # Phase 3: perform all filesystem renames
         for from_path, to_path in moves:

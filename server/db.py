@@ -985,17 +985,17 @@ def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str,
     return modified_count
 
 
-def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
-    """Single-pass scan: replace references for multiple moves at once.
+def _update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
+    """Single-pass: replace references for multiple moves at once.
 
-    Used by directory rename to avoid N separate full-vault scans.
+    Uses edges table to find referrer files (falls back to full scan if empty).
     Each file is read once, all replacements applied in memory, written once.
 
     Args:
+        conn: database connection (for edges lookup), or None for fallback
         vault_dir: root of the vault
         moves: list of (old_path, new_path) tuples
         pre_rename: if True, the filesystem rename has NOT happened yet.
-            Uniqueness checks use old_path (which still exists on disk).
 
     Returns the number of files modified.
     """
@@ -1011,11 +1011,8 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_
         old_stem = Path(old_path).stem
         new_stem = Path(new_path).stem
         if pre_rename:
-            # File still exists at old_path — check uniqueness directly
             old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
         else:
-            # File already renamed away — old_path no longer exists.
-            # The name was unique if no OTHER file with the same name exists now.
             fname = Path(old_path).name
             count = sum(
                 1 for f in vault_dir.rglob(fname)
@@ -1030,15 +1027,21 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_
                 if old_name_unique and old_stem != new_stem else None
             ),
             "short_new": new_stem,
-            "plain_re": (
-                re.compile(re.escape(old_path) + r"(?![\w./])")
-                if "/" in old_path else None
-            ),
-            "plain_new": new_path if "/" in old_path else None,
         })
 
+    # Find all referrer files across all moves (union)
+    all_src_paths: set[str] = set()
+    for old_path, _ in moves:
+        all_src_paths.update(_find_referrers(conn, vault_dir, old_path))
+
+    # Exclude the destination paths (moved files themselves)
+    dest_paths = {new_path for _, new_path in moves}
+
     modified_count = 0
-    for md_file in _iter_vault_md(vault_dir):
+    for rel in all_src_paths:
+        if rel in dest_paths:
+            continue
+        md_file = vault_dir / rel
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
         except OSError:
@@ -1055,8 +1058,6 @@ def _update_references_batch(vault_dir: Path, moves: list[tuple[str, str]], pre_
                     lambda m, ns=p["short_new"]: "[[" + ns + (m.group(2) or "") + "]]",
                     content,
                 )
-            if p["plain_re"]:
-                content = p["plain_re"].sub(p["plain_new"], content)
 
         if content != original:
             md_file.write_bytes(content.encode("utf-8"))

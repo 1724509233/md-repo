@@ -471,63 +471,85 @@ def test_is_filename_unique(vault_dir):
 
 def test_update_references_batch_single_move(vault_dir):
     """Batch with one move works same as _update_references."""
-    from server.db import _update_references_batch
+    from server.db import init_db, graph_extract_file, _update_references_batch
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]]")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]]")
 
-    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[docs/b.md]]" in content
+        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[docs/b.md]]" in content
+    finally:
+        conn.close()
 
 
 def test_update_references_batch_multiple_moves(vault_dir):
     """Batch with multiple moves updates all references in one scan."""
-    from server.db import _update_references_batch
+    from server.db import init_db, graph_extract_file, _update_references_batch
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "b.md").write_text("# B")
-    (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]] and [[notes/b.md]]")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "b.md").write_text("# B")
+        (vault_dir / "notes" / "ref.md").write_text("See [[notes/a.md]] and [[notes/b.md]]")
 
-    count = _update_references_batch(vault_dir, [
-        ("notes/a.md", "docs/x.md"),
-        ("notes/b.md", "docs/y.md"),
-    ])
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[docs/x.md]]" in content
-    assert "[[docs/y.md]]" in content
-    assert "[[notes/a.md]]" not in content
-    assert "[[notes/b.md]]" not in content
+        count = _update_references_batch(conn, vault_dir, [
+            ("notes/a.md", "docs/x.md"),
+            ("notes/b.md", "docs/y.md"),
+        ])
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[docs/x.md]]" in content
+        assert "[[docs/y.md]]" in content
+        assert "[[notes/a.md]]" not in content
+        assert "[[notes/b.md]]" not in content
+    finally:
+        conn.close()
 
 
 def test_update_references_batch_empty(vault_dir):
     """Empty moves list is a no-op."""
-    from server.db import _update_references_batch
+    from server.db import init_db, _update_references_batch
 
-    (vault_dir / "a.md").write_text("# A")
-    count = _update_references_batch(vault_dir, [])
-    assert count == 0
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "a.md").write_text("# A")
+        count = _update_references_batch(conn, vault_dir, [])
+        assert count == 0
+    finally:
+        conn.close()
 
 
 def test_update_references_batch_short_name(vault_dir):
     """Batch handles short-name wikilinks when filename is unique."""
-    from server.db import _update_references_batch
+    from server.db import init_db, graph_extract_file, _update_references_batch
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "ref.md").write_text("See [[a]]")
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "ref.md").write_text("See [[a]]")
 
-    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "[[b]]" in content
+        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        assert count == 1
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "[[b]]" in content
+    finally:
+        conn.close()
 
 
 def test_update_references_plain_text_boundary(vault_dir):
@@ -557,22 +579,29 @@ def test_update_references_plain_text_boundary(vault_dir):
 
 
 def test_update_references_plain_text_boundary_batch(vault_dir):
-    """Batch plain text replacement also respects boundaries."""
-    from server.db import _update_references_batch
+    """Batch plain text replacement is disabled; only wikilinks are updated."""
+    from server.db import init_db, graph_extract_file, _update_references_batch
 
-    (vault_dir / "notes").mkdir(exist_ok=True)
-    (vault_dir / "notes" / "a.md").write_text("# A")
-    (vault_dir / "notes" / "abc.md").write_text("# ABC")
-    (vault_dir / "notes" / "ref.md").write_text(
-        "See notes/a.md and notes/abc.md for details."
-    )
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        (vault_dir / "notes" / "a.md").write_text("# A")
+        (vault_dir / "notes" / "abc.md").write_text("# ABC")
+        (vault_dir / "notes" / "ref.md").write_text(
+            "See notes/a.md and notes/abc.md for details."
+        )
 
-    count = _update_references_batch(vault_dir, [("notes/a.md", "docs/b.md")])
-    assert count == 1
+        graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-    content = (vault_dir / "notes" / "ref.md").read_text()
-    assert "docs/b.md" in content
-    assert "notes/abc.md" in content
+        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        # Plain text paths are NOT wikilinks, so no replacement
+        assert count == 0
+
+        content = (vault_dir / "notes" / "ref.md").read_text()
+        assert "notes/a.md" in content
+        assert "notes/abc.md" in content
+    finally:
+        conn.close()
 
 
 def test_move_docs_updates_references(vault_dir):
