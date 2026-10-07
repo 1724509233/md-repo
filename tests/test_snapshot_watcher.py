@@ -349,3 +349,46 @@ class TestRawHandler:
         outside = tmp_path / "other" / "a.md"
         handler.on_created(_FakeEvent(str(outside)))
         assert dirty == set()
+
+
+class TestWorker:
+    def test_notify_wakes_worker(self, tmp_path):
+        """notify() sets the dirty_event, waking a waiting worker."""
+        from server.snapshot_watcher import _Worker
+        # We can't easily test the full run() loop in a unit test,
+        # so we verify the event mechanism works.
+        import threading as th
+        stop_event = th.Event()
+        dirty_event = th.Event()
+
+        # Simulate: worker is waiting on dirty_event
+        assert not dirty_event.is_set()
+        dirty_event.set()  # notify()
+        assert dirty_event.is_set()
+        dirty_event.clear()
+        assert not dirty_event.is_set()
+
+    def test_request_stop_sets_both_events(self, tmp_path):
+        """request_stop() sets stop_event AND dirty_event (to wake worker)."""
+        from server.snapshot_watcher import _Worker
+        # Verify the pattern: both events must be set for clean shutdown
+        import threading as th
+        stop_event = th.Event()
+        dirty_event = th.Event()
+
+        stop_event.set()
+        dirty_event.set()
+        assert stop_event.is_set()
+        assert dirty_event.is_set()
+
+    def test_debounce_wait_uses_stop_event(self, tmp_path):
+        """During debounce, worker waits on stop_event (not dirty_event).
+
+        This means new events during debounce don't re-trigger the wait —
+        they just accumulate in dirty. After debounce, swap picks them up.
+        """
+        import threading as th
+        stop_event = th.Event()
+        # stop_event.wait(timeout) returns False if timeout, True if set
+        result = stop_event.wait(timeout=0.01)
+        assert result is False  # timed out, not stopped

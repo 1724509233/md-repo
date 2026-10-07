@@ -196,3 +196,48 @@ class _RawHandler(FileSystemEventHandler):
     def on_moved(self, event) -> None:
         self._mark(event.src_path)
         self._mark(event.dest_path)
+
+
+class _Worker(threading.Thread):
+    """Worker thread: debounce → swap dirty → flush. Reconcile when idle."""
+
+    def __init__(self, watcher: "SnapshotWatcher") -> None:
+        super().__init__(daemon=True)
+        self._w = watcher
+        self._stop_event = threading.Event()
+        self._dirty_event = threading.Event()
+        self._last_reconcile: float = 0.0
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            # Wait for dirty to be non-empty (or stop)
+            self._dirty_event.wait()
+            self._dirty_event.clear()
+            if self._stop_event.is_set():
+                break
+
+            # Debounce: wait for events to accumulate.
+            # New events during this window just add to dirty (no re-wait).
+            self._stop_event.wait(timeout=self._w._debounce)
+
+            processing = self._w._swap_dirty()
+            if processing:
+                self._w._flush(processing)
+                self._last_reconcile = time.monotonic()
+            else:
+                self._maybe_reconcile()
+
+    def _maybe_reconcile(self) -> None:
+        now = time.monotonic()
+        if now - self._last_reconcile >= self._w._reconcile_interval:
+            self._last_reconcile = now
+            self._w._reconcile()
+
+    def notify(self) -> None:
+        """Called by _RawHandler when a path is marked dirty."""
+        self._dirty_event.set()
+
+    def request_stop(self) -> None:
+        """Signal the worker to exit. Sets both events to ensure wake-up."""
+        self._stop_event.set()
+        self._dirty_event.set()
