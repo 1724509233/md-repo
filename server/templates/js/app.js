@@ -1,0 +1,262 @@
+/* Vue 3 App 入口：全局状态 + 组件注册 + 轮询 */
+const { createApp, reactive, provide, ref, watch, nextTick, onMounted } = Vue
+
+import { api } from './api.js'
+import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
+import { FileTree } from './components/FileTree.js'
+import { EditorPane } from './components/EditorPane.js'
+import { TopBar } from './components/TopBar.js'
+import { AIChatPanel } from './components/AIChatPanel.js'
+import { MobileSheet } from './components/MobileSheet.js'
+import { ConflictBanner } from './components/ConflictBanner.js'
+
+// 初始化 markdown 渲染器
+setupMarkdown()
+
+// ─── 全局状态 ───
+const state = reactive({
+  currentPath: null,
+  previewMode: true,
+  dirty: false,
+  sessionId: 'web-' + Date.now(),
+  files: [],
+  aiOpen: false,
+  sidebarOpen: false,   // 移动端 sidebar
+  moreMenuOpen: false,  // 移动端更多菜单
+  conflict: null,       // { toolName, path } | null
+  docContent: ''        // 当前文档内容
+})
+
+// ─── 核心操作 ───
+let lastChangeTs = Date.now() / 1000
+
+async function loadDocs() {
+  const files = await api.getDocs()
+  if (files) state.files = files
+}
+
+async function openDoc(path) {
+  // 自动保存未保存的编辑
+  if (state.dirty && state.currentPath) {
+    await saveDoc()
+  }
+  state.currentPath = path
+  state.dirty = false
+  try {
+    const text = await api.getDoc(path)
+    state.docContent = text
+  } catch (e) {
+    state.docContent = '加载失败: ' + e.message
+  }
+}
+
+async function saveDoc() {
+  if (!state.currentPath) return
+  try {
+    await api.saveDoc(state.currentPath, state.docContent)
+    state.dirty = false
+  } catch (e) {
+    alert('保存失败: ' + e.message)
+  }
+}
+
+function downloadDoc() {
+  if (!state.currentPath) return
+  const blob = new Blob([state.docContent], { type: 'text/markdown' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = state.currentPath.split('/').pop()
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+function setMode(mode) {
+  state.previewMode = mode === 'preview'
+}
+
+// ─── 变更轮询 ───
+async function pollChanges() {
+  try {
+    const all = await api.getChanges(lastChangeTs)
+    if (!all.length) return
+    lastChangeTs = all[0].ts
+
+    // 过滤：跳过 agent（由 toolResult 处理）和 web（用户刚保存）
+    const changes = all.filter(c => c.source !== 'agent' && c.source !== 'web')
+    if (!changes.length) return
+
+    // 树结构变化？
+    const treeChanged = changes.some(c => ['created', 'deleted', 'moved'].includes(c.action))
+    if (treeChanged) await loadDocs()
+
+    // 当前文档受影响？
+    const curAffected = changes.some(c =>
+      c.path === state.currentPath || (c.action === 'moved' && c.from_path === state.currentPath)
+    )
+    if (curAffected && state.currentPath) {
+      const deleted = changes.some(c => c.path === state.currentPath && c.action === 'deleted')
+      const moved = changes.find(c => c.action === 'moved' && c.from_path === state.currentPath)
+      if (deleted) {
+        state.docContent = ''
+      } else {
+        if (moved) state.currentPath = moved.path
+        try {
+          state.docContent = await api.getDoc(state.currentPath)
+        } catch (e) { }
+      }
+    }
+  } catch (e) { }
+}
+
+// ─── AI 工具调用结果 → 文档状态同步 ───
+function handleToolResult(evt) {
+  const { name, args, result } = evt
+  if (name === 'delete_doc') {
+    if (args.path === state.currentPath) {
+      state.docContent = ''
+    }
+    loadDocs()
+  } else if (name === 'move_docs') {
+    const moves = args.moves || []
+    for (const m of moves) {
+      if (m.from_path === state.currentPath) {
+        state.currentPath = m.to_path
+        api.getDoc(m.to_path).then(text => { state.docContent = text }).catch(() => { })
+        break
+      }
+    }
+    loadDocs()
+  } else if (name === 'write_doc' || name === 'edit_doc') {
+    if (args.path === state.currentPath) {
+      if (state.dirty) {
+        state.conflict = { toolName: name, path: args.path }
+      } else {
+        api.getDoc(args.path).then(text => { state.docContent = text }).catch(() => { })
+      }
+    }
+    if (name === 'write_doc') loadDocs()
+  }
+}
+
+// ─── AI 新会话 ───
+async function startNewSession() {
+  try {
+    const data = await api.newSession(state.sessionId)
+    state.sessionId = data.session_id
+  } catch (e) { }
+}
+
+// ─── 创建 App ───
+export function createApp() {
+  const app = Vue.createApp({
+    setup() {
+      provide('state', state)
+      provide('api', api)
+
+      onMounted(() => {
+        loadDocs()
+        setInterval(pollChanges, 10000)
+
+        // 移动端 sidebar 点击 overlay 关闭
+        document.addEventListener('click', (e) => {
+          if (state.moreMenuOpen && !e.target.closest('.lg\\:hidden.relative')) {
+            state.moreMenuOpen = false
+          }
+        })
+      })
+
+      return {
+        state,
+        loadDocs, openDoc, saveDoc, downloadDoc, setMode,
+        handleToolResult, startNewSession, renderMarkdown
+      }
+    },
+    template: `
+      <div class="flex h-screen">
+        <!-- Sidebar -->
+        <aside class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-surface border-r border-border flex flex-col transform transition-transform duration-300"
+          :class="state.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
+          <div class="flex items-center gap-2.5 px-4 h-14 border-b border-border shrink-0">
+            <div class="logo-mark">M</div>
+            <span class="logo-word">md-vault</span>
+            <button class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden"
+              @click="state.sidebarOpen = false" aria-label="关闭侧边栏">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+          <div class="px-3 pt-3 pb-2 shrink-0">
+            <FileTree :files="state.files" :current-path="state.currentPath" @select="openDoc" />
+          </div>
+        </aside>
+
+        <!-- Mobile overlay -->
+        <div class="fixed inset-0 bg-black/30 z-30 lg:hidden"
+          :class="{ hidden: !state.sidebarOpen }"
+          @click="state.sidebarOpen = false"></div>
+
+        <!-- Main area -->
+        <div class="flex-1 flex overflow-hidden relative">
+          <main class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350"
+            :style="{ paddingRight: state.aiOpen && window.innerWidth >= 1024 ? '40%' : '0' }">
+            <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
+              @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
+              @toggle-sidebar="state.sidebarOpen = !state.sidebarOpen"
+              @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen" />
+
+            <div class="flex-1 overflow-y-auto p-4 md:p-6">
+              <ConflictBanner v-if="state.conflict"
+                :tool-name="state.conflict.toolName" :path="state.conflict.path"
+                @accept="acceptConflict" @dismiss="state.conflict = null" />
+              <EditorPane :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+                @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
+            </div>
+          </main>
+
+          <!-- AI 面板切换按钮 -->
+          <button class="fixed bottom-5 right-4 flex items-center justify-center z-40"
+            :style="{ right: state.aiOpen && window.innerWidth >= 1024 ? '40%' : undefined }"
+            @click="state.aiOpen = !state.aiOpen" aria-label="打开/关闭 AI 助手">
+            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
+
+          <!-- AI 面板 -->
+          <div class="bg-surface border-border flex flex-col"
+            :class="{ open: state.aiOpen }"
+            id="ai-panel">
+            <MobileSheet :open="state.aiOpen" @close="state.aiOpen = false" />
+            <AIChatPanel v-if="state.aiOpen"
+              :doc-path="state.currentPath || ''" :session-id="state.sessionId"
+              @tool-result="handleToolResult" @new-session="startNewSession"
+              @close="state.aiOpen = false" />
+          </div>
+        </div>
+      </div>
+    `,
+    methods: {
+      onEditorInput(text) {
+        state.docContent = text
+        state.dirty = true
+      },
+      acceptConflict() {
+        const path = state.conflict.path
+        state.conflict = null
+        api.getDoc(path).then(text => {
+          state.docContent = text
+          state.dirty = false
+        }).catch(() => { })
+      }
+    }
+  })
+
+  app.component('FileTree', FileTree)
+  app.component('EditorPane', EditorPane)
+  app.component('TopBar', TopBar)
+  app.component('AIChatPanel', AIChatPanel)
+  app.component('MobileSheet', MobileSheet)
+  app.component('ConflictBanner', ConflictBanner)
+
+  return app
+}
