@@ -308,10 +308,15 @@
         async function pollChanges() {
           try {
             var res = await fetch('/api/docs/changes?since=' + lastChangeTs);
-            var changes = await res.json();
+            var all = await res.json();
+            if (!all.length) return;
+            // DESC order: all[0] is newest → advance cursor (before filtering)
+            lastChangeTs = all[0].ts;
+            // Filter: skip agent (handled by tool_result) and web (user just saved)
+            var changes = all.filter(function (c) {
+              return c.source !== 'agent' && c.source !== 'web';
+            });
             if (!changes.length) return;
-            // DESC order: changes[0] is newest → advance cursor
-            lastChangeTs = changes[0].ts;
 
             // Classify: tree structure changed?
             var treeChanged = changes.some(function (c) {
@@ -652,6 +657,7 @@
               rt.className = 'tool-result-text done';
               rt.textContent = toolResultSummary(name, args, result);
               line.after(rt);
+              handleToolResult(name, args, result);
             } else if (status === 'error') {
               var et = document.createElement('div');
               et.className = 'tool-result-text error';
@@ -671,6 +677,68 @@
             }
           }
         }
+        /* ---------- tool_result → doc state sync ---------- */
+        function handleToolResult(name, args, result) {
+          if (name === 'delete_doc') {
+            if (args.path === currentPath) {
+              editor.value = '';
+              document.getElementById('current-file').textContent = '(已删除)';
+              if (previewMode) renderPreview();
+            }
+            loadDocs();
+          } else if (name === 'move_docs') {
+            var moves = args.moves || [];
+            for (var i = 0; i < moves.length; i++) {
+              if (moves[i].from_path === currentPath) {
+                var newP = moves[i].to_path;
+                currentPath = newP;
+                document.getElementById('current-file').textContent = newP;
+                fetch('/api/docs/' + encodeURIComponent(newP)).then(function (r) { return r.text() }).then(function (text) {
+                  editor.value = text;
+                  if (previewMode) renderPreview();
+                }).catch(function () { });
+                break;
+              }
+            }
+            loadDocs();
+          } else if (name === 'write_doc' || name === 'edit_doc') {
+            if (args.path === currentPath) {
+              if (dirty) {
+                showConflictBanner(name, args.path);
+              } else {
+                fetch('/api/docs/' + encodeURIComponent(args.path)).then(function (r) { return r.text() }).then(function (text) {
+                  editor.value = text;
+                  if (previewMode) renderPreview();
+                }).catch(function () { });
+              }
+            }
+            if (name === 'write_doc') loadDocs();
+          }
+        }
+
+        function showConflictBanner(toolName, path) {
+          var existing = document.getElementById('conflict-banner');
+          if (existing) existing.remove();
+          var banner = document.createElement('div');
+          banner.id = 'conflict-banner';
+          banner.className = 'conflict-banner';
+          var msg = toolName === 'write_doc' ? 'agent 已写入此文档' : 'agent 已编辑此文档';
+          banner.innerHTML = '<span class="conflict-msg">' + ICONS.alert + ' ' + msg + '，你的未保存编辑将被覆盖</span>'
+            + '<button class="conflict-keep">保留我的</button>'
+            + '<button class="conflict-accept">接受覆盖</button>';
+          var docWrap = document.getElementById('doc-wrap');
+          docWrap.parentNode.insertBefore(banner, docWrap);
+          banner.querySelector('.conflict-keep').addEventListener('click', function () { banner.remove(); });
+          banner.querySelector('.conflict-accept').addEventListener('click', function () {
+            banner.remove();
+            fetch('/api/docs/' + encodeURIComponent(path)).then(function (r) { return r.text() }).then(function (text) {
+              editor.value = text;
+              dirty = false;
+              if (previewMode) renderPreview();
+            }).catch(function () { });
+          });
+        }
+
         function sendConfirm(id, approved) {
           /* 乐观更新：点击后移除按钮 + 状态融合到工具行图标（灰✓/灰✕），不显示文本行 */
           var line = document.querySelector('.tool-line[data-tool-id="' + id + '"]');

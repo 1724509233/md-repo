@@ -351,7 +351,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
                 save_session(db_conn, session_id, session["messages"], session.get("token_count", 0))
             except (GeneratorExit, asyncio.CancelledError):
-                return
+                logger.error(
+                    "SSE stream disconnected (session=%s, pending_confirms=%d)",
+                    session_id, len(session["pending_confirms"]),
+                    exc_info=True,
+                )
+                raise
 
         from fastapi.responses import StreamingResponse
 

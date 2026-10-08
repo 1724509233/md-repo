@@ -356,13 +356,12 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         if not fp.is_file():
             return responses._file_not_found_hint(args["path"], db_conn, tool="delete_doc")
         from .write_registry import register_write
-        from .db import _remove_dead_links
+        from .db import apply_change
 
         register_write(args["path"], "agent")
         fp.unlink()
-        ref_count = _remove_dead_links(db_conn, vault_dir, args["path"])
-        if ref_count > 0:
-            return f"Deleted: {args['path']} (removed dead links in {ref_count} files)"
+        if db_conn:
+            apply_change(db_conn, vault_dir, args["path"], "deleted", source="agent")
         return f"Deleted: {args['path']}"
 
     elif name == "move_docs":
@@ -572,13 +571,18 @@ async def agent_loop(messages, tools, ai_config, pending_confirms, vault_dir, db
                     yield sse("tool_result", {"id": tc["id"], "result": err, "error": True})
                     continue
 
+            logger.info("tool_call %s: in WRITE_TOOLS=%s", tc["name"], tc["name"] in WRITE_TOOLS)
             if tc["name"] in WRITE_TOOLS:
                 entry = {"event": asyncio.Event(), "approved": None}
                 pending_confirms[tc["id"]] = entry
-                yield sse("confirm_request", {
+                confirm_sse = sse("confirm_request", {
                     "id": tc["id"], "name": tc["name"], "args": args,
                 })
+                logger.info("yielding confirm_request for %s", tc["id"])
+                yield confirm_sse
+                logger.info("waiting for user confirmation on %s", tc["id"])
                 await entry["event"].wait()
+                logger.info("user confirmed/rejected %s, approved=%s", tc["id"], entry["approved"])
                 del pending_confirms[tc["id"]]
                 approved = entry["approved"]
                 if not approved:
