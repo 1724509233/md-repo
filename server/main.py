@@ -151,7 +151,7 @@ def main(argv: list[str] | None = None) -> None:
 
     root_logger = logging.getLogger()
     root_logger.setLevel(log_level)
-    fmt = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s %(message)s")
 
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(fmt)

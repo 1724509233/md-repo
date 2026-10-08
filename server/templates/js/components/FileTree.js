@@ -17,7 +17,8 @@ const TreeNode = {
     const treeState = inject('treeState')
 
     function isExpanded(dirPath) {
-      return treeState.expandedDirs.has(dirPath)
+      const dirs = treeState.expandedDirs.value || treeState.expandedDirs
+      return dirs.has(dirPath)
     }
 
     return { ICONS_LOCAL, isExpanded }
@@ -135,14 +136,14 @@ export const FileTree = {
     return { searchQuery, filteredTree, toggleDir, selectFile }
   },
   template: `
-    <div class="file-tree">
+    <div id="file-tree" class="file-tree">
       <div class="relative mb-2">
         <span class="absolute inset-y-0 left-0 flex items-center pl-3">
           <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
           </svg>
         </span>
-        <input v-model="searchQuery" type="text"
+        <input id="search-input" v-model="searchQuery" type="text"
           class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg outline-none"
           placeholder="搜索文档…">
       </div>

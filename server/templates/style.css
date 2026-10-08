@@ -119,14 +119,21 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 }
 
 /* ============ AI 面板（桌面侧滑）============ */
-#ai-panel { position: absolute; right: 0; top: 0; bottom: 0; width: 40%; transform: translateX(100%); transition: transform .25s cubic-bezier(.32,.72,0,1); z-index: 15; background: var(--surface); border-left: 2px solid var(--brass); }
-#ai-panel.open { transform: translateX(0); }
+#ai-panel { position: absolute; right: -40%; top: 0; bottom: 0; width: 40%; transition: right .25s cubic-bezier(.32,.72,0,1); z-index: 15; background: var(--surface); border-left: 2px solid var(--brass); }
+#ai-panel.open { right: 0; }
+
+/* 桌面端 main 内容区挤压（与面板同帧 class 切换） */
+@media (min-width: 1024px) {
+  main { transition: padding-right .25s cubic-bezier(.32,.72,0,1); }
+  main.ai-open { padding-right: 40%; }
+}
 #ai-panel .font-ui, #ai-panel button, #ai-panel input, #ai-panel textarea { font-family: 'Inter', sans-serif; }
 #ai-messages { font-family: 'Source Serif 4', serif; }
 
 /* 桌面 toggle tab */
 @media (min-width: 1024px) {
-  #ai-btn { position: absolute; right: 0; top: 50%; transform: translateY(-50%); z-index: 25; width: 32px; height: 64px; border-radius: 8px 0 0 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: right .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
+  #ai-btn { right: 0; z-index: 25; width: 32px; height: 64px; border-radius: 8px 0 0 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: right .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
+  #ai-btn.ai-open { right: 40%; }
   #ai-btn:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
   #ai-btn #ai-chevron { transform: rotate(-90deg); }
   #ai-btn.open #ai-chevron { transform: rotate(90deg); }
@@ -135,22 +142,22 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 /* ============ 移动底部抽屉 (< lg) ============ */
 @media (max-width: 1023px) {
   #ai-panel {
-    position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: 100%;
-    height: 80vh; transform: translateY(100%);
+    position: fixed; left: 0; right: 0; top: auto; bottom: -80vh; width: 100%;
+    height: 80vh;
     border-left: none; border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
-    z-index: 20;
-    transition: transform .38s cubic-bezier(.32,.72,0,1);
+    z-index: 40;
+    transition: bottom .38s cubic-bezier(.32,.72,0,1);
   }
-  #ai-panel.open { transform: translateY(0); }
+  #ai-panel.open { bottom: 0; }
   #ai-sheet-handle { display: flex; }
   #ai-sheet-backdrop { display: block; }
-  #ai-btn { width: 48px; height: 40px; border-radius: 9999px; z-index: 35; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: transform .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
-  #ai-btn:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
-  #ai-btn.open { transform: translateY(calc(80vh + 4px)); }
-  #ai-btn #ai-chevron { transform: rotate(0deg); }
-  #ai-btn.open #ai-chevron { transform: rotate(180deg); }
+  #ai-btn-mobile { bottom: 1.25rem; width: 48px; height: 40px; border-radius: 9999px; z-index: 35; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: bottom .38s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
+  #ai-btn-mobile:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
+  #ai-btn-mobile.open { bottom: calc(80vh + 4px); }
+  #ai-btn-mobile #ai-chevron { transform: rotate(0deg); }
+  #ai-btn-mobile.open #ai-chevron { transform: rotate(180deg); }
 }
 #ai-sheet-handle { display: none; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
 #ai-sheet-handle:active { cursor: grabbing; }

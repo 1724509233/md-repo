@@ -1,5 +1,5 @@
 /* EditorPane 组件：textarea + markdown 预览 + 编辑/预览切换 + page-turn 动画 */
-const { ref, watch, nextTick, onMounted } = Vue
+const { ref, computed, watch, nextTick, onMounted } = Vue
 import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
 
 export const EditorPane = {
@@ -14,36 +14,44 @@ export const EditorPane = {
     const previewEl = ref(null)
     const docWrapEl = ref(null)
 
-    // 外部 content 变化时同步到 textarea（非用户输入触发）
+    // 当前编辑内容（本地响应式，避免 v-model 与外部 prop 冲突）
+    const localContent = ref(props.content)
+
+    // 外部 content 变化时同步到本地（非用户输入触发）
     watch(() => props.content, (newVal) => {
+      localContent.value = newVal
       if (editorEl.value && document.activeElement !== editorEl.value) {
         editorEl.value.value = newVal
       }
-      // 如果当前在 preview 模式，重新渲染
-      if (props.mode === 'preview') {
-        nextTick(() => renderPreview())
+    })
+
+    // 渲染后的 HTML（computed，Vue 自动更新 v-html）
+    const renderedHtml = computed(() => {
+      return renderMarkdown(localContent.value)
+    })
+
+    // v-html 更新后执行 postProcess（hljs + mermaid）
+    watch(renderedHtml, async () => {
+      if (props.mode !== 'preview') return
+      await nextTick()
+      if (previewEl.value) {
+        postProcessPreview(previewEl.value)
       }
     })
 
-    // 模式切换到 preview 时渲染
+    // 模式切换到 preview 时确保渲染
     watch(() => props.mode, async (mode) => {
       if (mode === 'preview' && previewEl.value) {
         await nextTick()
-        renderPreview()
+        postProcessPreview(previewEl.value)
         fadeView(previewEl.value)
       } else if (mode === 'edit' && editorEl.value) {
         fadeView(editorEl.value)
       }
     })
 
-    function renderPreview() {
-      if (!previewEl.value) return
-      const text = editorEl.value ? editorEl.value.value : props.content
-      previewEl.value.innerHTML = renderMarkdown(text)
-      postProcessPreview(previewEl.value)
-    }
-
     function onInput(e) {
+      localContent.value = e.target.value
       emit('input', e.target.value)
     }
 
@@ -122,18 +130,17 @@ export const EditorPane = {
       done()
     }
 
-    // 暴露 triggerPageTurn 给父组件（通过 ref）
-    return { editorEl, previewEl, docWrapEl, onInput, onPreviewClick, renderPreview, triggerPageTurn }
+    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, triggerPageTurn }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
-      <textarea ref="editorEl"
+      <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
         class="w-full flex-1 border-0 bg-transparent resize-none focus:outline-none"
         placeholder="从左侧选择一个文档..."
         @input="onInput"></textarea>
-      <div ref="previewEl" v-show="mode === 'preview'"
-        class="w-full flex-1" @click="onPreviewClick"></div>
+      <div id="preview" ref="previewEl" v-show="mode === 'preview'"
+        class="w-full flex-1" v-html="renderedHtml" @click="onPreviewClick"></div>
     </div>
   `
 }

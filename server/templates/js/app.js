@@ -1,5 +1,5 @@
 /* Vue 3 App 入口：全局状态 + 组件注册 + 轮询 */
-const { createApp, reactive, provide, ref, watch, nextTick, onMounted } = Vue
+const { reactive, provide, ref, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
@@ -167,15 +167,6 @@ async function startNewSession() {
 // ─── AI 面板切换（桌面/移动适配）───
 function toggleAI(open) {
   state.aiOpen = open
-  if (window.innerWidth >= 1024) {
-    // 桌面端：通过 padding-right 推挤主内容区
-    const main = document.querySelector('main')
-    if (main) main.style.paddingRight = open ? '40%' : '0'
-  } else {
-    // 移动端：bottom sheet overlay
-    const aiBtn = document.getElementById('ai-btn')
-    if (aiBtn) aiBtn.style.right = ''
-  }
 }
 
 // ─── 创建 App ───
@@ -199,8 +190,10 @@ export function createApp() {
         // 初始欢迎消息由 AIChatPanel 内部处理
       })
 
+      const isDesktop = () => window.innerWidth >= 1024
+
       return {
-        state, editorPaneRef,
+        state, editorPaneRef, isDesktop,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown
       }
@@ -230,8 +223,10 @@ export function createApp() {
 
         <!-- Main area -->
         <div class="flex-1 flex overflow-hidden relative">
-          <main class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
+          <main class="relative flex-1 flex flex-col overflow-hidden"
+            :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
+              :more-menu-open="state.moreMenuOpen"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-sidebar="state.sidebarOpen = !state.sidebarOpen"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen" />
@@ -245,20 +240,32 @@ export function createApp() {
             </div>
           </main>
 
-          <!-- AI 面板切换按钮 -->
-          <button id="ai-btn" class="fixed bottom-5 right-4 flex items-center justify-center z-40"
+          <!-- AI 面板切换按钮（桌面端：tab 形状，贴面板左边缘） -->
+          <button id="ai-btn" class="hidden lg:flex absolute top-1/2 -translate-y-1/2 items-center justify-center z-40"
+            :class="{ 'ai-open': state.aiOpen }"
+            @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
+            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+
+          <!-- AI 面板切换按钮（移动端：圆形，固定右下角） -->
+          <button id="ai-btn-mobile" class="lg:hidden fixed right-4 flex items-center justify-center z-40"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
             <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
             </svg>
           </button>
+
+          <!-- 移动端 backdrop + 拖拽手柄 -->
+          <MobileSheet :open="state.aiOpen" @close="toggleAI(false)" />
 
           <!-- AI 面板 -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
             :class="{ open: state.aiOpen }">
-            <MobileSheet :open="state.aiOpen" @close="toggleAI(false)" />
-            <AIChatPanel v-if="state.aiOpen"
+            <AIChatPanel v-show="state.aiOpen"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
               @tool-result="handleToolResult" @new-session="startNewSession"
               @close="toggleAI(false)" />

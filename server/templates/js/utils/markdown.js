@@ -8,16 +8,17 @@ export function setupMarkdown() {
 
   const renderer = new marked.Renderer()
 
-  // 代码块：带语言标签 + 复制按钮
-  renderer.code = function (code, lang) {
+  // 代码块：带语言标签 + 复制按钮（marked v4: 第二参数是完整 infostring）
+  renderer.code = function (code, infostring) {
+    const lang = (infostring || '').trim().split(/\s+/)[0]
     const langLabel = lang || 'text'
     const cls = lang ? ` class="language-${lang}"` : ''
     return `<div class="code-block"><div class="code-block-header"><span>${langLabel}</span><button class="code-copy-btn" type="button">复制</button></div><pre><code${cls}>${code}</code></pre></div>`
   }
 
-  // 表格：包裹 overflow-x-auto
+  // 表格：包裹 overflow-x-auto（marked v4: header/body 已是完整行 HTML）
   renderer.table = function (header, body) {
-    return `<div class="overflow-x-auto"><table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`
+    return `<div class="overflow-x-auto"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`
   }
 
   marked.setOptions({ renderer })

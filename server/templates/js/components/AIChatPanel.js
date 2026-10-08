@@ -1,7 +1,8 @@
 /* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
 const { ref, reactive, watch, nextTick, onUnmounted } = Vue
 import { ICONS } from '../utils/icons.js'
-import { escapeHtml } from '../utils/markdown.js'
+import { renderMarkdown } from '../utils/markdown.js'
+import { api } from '../api.js'
 
 const toolShortNames = {
   read_doc: { icon: ICONS.book, label: '读取' },
@@ -26,7 +27,7 @@ export const AIChatPanel = {
     const ICONS_LOCAL = ICONS
     const toolNames = toolShortNames
 
-    const messages = ref([])       // [{ role, text, tools: [], streaming }]
+    const messages = ref([])       // [{ role, blocks: [], streaming, rendered }]
     const inputText = ref('')
     const status = ref('ready')    // 'ready' | 'thinking'
     const aiMode = ref('当前文档')
@@ -34,6 +35,9 @@ export const AIChatPanel = {
     const abortCtrl = ref(null)
     const inputEl = ref(null)
     const messagesEl = ref(null)
+    const streamTextEl = ref(null)
+
+    let currentTurn = null
 
     // 工具调用摘要
     function toolKeyParam(name, args) {
@@ -83,15 +87,20 @@ export const AIChatPanel = {
     }
 
     function addMsg(role, text) {
-      const msg = { role, text, tools: [], streaming: false }
+      const msg = { role, blocks: [], streaming: false, rendered: false }
+      if (text) msg.blocks.push({ type: 'text', text })
       messages.value.push(msg)
       scrollToBottom()
       return msg
     }
 
+    let scrollTicking = false
     function scrollToBottom() {
-      nextTick(() => {
+      if (scrollTicking) return
+      scrollTicking = true
+      requestAnimationFrame(() => {
         if (messagesEl.value) messagesEl.value.scrollTop = messagesEl.value.scrollHeight
+        scrollTicking = false
       })
     }
 
@@ -109,22 +118,20 @@ export const AIChatPanel = {
       addMsg('user', text)
       setStatus('thinking')
 
-      let turn = null
+      currentTurn = null
       abortCtrl.value = new AbortController()
 
       try {
         const body = { message: text, session_id: props.sessionId, doc_path: props.docPath }
         if (aiMode.value === '全库搜索') {
-          const { api } = await import('../api.js')
           const results = await api.aiSearch(text)
+          if (abortCtrl.value && abortCtrl.value.signal.aborted) return
           body.context = (results || []).map(r => `【${r.path}】\n${r.snippet || ''}`).join('\n\n')
         }
 
-        const { api } = await import('../api.js')
         const resp = await api.agentChat(body, abortCtrl.value.signal)
         if (!resp.ok) {
-          const eb = addMsg('ai', '')
-          eb.text = `错误: ${resp.status}`
+          addMsg('ai', `错误: ${resp.status}`)
           setStatus('ready')
           return
         }
@@ -147,25 +154,40 @@ export const AIChatPanel = {
               const evt = JSON.parse(trimmed.slice(6))
               switch (evt.type) {
                 case 'token':
-                  if (!turn) { turn = addMsg('ai', ''); turn.streaming = true }
-                  turn.text += evt.text
+                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = true }
+                  let lastBlock = currentTurn.blocks[currentTurn.blocks.length - 1]
+                  if (!lastBlock || lastBlock.type !== 'text') {
+                    lastBlock = { type: 'text', text: '' }
+                    currentTurn.blocks.push(lastBlock)
+                  }
+                  lastBlock.text += evt.text
+                  // 直写 DOM，绕过 Vue diff
+                  if (streamTextEl.value) {
+                    streamTextEl.value.textContent = lastBlock.text
+                  }
                   break
                 case 'tool_call':
-                  if (!turn) { turn = addMsg('ai', ''); turn.streaming = true }
-                  turn.tools.push({ id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null })
+                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = false }
+                  currentTurn.blocks.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null, expanded: false })
                   break
                 case 'confirm_request': {
-                  const tool = turn ? turn.tools.find(t => t.id === evt.id) : null
-                  if (tool) tool.status = 'confirm'
+                  const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
+                  if (tool) {
+                    tool.status = 'confirm'
+                  } else {
+                    console.warn('[ai-chat] confirm_request: no matching tool for id', evt.id)
+                  }
                   break
                 }
                 case 'tool_result': {
-                  const tool = turn ? turn.tools.find(t => t.id === evt.id) : null
+                  const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
                   if (tool) {
                     tool.status = evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done')
                     tool.result = evt.result
+                    emit('toolResult', evt)
+                  } else {
+                    console.warn('[ai-chat] tool_result: no matching tool for id', evt.id)
                   }
-                  emit('toolResult', evt)
                   break
                 }
                 case 'token_usage':
@@ -174,7 +196,7 @@ export const AIChatPanel = {
                   tokenUsage.percent = evt.percent
                   break
                 case 'done':
-                  if (turn) { turn.streaming = false; finishTurn(turn) }
+                  if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
                   break
               }
             } catch (e) { }
@@ -183,10 +205,9 @@ export const AIChatPanel = {
         }
       } catch (e) {
         if (e.name === 'AbortError') {
-          if (turn) { turn.streaming = false; finishTurn(turn) }
+          if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
         } else {
-          if (!turn) turn = addMsg('ai', '')
-          turn.text = `请求失败: ${e.message}`
+          addMsg('ai', `请求失败: ${e.message}`)
         }
       }
       abortCtrl.value = null
@@ -194,20 +215,19 @@ export const AIChatPanel = {
     }
 
     function finishTurn(turn) {
-      // 渲染 markdown（由模板 v-html 处理）
+      turn.streaming = false
+      // 合并 text blocks 用于 markdown 渲染
+      turn.fullText = turn.blocks.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
       turn.rendered = true
     }
 
     function sendConfirm(id, approved) {
-      const { api } = import('../api.js')
       // 乐观更新
       for (const msg of messages.value) {
-        const tool = msg.tools.find(t => t.id === id)
-        if (tool) {
-          tool.status = approved ? 'confirmed' : 'rejected'
-        }
+        const tool = msg.blocks.find(b => b.type === 'tool' && b.id === id)
+        if (tool) { tool.status = approved ? 'confirmed' : 'rejected' }
       }
-      api.then(m => m.api.agentConfirm(id, approved, props.sessionId))
+      api.agentConfirm(id, approved, props.sessionId).catch(err => console.error('[ai-confirm]', err))
     }
 
     function toggleMode() {
@@ -233,6 +253,7 @@ export const AIChatPanel = {
 
     function stopChat() {
       if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
+      if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
       setStatus('ready')
     }
 
@@ -240,14 +261,27 @@ export const AIChatPanel = {
       emit('newSession')
     }
 
+    // 输入框高度自动扩展（上限 40% 面板高度）
+    watch(inputText, () => {
+      nextTick(() => {
+        const el = inputEl.value
+        if (!el) return
+        el.style.height = 'auto'
+        const panel = el.closest('#ai-panel')
+        const maxH = (panel ? panel.offsetHeight : 400) * 0.4
+        const newH = Math.min(el.scrollHeight, maxH)
+        el.style.height = newH + 'px'
+      })
+    })
+
     onUnmounted(() => {
       if (abortCtrl.value) abortCtrl.value.abort()
     })
 
     return {
       ICONS_LOCAL, toolNames, messages, inputText, status, aiMode, tokenUsage,
-      inputEl, messagesEl, sendChat, sendConfirm, toggleMode, onKeydown, stopChat, newSession,
-      toolKeyParam, toolResultSummary, escapeHtml
+      inputEl, messagesEl, streamTextEl, sendChat, sendConfirm, toggleMode, onKeydown, stopChat, newSession,
+      toolKeyParam, toolResultSummary
     }
   },
   template: `
@@ -264,96 +298,102 @@ export const AIChatPanel = {
             <span v-else>就绪</span>
           </div>
         </div>
-        <span class="text-xs px-2.5 py-1 rounded-md cursor-pointer font-medium whitespace-nowrap" @click="toggleMode">{{ aiMode }}</span>
-        <button class="text-[11px] px-2 py-1 border border-border rounded cursor-pointer" @click="newSession">新会话</button>
+        <span id="ai-mode" class="text-xs px-2.5 py-1 rounded-md cursor-pointer font-medium whitespace-nowrap" @click="toggleMode">{{ aiMode }}</span>
+        <button id="btn-new-session" class="text-[11px] px-2 py-1 border border-border rounded cursor-pointer" @click="newSession">新会话</button>
         <button class="w-11 h-11 flex items-center justify-center text-muted hover:text-text" @click="$emit('close')" aria-label="关闭">
           <span v-html="ICONS_LOCAL.x"></span>
         </button>
       </div>
 
       <!-- 消息列表 -->
-      <div ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4">
+      <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4">
         <div v-for="(msg, mi) in messages" :key="mi"
           class="msg-in flex" :class="{ 'justify-end': msg.role === 'user' }">
+          <!-- 用户消息 -->
           <div v-if="msg.role === 'user'"
             class="msg-user max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md text-sm">
-            {{ msg.text }}
+            {{ msg.blocks[0] ? msg.blocks[0].text : '' }}
           </div>
+          <!-- AI 消息 -->
           <div v-else
             class="msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm">
-            <!-- 流式文本 -->
-            <div v-if="msg.streaming" class="turn-text stream-cursor" style="white-space: pre-wrap">{{ msg.text }}</div>
-            <!-- 完成后的 markdown -->
-            <div v-else-if="msg.rendered" class="turn-text" v-html="renderedHtml(msg)"></div>
-            <div v-else class="turn-text" style="white-space: pre-wrap">{{ msg.text }}</div>
-
-            <!-- 工具调用 -->
-            <div v-for="tool in msg.tools" :key="tool.id" class="tool-entry">
-              <div class="tool-line" :data-tool-id="tool.id" @click="toggleTool(tool)">
-                <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': tool.expanded }" viewBox="0 0 24 24">
-                  <path d="M9 5l7 7-7 7"/>
-                </svg>
-                <span class="ts-icon" v-html="toolNames[tool.name] ? toolNames[tool.name].icon : ''"></span>
-                <span class="tool-label">{{ toolNames[tool.name] ? toolNames[tool.name].label : tool.name }}</span>
-                <span v-if="toolKeyParam(tool.name, tool.args)" class="tool-param">{{ toolKeyParam(tool.name, tool.args) }}</span>
-                <span class="ts-status" :class="tool.status">
-                  <span v-if="tool.status === 'done'" v-html="ICONS_LOCAL.check"></span>
-                  <span v-else-if="tool.status === 'confirm'" v-html="ICONS_LOCAL.alert"></span>
-                  <span v-else-if="tool.status === 'rejected'" v-html="ICONS_LOCAL.x"></span>
-                  <span v-else-if="tool.status === 'error'" v-html="ICONS_LOCAL.alert"></span>
-                </span>
+            <template v-for="(block, bi) in msg.blocks" :key="bi">
+              <!-- 文本块 -->
+              <div v-if="block.type === 'text'">
+                <div v-if="msg.streaming && bi === msg.blocks.length - 1" ref="streamTextEl" class="turn-text stream-cursor" style="white-space: pre-wrap">{{ block.text }}</div>
+                <div v-else-if="msg.rendered" class="turn-text" v-html="renderedHtml(msg, bi)"></div>
+                <div v-else class="turn-text" style="white-space: pre-wrap">{{ block.text }}</div>
               </div>
-              <!-- 确认按钮 -->
-              <div v-if="tool.status === 'confirm'" class="confirm-btns">
-                <button class="confirm-yes flex items-center gap-1.5" @click="sendConfirm(tool.id, true)">
-                  <span v-html="ICONS_LOCAL.check"></span>确认
-                </button>
-                <button class="confirm-no flex items-center gap-1.5" @click="sendConfirm(tool.id, false)">
-                  <span v-html="ICONS_LOCAL.x"></span>取消
-                </button>
-              </div>
-              <!-- 结果摘要 -->
-              <div v-if="tool.status === 'done' && tool.result" class="tool-result-text done">
-                {{ toolResultSummary(tool.name, tool.args, tool.result) }}
-              </div>
-              <div v-if="tool.status === 'error'" class="tool-result-text error">
-                {{ tool.result || '失败' }}
-              </div>
-              <!-- 详情展开 -->
-              <div v-if="tool.expanded" class="tool-detail">
-                <pre class="tool-pre">{{ JSON.stringify(tool.args, null, 2) }}</pre>
-                <div v-if="tool.result" class="tool-result-slot">
-                  <div class="tool-result-label">结果</div>
-                  <pre class="tool-pre tool-result-pre">{{ tool.result }}</pre>
+              <!-- 工具块 -->
+              <div v-else-if="block.type === 'tool'" class="tool-entry">
+                <div class="tool-line" :data-tool-id="block.id" @click="toggleTool(block)">
+                  <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24">
+                    <path d="M9 5l7 7-7 7"/>
+                  </svg>
+                  <span class="ts-icon" v-html="toolNames[block.name] ? toolNames[block.name].icon : ''"></span>
+                  <span class="tool-label">{{ toolNames[block.name] ? toolNames[block.name].label : block.name }}</span>
+                  <span v-if="toolKeyParam(block.name, block.args)" class="tool-param">{{ toolKeyParam(block.name, block.args) }}</span>
+                  <span class="ts-status" :class="block.status">
+                    <span v-if="block.status === 'done' || block.status === 'confirmed'" v-html="ICONS_LOCAL.check"></span>
+                    <span v-else-if="block.status === 'confirm'" v-html="ICONS_LOCAL.alert"></span>
+                    <span v-else-if="block.status === 'rejected'" v-html="ICONS_LOCAL.x"></span>
+                    <span v-else-if="block.status === 'error'" v-html="ICONS_LOCAL.alert"></span>
+                  </span>
+                </div>
+                <!-- 确认按钮 -->
+                <div v-if="block.status === 'confirm'" class="confirm-btns">
+                  <button class="confirm-yes flex items-center gap-1.5" @click="sendConfirm(block.id, true)">
+                    <span v-html="ICONS_LOCAL.check"></span>确认
+                  </button>
+                  <button class="confirm-no flex items-center gap-1.5" @click="sendConfirm(block.id, false)">
+                    <span v-html="ICONS_LOCAL.x"></span>取消
+                  </button>
+                </div>
+                <!-- 结果摘要 -->
+                <div v-if="block.status === 'done' && block.result" class="tool-result-text done">
+                  {{ toolResultSummary(block.name, block.args, block.result) }}
+                </div>
+                <div v-if="block.status === 'error'" class="tool-result-text error">
+                  {{ block.result || '失败' }}
+                </div>
+                <!-- 详情展开 -->
+                <div class="tool-detail" :class="{ open: block.expanded }">
+                  <div class="tool-detail-inner">
+                    <pre class="tool-pre">{{ JSON.stringify(block.args, null, 2) }}</pre>
+                    <div v-if="block.result" class="tool-result-slot">
+                      <div class="tool-result-label">结果</div>
+                      <pre class="tool-pre tool-result-pre">{{ block.result }}</pre>
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
+            </template>
           </div>
         </div>
       </div>
 
       <!-- Token 用量 -->
-      <div class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0"
+      <div id="token-wrap" class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0"
         :class="{ visible: tokenUsage.percent > 50 }">
         <span class="text-[11px] text-muted whitespace-nowrap">Token {{ (tokenUsage.used / 1000).toFixed(1) }}K / {{ Math.round(tokenUsage.total / 1000) }}K</span>
         <div class="flex-1 h-1 bg-[color-mix(in_srgb,var(--ink)_8%,transparent)] rounded-full overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-300"
-            :style="{ width: tokenUsage.percent + '%', background: tokenUsage.percent > 80 ? '#ef4444' : (tokenUsage.percent > 50 ? '#eab308' : '#22c55e') }"></div>
+          <div id="token-fill" class="h-full rounded-full transition-all duration-300"
+            :style="{ width: Math.min(100, tokenUsage.percent) + '%', background: tokenUsage.percent > 80 ? '#ef4444' : (tokenUsage.percent > 50 ? '#eab308' : '#22c55e') }"></div>
         </div>
       </div>
 
       <!-- 输入区 -->
       <div class="p-3 border-t border-border shrink-0">
         <div class="flex items-end gap-2 border border-border rounded-xl p-3">
-          <textarea ref="inputEl" v-model="inputText" rows="1"
+          <textarea id="ai-input" ref="inputEl" v-model="inputText" rows="1"
             class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
             placeholder="输入消息，Enter 发送..."
             @keydown="onKeydown"></textarea>
-          <button class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+          <button id="ai-send" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             :class="{ hidden: status === 'thinking' }" @click="sendChat" aria-label="发送">
             <svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
           </button>
-          <button class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+          <button id="ai-stop" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             :class="{ hidden: status !== 'thinking' }" @click="stopChat" aria-label="中止">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
           </button>
@@ -362,12 +402,13 @@ export const AIChatPanel = {
     </div>
   `,
   methods: {
-    toggleTool(tool) {
-      tool.expanded = !tool.expanded
+    toggleTool(block) {
+      block.expanded = !block.expanded
     },
-    renderedHtml(msg) {
-      // 在 P3 中接入 renderMarkdown
-      return msg.text
+    renderedHtml(msg, bi) {
+      const block = msg.blocks[bi]
+      if (!block || block.type !== 'text') return ''
+      return renderMarkdown(block.text)
     }
   }
 }

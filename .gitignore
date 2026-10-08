@@ -11,3 +11,6 @@ config.yaml
 .opencode/
 scripts/probe_events.log
 archive/
+start.sh
+issues/
+.vscode/
