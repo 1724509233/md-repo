@@ -47,18 +47,29 @@ pip install -e ".[dev]"
 复制 `config.example.yaml` 为 `config.yaml`，修改：
 
 ```yaml
+# 服务端配置
 server:
-  vault_dir: D:/md-vault    # 你的 Obsidian vault 路径
+  host: 0.0.0.0
+  port: 9888
+  vault_dir: ./vault
+  log_level: INFO  # DEBUG for verbose watcher event/IO logging
 
+# 客户端配置
 client:
   server_url: http://192.168.1.100:9888
   vault_dir: ./vault
   device_name: mac
+  poll_interval: 300
 
-ai:                           # 可选，不配则 AI 功能不可用
-  base_url: "https://api.deepseek.com/v1"
-  api_key: "your-key"
-  model: "deepseek-chat"
+# AI 配置 (可选) 
+ai:
+  base_url: "https://api.deepseek.com/v1"  # or http://localhost:11434/v1 for Ollama
+  api_key: "your-api-key"
+  model: "deepseek-v4-flash"
+  max_tokens: 8192
+  context_window: 262144
+  temperature: 0.3
+
 ```
 
 ### 3. 启动服务端
@@ -150,6 +161,77 @@ pytest tests/ -v          # 72 tests
 ├── tests/               # pytest 套件（63 tests）
 └── docs/superpowers/    # 设计文档 + 实施计划
 ```
+
+## MCP Server（接入 OpenCode 等 AI 助手）
+
+MCP server 是独立的 stdio 进程，给 AI 助手提供 `search_docs` / `read_doc` / `write_doc` / `edit_doc` / `get_related_docs` 等工具，直接读写 vault。
+
+### 1. 安装
+
+```bash
+pip install -e ".[mcp]"        # 生成 md-vault-mcp 命令
+which md-vault-mcp             # 确认在 PATH 中（如 .venv/bin/md-vault-mcp）
+```
+
+### 2. 注册到 OpenCode
+
+编辑 `~/.config/opencode/opencode.json`，在 `mcp` 段追加：
+
+```json
+{
+  "mcp": {
+    "md-vault": {
+      "type": "local",
+      "command": ["md-vault-mcp"],
+      "enabled": true
+    }
+  }
+}
+```
+
+> 若 `md-vault-mcp` 不在系统 PATH（如装在 venv 里），把 `command` 改成绝对路径：
+> `["/path/to/.venv/bin/md-vault-mcp"]`。
+
+### 3. 追加 AGENTS.md 提示词
+
+在项目 `AGENTS.md`（或 `~/.config/opencode/AGENTS.md`）加入，让 agent 优先查 vault 而非 web 搜索：
+
+````markdown
+## MD Vault
+
+A personal knowledge base synced across devices. Use the `md-vault` MCP tools
+BEFORE web search or memory recall when you need project context, prior
+decisions, or development notes:
+
+- **search_docs**: Find relevant documents by keyword (FTS5 + Chinese support)
+- **read_doc**: Read full document content
+- **get_related_docs**: Discover related documents via wikilinks/tags
+- **write_doc**: Create or update a knowledge note
+- **edit_doc**: Precise text replacement in an existing document
+
+If the MCP server is not available, skip vault access — do not fall back to
+reading vault files directly.
+
+### MCP Server Restart
+
+The `md-vault` MCP server is a long-running stdio process launched by OpenCode
+(`command: ["md-vault-mcp"]` in `~/.config/opencode/opencode.json`). Code changes
+to `server/mcp_server.py` or `server/agent.py` do NOT take effect until the
+process is restarted. To restart:
+
+1. Run `/mcp` in OpenCode to see the server list and reconnect, OR
+2. Restart the OpenCode session entirely.
+
+After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
+````
+
+### 4. 重启生效
+
+MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码后需重启：OpenCode 里跑 `/mcp` 重连，或整个会话重启。用一次 `write_doc` + `read_doc` 往返验证。
+
+## 待办
+
+- [ ] 拆分 server / client 为独立发布的包（当前 `pip install md-sync` 一并安装两者，client 用户被迫带上 fastapi/openai 等 server 依赖）
 
 ## 设计约束
 

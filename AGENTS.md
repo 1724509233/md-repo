@@ -87,3 +87,8 @@ process is restarted. To restart:
 
 After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
 <!-- MDVAULT_END -->
+
+
+## Todo
+
+- [ ] 拆分 server / client 为独立发布的包（当前 `pip install md-sync` 一并安装两者，client 用户被迫带上 fastapi/openai 等 server 依赖）
