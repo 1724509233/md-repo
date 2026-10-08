@@ -27,6 +27,9 @@ const state = reactive({
   docContent: ''        // 当前文档内容
 })
 
+// ─── EditorPane ref（用于调用 triggerPageTurn）───
+const editorPaneRef = ref(null)
+
 // ─── 核心操作 ───
 let lastChangeTs = Date.now() / 1000
 
@@ -42,11 +45,26 @@ async function openDoc(path) {
   }
   state.currentPath = path
   state.dirty = false
+
+  // fetch 先行：成功后才播放动画
+  let text
   try {
-    const text = await api.getDoc(path)
-    state.docContent = text
+    text = await api.getDoc(path)
   } catch (e) {
     state.docContent = '加载失败: ' + e.message
+    return
+  }
+
+  // page-turn 动画（桌面端淡出→替换→淡入）
+  if (editorPaneRef.value && editorPaneRef.value.triggerPageTurn) {
+    await editorPaneRef.value.triggerPageTurn()
+  }
+
+  state.docContent = text
+
+  // 移动端：打开文档后关闭 sidebar
+  if (window.innerWidth < 1024) {
+    state.sidebarOpen = false
   }
 }
 
@@ -146,6 +164,20 @@ async function startNewSession() {
   } catch (e) { }
 }
 
+// ─── AI 面板切换（桌面/移动适配）───
+function toggleAI(open) {
+  state.aiOpen = open
+  if (window.innerWidth >= 1024) {
+    // 桌面端：通过 padding-right 推挤主内容区
+    const main = document.querySelector('main')
+    if (main) main.style.paddingRight = open ? '40%' : '0'
+  } else {
+    // 移动端：bottom sheet overlay
+    const aiBtn = document.getElementById('ai-btn')
+    if (aiBtn) aiBtn.style.right = ''
+  }
+}
+
 // ─── 创建 App ───
 export function createApp() {
   const app = Vue.createApp({
@@ -159,16 +191,18 @@ export function createApp() {
 
         // 移动端 sidebar 点击 overlay 关闭
         document.addEventListener('click', (e) => {
-          if (state.moreMenuOpen && !e.target.closest('.lg\\:hidden.relative')) {
+          if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
           }
         })
+
+        // 初始欢迎消息由 AIChatPanel 内部处理
       })
 
       return {
-        state,
+        state, editorPaneRef,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
-        handleToolResult, startNewSession, renderMarkdown
+        handleToolResult, startNewSession, toggleAI, renderMarkdown
       }
     },
     template: `
@@ -196,8 +230,7 @@ export function createApp() {
 
         <!-- Main area -->
         <div class="flex-1 flex overflow-hidden relative">
-          <main class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350"
-            :style="{ paddingRight: state.aiOpen && window.innerWidth >= 1024 ? '40%' : '0' }">
+          <main class="relative flex-1 flex flex-col overflow-hidden transition-[padding] duration-350">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-sidebar="state.sidebarOpen = !state.sidebarOpen"
@@ -207,15 +240,14 @@ export function createApp() {
               <ConflictBanner v-if="state.conflict"
                 :tool-name="state.conflict.toolName" :path="state.conflict.path"
                 @accept="acceptConflict" @dismiss="state.conflict = null" />
-              <EditorPane :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+              <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
                 @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
             </div>
           </main>
 
           <!-- AI 面板切换按钮 -->
-          <button class="fixed bottom-5 right-4 flex items-center justify-center z-40"
-            :style="{ right: state.aiOpen && window.innerWidth >= 1024 ? '40%' : undefined }"
-            @click="state.aiOpen = !state.aiOpen" aria-label="打开/关闭 AI 助手">
+          <button id="ai-btn" class="fixed bottom-5 right-4 flex items-center justify-center z-40"
+            @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
             <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7" />
@@ -223,14 +255,13 @@ export function createApp() {
           </button>
 
           <!-- AI 面板 -->
-          <div class="bg-surface border-border flex flex-col"
-            :class="{ open: state.aiOpen }"
-            id="ai-panel">
-            <MobileSheet :open="state.aiOpen" @close="state.aiOpen = false" />
+          <div id="ai-panel" class="bg-surface border-border flex flex-col"
+            :class="{ open: state.aiOpen }">
+            <MobileSheet :open="state.aiOpen" @close="toggleAI(false)" />
             <AIChatPanel v-if="state.aiOpen"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
               @tool-result="handleToolResult" @new-session="startNewSession"
-              @close="state.aiOpen = false" />
+              @close="toggleAI(false)" />
           </div>
         </div>
       </div>

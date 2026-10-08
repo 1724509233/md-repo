@@ -1,8 +1,65 @@
 /* FileTree 组件：递归文件树 + 搜索过滤 + 展开/折叠 */
-const { ref, computed, watch } = Vue
+const { ref, computed, watch, provide, inject } = Vue
+import { ICONS } from '../utils/icons.js'
+
+// 递归子组件：渲染树节点
+const TreeNode = {
+  name: 'TreeNode',
+  props: {
+    node: Object,       // { dirs: {}, files: [] }
+    dirPath: { type: String, default: '' },
+    currentPath: { type: String, default: null }
+  },
+  emits: ['select', 'toggle'],
+  setup(props, { emit }) {
+    const ICONS_LOCAL = ICONS
+    // 从 FileTree 父组件注入展开状态
+    const treeState = inject('treeState')
+
+    function isExpanded(dirPath) {
+      return treeState.expandedDirs.has(dirPath)
+    }
+
+    return { ICONS_LOCAL, isExpanded }
+  },
+  template: `
+    <div>
+      <!-- 子目录 -->
+      <template v-for="(child, name) in node.dirs" :key="name">
+        <div class="tree-group" :class="{ open: isExpanded(dirPath + '/' + name) }" :data-dir="dirPath + '/' + name">
+          <button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left"
+            @click="$emit('toggle', dirPath + '/' + name)">
+            <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(dirPath + '/' + name) }"
+              fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span v-html="ICONS_LOCAL.folder"></span>
+            <span class="font-medium">{{ name }}</span>
+          </button>
+          <div class="tree-children ml-2 pl-1.5 border-l border-border">
+            <div class="tree-children-inner space-y-0.5 py-0.5" v-show="isExpanded(dirPath + '/' + name)">
+              <TreeNode :node="child" :dir-path="dirPath + '/' + name" :current-path="currentPath"
+                @select="$emit('select', $event)"
+                @toggle="$emit('toggle', $event)" />
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- 文件 -->
+      <button v-for="f in node.files" :key="f.path"
+        class="tree-file w-full text-left px-2 py-1.5 rounded-md"
+        :class="{ active: f.path === currentPath }"
+        @click="$emit('select', f.path)">
+        {{ f.name }}
+      </button>
+    </div>
+  `
+}
 
 export const FileTree = {
   name: 'FileTree',
+  components: { TreeNode },
   props: {
     files: { type: Array, default: () => [] },
     currentPath: { type: String, default: null }
@@ -11,6 +68,9 @@ export const FileTree = {
   setup(props, { emit }) {
     const searchQuery = ref('')
     const expandedDirs = ref(new Set())
+
+    // 提供给递归子组件
+    provide('treeState', { expandedDirs })
 
     // 构建树形结构
     const tree = computed(() => {
@@ -59,17 +119,20 @@ export const FileTree = {
     // 搜索时自动展开所有目录
     watch(searchQuery, (q) => {
       if (q) {
-        function expandAll(node) {
+        function expandAll(node, prefix) {
           for (const [name, child] of Object.entries(node.dirs)) {
-            expandedDirs.value.add(name)
-            expandAll(child)
+            const p = prefix ? prefix + '/' + name : name
+            expandedDirs.value.add(p)
+            expandAll(child, p)
           }
         }
-        expandAll(tree.value)
+        expandAll(tree.value, '')
+      } else {
+        // 清空搜索时重置展开状态（保留用户手动展开的）
       }
     })
 
-    return { searchQuery, expandedDirs, filteredTree, toggleDir, selectFile }
+    return { searchQuery, filteredTree, toggleDir, selectFile }
   },
   template: `
     <div class="file-tree">
@@ -86,35 +149,9 @@ export const FileTree = {
       <nav class="overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
         <div v-if="!filteredTree.files.length && !Object.keys(filteredTree.dirs).length"
           class="text-muted text-xs px-2 py-3 text-center">无匹配文档</div>
-        <template v-for="(node, name) in filteredTree.dirs" :key="name">
-          <div class="tree-group" :class="{ open: expandedDirs.has(name) }" :data-dir="name">
-            <button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left"
-              @click="toggleDir(name)">
-              <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': expandedDirs.has(name) }"
-                fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-              </svg>
-              <span v-html="ICONS.folder"></span>
-              <span class="font-medium">{{ name }}</span>
-            </button>
-            <div class="tree-children ml-2 pl-1.5 border-l border-border">
-              <div class="tree-children-inner space-y-0.5 py-0.5">
-                <button v-for="f in node.files" :key="f.path"
-                  class="tree-file w-full text-left px-2 py-1.5 rounded-md"
-                  :class="{ active: f.path === currentPath }"
-                  @click="selectFile(f.path)">
-                  {{ f.name }}
-                </button>
-              </div>
-            </div>
-          </div>
-        </template>
-        <button v-for="f in filteredTree.files" :key="f.path"
-          class="tree-file w-full text-left px-2 py-1.5 rounded-md"
-          :class="{ active: f.path === currentPath }"
-          @click="selectFile(f.path)">
-          {{ f.name }}
-        </button>
+        <TreeNode :node="filteredTree" dir-path="" :current-path="currentPath"
+          @select="selectFile"
+          @toggle="toggleDir" />
       </nav>
     </div>
   `
