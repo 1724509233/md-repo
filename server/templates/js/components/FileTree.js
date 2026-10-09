@@ -36,6 +36,7 @@ const TreeNode = {
             </svg>
             <span v-html="ICONS_LOCAL.folder"></span>
             <span class="font-medium">{{ name }}</span>
+            <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
           </button>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
             <div class="tree-children-inner space-y-0.5 py-0.5" v-show="isExpanded(dirPath + '/' + name)">
@@ -73,6 +74,13 @@ export const FileTree = {
     // 提供给递归子组件
     provide('treeState', { expandedDirs })
 
+    // 递归统计目录总文件数（含所有子目录），用于目录行徽标
+    function countFiles(node) {
+      let total = node.files.length
+      for (const child of Object.values(node.dirs)) total += countFiles(child)
+      return total
+    }
+
     // 构建树形结构
     const tree = computed(() => {
       const root = { dirs: {}, files: [] }
@@ -87,6 +95,12 @@ export const FileTree = {
         if (name.toLowerCase().endsWith('.md')) name = name.slice(0, -3)
         node.files.push({ path: f.path, name })
       }
+      // 自底向上为每个目录节点挂载递归文件总数（count 含自身直接文件 + 所有子目录）
+      function annotate(node) {
+        for (const child of Object.values(node.dirs)) annotate(child)
+        node.count = countFiles(node)
+      }
+      annotate(root)
       return root
     })
 
@@ -136,7 +150,7 @@ export const FileTree = {
     return { searchQuery, filteredTree, toggleDir, selectFile }
   },
   template: `
-    <div id="file-tree" class="file-tree">
+    <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
       <div class="relative mb-2">
         <span class="absolute inset-y-0 left-0 flex items-center pl-3">
           <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -147,7 +161,7 @@ export const FileTree = {
           class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg outline-none"
           placeholder="搜索文档…">
       </div>
-      <nav class="overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
+      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
         <div v-if="!filteredTree.files.length && !Object.keys(filteredTree.dirs).length"
           class="text-muted text-xs px-2 py-3 text-center">无匹配文档</div>
         <TreeNode :node="filteredTree" dir-path="" :current-path="currentPath"

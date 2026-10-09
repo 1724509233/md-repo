@@ -51,6 +51,16 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .tree-file.active:hover { background: color-mix(in srgb, var(--brass) 18%, transparent); }
 .tree-group.open > .tree-row .chev { transform: rotate(90deg); }
 .chev { transition: transform .2s ease; }
+/* 目录文件计数徽标：pill 填充，比 surface 略深，数字居中 */
+.tree-count {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.25rem; height: 1.125rem; padding: 0 .375rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  font-size: 10px; line-height: 1; font-weight: 500;
+  color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
 /* 子项展开/折叠：grid-template-rows 0fr→1fr 过渡（纯 CSS，无需 JS 算高度） */
 .tree-children { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .tree-group.open > .tree-children { grid-template-rows: 1fr; }

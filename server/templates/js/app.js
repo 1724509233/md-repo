@@ -211,7 +211,7 @@ export function createApp() {
               <svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>
-          <div class="px-3 pt-3 pb-2 shrink-0">
+          <div class="px-3 pt-3 pb-2 flex-1 min-h-0 overflow-hidden">
             <FileTree :files="state.files" :current-path="state.currentPath" @select="openDoc" />
           </div>
         </aside>
