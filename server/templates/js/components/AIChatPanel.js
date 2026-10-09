@@ -38,6 +38,7 @@ export const AIChatPanel = {
     const streamTextEl = ref(null)
 
     let currentTurn = null
+    let sendChain = Promise.resolve()
 
     // 工具调用摘要
     function toolKeyParam(name, args) {
@@ -108,13 +109,27 @@ export const AIChatPanel = {
       status.value = state
     }
 
-    // 发送消息（SSE）
-    async function sendChat() {
+    // 发送消息（SSE）：串行队列入口，追加到 sendChain
+    function sendChat() {
       const text = inputText.value.trim()
       if (!text) return
-      if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
       inputText.value = ''
+      sendChain = sendChain.then(() => doSend(text)).catch(e => {
+        console.error('[ai-chat] sendChain error', e)
+      })
+    }
 
+    async function doSend(text) {
+      // 1. 中止旧流（如有），等待清理完成
+      if (abortCtrl.value) {
+        const oldCtrl = abortCtrl.value
+        const oldTurn = currentTurn
+        oldCtrl.abort()
+        await new Promise(r => requestAnimationFrame(r))
+        if (oldTurn) { finishTurn(oldTurn); currentTurn = null }
+      }
+
+      // 2. 发起新请求
       addMsg('user', text)
       setStatus('thinking')
 
@@ -215,6 +230,8 @@ export const AIChatPanel = {
     }
 
     function finishTurn(turn) {
+      if (turn._finished) return
+      turn._finished = true
       turn.streaming = false
       // 合并 text blocks 用于 markdown 渲染
       turn.fullText = turn.blocks.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
@@ -260,6 +277,15 @@ export const AIChatPanel = {
     function newSession() {
       emit('newSession')
     }
+
+    // sessionId 变化时重置会话（新会话按钮触发）
+    watch(() => props.sessionId, () => {
+      if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
+      messages.value = []
+      currentTurn = null
+      inputText.value = ''
+      setStatus('ready')
+    })
 
     // 输入框高度自动扩展（上限 40% 面板高度）
     watch(inputText, () => {

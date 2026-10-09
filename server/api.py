@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .agent import SessionManager
 from .db import get_all_files, upsert_file
 from .sync import compare_files
 
@@ -63,17 +64,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
 
-    # Agent session store: session_id -> {"messages": [...], "pending_confirms": dict, "last_active": float}
-    _agent_sessions: dict[str, dict] = {}
-    _SESSION_TTL = 1800  # 30 minutes
-
-    # FIXME: 清理时应排除当前活跃 session_id，避免用户 30min 未发消息后回来时
-    # 误清除其内存缓存（功能等价但多一次 DB 恢复 IO）。
-    def _cleanup_sessions():
-        now = time.time()
-        expired = [sid for sid, s in _agent_sessions.items() if now - s.get("last_active", 0) > _SESSION_TTL]
-        for sid in expired:
-            del _agent_sessions[sid]
+    session_mgr = SessionManager(db_conn, vault_dir)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -268,45 +259,31 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         session_id = body.get("session_id", "default")
         doc_path = body.get("doc_path", "")
 
-        _cleanup_sessions()
-
-        # Get or create session (restore from SQLite if persisted)
-        if session_id not in _agent_sessions:
-            from .agent import SYSTEM_PROMPT, _build_time_block
-            from .db import load_session
-
-            saved = load_session(db_conn, session_id) if db_conn else None
-            if saved:
-                _agent_sessions[session_id] = {
-                    "messages": saved["messages"],
-                    "pending_confirms": {},
-                    "last_active": saved["last_active"],
-                    "token_count": saved.get("token_count", 0),
-                }
-            else:
-                _agent_sessions[session_id] = {
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "system", "content": _build_time_block()},
-                    ],
-                    "pending_confirms": {},
-                    "last_active": time.time(),
-                }
-        session = _agent_sessions[session_id]
+        session_mgr.cleanup()
+        session = session_mgr.get_or_create(session_id)
         session["last_active"] = time.time()
 
-        # Inject current doc context: one-line path + change signal (not full content)
+        # Pre-check doc_path（不修改 session，只验证；409 走 HTTP 异常）
+        doc_context = None
         if doc_path:
             rel = _safe_rel_path(doc_path)
             if rel is None:
                 logger.info("doc_context skipped: _safe_rel_path rejected %r", doc_path)
-            elif rel:
-                rel_str = rel.as_posix()
-                fp = vault_dir / rel
-                if not fp.is_file():
-                    raise HTTPException(status_code=409, detail=f"doc_path '{rel_str}' exists in index but not on disk (stale DB?)")
-                else:
-                    # Check for external changes since agent last read this doc
+            elif not (vault_dir / rel).is_file():
+                raise HTTPException(status_code=409, detail=f"doc_path '{rel.as_posix()}' not on disk")
+            else:
+                doc_context = rel
+
+        lock = session_mgr.get_lock(session_id)
+        await lock.acquire()
+
+        from .agent import TOOLS, agent_loop
+
+        async def event_generator():
+            try:
+                # doc_context 注入（在 lock 内，修改 session["messages"]）
+                if doc_context:
+                    rel_str = doc_context.as_posix()
                     last_read_ts = session.get("last_read_ts", {}).get(rel_str, 0)
                     warning = ""
                     if last_read_ts > 0 and db_conn:
@@ -314,25 +291,18 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                         changes = get_changes(db_conn, since=last_read_ts, path=rel_str, limit=1)
                         if changes:
                             warning = " ⚠ 自上次读取后有修改"
-                    doc_context = f"[当前打开: {rel_str}{warning}]"
+                    doc_ctx = f"[当前打开: {rel_str}{warning}]"
                     # Remove any previous doc context (user message prefix)
                     session["messages"] = [
                         m for m in session["messages"]
                         if not (m.get("role") == "user" and m.get("content", "").startswith("[当前打开:"))
                     ]
-                    session["messages"].append({"role": "user", "content": doc_context})
-                    logger.info("doc_context injected: %s (msgs=%d)", doc_context, len(session["messages"]))
-            else:
-                logger.info("doc_context skipped: _safe_rel_path returned empty for %r", doc_path)
-        else:
-            logger.info("doc_context skipped: no doc_path in request")
+                    session["messages"].append({"role": "user", "content": doc_ctx})
+                    logger.info("doc_context injected: %s (msgs=%d)", doc_ctx, len(session["messages"]))
 
-        session["messages"].append({"role": "user", "content": message})
+                # user message append（在 lock 内）
+                session["messages"].append({"role": "user", "content": message})
 
-        from .agent import TOOLS, agent_loop
-
-        async def event_generator():
-            try:
                 async for event in agent_loop(
                     messages=session["messages"],
                     tools=TOOLS,
@@ -347,9 +317,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 ):
                     yield event
                 # Persist session after agent_loop completes
-                from .db import save_session
-
-                save_session(db_conn, session_id, session["messages"], session.get("token_count", 0))
+                session_mgr.save(session_id)
             except (GeneratorExit, asyncio.CancelledError):
                 logger.error(
                     "SSE stream disconnected (session=%s, pending_confirms=%d)",
@@ -357,6 +325,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     exc_info=True,
                 )
                 raise
+            finally:
+                lock.release()
 
         from fastapi.responses import StreamingResponse
 
@@ -369,7 +339,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         tool_call_id = body.get("id", "")
         approved = bool(body.get("approved", False))
 
-        session = _agent_sessions.get(session_id)
+        session = session_mgr.get(session_id)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
 
@@ -383,31 +353,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
     @app.post("/api/agent/new-session")
     async def agent_new_session(request: Request) -> dict:
-        import uuid
-
-        body = await request.json()
-        old_session_id = body.get("old_session_id", "")
-
-        new_id = str(uuid.uuid4())
-
-        from .db import load_session, save_session
-        from .agent import SYSTEM_PROMPT, _build_time_block
-
-        new_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "system", "content": _build_time_block()},
-        ]
-
-        _agent_sessions[new_id] = {
-            "messages": new_messages,
-            "pending_confirms": {},
-            "last_active": time.time(),
-            "token_count": 0,
-        }
-
-        if db_conn:
-            save_session(db_conn, new_id, new_messages, token_count=0)
-
+        new_id = session_mgr.create_new()
         return {"session_id": new_id}
 
     @app.put("/api/docs/{path:path}")

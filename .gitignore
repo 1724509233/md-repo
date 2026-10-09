@@ -14,3 +14,4 @@ archive/
 start.sh
 issues/
 .vscode/
+.DS_Store

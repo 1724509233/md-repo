@@ -11,6 +11,7 @@ from openai import AsyncOpenAI
 from .execute import execute_tool
 from .loop import agent_loop
 from .prompts import SYSTEM_PROMPT, _build_time_block, sse
+from .session import SessionManager
 from .tools import (
     DeleteDocArgs,
     EditDocArgs,
@@ -62,4 +63,6 @@ __all__ = [
     "execute_tool",
     # loop
     "agent_loop",
+    # session
+    "SessionManager",
 ]
