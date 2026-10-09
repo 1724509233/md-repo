@@ -46,11 +46,12 @@ export const api = {
   },
 
   /** POST /api/ai/search — RAG 搜索 */
-  async aiSearch(query, topK = 5) {
+  async aiSearch(query, topK = 5, signal) {
     const res = await fetch('/api/ai/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, top_k: topK })
+      body: JSON.stringify({ query, top_k: topK }),
+      signal
     })
     const data = await res.json()
     return data.results || []

@@ -1,6 +1,7 @@
-/* FileTree 组件：递归文件树 + 搜索过滤 + 展开/折叠 */
-const { ref, computed, watch, provide, inject } = Vue
+/* FileTree 组件：递归文件树 + RAG 搜索下拉框 + 展开/折叠 */
+const { ref, computed, watch, provide, inject, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
+import { api } from '../api.js'
 
 // 递归子组件：渲染树节点
 const TreeNode = {
@@ -104,24 +105,6 @@ export const FileTree = {
       return root
     })
 
-    // 搜索过滤
-    const filteredTree = computed(() => {
-      if (!searchQuery.value) return tree.value
-      const q = searchQuery.value.toLowerCase()
-      function filter(node) {
-        const result = { dirs: {}, files: [] }
-        for (const [name, child] of Object.entries(node.dirs)) {
-          const fc = filter(child)
-          if (Object.keys(fc.dirs).length || fc.files.length) result.dirs[name] = fc
-        }
-        for (const f of node.files) {
-          if (f.name.toLowerCase().includes(q)) result.files.push(f)
-        }
-        return result
-      }
-      return filter(tree.value)
-    })
-
     function toggleDir(dirPath) {
       if (expandedDirs.value.has(dirPath)) expandedDirs.value.delete(dirPath)
       else expandedDirs.value.add(dirPath)
@@ -131,23 +114,130 @@ export const FileTree = {
       emit('select', path)
     }
 
-    // 搜索时自动展开所有目录
-    watch(searchQuery, (q) => {
-      if (q) {
-        function expandAll(node, prefix) {
-          for (const [name, child] of Object.entries(node.dirs)) {
-            const p = prefix ? prefix + '/' + name : name
-            expandedDirs.value.add(p)
-            expandAll(child, p)
-          }
+    // ============ RAG 搜索下拉框 ============
+    const results = ref([])
+    const loading = ref(false)
+    const activeIndex = ref(-1)
+    const searchOpen = computed(() => searchQuery.value.trim().length > 0)
+
+    let debounceTimer = null
+    let abortController = null
+    let requestId = 0
+
+    // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
+    const shapedResults = computed(() => {
+      const items = []
+      for (const item of results.value) {
+        const base = item.path.split('/').pop() || item.path
+        const name = base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base
+        const segments = item.segments || []
+        if (!segments.length) {
+          items.push({ path: item.path, name, heading: '' })
+          continue
         }
-        expandAll(tree.value, '')
-      } else {
-        // 清空搜索时重置展开状态（保留用户手动展开的）
+        for (const seg of segments) {
+          items.push({ path: item.path, name, heading: seg.heading_path || '' })
+        }
       }
+      return items
     })
 
-    return { searchQuery, filteredTree, toggleDir, selectFile }
+    function resetToIdle() {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+      if (abortController) { abortController.abort(); abortController = null }
+      results.value = []
+      loading.value = false
+      activeIndex.value = -1
+    }
+
+    async function runSearch(q) {
+      if (abortController) abortController.abort()
+      const controller = new AbortController()
+      abortController = controller
+      const id = ++requestId
+      loading.value = true
+      try {
+        const data = await api.aiSearch(q, 8, controller.signal)
+        if (id !== requestId) return // 过期响应，丢弃
+        results.value = data
+        loading.value = false
+        activeIndex.value = -1
+      } catch (err) {
+        if (err.name === 'AbortError') return // 中止：忽略，不修改 results
+        if (id !== requestId) return
+        loading.value = false
+        results.value = []
+      }
+    }
+
+    // 300ms 尾随防抖
+    watch(searchQuery, (q) => {
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
+      const trimmed = q.trim()
+      if (!trimmed) {
+        resetToIdle()
+        return
+      }
+      debounceTimer = setTimeout(() => {
+        debounceTimer = null
+        runSearch(trimmed)
+      }, 300)
+    })
+
+    function pickResult(item) {
+      emit('select', item.path, item.heading)
+      searchQuery.value = ''
+      resetToIdle()
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        activeIndex.value = Math.min(activeIndex.value + 1, shapedResults.value.length - 1)
+        scrollActiveIntoView()
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        activeIndex.value = Math.max(activeIndex.value - 1, 0)
+        scrollActiveIntoView()
+      } else if (e.key === 'Enter') {
+        const idx = activeIndex.value >= 0 ? activeIndex.value : 0
+        if (shapedResults.value[idx]) pickResult(shapedResults.value[idx])
+      } else if (e.key === 'Escape') {
+        searchQuery.value = ''
+        resetToIdle()
+      }
+    }
+
+    function scrollActiveIntoView() {
+      const el = document.querySelector('#file-tree .search-item.active')
+      if (el) el.scrollIntoView({ block: 'nearest' })
+    }
+
+    // 外部点击关闭（mousedown on document）
+    function onDocMouseDown(e) {
+      const container = document.querySelector('#file-tree .relative')
+      if (container && !container.contains(e.target)) {
+        searchQuery.value = ''
+        resetToIdle()
+      }
+    }
+
+    watch(searchOpen, (open) => {
+      if (open) document.addEventListener('mousedown', onDocMouseDown)
+      else document.removeEventListener('mousedown', onDocMouseDown)
+    })
+
+    onBeforeUnmount(() => {
+      document.removeEventListener('mousedown', onDocMouseDown)
+      if (debounceTimer) clearTimeout(debounceTimer)
+      if (abortController) abortController.abort()
+    })
+
+    return {
+      searchQuery, tree, toggleDir, selectFile,
+      results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
+      ICONS
+    }
   },
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
@@ -158,13 +248,41 @@ export const FileTree = {
           </svg>
         </span>
         <input id="search-input" v-model="searchQuery" type="text"
-          class="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg outline-none"
-          placeholder="搜索文档…">
+          class="w-full pl-9 pr-8 py-2 text-sm border border-border rounded-lg outline-none"
+          placeholder="搜索文档…" @keydown="onKeydown">
+        <button v-if="searchQuery" class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted hover:text-ink"
+          title="清除搜索" @click="searchQuery = ''">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+
+        <!-- RAG 搜索下拉框 -->
+        <div class="search-dropdown" v-show="searchOpen">
+          <!-- 加载 -->
+          <div v-if="loading && !results.length" class="search-loading">
+            <span class="search-spinner"></span>
+            <span>搜索中…</span>
+          </div>
+          <!-- 空 -->
+          <div v-else-if="!loading && !results.length" class="search-empty">无匹配文档</div>
+          <!-- 结果 -->
+          <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
+            class="search-item" :class="{ active: i === activeIndex }"
+            :title="item.path"
+            @click="pickResult(item)" @mouseenter="activeIndex = i">
+            <div class="flex items-center gap-1.5">
+              <span class="search-item-icon" v-html="ICONS.file"></span>
+              <span class="search-item-name">{{ item.name }}</span>
+            </div>
+            <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
+          </button>
+        </div>
       </div>
-      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm">
-        <div v-if="!filteredTree.files.length && !Object.keys(filteredTree.dirs).length"
+      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen">
+        <div v-if="!tree.files.length && !Object.keys(tree.dirs).length"
           class="text-muted text-xs px-2 py-3 text-center">无匹配文档</div>
-        <TreeNode :node="filteredTree" dir-path="" :current-path="currentPath"
+        <TreeNode :node="tree" dir-path="" :current-path="currentPath"
           @select="selectFile"
           @toggle="toggleDir" />
       </nav>

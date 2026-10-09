@@ -138,11 +138,13 @@ export const AIChatPanel = {
 
       try {
         const body = { message: text, session_id: props.sessionId, doc_path: props.docPath }
-        if (aiMode.value === '全库搜索') {
-          const results = await api.aiSearch(text)
-          if (abortCtrl.value && abortCtrl.value.signal.aborted) return
-          body.context = (results || []).map(r => `【${r.path}】\n${r.snippet || ''}`).join('\n\n')
-        }
+
+        // 全库搜索由agent自行调用工具获取结果，不做上下文注入；用户主动搜索功能由文件树顶部rag搜索功能替代
+        // if (aiMode.value === '全库搜索') {
+        //   const results = await api.aiSearch(text)
+        //   if (abortCtrl.value && abortCtrl.value.signal.aborted) return
+        //   body.context = (results || []).map(r => `【${r.path}】\n${r.snippet || ''}`).join('\n\n')
+        // }
 
         const resp = await api.agentChat(body, abortCtrl.value.signal)
         if (!resp.ok) {
@@ -248,7 +250,7 @@ export const AIChatPanel = {
     }
 
     function toggleMode() {
-      aiMode.value = aiMode.value === '当前文档' ? '全库搜索' : '当前文档'
+      // aiMode.value = aiMode.value === '当前文档' ? '全库搜索' : '当前文档'
     }
 
     function onKeydown(e) {

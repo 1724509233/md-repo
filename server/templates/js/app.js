@@ -38,7 +38,7 @@ async function loadDocs() {
   if (files) state.files = files
 }
 
-async function openDoc(path) {
+async function openDoc(path, heading) {
   // 自动保存未保存的编辑
   if (state.dirty && state.currentPath) {
     await saveDoc()
@@ -65,6 +65,55 @@ async function openDoc(path) {
   // 移动端：打开文档后关闭 sidebar
   if (window.innerWidth < 1024) {
     state.sidebarOpen = false
+  }
+
+  // RAG 搜索跳转：滚动到 heading + 持久标记线
+  // 先清理上一次的标记（如果存在）
+  if (state._dismissMarker) {
+    state._dismissMarker()
+    state._dismissMarker = null
+  }
+
+  if (heading) {
+    await nextTick()
+    const lastCrumb = heading.split(' > ').pop().trim()
+    const headings = document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6')
+    const el = Array.from(headings).find(h => h.textContent.trim() === lastCrumb)
+    if (el) {
+      el.scrollIntoView({ behavior: 'auto', block: 'center' })
+      setTimeout(() => {
+        // 强制清理旧标记 class（防止重复点击时 fade-out 未完成导致冲突）
+        el.classList.remove('heading-flash', 'heading-flash-in', 'heading-flash-out')
+        void el.offsetWidth // 强制 reflow，确保 class 移除生效
+        el.classList.add('heading-flash', 'heading-flash-in')
+
+        let dismissed = false
+        function dismiss() {
+          if (dismissed) return
+          dismissed = true
+          el.classList.remove('heading-flash-in')
+          el.classList.add('heading-flash-out')
+          el.addEventListener('animationend', function onOut(e2) {
+            if (e2.animationName === 'marker-fade-out') {
+              el.classList.remove('heading-flash', 'heading-flash-out')
+            }
+          })
+          preview.removeEventListener('scroll', scrollHandler)
+        }
+
+        // 滚动容器是 #preview 的祖先（app.js 中 .flex-1.overflow-y-auto），
+        // 向上查找最近的 overflow-y:auto/scroll 祖先
+        let scroller = el.parentElement
+        while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
+          scroller = scroller.parentElement
+        }
+        if (!scroller) scroller = document.querySelector('#preview').parentElement
+        const scrollHandler = () => dismiss()
+        scroller.addEventListener('scroll', scrollHandler)
+
+        state._dismissMarker = dismiss
+      }, 200)
+    }
   }
 }
 
