@@ -13,12 +13,12 @@ import logging
 import os
 import threading
 import time
-from collections import defaultdict
 from pathlib import Path
 
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .vault.orchestration.move_detect import pair_moves
 from .vault.service import FileEntry
 
 logger = logging.getLogger(__name__)
@@ -133,41 +133,15 @@ def _pair_moves(
     gone: dict[str, FileEntry],
     new: dict[str, FileEntry],
 ) -> tuple[list[tuple[str, str]], list[str], list[str]]:
-    """Pair gone and new entries by content hash (1:1 rule).
+    """Pair gone and new entries via the shared two-level cascade.
 
-    Returns (moves, deletes, creates):
-      moves:   [(old_rel, new_rel), ...] — 1:1 hash matches
+    Thin wrapper around ``move_detect.pair_moves`` (hash grouping →
+    filename grouping). Returns (moves, deletes, creates):
+      moves:   [(old_rel, new_rel), ...]
       deletes: [rel, ...] — unpaired gone entries
       creates: [rel, ...] — unpaired new entries
-
-    1:1 rule: for a given hash, if exactly 1 gone AND exactly 1 new
-    share that hash → move. Otherwise all entries with that hash
-    degrade to delete + create. Conservative: prefer false negatives
-    (missed moves) over false positives (wrong moves).
     """
-    gone_by_hash: dict[str, list[str]] = defaultdict(list)
-    for rel, entry in gone.items():
-        gone_by_hash[entry.hash].append(rel)
-
-    new_by_hash: dict[str, list[str]] = defaultdict(list)
-    for rel, entry in new.items():
-        new_by_hash[entry.hash].append(rel)
-
-    moves: list[tuple[str, str]] = []
-    paired_gone: set[str] = set()
-    paired_new: set[str] = set()
-
-    for h, gone_list in gone_by_hash.items():
-        new_list = new_by_hash.get(h, [])
-        if len(gone_list) == 1 and len(new_list) == 1:
-            moves.append((gone_list[0], new_list[0]))
-            paired_gone.add(gone_list[0])
-            paired_new.add(new_list[0])
-
-    deletes = [rel for rel in gone if rel not in paired_gone]
-    creates = [rel for rel in new if rel not in paired_new]
-
-    return moves, deletes, creates
+    return pair_moves(gone, new)
 
 
 class _RawHandler(FileSystemEventHandler):

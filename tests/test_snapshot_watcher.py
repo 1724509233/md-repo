@@ -193,15 +193,15 @@ class TestPairMoves:
         assert creates == []
 
     def test_same_name_different_hash(self):
-        """Same filename, different content → NOT a move."""
+        """Same filename, different content, 1:1 → move (Phase 2: move after edit)."""
         from server.snapshot_watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         gone = {"dirA/notes.md": FileEntry("hash_a", 10, 0.0)}
         new = {"dirB/notes.md": FileEntry("hash_b", 20, 0.0)}
         moves, deletes, creates = _pair_moves(gone, new)
-        assert moves == []
-        assert deletes == ["dirA/notes.md"]
-        assert creates == ["dirB/notes.md"]
+        assert moves == [("dirA/notes.md", "dirB/notes.md")]
+        assert deletes == []
+        assert creates == []
 
     def test_1_to_1_same_hash(self):
         from server.snapshot_watcher import _pair_moves
@@ -212,8 +212,9 @@ class TestPairMoves:
         moves, deletes, creates = _pair_moves(gone, new)
         assert moves == [("a/x.md", "b/x.md")]
 
-    def test_2_to_1_same_hash_degrades(self):
-        """Two gone, one new with same hash → no move, all delete+create."""
+    def test_2_to_1_same_hash_nearest_neighbor(self):
+        """Two gone, one new with same hash → Phase 2 nearest-neighbor pairs
+        the closest gone; the other degrades to delete."""
         from server.snapshot_watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "dup_hash"
@@ -223,12 +224,14 @@ class TestPairMoves:
         }
         new = {"c/x.md": FileEntry(h, 5, 0.0)}
         moves, deletes, creates = _pair_moves(gone, new)
-        assert moves == []
-        assert sorted(deletes) == ["a/x.md", "b/x.md"]
-        assert creates == ["c/x.md"]
+        # a/x.md is closest to c/x.md (tie on distance broken by path sort).
+        assert moves == [("a/x.md", "c/x.md")]
+        assert deletes == ["b/x.md"]
+        assert creates == []
 
-    def test_1_to_2_same_hash_degrades(self):
-        """One gone, two new with same hash → no move."""
+    def test_1_to_2_same_hash_move_plus_copy(self):
+        """One gone, two new with same hash → move + copy: the closest new is
+        paired as a move, the other stays a create."""
         from server.snapshot_watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "dup_hash"
@@ -238,9 +241,10 @@ class TestPairMoves:
             "c/x.md": FileEntry(h, 5, 0.0),
         }
         moves, deletes, creates = _pair_moves(gone, new)
-        assert moves == []
-        assert deletes == ["a/x.md"]
-        assert sorted(creates) == ["b/x.md", "c/x.md"]
+        # b/x.md is closest to a/x.md (tie on distance broken by path sort).
+        assert moves == [("a/x.md", "b/x.md")]
+        assert deletes == []
+        assert creates == ["c/x.md"]
 
     def test_multiple_independent_moves(self):
         from server.snapshot_watcher import _pair_moves
