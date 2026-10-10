@@ -15,35 +15,7 @@ _STOPWORDS = frozenset(
 )
 
 
-def init_segments(conn: sqlite3.Connection) -> None:
-    """Create the segments table and FTS5 virtual table if they don't exist."""
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS segments(
-            id INTEGER PRIMARY KEY,
-            path TEXT NOT NULL,
-            mtime REAL,
-            seg_index INTEGER,
-            heading_path TEXT,
-            kind TEXT,
-            content TEXT,
-            body TEXT,
-            meta TEXT,
-            code TEXT
-        )
-        """
-    )
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_path ON segments(path)")
-    conn.execute(
-        """
-        CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
-            body, meta, code,
-            content='segments', content_rowid='id'
-        )
-        """
-    )
-    conn.commit()
-
+# ── FS: text processing (no DB) ──
 
 def _tokenize_for_index(text: str) -> str:
     """Tokenize text with jieba cut_for_search, filter stopwords, return space-joined."""
@@ -130,99 +102,36 @@ def _split_long_text(text: str, heading_path: str, segments: list[dict], max_len
         segments.append({"kind": "text", "content": current.strip(), "heading_path": heading_path})
 
 
-def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
-    """Read a file, segment it, tokenize, and upsert into segments table."""
-    fp = vault_dir / path
-    if not fp.is_file():
-        delete_segments(conn, path)
-        return
+# ── DB: segments table (no disk I/O) ──
 
-    content = fp.read_bytes().decode("utf-8", errors="replace")
-    mtime = fp.stat().st_mtime
-
-    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
-
-    segs = segment_markdown(content)
-    for i, seg in enumerate(segs):
-        kind = seg["kind"]
-        heading_path = seg["heading_path"]
-        text = seg["content"]
-
-        if kind == "meta":
-            meta_text = text + " " + heading_path if heading_path else text
-            body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
-        elif kind == "code":
-            body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
-        else:
-            # text: include heading_path in body tokens (title is searchable content)
-            body_text = text + " " + heading_path if heading_path else text
-            body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
-
-        conn.execute(
-            "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (path, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
+def init_segments(conn: sqlite3.Connection) -> None:
+    """Create the segments table and FTS5 virtual table if they don't exist."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS segments(
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL,
+            mtime REAL,
+            seg_index INTEGER,
+            heading_path TEXT,
+            kind TEXT,
+            content TEXT,
+            body TEXT,
+            meta TEXT,
+            code TEXT
         )
-
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_segments_path ON segments(path)")
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS segments_fts USING fts5(
+            body, meta, code,
+            content='segments', content_rowid='id'
+        )
+        """
+    )
     conn.commit()
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
-
-
-def delete_segments(conn: sqlite3.Connection, path: str) -> None:
-    """Remove all segments for a path."""
-    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
-    conn.commit()
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
-
-
-def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
-    """Yield all .md files in vault, skipping .sync/ and .obsidian/."""
-    for f in vault_dir.rglob("*.md"):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
-            continue
-        if not f.is_file():
-            continue
-        yield f
-
-
-def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
-    """Full rebuild of segments index from vault. Returns count of indexed files."""
-    try:
-        conn.execute("BEGIN")
-        conn.execute("DELETE FROM segments")
-        count = 0
-        for md_file in _iter_vault_md(vault_dir):
-            rel = md_file.relative_to(vault_dir).as_posix()
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
-            mtime = md_file.stat().st_mtime
-            segs = segment_markdown(content)
-            for i, seg in enumerate(segs):
-                kind = seg["kind"]
-                heading_path = seg["heading_path"]
-                text = seg["content"]
-                if kind == "meta":
-                    meta_text = text + " " + heading_path if heading_path else text
-                    body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
-                elif kind == "code":
-                    body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
-                else:
-                    body_text = text + " " + heading_path if heading_path else text
-                    body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
-                conn.execute(
-                    "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (rel, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
-                )
-            count += 1
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
-    return count
 
 
 def segments_search(conn: sqlite3.Connection, query: str, top_k: int = 5, expand: bool = True) -> list[dict]:
@@ -275,3 +184,100 @@ def segments_search(conn: sqlite3.Connection, query: str, top_k: int = 5, expand
             return results
 
     return []
+
+
+# ── Orchestration: coordinates FS + DB ──
+
+def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
+    """Yield all .md files in vault, skipping .sync/ and .obsidian/."""
+    for f in vault_dir.rglob("*.md"):
+        if ".sync" in f.parts or ".obsidian" in f.parts:
+            continue
+        if not f.is_file():
+            continue
+        yield f
+
+
+def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
+    """Read a file, segment it, tokenize, and upsert into segments table."""
+    fp = vault_dir / path
+    if not fp.is_file():
+        delete_segments(conn, path)
+        return
+
+    content = fp.read_bytes().decode("utf-8", errors="replace")
+    mtime = fp.stat().st_mtime
+
+    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
+
+    segs = segment_markdown(content)
+    for i, seg in enumerate(segs):
+        kind = seg["kind"]
+        heading_path = seg["heading_path"]
+        text = seg["content"]
+
+        if kind == "meta":
+            meta_text = text + " " + heading_path if heading_path else text
+            body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
+        elif kind == "code":
+            body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
+        else:
+            # text: include heading_path in body tokens (title is searchable content)
+            body_text = text + " " + heading_path if heading_path else text
+            body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
+
+        conn.execute(
+            "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (path, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
+        )
+
+    conn.commit()
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+
+
+def delete_segments(conn: sqlite3.Connection, path: str) -> None:
+    """Remove all segments for a path."""
+    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
+    conn.commit()
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+
+
+def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
+    """Full rebuild of segments index from vault. Returns count of indexed files."""
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM segments")
+        count = 0
+        for md_file in _iter_vault_md(vault_dir):
+            rel = md_file.relative_to(vault_dir).as_posix()
+            content = md_file.read_bytes().decode("utf-8", errors="replace")
+            mtime = md_file.stat().st_mtime
+            segs = segment_markdown(content)
+            for i, seg in enumerate(segs):
+                kind = seg["kind"]
+                heading_path = seg["heading_path"]
+                text = seg["content"]
+                if kind == "meta":
+                    meta_text = text + " " + heading_path if heading_path else text
+                    body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
+                elif kind == "code":
+                    body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
+                else:
+                    body_text = text + " " + heading_path if heading_path else text
+                    body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
+                conn.execute(
+                    "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (rel, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
+                )
+            count += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+    return count
