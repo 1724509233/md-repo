@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .tool import ToolContext
+from .tools.tool import ToolContext
 from .tools import TOOL_REGISTRY
 
 

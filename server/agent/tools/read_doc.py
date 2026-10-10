@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..tool import Tool, ToolContext, _check_md_path
+from .tool import DocTool, ToolContext, _check_md_path
 
 
 class ReadDocArgs(BaseModel):
@@ -17,16 +17,18 @@ class ReadDocArgs(BaseModel):
     def validate_path(cls, v): return _check_md_path(v)
 
 
-class ReadDocTool(Tool):
+class ReadDocTool(DocTool):
     name = "read_doc"
     args_model = ReadDocArgs
 
-    def _execute(self, args, ctx: ToolContext) -> str:
-        from ... import responses
+    @staticmethod
+    def read_offset_exceeds(offset: int, total: int) -> str:
+        return f"Error: offset {offset} exceeds file length ({total} lines). Use read_doc with offset <= {total}."
 
+    def _execute(self, args, ctx: ToolContext) -> str:
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return responses._file_not_found_hint(args.path, ctx.db_conn, tool="read_doc")
+            return self._file_not_found_hint(args.path, ctx.db_conn)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total = len(lines)
@@ -35,7 +37,7 @@ class ReadDocTool(Tool):
         if limit is not None:
             limit = int(limit)
         if offset > total:
-            return responses.read_offset_exceeds(offset, total)
+            return self.read_offset_exceeds(offset, total)
         if limit is not None:
             selected = lines[offset - 1: offset - 1 + limit]
         else:

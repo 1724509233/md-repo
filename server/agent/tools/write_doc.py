@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..tool import Tool, ToolContext, _check_md_path
+from .tool import Tool, ToolContext, _check_md_path
 
 
 class WriteDocArgs(BaseModel):

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from ..tool import Tool, ToolContext
+from .tool import Tool, ToolContext
 
 
 class SearchDocsArgs(BaseModel):
@@ -17,10 +17,18 @@ class SearchDocsTool(Tool):
     name = "search_docs"
     args_model = SearchDocsArgs
 
+    @staticmethod
+    def fts_syntax_error(query: str) -> str:
+        return f'Error: invalid search query "{query}". Avoid special characters (", *, (, ), AND, OR, NOT). Use plain keywords.'
+
+    @staticmethod
+    def search_no_match(query: str) -> str:
+        return (f'No exact match for "{query}". Search requires ALL keywords to appear in a document. '
+                f"Tip: remove one keyword at a time, or use list_files to browse.")
+
     def _execute(self, args, ctx: ToolContext) -> str:
         import html as _html
 
-        from ... import responses
         from ...ai import rag_search
 
         expand = args.expand
@@ -28,10 +36,10 @@ class SearchDocsTool(Tool):
             results = rag_search(str(ctx.vault_dir), args.query, top_k=args.top_k, expand=expand)
         except Exception as e:
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
-                return responses.fts_syntax_error(args.query)
+                return self.fts_syntax_error(args.query)
             raise
         if not results:
-            return responses.search_no_match(args.query)
+            return self.search_no_match(args.query)
         lines = [f'<results count="{len(results)}" query="{_html.escape(args.query, quote=False)}">']
         for r in results:
             lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')

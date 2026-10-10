@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..tool import Tool, ToolContext, _check_md_path
+from .tool import DocTool, ToolContext, _check_md_path
 
 
 class DeleteDocArgs(BaseModel):
@@ -15,19 +15,18 @@ class DeleteDocArgs(BaseModel):
     def validate_path(cls, v): return _check_md_path(v)
 
 
-class DeleteDocTool(Tool):
+class DeleteDocTool(DocTool):
     name = "delete_doc"
     args_model = DeleteDocArgs
     is_write = True
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ... import responses
         from ...vault.service import apply_change
         from ...write_registry import register_write
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return responses._file_not_found_hint(args.path, ctx.db_conn, tool="delete_doc")
+            return self._file_not_found_hint(args.path, ctx.db_conn)
 
         register_write(args.path, "agent")
         fp.unlink()

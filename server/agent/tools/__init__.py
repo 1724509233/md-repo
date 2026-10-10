@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from ..tool import Tool, _check_md_path, _check_optional_path, _tool
+from .tool import Tool, _check_md_path, _check_optional_path, _tool
 from .delete_doc import DeleteDocArgs, DeleteDocTool
 from .edit_doc import EditDocArgs, EditDocTool
 from .get_related_docs import GetRelatedDocsArgs, GetRelatedDocsTool

@@ -1,4 +1,4 @@
-"""Tests for tool result message redesign (responses.py + execute_tool integration)."""
+"""Tests for tool result message redesign (execute_tool integration)."""
 from __future__ import annotations
 
 import time
@@ -170,15 +170,19 @@ def test_read_doc_offset_exceeds(tmp_path: Path):
 
 def test_responses_parity():
     """Key response strings contain the expected actionable phrases."""
-    from server import responses
+    from server.agent.tools.tool import DocTool
+    from server.agent.tools.search_docs import SearchDocsTool
+    from server.agent.tools.move_docs import MoveDocsTool
+    from server.agent.tools.recent_changes import RecentChangesTool
+    from server.agent.tools.read_doc import ReadDocTool
 
-    assert "remove one keyword" in responses.search_no_match("test")
-    assert "list_files" in responses.search_no_match("test")
-    assert "file not found" in responses.file_not_found("x.md")
-    assert "destination already exists" in responses.move_dest_exists("y.md")
-    assert "Do not overwrite or relocate on your own" in responses.move_dest_exists("y.md")
-    assert "do NOT create a new file" in responses.edit_not_found_moved("a.md", "b.md")
-    assert "Do NOT recreate it from memory" in responses.edit_not_found_deleted("a.md")
-    assert "check the path/source filters" in responses.changes_empty()
-    assert "offset <=" in responses.read_offset_exceeds(10, 5)
-    assert "invalid search query" in responses.fts_syntax_error('bad"query')
+    assert "remove one keyword" in SearchDocsTool.search_no_match("test")
+    assert "list_files" in SearchDocsTool.search_no_match("test")
+    assert "file not found" in DocTool.file_not_found("x.md")
+    assert "destination already exists" in MoveDocsTool.move_dest_exists("y.md")
+    assert "Do not overwrite or relocate on your own" in MoveDocsTool.move_dest_exists("y.md")
+    assert "do NOT create a new file" in DocTool.edit_not_found_moved("a.md", "b.md")
+    assert "Do NOT recreate it from memory" in DocTool.edit_not_found_deleted("a.md")
+    assert "check the path/source filters" in RecentChangesTool.changes_empty()
+    assert "offset <=" in ReadDocTool.read_offset_exceeds(10, 5)
+    assert "invalid search query" in SearchDocsTool.fts_syntax_error('bad"query')

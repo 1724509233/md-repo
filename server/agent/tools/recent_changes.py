@@ -5,7 +5,7 @@ import time
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..tool import Tool, ToolContext, _check_optional_path
+from .tool import Tool, ToolContext, _check_optional_path
 
 
 class RecentChangesArgs(BaseModel):
@@ -24,8 +24,11 @@ class RecentChangesTool(Tool):
     name = "recent_changes"
     args_model = RecentChangesArgs
 
+    @staticmethod
+    def changes_empty() -> str:
+        return 'No recent changes found. Tip: check the path/source filters, or widen since (e.g. since="7d").'
+
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ... import responses
         from ...vault.db.changes import get_changes
         from ..validate import parse_since
 
@@ -49,7 +52,7 @@ class RecentChangesTool(Tool):
             limit=args.limit,
         )
         if not changes:
-            return responses.changes_empty()
+            return self.changes_empty()
         lines = []
         for c in changes:
             ts_str = time.strftime("%H:%M", time.localtime(c["ts"]))

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from ..tool import Tool, ToolContext, _check_md_path
+from .tool import DocTool, ToolContext, _check_md_path
 
 
 class MoveDocItem(BaseModel):
@@ -34,13 +34,19 @@ class MoveDocsArgs(BaseModel):
         return self
 
 
-class MoveDocsTool(Tool):
+class MoveDocsTool(DocTool):
     name = "move_docs"
     args_model = MoveDocsArgs
     is_write = True
 
+    @staticmethod
+    def move_dest_exists(to_path: str) -> str:
+        return (f"Error: destination already exists: {to_path}. "
+                f"Do not overwrite or relocate on your own — this requires a user decision. "
+                f"Use read_doc to inspect the existing file first, then ask the user whether to "
+                f"overwrite it or specify a different destination.")
+
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ... import responses
         from ...vault.orchestration.refs import _update_references_batch
         from ...write_registry import register_write
 
@@ -50,10 +56,10 @@ class MoveDocsTool(Tool):
         for from_path, to_path in moves:
             src = ctx.vault_dir / from_path
             if not src.is_file():
-                return responses._file_not_found_hint(from_path, ctx.db_conn, tool="move_docs")
+                return self._file_not_found_hint(from_path, ctx.db_conn)
             dst = ctx.vault_dir / to_path
             if dst.is_file():
-                return responses.move_dest_exists(to_path)
+                return self.move_dest_exists(to_path)
 
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
         ref_count = _update_references_batch(ctx.db_conn, ctx.vault_dir, moves, pre_rename=True)
