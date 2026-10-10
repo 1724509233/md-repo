@@ -20,16 +20,24 @@ class DeleteDocTool(DocTool):
     args_model = DeleteDocArgs
     is_write = True
 
+    def precheck(self, args: dict, ctx: ToolContext) -> str | None:
+        """Existence check before asking the user to confirm."""
+        if not (ctx.vault_dir / args["path"]).is_file():
+            return f"Error: file not found: {args['path']}"
+        return None
+
     def _execute(self, args, ctx: ToolContext) -> str:
+        from ...vault.db.conn import get_conn
         from ...vault.service import apply_change
         from ...write_registry import register_write
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return self._file_not_found_hint(args.path, ctx.db_conn)
+            return self._file_not_found_hint(args.path)
 
         register_write(args.path, "agent")
         fp.unlink()
-        if ctx.db_conn:
-            apply_change(ctx.db_conn, ctx.vault_dir, args.path, "deleted", source="agent")
+        conn = get_conn()
+        if conn:
+            apply_change(conn, ctx.vault_dir, args.path, "deleted", source="agent")
         return f"Deleted: {args.path}"

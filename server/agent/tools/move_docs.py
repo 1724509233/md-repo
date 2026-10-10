@@ -46,7 +46,18 @@ class MoveDocsTool(DocTool):
                 f"Use read_doc to inspect the existing file first, then ask the user whether to "
                 f"overwrite it or specify a different destination.")
 
+    def precheck(self, args: dict, ctx: ToolContext) -> str | None:
+        """Existence check for all sources before asking the user to confirm."""
+        missing = [
+            m["from_path"] for m in args.get("moves", [])
+            if not (ctx.vault_dir / m["from_path"]).is_file()
+        ]
+        if missing:
+            return f"Error: file(s) not found: {', '.join(missing)}"
+        return None
+
     def _execute(self, args, ctx: ToolContext) -> str:
+        from ...vault.db.conn import get_conn
         from ...vault.orchestration.refs import _update_references_batch
         from ...write_registry import register_write
 
@@ -56,13 +67,13 @@ class MoveDocsTool(DocTool):
         for from_path, to_path in moves:
             src = ctx.vault_dir / from_path
             if not src.is_file():
-                return self._file_not_found_hint(from_path, ctx.db_conn)
+                return self._file_not_found_hint(from_path)
             dst = ctx.vault_dir / to_path
             if dst.is_file():
                 return self.move_dest_exists(to_path)
 
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
-        ref_count = _update_references_batch(ctx.db_conn, ctx.vault_dir, moves, pre_rename=True)
+        ref_count = _update_references_batch(get_conn(), ctx.vault_dir, moves, pre_rename=True)
 
         # Phase 3: perform all filesystem renames
         # DB update (files, change_log, FTS, graph) is handled by the snapshot

@@ -637,7 +637,7 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
 
 def test_move_docs_updates_references(vault_dir):
     """move_docs renames the file; reference updates are handled inline via _update_references_batch."""
-    from server.agent import execute_tool
+    from server.agent import ToolContext, execute_tool
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "old.md").write_text("# Old doc")
@@ -646,8 +646,7 @@ def test_move_docs_updates_references(vault_dir):
     result = execute_tool(
         "move_docs",
         {"moves": [{"from_path": "notes/old.md", "to_path": "notes/new.md"}]},
-        vault_dir,
-        None,
+        ToolContext(vault_dir=vault_dir),
     )
 
     assert "Moved" in result

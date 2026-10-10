@@ -37,6 +37,11 @@ def main():
     config = load_server_config(str(_find_config()))
     vault_dir = config.vault_dir
     db_conn = init_db(vault_dir / ".sync" / "index.db")
+
+    # Register the module-level DB handle for lazy access (agent tools).
+    from server.vault.db.conn import init as register_db_conn
+
+    register_db_conn(db_conn)
     
     # Warm up jieba in background thread
     def _warmup():
@@ -103,7 +108,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return _read_doc_tool._file_not_found_hint(path, db_conn)
+            return _read_doc_tool._file_not_found_hint(path)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         return f"File: {path} ({len(content)} chars)\n\n{content}"
     
@@ -129,7 +134,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return _edit_doc_tool._file_not_found_hint(path, db_conn)
+            return _edit_doc_tool._file_not_found_hint(path)
         result = edit_file(vault_dir, path, old_string, new_string)
         return result
     

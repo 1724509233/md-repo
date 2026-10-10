@@ -47,6 +47,11 @@ def main(argv: list[str] | None = None) -> None:
     db_path = vault_dir / ".sync" / "index.db"
     conn = init_db(db_path)
 
+    # Register the module-level DB handle for lazy access (agent tools, reminders).
+    from .vault.db.conn import init as register_db_conn
+
+    register_db_conn(conn)
+
     # Ensure the FTS and graph indexes are populated. On first run they are
     # empty; on later runs the FTS table may also be empty (e.g. an older
     # version of the server never built it), so rebuild whenever it is.

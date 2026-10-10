@@ -37,7 +37,7 @@ class EditDocTool(DocTool):
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return self._file_not_found_hint(args.path, ctx.db_conn)
+            return self._file_not_found_hint(args.path)
 
         register_write(args.path, "agent")
         result = edit_file(ctx.vault_dir, args.path, args.old_string, args.new_string)

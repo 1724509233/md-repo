@@ -30,9 +30,11 @@ class RecentChangesTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db.changes import get_changes
+        from ...vault.db.conn import get_conn
         from ..validate import parse_since
 
-        if not ctx.db_conn:
+        conn = get_conn()
+        if not conn:
             return "Error: database not available"
         since_raw = args.since
         if isinstance(since_raw, str) and since_raw.strip().lower() == "none":
@@ -45,7 +47,7 @@ class RecentChangesTool(Tool):
         if isinstance(source_raw, str) and source_raw.strip().lower() == "none":
             source_raw = None
         changes = get_changes(
-            ctx.db_conn,
+            conn,
             since=since_ts,
             path=path_raw,
             source=source_raw,

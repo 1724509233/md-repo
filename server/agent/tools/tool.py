@@ -16,11 +16,15 @@ from pydantic import BaseModel, ValidationError
 
 @dataclass
 class ToolContext:
-    """Runtime context passed to every tool call."""
+    """Runtime context passed to every tool call.
+
+    DB access is not threaded here — tools fetch the connection lazily from
+    ``server.vault.db.conn.get_conn()``.
+    """
 
     vault_dir: Path
-    db_conn: object | None = None
     read_doc_max_chars: int = 4000
+    last_read_ts: dict | None = None
 
 
 # ── Shared path validators ──────────────────────────────────────────────
@@ -84,6 +88,14 @@ class Tool:
     def _execute(self, args, ctx: ToolContext) -> str:
         raise NotImplementedError
 
+    def precheck(self, args: dict, ctx: ToolContext) -> str | None:
+        """Optional pre-execution check (e.g. file existence before a
+        confirm prompt). Returns an error string to short-circuit, or None."""
+        return None
+
+    def on_success(self, args, result: str, ctx: ToolContext) -> None:
+        """Optional post-success hook (e.g. read tracking). No-op by default."""
+
     def to_openai_tool(self) -> dict:
         return _tool(self.args_model, self.name)
 
@@ -137,14 +149,17 @@ class DocTool(Tool):
             return time.strftime("%Y-%m-%d", time.localtime(ts))
 
     @staticmethod
-    def _missing_lookup(path: str, db_conn):
+    def _missing_lookup(path: str):
         """Shared change-log lookup: why is this file missing?
 
         Returns ``("moved", new_path)`` / ``("deleted", ts)`` / ``None`` (no history).
         Returns the ``_UNAVAILABLE`` sentinel when history cannot be queried
-        (no db_conn or lookup error) — the template maps that to a plain
+        (no db registered or lookup error) — the template maps that to a plain
         ``file_not_found`` regardless of subclass. No message logic here.
         """
+        from ...vault.db.conn import get_conn
+
+        db_conn = get_conn()
         if db_conn is None:
             return _UNAVAILABLE
         from ...vault.db.changes import get_changes
@@ -179,9 +194,9 @@ class DocTool(Tool):
             return DocTool.file_moved(path, value)
         return DocTool.file_deleted(path, DocTool._relative_time(value))
 
-    def _file_not_found_hint(self, path: str, db_conn) -> str:
+    def _file_not_found_hint(self, path: str) -> str:
         """Template: shared lookup → this tool's message (polymorphic, no tool arg)."""
-        lookup = DocTool._missing_lookup(path, db_conn)
+        lookup = DocTool._missing_lookup(path)
         if lookup is _UNAVAILABLE:
             return DocTool.file_not_found(path)
         return self._missing_message(path, lookup)

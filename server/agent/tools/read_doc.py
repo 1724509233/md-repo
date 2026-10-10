@@ -1,6 +1,8 @@
 """read_doc tool."""
 from __future__ import annotations
 
+import time
+
 from pydantic import BaseModel, Field, field_validator
 
 from .tool import DocTool, ToolContext, _check_md_path
@@ -28,7 +30,7 @@ class ReadDocTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return self._file_not_found_hint(args.path, ctx.db_conn)
+            return self._file_not_found_hint(args.path)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total = len(lines)
@@ -67,3 +69,9 @@ class ReadDocTool(DocTool):
             next_offset = offset + cut
             header += f"\n[truncated — {remaining} more lines, use read_doc with offset={next_offset} to continue]"
         return f"{header}\n<content>\n{text}</content>"
+
+    def on_success(self, args: dict, result: str, ctx: ToolContext) -> None:
+        """Track the read timestamp for change detection (doc-path reminder)."""
+        path = args.get("path")
+        if path and ctx.last_read_ts is not None:
+            ctx.last_read_ts[path] = time.time()

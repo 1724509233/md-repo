@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from server.agent import execute_tool
+from server.agent import ToolContext, execute_tool
+from server.vault.db.conn import init as register_db_conn
 
 
 def test_validate_rejects_path_traversal(tmp_path: Path):
@@ -90,7 +91,7 @@ def test_execute_get_related_docs(vault_dir, db_conn):
     graph_extract_file(db_conn, vault_dir, "a.md")
     graph_extract_file(db_conn, vault_dir, "b.md")
 
-    result = execute_tool("get_related_docs", {"path": "a.md"}, vault_dir, db_conn)
+    result = execute_tool("get_related_docs", {"path": "a.md"}, ToolContext(vault_dir=vault_dir))
     assert "b.md" in result
 
 
@@ -105,7 +106,7 @@ def test_execute_read_doc(tmp_path: Path):
     notes.mkdir(parents=True)
     (notes / "test.md").write_bytes(b"# Hello\n\nWorld")
 
-    result = execute_tool("read_doc", {"path": "notes/test.md"}, vault, None)
+    result = execute_tool("read_doc", {"path": "notes/test.md"}, ToolContext(vault_dir=vault))
     assert "notes/test.md" in result
     assert "# Hello" in result
     assert "3 lines" in result
@@ -121,8 +122,7 @@ def test_execute_read_doc_offset_limit(tmp_path: Path):
 
     # Read lines 2-3
     result = execute_tool(
-        "read_doc", {"path": "notes/big.md", "offset": 2, "limit": 2}, vault, None
-    )
+        "read_doc", {"path": "notes/big.md", "offset": 2, "limit": 2}, ToolContext(vault_dir=vault))
     assert "lines 2-3 of 5" in result
     assert "line2\nline3" in result
     assert "line1" not in result
@@ -130,15 +130,13 @@ def test_execute_read_doc_offset_limit(tmp_path: Path):
 
     # Read from line 4 to end
     result = execute_tool(
-        "read_doc", {"path": "notes/big.md", "offset": 4}, vault, None
-    )
+        "read_doc", {"path": "notes/big.md", "offset": 4}, ToolContext(vault_dir=vault))
     assert "lines 4-5 of 5" in result
     assert "line4\nline5" in result
 
     # Offset beyond file
     result = execute_tool(
-        "read_doc", {"path": "notes/big.md", "offset": 99}, vault, None
-    )
+        "read_doc", {"path": "notes/big.md", "offset": 99}, ToolContext(vault_dir=vault))
     assert "Error" in result
     assert "exceeds" in result
 
@@ -153,7 +151,7 @@ def test_execute_read_doc_truncation(tmp_path: Path):
     lines = [f"line{i:03d} " + "x" * 42 + "\n" for i in range(1, 201)]
     (notes / "big.md").write_bytes("".join(lines).encode("utf-8"))
 
-    result = execute_tool("read_doc", {"path": "notes/big.md"}, vault, None)
+    result = execute_tool("read_doc", {"path": "notes/big.md"}, ToolContext(vault_dir=vault))
     assert "truncated" in result
     assert "more lines" in result
     assert "offset=" in result
@@ -169,8 +167,7 @@ def test_execute_read_doc_truncation(tmp_path: Path):
 
     # Continue reading from suggested offset
     result2 = execute_tool(
-        "read_doc", {"path": "notes/big.md", "offset": next_offset}, vault, None
-    )
+        "read_doc", {"path": "notes/big.md", "offset": next_offset}, ToolContext(vault_dir=vault))
     assert "line200" in result2 or "truncated" in result2
 
 
@@ -182,7 +179,7 @@ def test_execute_read_doc_small_no_truncation(tmp_path: Path):
     notes.mkdir(parents=True)
     (notes / "small.md").write_bytes(b"hello\nworld\n")
 
-    result = execute_tool("read_doc", {"path": "notes/small.md"}, vault, None)
+    result = execute_tool("read_doc", {"path": "notes/small.md"}, ToolContext(vault_dir=vault))
     assert "truncated" not in result
     assert "hello\nworld" in result
 
@@ -192,7 +189,7 @@ def test_execute_read_doc_not_found(tmp_path: Path):
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = execute_tool("read_doc", {"path": "missing.md"}, vault, None)
+    result = execute_tool("read_doc", {"path": "missing.md"}, ToolContext(vault_dir=vault))
     assert "not found" in result
 
 
@@ -202,8 +199,7 @@ def test_execute_write_doc(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     result = execute_tool(
-        "write_doc", {"path": "notes/new.md", "content": "# New Doc"}, vault, None
-    )
+        "write_doc", {"path": "notes/new.md", "content": "# New Doc"}, ToolContext(vault_dir=vault))
     assert "Saved" in result
     fp = vault / "notes" / "new.md"
     assert fp.is_file()
@@ -220,9 +216,7 @@ def test_execute_edit_doc(tmp_path: Path):
 
     result = execute_tool(
         "edit_doc",
-        {"path": "notes/edit.md", "old_string": "Old text here.", "new_string": "New text here."},
-        vault, None,
-    )
+        {"path": "notes/edit.md", "old_string": "Old text here.", "new_string": "New text here."}, ToolContext(vault_dir=vault))
     assert "Edited" in result
     assert (notes / "edit.md").read_bytes() == b"# Title\n\nNew text here.\n"
 
@@ -237,9 +231,7 @@ def test_execute_edit_doc_not_found(tmp_path: Path):
 
     result = execute_tool(
         "edit_doc",
-        {"path": "notes/edit.md", "old_string": "nonexistent", "new_string": "x"},
-        vault, None,
-    )
+        {"path": "notes/edit.md", "old_string": "nonexistent", "new_string": "x"}, ToolContext(vault_dir=vault))
     assert "Error" in result
 
 
@@ -253,9 +245,7 @@ def test_execute_edit_doc_multiple(tmp_path: Path):
 
     result = execute_tool(
         "edit_doc",
-        {"path": "notes/edit.md", "old_string": "foo", "new_string": "baz"},
-        vault, None,
-    )
+        {"path": "notes/edit.md", "old_string": "foo", "new_string": "baz"}, ToolContext(vault_dir=vault))
     assert "Error" in result
     assert "2 times" in result
 
@@ -268,7 +258,7 @@ def test_execute_delete_doc(tmp_path: Path):
     notes.mkdir(parents=True)
     (notes / "del.md").write_bytes(b"content")
 
-    result = execute_tool("delete_doc", {"path": "notes/del.md"}, vault, None)
+    result = execute_tool("delete_doc", {"path": "notes/del.md"}, ToolContext(vault_dir=vault))
     assert "Deleted" in result
     assert not (vault / "notes" / "del.md").exists()
 
@@ -278,7 +268,7 @@ def test_execute_delete_doc_not_found(tmp_path: Path):
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = execute_tool("delete_doc", {"path": "missing.md"}, vault, None)
+    result = execute_tool("delete_doc", {"path": "missing.md"}, ToolContext(vault_dir=vault))
     assert "not found" in result
 
 
@@ -297,9 +287,7 @@ def test_execute_move_docs_batch(tmp_path: Path):
             {"from_path": "a.md", "to_path": "sub/a.md"},
             {"from_path": "b.md", "to_path": "sub/b.md"},
             {"from_path": "c.md", "to_path": "other/c.md"},
-        ]},
-        vault, None,
-    )
+        ]}, ToolContext(vault_dir=vault))
     assert "Moved 3 file(s)" in result
     assert not (vault / "a.md").exists()
     assert not (vault / "b.md").exists()
@@ -319,9 +307,7 @@ def test_execute_move_docs_updates_references(tmp_path: Path):
 
     result = execute_tool(
         "move_docs",
-        {"moves": [{"from_path": "old.md", "to_path": "new.md"}]},
-        vault, None,
-    )
+        {"moves": [{"from_path": "old.md", "to_path": "new.md"}]}, ToolContext(vault_dir=vault))
     assert "Moved 1 file(s)" in result
     # Reference should be updated in linker.md
     linker_content = (vault / "linker.md").read_bytes().decode()
@@ -342,9 +328,7 @@ def test_execute_move_docs_missing_source(tmp_path: Path):
         {"moves": [
             {"from_path": "a.md", "to_path": "sub/a.md"},
             {"from_path": "missing.md", "to_path": "sub/missing.md"},
-        ]},
-        vault, None,
-    )
+        ]}, ToolContext(vault_dir=vault))
     assert "not found" in result
     # No moves should have been performed
     assert (vault / "a.md").exists()
@@ -360,9 +344,7 @@ def test_execute_move_docs_dest_conflict(tmp_path: Path):
 
     result = execute_tool(
         "move_docs",
-        {"moves": [{"from_path": "a.md", "to_path": "b.md"}]},
-        vault, None,
-    )
+        {"moves": [{"from_path": "a.md", "to_path": "b.md"}]}, ToolContext(vault_dir=vault))
     assert "already exists" in result
     # No move should have been performed
     assert (vault / "a.md").exists()
@@ -414,7 +396,7 @@ def test_execute_list_files(tmp_path: Path):
     (vault / ".sync").mkdir()
     (vault / ".sync" / "skip.md").write_bytes(b"skip")
 
-    result = execute_tool("list_files", {}, vault, None)
+    result = execute_tool("list_files", {}, ToolContext(vault_dir=vault))
     assert "notes/a.md" in result
     assert "notes/b.md" in result
     assert ".sync" not in result
@@ -429,7 +411,7 @@ def test_execute_search_docs(tmp_path: Path):
     (notes / "react.md").write_bytes(b"React component patterns")
     (notes / "vue.md").write_bytes(b"Vue reactivity system")
 
-    result = execute_tool("search_docs", {"query": "react"}, vault, None)
+    result = execute_tool("search_docs", {"query": "react"}, ToolContext(vault_dir=vault))
     assert "react.md" in result
 
 
@@ -450,12 +432,32 @@ def _make_chunk(content=None, tool_calls=None, finish_reason=None):
     return chunk
 
 
-def test_agent_loop_no_tools(tmp_path: Path):
-    """LLM returns text only → done event."""
-    from server.agent import agent_loop, sse
+def _make_agent(tmp_path: Path, max_rounds: int = 15):
+    """Build an Agent with a mock model config and an empty vault."""
+    from server.agent import Agent, AgentSpec, ModelConfig
 
     vault = tmp_path / "vault"
-    vault.mkdir()
+    vault.mkdir(exist_ok=True)
+    spec = AgentSpec(
+        system_prompt="test",
+        model=ModelConfig(model_id="m", base_url="http://x", api_key="k"),
+        tools=[],
+        max_rounds=max_rounds,
+        vault_dir=vault,
+    )
+    return Agent(spec), vault
+
+
+def _sse(event) -> str:
+    """Format an Event as an SSE line (same as the API layer)."""
+    from server.agent import sse
+
+    return sse(event.type, event.data)
+
+
+def test_agent_loop_no_tools(tmp_path: Path):
+    """LLM returns text only → done event."""
+    agent, vault = _make_agent(tmp_path)
 
     chunk = _make_chunk(content="Hello!", finish_reason="stop")
     mock_stream = AsyncMock()
@@ -464,30 +466,19 @@ def test_agent_loop_no_tools(tmp_path: Path):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
-        events = list(
-            asyncio.get_event_loop().run_until_complete(
-                _collect(agent_loop(
-                    messages=[{"role": "user", "content": "hi"}],
-                    tools=[],
-                    ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    pending_confirms={},
-                    vault_dir=vault,
-                    db_conn=None,
-                ))
-            )
-        )
+    async def run():
+        return [_sse(e) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
 
     assert any('"type": "token"' in e for e in events)
     assert any('"type": "done"' in e for e in events)
 
 
 def test_agent_loop_token_usage(tmp_path: Path):
-    """Final chunk carries usage → token_usage SSE event with used=150."""
-    from server.agent import agent_loop
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
+    """Final chunk carries usage → token_usage event with used=150."""
+    agent, vault = _make_agent(tmp_path)
 
     # Content chunk
     content_chunk = _make_chunk(content="Hi!", finish_reason="stop")
@@ -502,19 +493,11 @@ def test_agent_loop_token_usage(tmp_path: Path):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
-        events = list(
-            asyncio.get_event_loop().run_until_complete(
-                _collect(agent_loop(
-                    messages=[{"role": "user", "content": "hi"}],
-                    tools=[],
-                    ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    pending_confirms={},
-                    vault_dir=vault,
-                    db_conn=None,
-                ))
-            )
-        )
+    async def run():
+        return [_sse(e) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
 
     usage_events = [e for e in events if '"type": "token_usage"' in e]
     assert len(usage_events) == 1
@@ -526,9 +509,7 @@ def test_agent_loop_token_usage(tmp_path: Path):
 
 def test_agent_loop_with_tool_call(tmp_path: Path):
     """LLM returns tool_call → execute → feed back → final text."""
-    from server.agent import agent_loop
-
-    vault = tmp_path / "vault"
+    agent, vault = _make_agent(tmp_path)
     notes = vault / "notes"
     notes.mkdir(parents=True)
     (notes / "test.md").write_bytes(b"# Test")
@@ -555,19 +536,11 @@ def test_agent_loop_with_tool_call(tmp_path: Path):
         side_effect=[mock_stream1, mock_stream2]
     )
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
-        events = list(
-            asyncio.get_event_loop().run_until_complete(
-                _collect(agent_loop(
-                    messages=[{"role": "user", "content": "read test.md"}],
-                    tools=[],
-                    ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-                    pending_confirms={},
-                    vault_dir=vault,
-                    db_conn=None,
-                ))
-            )
-        )
+    async def run():
+        return [_sse(e) async for e in agent.chat("read test.md")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
 
     assert any('"type": "tool_call"' in e for e in events)
     assert any('"type": "tool_result"' in e for e in events)
@@ -577,10 +550,7 @@ def test_agent_loop_with_tool_call(tmp_path: Path):
 
 def test_agent_loop_write_requires_confirm(tmp_path: Path):
     """Write tool → confirm_request → user approves → execute."""
-    from server.agent import agent_loop
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
+    agent, vault = _make_agent(tmp_path)
 
     tc = MagicMock()
     tc.index = 0
@@ -602,27 +572,17 @@ def test_agent_loop_write_requires_confirm(tmp_path: Path):
         side_effect=[mock_stream1, mock_stream2]
     )
 
-    pending = {}
-
     async def run():
         events = []
-        async for event in agent_loop(
-            messages=[{"role": "user", "content": "create new.md"}],
-            tools=[],
-            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-            pending_confirms=pending,
-            vault_dir=vault,
-            db_conn=None,
-        ):
-            events.append(event)
-            if '"type": "confirm_request"' in event and "call_w" in event:
-                entry = pending["call_w"]
-                entry["approved"] = True
-                entry["event"].set()
+        async for event in agent.chat("create new.md"):
+            line = _sse(event)
+            events.append(line)
+            if '"type": "confirm_request"' in line and "call_w" in line:
+                agent.confirm("call_w", True)
         return events
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
-        events = asyncio.get_event_loop().run_until_complete(run())
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
 
     assert any('"type": "confirm_request"' in e for e in events)
     assert any('"type": "tool_result"' in e for e in events)
@@ -632,10 +592,7 @@ def test_agent_loop_write_requires_confirm(tmp_path: Path):
 def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
     """A confirm value left over from a previous request must NOT be consumed
     by the next tool_call. Each confirm is matched by tool_call_id."""
-    from server.agent import agent_loop
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
+    agent, vault = _make_agent(tmp_path)
 
     # Round 1: write_doc tool call (will wait for confirm)
     tc1 = MagicMock()
@@ -670,24 +627,14 @@ def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
         side_effect=[mock_stream1, mock_stream2, mock_stream3]
     )
 
-    pending = {}  # new API: dict of tool_call_id -> {"event": Event, "approved": bool|None}
-
     async def run():
         events = []
-        async for event in agent_loop(
-            messages=[{"role": "user", "content": "write two files"}],
-            tools=[],
-            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-            pending_confirms=pending,
-            vault_dir=vault,
-            db_conn=None,
-        ):
-            events.append(event)
+        async for event in agent.chat("write two files"):
+            line = _sse(event)
+            events.append(line)
             # After first confirm_request, simulate user approving call_1
-            if '"type": "confirm_request"' in event and "call_1" in event:
-                entry = pending["call_1"]
-                entry["approved"] = True
-                entry["event"].set()
+            if '"type": "confirm_request"' in line and "call_1" in line:
+                agent.confirm("call_1", True)
             # After second confirm_request, do NOT approve — task will be cancelled
         return events
 
@@ -698,9 +645,9 @@ def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
         # Give the loop time to reach the first confirm and process it
         await aio.sleep(0.1)
         # Now approve call_1 if not already done (race-safe)
-        if "call_1" in pending and not pending["call_1"]["event"].is_set():
-            pending["call_1"]["approved"] = True
-            pending["call_1"]["event"].set()
+        entry = agent.pending_confirms.get("call_1")
+        if entry is not None and not entry["event"].is_set():
+            agent.confirm("call_1", True)
         await aio.sleep(0.1)
         # The loop should now be waiting on call_2's confirm.
         # Simulate: user does NOT click anything. Cancel the task (page refresh).
@@ -710,7 +657,7 @@ def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
         except aio.CancelledError:
             pass
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         aio.run(driver())
 
     # call_1 was approved → a.md should exist
@@ -721,10 +668,7 @@ def test_agent_loop_confirm_no_stale_value(tmp_path: Path):
 
 def test_agent_loop_confirm_reject_by_id(tmp_path: Path):
     """Rejecting a specific tool_call by id does not affect other calls."""
-    from server.agent import agent_loop
-
-    vault = tmp_path / "vault"
-    vault.mkdir()
+    agent, vault = _make_agent(tmp_path)
 
     tc1 = MagicMock()
     tc1.index = 0
@@ -746,40 +690,22 @@ def test_agent_loop_confirm_reject_by_id(tmp_path: Path):
         side_effect=[mock_stream1, mock_stream2]
     )
 
-    pending = {}
-
     async def run():
         events = []
-        async for event in agent_loop(
-            messages=[{"role": "user", "content": "write r.md"}],
-            tools=[],
-            ai_config=MagicMock(base_url="http://x", api_key="k", model="m"),
-            pending_confirms=pending,
-            vault_dir=vault,
-            db_conn=None,
-        ):
-            events.append(event)
-            if '"type": "confirm_request"' in event and "call_r" in event:
-                entry = pending["call_r"]
-                entry["approved"] = False  # reject
-                entry["event"].set()
+        async for event in agent.chat("write r.md"):
+            line = _sse(event)
+            events.append(line)
+            if '"type": "confirm_request"' in line and "call_r" in line:
+                agent.confirm("call_r", False)  # reject
         return events
 
     import asyncio as aio
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         events = aio.run(run())
 
     assert any('"type": "confirm_request"' in e for e in events)
     assert any('"rejected": true' in e for e in events)
     assert not (vault / "r.md").exists()
-
-
-async def _collect(async_gen):
-    """Collect all events from an async generator."""
-    result = []
-    async for event in async_gen:
-        result.append(event)
-    return result
 
 
 def _async_iter(items):
@@ -831,6 +757,7 @@ def test_execute_recent_changes(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn)
 
     # Create some changes
     (vault / "notes").mkdir()
@@ -840,7 +767,7 @@ def test_execute_recent_changes(tmp_path: Path):
     (vault / "notes" / "b.md").write_bytes(b"world")
     apply_change(conn, vault, "notes/b.md", "created", source="mcp")
 
-    result = execute_tool("recent_changes", {}, vault, conn)
+    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
     assert "web" in result
     assert "agent" in result
     assert "mcp" in result
@@ -856,6 +783,7 @@ def test_execute_recent_changes_filter(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn)
 
     (vault / "notes").mkdir()
     (vault / "notes" / "a.md").write_bytes(b"hello")
@@ -865,14 +793,14 @@ def test_execute_recent_changes_filter(tmp_path: Path):
 
     # Filter by path
     result = execute_tool(
-        "recent_changes", {"path": "notes/a.md"}, vault, conn
+        "recent_changes", {"path": "notes/a.md"}, ToolContext(vault_dir=vault)
     )
     assert "notes/a.md" in result
     assert "notes/b.md" not in result
 
     # Filter by source
     result = execute_tool(
-        "recent_changes", {"source": "agent"}, vault, conn
+        "recent_changes", {"source": "agent"}, ToolContext(vault_dir=vault)
     )
     assert "notes/b.md" in result
     assert "notes/a.md" not in result
@@ -885,8 +813,9 @@ def test_execute_recent_changes_empty(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn)
 
-    result = execute_tool("recent_changes", {}, vault, conn)
+    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
     assert "No recent changes" in result
 
 
@@ -895,15 +824,13 @@ def test_execute_recent_changes_no_db(tmp_path: Path):
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = execute_tool("recent_changes", {}, vault, None)
+    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
     assert "Error" in result
 
 
-def test_agent_loop_max_rounds():
-    """agent_loop with max_rounds=3 stops after 3 rounds."""
+def test_agent_loop_max_rounds(tmp_path: Path):
+    """Agent with max_rounds=3 stops after 3 rounds."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
-    from server.agent import agent_loop
 
     call_count = 0
 
@@ -921,36 +848,20 @@ def test_agent_loop_max_rounds():
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
 
-    ai_config = MagicMock()
-    ai_config.base_url = "http://test"
-    ai_config.api_key = "key"
-    ai_config.model = "test-model"
+    agent, vault = _make_agent(tmp_path, max_rounds=3)
 
     async def run():
-        events = []
-        async for event in agent_loop(
-            messages=[{"role": "user", "content": "test"}],
-            tools=None,
-            ai_config=ai_config,
-            pending_confirms={},
-            vault_dir=MagicMock(),
-            db_conn=None,
-            max_rounds=3,
-        ):
-            events.append(event)
-        return events
+        return [e async for e in agent.chat("test")]
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         events = asyncio.run(run())
     # Should have stopped after 3 rounds (each round yields a token + done)
     assert call_count <= 3
 
 
-def test_agent_loop_round_limit_reminder():
+def test_agent_loop_round_limit_reminder(tmp_path: Path):
     """In the last 3 rounds, a system reminder is injected into the LLM call."""
     import asyncio
-    from unittest.mock import AsyncMock, MagicMock, patch
-    from server.agent import agent_loop
 
     captured_messages = []
 
@@ -978,24 +889,13 @@ def test_agent_loop_round_limit_reminder():
     mock_client = MagicMock()
     mock_client.chat.completions.create = capture_create
 
-    ai_config = MagicMock()
-    ai_config.base_url = "http://test"
-    ai_config.api_key = "key"
-    ai_config.model = "test-model"
+    agent, vault = _make_agent(tmp_path, max_rounds=5)
 
     async def run():
-        async for event in agent_loop(
-            messages=[{"role": "user", "content": "test"}],
-            tools=None,
-            ai_config=ai_config,
-            pending_confirms={},
-            vault_dir=MagicMock(),
-            db_conn=None,
-            max_rounds=5,
-        ):
+        async for event in agent.chat("test"):
             pass
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         asyncio.run(run())
     # Check that in rounds 3,4,5 (0-indexed: 2,3,4), the messages include the reminder
     # The reminder should be present in at least one of the captured calls
@@ -1015,7 +915,7 @@ def test_read_doc_max_chars_truncation(vault_dir):
     test_file = vault_dir / "test_trunc.md"
     test_file.write_text("A" * 10000)
 
-    result = execute_tool("read_doc", {"path": "test_trunc.md"}, vault_dir, None, read_doc_max_chars=2000)
+    result = execute_tool("read_doc", {"path": "test_trunc.md"}, ToolContext(vault_dir=vault_dir, read_doc_max_chars=2000))
     # Should be truncated (content section should be ~2000 chars, not 10000)
     assert "truncated" in result.lower() or "[truncated" in result
 
@@ -1027,6 +927,6 @@ def test_read_doc_max_chars_backward_compat(vault_dir):
     test_file = vault_dir / "test_compat.md"
     test_file.write_text("B" * 3000)
 
-    result = execute_tool("read_doc", {"path": "test_compat.md"}, vault_dir, None)
+    result = execute_tool("read_doc", {"path": "test_compat.md"}, ToolContext(vault_dir=vault_dir))
     # 3000 chars < 4000 default, so no truncation
     assert "truncated" not in result.lower()
