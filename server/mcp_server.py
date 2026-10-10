@@ -26,7 +26,7 @@ from server.responses import (
 
 def main():
     from server.config import load_server_config
-    from server.vault import init_db, rebuild_segments_all, graph_rebuild_all, edit_file
+    from server.vault.service import init_db, rebuild_segments_all, graph_rebuild_all, edit_file
     from server.ai import rag_search
     from server.agent import validate_tool_call
     
@@ -81,7 +81,7 @@ def main():
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:
         """Get documents related to the given document via wikilinks, tags, or frontmatter related field."""
-        from server.vault import graph_get_related
+        from server.vault.service import graph_get_related
         fp = vault_dir / path
         if not fp.is_file():
             return related_no_file(path)

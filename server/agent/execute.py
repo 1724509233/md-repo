@@ -107,7 +107,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         if not fp.is_file():
             return responses._file_not_found_hint(args["path"], db_conn, tool="delete_doc")
         from ..write_registry import register_write
-        from ..vault.orchestration.file_ops import apply_change
+        from ..vault.service import apply_change
 
         register_write(args["path"], "agent")
         fp.unlink()
@@ -152,7 +152,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         return "\n".join(lines)
 
     elif name == "edit_doc":
-        from ..vault.fs.vault_ops import edit_file
+        from ..vault.service import edit_file
         from ..write_registry import register_write
 
         fp = vault_dir / args["path"]
@@ -164,7 +164,7 @@ def execute_tool(name: str, args: dict, vault_dir: Path, db_conn, read_doc_max_c
         return result
 
     elif name == "get_related_docs":
-        from ..vault.db.graph_sql import graph_get_related
+        from ..vault.service import graph_get_related
 
         fp = vault_dir / args["path"]
         if not fp.is_file():

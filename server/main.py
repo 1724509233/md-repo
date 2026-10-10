@@ -10,7 +10,7 @@ import uvicorn
 
 from .api import create_app
 from .config import load_server_config
-from .vault import apply_change, graph_rebuild_all, init_db
+from .vault.service import apply_change, graph_rebuild_all, init_db
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 from .write_registry import pop_source
@@ -52,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
     # version of the server never built it), so rebuild whenever it is.
     fts_count = conn.execute("SELECT count(*) FROM segments_fts").fetchone()[0]
     if fts_count == 0:
-        from .vault import rebuild_segments_all
+        from .vault.service import rebuild_segments_all
 
         rebuild_segments_all(conn, vault_dir)
         graph_rebuild_all(conn, vault_dir)

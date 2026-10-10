@@ -19,7 +19,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from .vault.file_entry import FileEntry
+from .vault.service import FileEntry
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +324,7 @@ class SnapshotWatcher:
 
         # 3. DB reconcile (if a conn was provided).
         if self._db_conn:
-            from .vault.orchestration.file_ops import reconcile
+            from .vault.service import reconcile
             reconcile(self._snapshot, self._db_conn, self._vault)
         # 4. Start watchdog + worker.
         # Pass self as the notifier: handler calls .notify() on SnapshotWatcher,
