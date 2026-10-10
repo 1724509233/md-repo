@@ -72,12 +72,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     )
 
     # Ensure the segments search index exists.
-    from .segments import init_segments
+    from ..segments import init_segments
 
     init_segments(conn)
 
     # Ensure the knowledge graph tables exist.
-    from .graph import init_graph
+    from ..graph import init_graph
 
     init_graph(conn)
 

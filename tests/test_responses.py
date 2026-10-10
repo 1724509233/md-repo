@@ -80,7 +80,7 @@ def test_get_related_docs_file_not_found(tmp_path: Path):
 
 def test_get_related_docs_no_links(tmp_path: Path):
     """get_related_docs on existing file with no links returns no-links hint."""
-    from server.db import init_db
+    from server.vault import init_db
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -104,7 +104,7 @@ def test_list_files_empty_dir(tmp_path: Path):
 
 def test_recent_changes_empty(tmp_path: Path):
     """recent_changes with no results returns actionable hint."""
-    from server.db import init_db
+    from server.vault import init_db
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -121,7 +121,7 @@ def test_recent_changes_empty(tmp_path: Path):
 
 def test_read_doc_moved_hint(tmp_path: Path):
     """read_doc on a moved file returns hint with new path."""
-    from server.db import init_db, log_change
+    from server.vault import init_db, log_change
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -140,7 +140,7 @@ def test_read_doc_moved_hint(tmp_path: Path):
 
 def test_delete_doc_deleted_hint(tmp_path: Path):
     """delete_doc on already-deleted file returns deleted hint."""
-    from server.db import init_db, log_change
+    from server.vault import init_db, log_change
 
     vault = tmp_path / "vault"
     vault.mkdir()

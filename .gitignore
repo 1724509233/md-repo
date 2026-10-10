@@ -5,6 +5,7 @@ __pycache__/
 .superpowers/
 .pytest_cache/
 vault/
+!server/vault/
 .codegraph/
 config.yaml
 .playwright-mcp/

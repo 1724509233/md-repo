@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 
 from server.agent.session import SessionManager
-from server.db.sessions import load_session, save_session
+from server.vault.db.sessions import load_session, save_session
 
 
 def test_get_or_create_new(vault_dir, db_conn):

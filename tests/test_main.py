@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from server.db import init_db, upsert_file
+from server.vault import init_db, upsert_file
 from server.snapshot_watcher import SnapshotWatcher
 
 

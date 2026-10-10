@@ -1,4 +1,4 @@
-"""Tests for server.db.reconcile.
+"""Tests for server.vault.reconcile.
 
 The ``reconcile(disk, conn, vault_dir)`` function is a pure DB-layer operation:
 it receives the disk state as ``dict[str, FileEntry]`` and does NOT scan the
@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from server.db import FileEntry, init_db, reconcile, upsert_file
+from server.vault import FileEntry, init_db, reconcile, upsert_file
 
 SAMPLE = b"# Test note\n\nSample content.\n"
 

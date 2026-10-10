@@ -61,7 +61,7 @@ from server.ai import rag_search
 
 def _setup_fts_db(tmp_path):
     """Create an empty .sync/index.db with the segments table for rag_search."""
-    from server.db import init_db
+    from server.vault import init_db
 
     (tmp_path / ".sync").mkdir()
     conn = init_db(tmp_path / ".sync" / "index.db")

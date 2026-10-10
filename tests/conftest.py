@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.api import create_app
-from server.db import init_db, upsert_file
+from server.vault import init_db, upsert_file
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 

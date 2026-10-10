@@ -82,7 +82,7 @@ def rag_search(vault_dir: str, query: str, top_k: int = 5, expand: bool = True) 
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     import jieba
-    from .db import segments_search, rebuild_segments_all
+    from .vault import segments_search, rebuild_segments_all
 
     vault = Path(vault_dir)
 
@@ -98,7 +98,7 @@ def rag_search(vault_dir: str, query: str, top_k: int = 5, expand: bool = True) 
         return _legacy_rag_search(vault_dir, query, top_k)
 
     # Tokenize query with jieba cut_for_search + stopword filtering
-    from .db import _tokenize_for_index
+    from .vault import _tokenize_for_index
     tokens = _tokenize_for_index(query)
     if not tokens:
         return []

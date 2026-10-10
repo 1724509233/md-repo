@@ -7,7 +7,7 @@ import time
 import uuid
 from pathlib import Path
 
-from ..db.sessions import load_session, save_session
+from ..vault.db.sessions import load_session, save_session
 from .prompts import SYSTEM_PROMPT, _build_time_block
 
 

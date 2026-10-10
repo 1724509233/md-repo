@@ -12,14 +12,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from .changes import log_change
-from .file_index import delete_file, upsert_file
+from .db.changes import log_change
+from .db.file_index import delete_file, upsert_file
 from .graph import (
     _find_referrers,
     graph_delete_file,
     graph_extract_file,
 )
-from .schema import _db_lock
+from .db.schema import _db_lock
 from .segments import delete_segments, index_segments
 
 

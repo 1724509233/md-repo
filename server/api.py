@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .agent import SessionManager
-from .db import get_all_files, upsert_file
+from .vault import get_all_files, upsert_file
 from .sync import compare_files
 
 logger = logging.getLogger("md-vault.api")
@@ -86,19 +86,19 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
     @app.get("/api/docs/changes")
     async def get_changes(since: float = 0.0) -> list[dict]:
-        from .db import get_changes as _get_changes
+        from .vault import get_changes as _get_changes
 
         return _get_changes(db_conn, since=since)
 
     @app.get("/api/graph/backlinks")
     async def graph_backlinks(path: str) -> list[dict]:
-        from .db import graph_get_backlinks
+        from .vault import graph_get_backlinks
 
         return graph_get_backlinks(db_conn, path)
 
     @app.get("/api/graph/related")
     async def graph_related(path: str, hops: int = 1) -> list[dict]:
-        from .db import graph_get_related
+        from .vault import graph_get_related
 
         return graph_get_related(db_conn, path, hops=hops)
 
@@ -162,7 +162,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             # pre-rename copy, which would recreate the old path).
             recent_moves = None
             if last_sync:
-                from .db import get_changes as _get_changes
+                from .vault import get_changes as _get_changes
 
                 all_changes = _get_changes(db_conn, since=float(last_sync), limit=200)
                 recent_moves = [
@@ -287,7 +287,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     last_read_ts = session.get("last_read_ts", {}).get(rel_str, 0)
                     warning = ""
                     if last_read_ts > 0 and db_conn:
-                        from .db import get_changes
+                        from .vault import get_changes
                         changes = get_changes(db_conn, since=last_read_ts, path=rel_str, limit=1)
                         if changes:
                             warning = " ⚠ 自上次读取后有修改"

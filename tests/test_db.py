@@ -1,10 +1,10 @@
-"""Tests for server.db."""
+"""Tests for server.vault."""
 from __future__ import annotations
 
 import sqlite3
 import time
 
-from server.db import (
+from server.vault import (
     clear_changes,
     delete_file,
     edit_file,
@@ -212,7 +212,7 @@ def test_edit_file_preserves_rest(tmp_path) -> None:
 
 
 def test_save_and_load_session(db_conn):
-    from server.db import save_session, load_session
+    from server.vault import save_session, load_session
 
     msgs = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
     save_session(db_conn, "test-sess", msgs, token_count=100)
@@ -223,13 +223,13 @@ def test_save_and_load_session(db_conn):
 
 
 def test_load_session_not_found(db_conn):
-    from server.db import load_session
+    from server.vault import load_session
 
     assert load_session(db_conn, "nonexistent") is None
 
 
 def test_get_recent_sessions(db_conn):
-    from server.db import save_session, get_recent_sessions
+    from server.vault import save_session, get_recent_sessions
 
     save_session(db_conn, "s1", [{"role": "user", "content": "a"}])
     save_session(db_conn, "s2", [{"role": "user", "content": "b"}])
@@ -240,7 +240,7 @@ def test_get_recent_sessions(db_conn):
 
 
 def test_save_session_updates_existing(db_conn):
-    from server.db import save_session, load_session
+    from server.vault import save_session, load_session
 
     save_session(db_conn, "upd", [{"role": "user", "content": "v1"}], token_count=10)
     save_session(db_conn, "upd", [{"role": "user", "content": "v2"}], token_count=20)
@@ -251,7 +251,7 @@ def test_save_session_updates_existing(db_conn):
 
 
 def test_update_references_wikilink(vault_dir):
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -272,7 +272,7 @@ def test_update_references_wikilink(vault_dir):
 
 
 def test_update_references_wikilink_alias(vault_dir):
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -293,7 +293,7 @@ def test_update_references_wikilink_alias(vault_dir):
 
 def test_update_references_plain_path(vault_dir):
     """Plain text path replacement is disabled; only wikilinks are updated."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -314,7 +314,7 @@ def test_update_references_plain_path(vault_dir):
 
 
 def test_update_references_multiple_files(vault_dir):
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -333,7 +333,7 @@ def test_update_references_multiple_files(vault_dir):
 
 
 def test_update_references_no_refs(vault_dir):
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -351,7 +351,7 @@ def test_update_references_no_refs(vault_dir):
 
 def test_update_references_short_name_no_slash(vault_dir):
     """Short filenames without '/' should NOT be replaced in plain text."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -370,7 +370,7 @@ def test_update_references_short_name_no_slash(vault_dir):
 
 def test_update_references_short_name_wikilink_unique(vault_dir):
     """Short-name wikilink [[a]] → [[b]] when old filename is unique."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -392,7 +392,7 @@ def test_update_references_short_name_wikilink_unique(vault_dir):
 
 def test_update_references_short_name_wikilink_alias(vault_dir):
     """Short-name wikilink with alias: [[a|alias]] → [[b|alias]]."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -413,7 +413,7 @@ def test_update_references_short_name_wikilink_alias(vault_dir):
 
 def test_update_references_short_name_wikilink_not_unique(vault_dir):
     """Short-name wikilink NOT replaced when old filename is ambiguous."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -435,7 +435,7 @@ def test_update_references_short_name_wikilink_not_unique(vault_dir):
 
 def test_update_references_short_name_same_stem(vault_dir):
     """Short-name wikilink NOT replaced when only directory changes (same stem)."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -456,7 +456,7 @@ def test_update_references_short_name_same_stem(vault_dir):
 
 def test_is_filename_unique(vault_dir):
     """_is_filename_unique returns True only when exactly one file matches."""
-    from server.db import _is_filename_unique
+    from server.vault import _is_filename_unique
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "projects").mkdir(exist_ok=True)
@@ -471,7 +471,7 @@ def test_is_filename_unique(vault_dir):
 
 def test_update_references_batch_single_move(vault_dir):
     """Batch with one move works same as _update_references."""
-    from server.db import init_db, graph_extract_file, _update_references_batch
+    from server.vault import init_db, graph_extract_file, _update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -492,7 +492,7 @@ def test_update_references_batch_single_move(vault_dir):
 
 def test_update_references_batch_multiple_moves(vault_dir):
     """Batch with multiple moves updates all references in one scan."""
-    from server.db import init_db, graph_extract_file, _update_references_batch
+    from server.vault import init_db, graph_extract_file, _update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -520,7 +520,7 @@ def test_update_references_batch_multiple_moves(vault_dir):
 
 def test_update_references_batch_empty(vault_dir):
     """Empty moves list is a no-op."""
-    from server.db import init_db, _update_references_batch
+    from server.vault import init_db, _update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -533,7 +533,7 @@ def test_update_references_batch_empty(vault_dir):
 
 def test_update_references_batch_short_name(vault_dir):
     """Batch handles short-name wikilinks when filename is unique."""
-    from server.db import init_db, graph_extract_file, _update_references_batch
+    from server.vault import init_db, graph_extract_file, _update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -554,7 +554,7 @@ def test_update_references_batch_short_name(vault_dir):
 
 def test_update_references_plain_text_boundary(vault_dir):
     """Plain text replacement is disabled; only wikilinks are updated."""
-    from server.db import init_db, graph_extract_file, _update_references
+    from server.vault import init_db, graph_extract_file, _update_references
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -580,7 +580,7 @@ def test_update_references_plain_text_boundary(vault_dir):
 
 def test_update_references_plain_text_boundary_batch(vault_dir):
     """Batch plain text replacement is disabled; only wikilinks are updated."""
-    from server.db import init_db, graph_extract_file, _update_references_batch
+    from server.vault import init_db, graph_extract_file, _update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -632,7 +632,7 @@ def test_move_docs_updates_references(vault_dir):
 
 def test_resolve_wikilink_exact_path(vault_dir):
     """_resolve_wikilink resolves exact relative paths."""
-    from server.db import _resolve_wikilink
+    from server.vault import _resolve_wikilink
 
     (vault_dir / "notes" / "a.md").write_text("# A")
 
@@ -642,7 +642,7 @@ def test_resolve_wikilink_exact_path(vault_dir):
 
 def test_resolve_wikilink_short_name(vault_dir):
     """_resolve_wikilink resolves Obsidian short names via vault-wide search."""
-    from server.db import _resolve_wikilink
+    from server.vault import _resolve_wikilink
 
     (vault_dir / "notes" / "MOC.md").write_text("# MOC")
 
@@ -653,14 +653,14 @@ def test_resolve_wikilink_short_name(vault_dir):
 
 def test_resolve_wikilink_not_found(vault_dir):
     """_resolve_wikilink returns None for non-existent targets."""
-    from server.db import _resolve_wikilink
+    from server.vault import _resolve_wikilink
 
     assert _resolve_wikilink(vault_dir, "nonexistent") is None
 
 
 def test_graph_extract_short_name_wikilink(vault_dir):
     """graph_extract_file creates edges for short-name wikilinks."""
-    from server.db import init_db, graph_extract_file, graph_get_related
+    from server.vault import init_db, graph_extract_file, graph_get_related
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -685,7 +685,7 @@ def test_graph_extract_short_name_wikilink(vault_dir):
 
 def test_remove_dead_links_full_path(vault_dir):
     """_remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
-    from server.db import init_db, graph_extract_file, _remove_dead_links
+    from server.vault import init_db, graph_extract_file, _remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -705,7 +705,7 @@ def test_remove_dead_links_full_path(vault_dir):
 
 def test_remove_dead_links_short_name(vault_dir):
     """_remove_dead_links removes short-name wikilinks when target is unique."""
-    from server.db import init_db, graph_extract_file, _remove_dead_links
+    from server.vault import init_db, graph_extract_file, _remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -725,7 +725,7 @@ def test_remove_dead_links_short_name(vault_dir):
 
 def test_remove_dead_links_alias(vault_dir):
     """_remove_dead_links removes wikilinks with aliases."""
-    from server.db import init_db, graph_extract_file, _remove_dead_links
+    from server.vault import init_db, graph_extract_file, _remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -745,7 +745,7 @@ def test_remove_dead_links_alias(vault_dir):
 
 def test_remove_dead_links_no_match(vault_dir):
     """_remove_dead_links returns 0 when no references exist."""
-    from server.db import init_db, graph_extract_file, _remove_dead_links
+    from server.vault import init_db, graph_extract_file, _remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -762,7 +762,7 @@ def test_remove_dead_links_no_match(vault_dir):
 
 def test_expand_wikilinks_basic():
     """_expand_wikilinks converts [[target]] to plain text."""
-    from server.db import _expand_wikilinks
+    from server.vault import _expand_wikilinks
 
     assert _expand_wikilinks("See [[target]] here") == "See target here"
     assert _expand_wikilinks("See [[notes/target]] here") == "See notes target here"
@@ -772,7 +772,7 @@ def test_expand_wikilinks_basic():
 
 def test_expand_wikilinks_md_extension():
     """_expand_wikilinks strips .md extension."""
-    from server.db import _expand_wikilinks
+    from server.vault import _expand_wikilinks
 
     assert _expand_wikilinks("See [[target.md]] here") == "See target here"
     assert _expand_wikilinks("See [[notes/target.md|alias]] here") == "See notes target alias here"
@@ -780,7 +780,7 @@ def test_expand_wikilinks_md_extension():
 
 def test_segments_search_wikilink_target(vault_dir):
     """Segments search finds documents by wikilink target name."""
-    from server.db import init_db, index_segments, segments_search
+    from server.vault import init_db, index_segments, segments_search
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -800,7 +800,7 @@ def test_segments_search_wikilink_target(vault_dir):
 
 def test_segments_search_wikilink_alias(vault_dir):
     """Segments search finds documents by wikilink alias."""
-    from server.db import init_db, index_segments, segments_search
+    from server.vault import init_db, index_segments, segments_search
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -820,7 +820,7 @@ def test_segments_search_wikilink_alias(vault_dir):
 
 def test_apply_change_moved_updates_references(vault_dir):
     """apply_change('moved') rewrites wikilinks in other docs."""
-    from server.db import init_db, apply_change
+    from server.vault import init_db, apply_change
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -841,7 +841,7 @@ def test_apply_change_moved_updates_references(vault_dir):
 
 def test_apply_change_moved_migrates_db_indexes(vault_dir):
     """apply_change('moved') migrates files, segments and graph to the new path."""
-    from server.db import init_db, apply_change, index_segments, graph_extract_file
+    from server.vault import init_db, apply_change, index_segments, graph_extract_file
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -878,7 +878,7 @@ def test_apply_change_moved_migrates_db_indexes(vault_dir):
 
 def test_apply_change_moved_plain_text_path_not_rewritten(vault_dir):
     """apply_change('moved') does NOT rewrite plain-text path references (only wikilinks)."""
-    from server.db import init_db, apply_change
+    from server.vault import init_db, apply_change
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -900,7 +900,7 @@ def test_apply_change_moved_plain_text_path_not_rewritten(vault_dir):
 
 def test_find_referrers_basic(vault_dir):
     """_find_referrers returns src paths that have wikilink edges to target."""
-    from server.db import init_db, graph_extract_file, _find_referrers
+    from server.vault import init_db, graph_extract_file, _find_referrers
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -921,7 +921,7 @@ def test_find_referrers_basic(vault_dir):
 
 def test_find_referrers_short_name(vault_dir):
     """_find_referrers resolves short-name targets via rglob(filename)."""
-    from server.db import init_db, graph_extract_file, _find_referrers
+    from server.vault import init_db, graph_extract_file, _find_referrers
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -939,7 +939,7 @@ def test_find_referrers_short_name(vault_dir):
 
 def test_find_referrers_empty_edges_fallback(vault_dir):
     """When edges table is empty, falls back to full-vault scan."""
-    from server.db import init_db, _find_referrers
+    from server.vault import init_db, _find_referrers
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -956,7 +956,7 @@ def test_find_referrers_empty_edges_fallback(vault_dir):
 
 def test_find_referrers_no_refs(vault_dir):
     """Returns empty list when edges is populated but no file links to target."""
-    from server.db import init_db, graph_extract_file, _find_referrers
+    from server.vault import init_db, graph_extract_file, _find_referrers
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -981,7 +981,7 @@ def test_find_referrers_no_refs(vault_dir):
 
 def test_apply_change_moved_updates_refs_via_edges(vault_dir):
     """apply_change(moved) updates references using edges, not full scan."""
-    from server.db import init_db, graph_extract_file, apply_change
+    from server.vault import init_db, graph_extract_file, apply_change
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -1008,7 +1008,7 @@ def test_apply_change_moved_updates_refs_via_edges(vault_dir):
 
 def test_apply_change_deleted_removes_dead_links_via_edges(vault_dir):
     """apply_change(deleted) removes dead links using edges, not full scan."""
-    from server.db import init_db, graph_extract_file, apply_change
+    from server.vault import init_db, graph_extract_file, apply_change
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:

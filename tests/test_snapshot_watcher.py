@@ -183,7 +183,7 @@ class TestPairMoves:
 
     def test_simple_move(self):
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         h = "abc123"
         gone = {"old/a.md": FileEntry(h, 10, 0.0)}
         new = {"new/a.md": FileEntry(h, 10, 0.0)}
@@ -195,7 +195,7 @@ class TestPairMoves:
     def test_same_name_different_hash(self):
         """Same filename, different content → NOT a move."""
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         gone = {"dirA/notes.md": FileEntry("hash_a", 10, 0.0)}
         new = {"dirB/notes.md": FileEntry("hash_b", 20, 0.0)}
         moves, deletes, creates = _pair_moves(gone, new)
@@ -205,7 +205,7 @@ class TestPairMoves:
 
     def test_1_to_1_same_hash(self):
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         h = "same_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
         new = {"b/x.md": FileEntry(h, 5, 0.0)}
@@ -215,7 +215,7 @@ class TestPairMoves:
     def test_2_to_1_same_hash_degrades(self):
         """Two gone, one new with same hash → no move, all delete+create."""
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         h = "dup_hash"
         gone = {
             "a/x.md": FileEntry(h, 5, 0.0),
@@ -230,7 +230,7 @@ class TestPairMoves:
     def test_1_to_2_same_hash_degrades(self):
         """One gone, two new with same hash → no move."""
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         h = "dup_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
         new = {
@@ -244,7 +244,7 @@ class TestPairMoves:
 
     def test_multiple_independent_moves(self):
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         gone = {
             "a/1.md": FileEntry("h1", 1, 0.0),
             "a/2.md": FileEntry("h2", 2, 0.0),
@@ -260,7 +260,7 @@ class TestPairMoves:
 
     def test_mixed_move_and_delete_and_create(self):
         from server.snapshot_watcher import _pair_moves
-        from server.db.file_entry import FileEntry
+        from server.vault.file_entry import FileEntry
         gone = {
             "a/move.md": FileEntry("h_move", 10, 0.0),
             "a/del.md": FileEntry("h_del", 20, 0.0),

@@ -96,7 +96,7 @@ def _file_not_found_hint(path: str, db_conn, tool: str) -> str:
     if db_conn is None:
         return file_not_found(path)
 
-    from .db import get_changes
+    from .vault import get_changes
 
     try:
         all_changes = get_changes(db_conn, limit=50)

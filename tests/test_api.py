@@ -7,7 +7,7 @@ import time
 import pytest
 
 from server import api as api_module
-from server.db import get_all_files
+from server.vault import get_all_files
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
@@ -212,7 +212,7 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
 
 def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
     """GET /api/graph/backlinks returns documents linking to a path."""
-    from server.db import init_graph, graph_extract_file
+    from server.vault import init_graph, graph_extract_file
 
     init_graph(db_conn)
     # Files at vault root so bare wikilinks resolve (no dangling edges).
@@ -229,7 +229,7 @@ def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
 
 def test_graph_related_endpoint(client, vault_dir, db_conn):
     """GET /api/graph/related returns related documents."""
-    from server.db import init_graph, graph_extract_file
+    from server.vault import init_graph, graph_extract_file
 
     init_graph(db_conn)
     # Files at vault root so bare wikilinks resolve (no dangling edges).
@@ -344,7 +344,7 @@ def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
 
 def test_new_session_clean(client, db_conn):
     """New session is always clean — no old messages injected."""
-    from server.db import save_session, load_session
+    from server.vault import save_session, load_session
 
     old_msgs = [
         {"role": "system", "content": "You are helpful."},
@@ -364,7 +364,7 @@ def test_new_session_clean(client, db_conn):
 
 
 def test_new_session_no_old(client, db_conn):
-    from server.db import load_session
+    from server.vault import load_session
 
     r = client.post("/api/agent/new-session", json={"old_session_id": ""})
     assert r.status_code == 200
@@ -378,7 +378,7 @@ def test_new_session_no_old(client, db_conn):
 
 def test_new_session_no_injection_even_with_history(client, db_conn):
     """Even with extensive old history, new session has zero non-system messages."""
-    from server.db import save_session, load_session
+    from server.vault import save_session, load_session
 
     old_msgs = [{"role": "system", "content": "sys"}]
     for i in range(10):

@@ -1,13 +1,13 @@
-"""SQLite index package.
+"""Vault index package.
 
 Compatibility layer: re-exports every symbol of the former monolithic
-``server/db.py`` so existing imports (``from server.db import X``) keep
+``server/db.py`` so existing imports (``from server.vault import X``) keep
 working. New code should import from the submodules directly, e.g.
-``from server.db.segments import segments_search``.
+``from server.vault.segments import segments_search``.
 """
-from .changes import clear_changes, get_changes, log_change
+from .db.changes import clear_changes, get_changes, log_change
 from .file_entry import FileEntry
-from .file_index import delete_file, get_all_files, upsert_file
+from .db.file_index import delete_file, get_all_files, upsert_file
 from .file_ops import (
     _is_filename_unique,
     _remove_dead_links,
@@ -30,7 +30,7 @@ from .graph import (
     graph_upsert_entity,
     init_graph,
 )
-from .schema import _ACTION_TO_OP, _OP_TO_ACTION, _db_lock, init_db
+from .db.schema import _ACTION_TO_OP, _OP_TO_ACTION, _db_lock, init_db
 from .segments import (
     _iter_vault_md,
     _split_long_text,
@@ -43,7 +43,7 @@ from .segments import (
     segments_search,
 )
 from .reconcile import reconcile
-from .sessions import get_recent_sessions, load_session, save_session
+from .db.sessions import get_recent_sessions, load_session, save_session
 
 __all__ = [
     # file_entry
