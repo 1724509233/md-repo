@@ -212,7 +212,8 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
 
 def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
     """GET /api/graph/backlinks returns documents linking to a path."""
-    from server.vault import init_graph, graph_extract_file
+    from server.vault import init_graph
+    from server.vault.orchestration.indexer import graph_extract_file
 
     init_graph(db_conn)
     # Files at vault root so bare wikilinks resolve (no dangling edges).
@@ -229,7 +230,8 @@ def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
 
 def test_graph_related_endpoint(client, vault_dir, db_conn):
     """GET /api/graph/related returns related documents."""
-    from server.vault import init_graph, graph_extract_file
+    from server.vault import init_graph
+    from server.vault.orchestration.indexer import graph_extract_file
 
     init_graph(db_conn)
     # Files at vault root so bare wikilinks resolve (no dangling edges).

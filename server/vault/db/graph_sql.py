@@ -1,76 +1,17 @@
-"""Knowledge graph: wikilink/tag/related entities and edges over the vault."""
+"""Knowledge graph tables: entities/edges schema, queries, and referrer lookup.
+
+Most functions are pure SQL (no disk I/O). The one exception is
+``_find_referrers``, whose fallback path (when conn is None or the edges table
+is empty) performs disk I/O via ``_iter_vault_md`` — a documented, accepted
+db→fs dependency.
+"""
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
-from .segments import _iter_vault_md
+from ..fs.vault_ops import _iter_vault_md
 
-
-# ── FS: link parsing (no DB) ──
-
-def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
-    """Resolve a wikilink target to a vault-relative path.
-
-    Resolution order:
-    1. Exact relative path (e.g. 'notes/a.md')
-    2. Same-directory relative (e.g. './a.md' from the linking file's dir)
-    3. Vault-wide search by filename (e.g. 'a.md' → find 'notes/a.md')
-
-    Returns the vault-relative path, or None if not found.
-    """
-    # Normalize: add .md if no extension
-    if not target.endswith(".md"):
-        target += ".md"
-
-    # 1. Exact relative path from vault root
-    if (vault_dir / target).is_file():
-        return target
-
-    # 2. Vault-wide search by filename (handles Obsidian short names like [[MOC]])
-    #    Only resolves when the filename is unique; ambiguous matches return None.
-    filename = Path(target).name
-    matches = [
-        f for f in vault_dir.rglob(filename)
-        if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
-    ]
-    if len(matches) == 1:
-        return matches[0].relative_to(vault_dir).as_posix()
-
-    return None
-
-
-def _expand_wikilinks(content: str) -> str:
-    """Expand wikilinks into plain text for FTS indexing.
-
-    [[notes/target|alias]] → "notes target alias"
-    [[target]] → "target"
-    """
-    import re
-
-    def _replace(m):
-        target = m.group(1).strip()
-        alias = m.group(2)
-        # Strip .md extension, split path into components
-        if target.endswith(".md"):
-            target = target[:-3]
-        parts = target.replace("/", " ").split()
-        if alias:
-            parts.append(alias.strip())
-        return " ".join(parts)
-
-    return re.sub(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]", _replace, content)
-
-
-def _extract_title(content: str) -> str:
-    """Extract the first markdown heading as title."""
-    for line in content.split("\n"):
-        if line.startswith("# "):
-            return line[2:].strip()
-    return ""
-
-
-# ── DB: entities/edges table (no disk I/O) ──
 
 def init_graph(conn: sqlite3.Connection) -> None:
     """Create graph tables if they don't exist."""
@@ -252,71 +193,3 @@ def _find_referrers(conn: sqlite3.Connection | None, vault_dir: Path, target_pat
     ).fetchall()
 
     return [row[0] for row in rows]
-
-
-# ── Orchestration: coordinates FS + DB ──
-
-def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
-    """Extract wikilinks, tags, and related from a markdown file into the graph.
-
-    Called after FTS index update on change_log events.
-    """
-    import re
-
-    fp = vault_dir / path
-    if not fp.is_file():
-        graph_delete_file(conn, path)
-        return
-
-    content = fp.read_bytes().decode("utf-8", errors="replace")
-
-    # Get or create entity for this document
-    doc_id = graph_upsert_entity(conn, path, "doc", path)
-
-    # 1. Wikilinks: [[target]] or [[target|alias]]
-    for match in re.finditer(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", content):
-        target = match.group(1).strip()
-        resolved = _resolve_wikilink(vault_dir, target)
-        if resolved:
-            dst_id = graph_upsert_entity(conn, resolved, "doc", resolved)
-            graph_add_edge(conn, doc_id, dst_id, "wikilink", path)
-
-    # 2. Tags: #tag (word boundary, not in code blocks)
-    # Remove code blocks first
-    no_code = re.sub(r"```.*?```", "", content, flags=re.DOTALL)
-    no_code = re.sub(r"`[^`]+`", "", no_code)
-    for match in re.finditer(r"(?:^|\s)#(\w+)", no_code, flags=re.MULTILINE):
-        tag = match.group(1)
-        dst_id = graph_upsert_entity(conn, tag, "tag")
-        graph_add_edge(conn, doc_id, dst_id, "tag", path)
-
-    # 3. Frontmatter related: [a, b]
-    fm_match = re.match(r"^---\s*\n(.*?)\n---", content, flags=re.DOTALL)
-    if fm_match:
-        fm = fm_match.group(1)
-        rel_match = re.search(r"^related:\s*\[(.+)\]", fm, flags=re.MULTILINE)
-        if rel_match:
-            for item in rel_match.group(1).split(","):
-                target = item.strip().strip("'\"")
-                resolved = _resolve_wikilink(vault_dir, target)
-                if resolved:
-                    dst_id = graph_upsert_entity(conn, resolved, "doc", resolved)
-                    graph_add_edge(conn, doc_id, dst_id, "related", path)
-
-    conn.commit()
-
-
-def graph_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
-    """Full rebuild of graph from vault. Returns count of processed files.
-
-    Deletes all edges/entities, then re-extracts every .md file.
-    """
-    conn.execute("DELETE FROM edges")
-    conn.execute("DELETE FROM entities")
-    count = 0
-    for md_file in _iter_vault_md(vault_dir):
-        rel = md_file.relative_to(vault_dir).as_posix()
-        graph_extract_file(conn, vault_dir, rel)
-        count += 1
-    conn.commit()
-    return count

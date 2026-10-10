@@ -1,4 +1,4 @@
-"""Tests for server.vault.reconcile.
+"""Tests for server.vault.orchestration.file_ops.reconcile.
 
 The ``reconcile(disk, conn, vault_dir)`` function is a pure DB-layer operation:
 it receives the disk state as ``dict[str, FileEntry]`` and does NOT scan the

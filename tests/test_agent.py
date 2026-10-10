@@ -79,7 +79,8 @@ def test_read_write_tool_sets():
 
 def test_execute_get_related_docs(vault_dir, db_conn):
     """get_related_docs returns linked documents."""
-    from server.vault import init_graph, graph_extract_file
+    from server.vault import init_graph
+    from server.vault.orchestration.indexer import graph_extract_file
 
     init_graph(db_conn)
     # Create two linked docs at the vault root (bare wikilinks resolve relative to root).
@@ -824,7 +825,8 @@ def test_parse_since_invalid():
 
 def test_execute_recent_changes(tmp_path: Path):
     from server.agent import execute_tool
-    from server.vault import init_db, apply_change
+    from server.vault import init_db
+    from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -848,7 +850,8 @@ def test_execute_recent_changes(tmp_path: Path):
 
 def test_execute_recent_changes_filter(tmp_path: Path):
     from server.agent import execute_tool
-    from server.vault import init_db, apply_change
+    from server.vault import init_db
+    from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
     vault.mkdir()
