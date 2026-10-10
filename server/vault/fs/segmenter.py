@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import re as _re
 
+import jieba
+
 # 50-100 most common Chinese function words for stopword filtering
 _STOPWORDS = frozenset(
     "的 了 在 是 我 有 和 就 不 人 都 一 一个 上 也 很 到 说 要 去 你 会 着 没有 看 好 "
@@ -16,7 +18,6 @@ _STOPWORDS = frozenset(
 
 def _tokenize_for_index(text: str) -> str:
     """Tokenize text with jieba cut_for_search, filter stopwords, return space-joined."""
-    import jieba
     tokens = []
     for t in jieba.cut_for_search(text):
         t = t.strip().lower()

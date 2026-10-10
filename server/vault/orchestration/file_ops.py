@@ -20,6 +20,7 @@ from ..db.schema import _db_lock
 from ..file_entry import FileEntry
 from .indexer import (
     delete_segments,
+    fts_batch,
     graph_delete_file,
     graph_extract_file,
     index_segments,
@@ -164,20 +165,22 @@ def reconcile(
 
     # Phase 4: apply each category via apply_change.
     # Pass new_hash from the disk scan to avoid redundant read+hash.
-    for old, new in moved:
-        apply_change(conn, vault_dir, new, "moved", source=SOURCE, from_path=old,
-                     new_hash=disk[new].hash)
+    # Batch mode: suppress per-call FTS rebuild; one rebuild on exit.
+    with fts_batch():
+        for old, new in moved:
+            apply_change(conn, vault_dir, new, "moved", source=SOURCE, from_path=old,
+                         new_hash=disk[new].hash)
 
-    for p in true_created:
-        apply_change(conn, vault_dir, p, "created", source=SOURCE,
-                     new_hash=disk[p].hash)
+        for p in true_created:
+            apply_change(conn, vault_dir, p, "created", source=SOURCE,
+                         new_hash=disk[p].hash)
 
-    for p in modified:
-        apply_change(conn, vault_dir, p, "modified", source=SOURCE,
-                     new_hash=disk[p].hash)
+        for p in modified:
+            apply_change(conn, vault_dir, p, "modified", source=SOURCE,
+                         new_hash=disk[p].hash)
 
-    for p in true_deleted:
-        apply_change(conn, vault_dir, p, "deleted", source=SOURCE)
+        for p in true_deleted:
+            apply_change(conn, vault_dir, p, "deleted", source=SOURCE)
 
     # unchanged: skip (no rehash, no upsert, no log)
 

@@ -5,6 +5,7 @@ Builds the segments FTS index and the knowledge graph from vault files.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..db.graph_sql import (
@@ -13,20 +14,54 @@ from ..db.graph_sql import (
     graph_upsert_entity,
 )
 from ..db.segments_sql import init_segments  # noqa: F401  (re-exported for compat)
-from ..fs.link_parser import _resolve_wikilink
+from ..fs.link_parser import _clear_wikilink_cache, _resolve_wikilink
 from ..fs.segmenter import _tokenize_for_index, segment_markdown
 from ..fs.vault_ops import _iter_vault_md
 
+# ── FTS batch mode ─────────────────────────────────────────────────────────
+# Per-call FTS rebuild is the default (correct for single-file ops). Batch
+# callers that process many files in a loop (reconcile, watcher flush) wrap
+# the loop in `with fts_batch():` to suppress per-call rebuilds and rebuild
+# FTS exactly once on exit. Nesting is supported via a depth counter.
+_fts_batch_depth = 0
 
-def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
-    """Read a file, segment it, tokenize, and upsert into segments table."""
+
+@contextmanager
+def fts_batch():
+    """Opt-in batch mode: suppress per-call FTS rebuild.
+
+    Callers that process many files in a loop (reconcile, watcher flush)
+    wrap the loop in ``with fts_batch():`` to rebuild FTS only once at the
+    end. Single-file callers (agent edit, direct apply_change) are unaffected
+    — they don't use fts_batch and get the default per-call rebuild.
+    """
+    global _fts_batch_depth
+    _fts_batch_depth += 1
+    try:
+        yield
+    finally:
+        _fts_batch_depth -= 1
+
+
+def _rebuild_fts(conn: sqlite3.Connection) -> None:
+    """Rebuild the segments FTS index from the segments table."""
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+
+
+def _index_one_file(conn: sqlite3.Connection, vault_dir: Path, path: str, mtime: float | None = None) -> bool:
+    """Read a file, segment it, tokenize, and INSERT into segments table.
+
+    Does NOT do FTS rebuild (caller handles that). Returns False if the file
+    does not exist on disk.
+    """
     fp = vault_dir / path
     if not fp.is_file():
-        delete_segments(conn, path)
-        return
+        return False
 
     content = fp.read_bytes().decode("utf-8", errors="replace")
-    mtime = fp.stat().st_mtime
+    if mtime is None:
+        mtime = fp.stat().st_mtime
 
     conn.execute("DELETE FROM segments WHERE path = ?", (path,))
 
@@ -52,54 +87,44 @@ def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None
             (path, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
         )
 
+    return True
+
+
+def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
+    """Read a file, segment it, tokenize, and upsert into segments table."""
+    if not _index_one_file(conn, vault_dir, path):
+        delete_segments(conn, path)
+        return
+
     conn.commit()
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
+    if _fts_batch_depth == 0:
+        _rebuild_fts(conn)
 
 
 def delete_segments(conn: sqlite3.Connection, path: str) -> None:
     """Remove all segments for a path."""
     conn.execute("DELETE FROM segments WHERE path = ?", (path,))
     conn.commit()
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
+    if _fts_batch_depth == 0:
+        _rebuild_fts(conn)
 
 
 def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
     """Full rebuild of segments index from vault. Returns count of indexed files."""
+    _clear_wikilink_cache()
     try:
         conn.execute("BEGIN")
         conn.execute("DELETE FROM segments")
         count = 0
         for md_file in _iter_vault_md(vault_dir):
             rel = md_file.relative_to(vault_dir).as_posix()
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
-            mtime = md_file.stat().st_mtime
-            segs = segment_markdown(content)
-            for i, seg in enumerate(segs):
-                kind = seg["kind"]
-                heading_path = seg["heading_path"]
-                text = seg["content"]
-                if kind == "meta":
-                    meta_text = text + " " + heading_path if heading_path else text
-                    body_tok, meta_tok, code_tok = "", _tokenize_for_index(meta_text), ""
-                elif kind == "code":
-                    body_tok, meta_tok, code_tok = "", "", _tokenize_for_index(text)
-                else:
-                    body_text = text + " " + heading_path if heading_path else text
-                    body_tok, meta_tok, code_tok = _tokenize_for_index(body_text), "", ""
-                conn.execute(
-                    "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (rel, mtime, i, heading_path, kind, text, body_tok, meta_tok, code_tok)
-                )
-            count += 1
+            if _index_one_file(conn, vault_dir, rel):
+                count += 1
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
-    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
-    conn.commit()
+    _rebuild_fts(conn)
     return count
 
 
@@ -119,6 +144,11 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
 
     # Get or create entity for this document
     doc_id = graph_upsert_entity(conn, path, "doc", path)
+
+    # Clear this document's outgoing edges so re-extraction is idempotent.
+    # graph_add_edge is INSERT OR IGNORE, so without this a removed wikilink
+    # would leave a stale edge behind.
+    conn.execute("DELETE FROM edges WHERE src_id = ?", (doc_id,))
 
     # 1. Wikilinks: [[target]] or [[target|alias]]
     for match in re.finditer(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]", content):
@@ -158,6 +188,7 @@ def graph_rebuild_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
 
     Deletes all edges/entities, then re-extracts every .md file.
     """
+    _clear_wikilink_cache()
     conn.execute("DELETE FROM edges")
     conn.execute("DELETE FROM entities")
     count = 0

@@ -26,57 +26,13 @@ def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
 def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str, new_path: str) -> int:
     """Replace references to old_path with new_path in files that link to it.
 
-    Uses edges table to find referrer files (falls back to full scan if empty).
-    Handles:
-    - Full-path wikilinks: [[old_path]] → [[new_path]], [[old_path|alias]] → [[new_path|alias]]
-    - Short-name wikilinks: [[old_stem]] → [[new_stem]] (only when old filename is unique)
+    Thin wrapper around :func:`_update_references_batch` for the single-move
+    case. Uses edges table to find referrer files (falls back to full scan if
+    empty). Handles full-path and short-name wikilinks.
 
     Returns the number of files modified.
     """
-    import re
-
-    old_stem = Path(old_path).stem
-    new_stem = Path(new_path).stem
-    old_name_unique = _is_filename_unique(vault_dir, Path(old_path).name)
-
-    src_paths = _find_referrers(conn, vault_dir, old_path)
-
-    modified_count = 0
-    for rel in src_paths:
-        if rel == new_path:
-            continue
-        md_file = vault_dir / rel
-        try:
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
-        except OSError:
-            continue
-
-        original = content
-
-        # 1. Full-path wikilink replacement: [[old_path]] or [[old_path|alias]]
-        escaped_old = re.escape(old_path)
-        content = re.sub(
-            r"\[\[(" + escaped_old + r")(\|[^\]]+)?\]\]",
-            lambda m: "[[" + new_path + (m.group(2) or "") + "]]",
-            content,
-        )
-
-        # 2. Short-name wikilink replacement: [[old_stem]] → [[new_stem]]
-        #    Only when the old filename is unique in the vault (no ambiguity)
-        #    and the stem actually changed.
-        if old_name_unique and old_stem != new_stem:
-            escaped_stem = re.escape(old_stem)
-            content = re.sub(
-                r"\[\[(" + escaped_stem + r")(\|[^\]]+)?\]\]",
-                lambda m: "[[" + new_stem + (m.group(2) or "") + "]]",
-                content,
-            )
-
-        if content != original:
-            md_file.write_bytes(content.encode("utf-8"))
-            modified_count += 1
-
-    return modified_count
+    return _update_references_batch(conn, vault_dir, [(old_path, new_path)])
 
 
 def _update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:

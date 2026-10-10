@@ -3,6 +3,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Module-level cache: filename → list of vault-relative paths matching it.
+# A file with N wikilinks would otherwise trigger N full vault rglob scans;
+# this cache collapses them into one scan per distinct filename.
+_wikilink_cache: dict[str, list[str]] = {}
+
+
+def _clear_wikilink_cache() -> None:
+    """Drop the wikilink resolution cache.
+
+    Called at the start of full rebuilds (``rebuild_segments_all``,
+    ``graph_rebuild_all``) so a vault that changed on disk is re-scanned.
+    """
+    _wikilink_cache.clear()
+
 
 def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
     """Resolve a wikilink target to a vault-relative path.
@@ -24,13 +38,17 @@ def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
 
     # 2. Vault-wide search by filename (handles Obsidian short names like [[MOC]])
     #    Only resolves when the filename is unique; ambiguous matches return None.
+    #    The rglob result is cached per filename to avoid repeated full scans.
     filename = Path(target).name
-    matches = [
-        f for f in vault_dir.rglob(filename)
-        if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
-    ]
+    if filename not in _wikilink_cache:
+        _wikilink_cache[filename] = [
+            f.relative_to(vault_dir).as_posix()
+            for f in vault_dir.rglob(filename)
+            if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+        ]
+    matches = _wikilink_cache[filename]
     if len(matches) == 1:
-        return matches[0].relative_to(vault_dir).as_posix()
+        return matches[0]
 
     return None
 
