@@ -6,8 +6,11 @@ with the index/segments/graph tables after each mutation.
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from .changes import log_change
 from .file_index import delete_file, upsert_file
@@ -43,14 +46,18 @@ def apply_change(
     with _db_lock:
         if action in ("created", "modified", "create", "update"):
             fp = vault_dir / path
-            if fp.is_file():
+            if not fp.is_file():
+                logger.warning("apply_change: %s not found on disk, skipping", path)
+                return
+            if new_hash:
+                digest = new_hash
+                mtime = fp.stat().st_mtime
+            else:
                 content = fp.read_bytes()
                 digest = hashlib.sha256(content).hexdigest()
                 mtime = fp.stat().st_mtime
-                upsert_file(conn, path, digest, mtime)
-                if not new_hash:
-                    new_hash = digest
-            log_change(conn, path, action, from_path=from_path, source=source, new_hash=new_hash)
+            upsert_file(conn, path, digest, mtime)
+            log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
             index_segments(conn, vault_dir, path)
             graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
@@ -62,13 +69,16 @@ def apply_change(
         elif action in ("moved", "move"):
             src = vault_dir / from_path
             dst = vault_dir / path
-            if src.is_file():
+            if new_hash:
+                digest = new_hash
+            elif src.is_file():
                 content = src.read_bytes()
                 digest = hashlib.sha256(content).hexdigest()
             elif dst.is_file():
                 content = dst.read_bytes()
                 digest = hashlib.sha256(content).hexdigest()
             else:
+                logger.warning("apply_change: moved %s → %s, neither exists on disk", from_path, path)
                 digest = ""
             if dst.is_file():
                 upsert_file(conn, path, digest, dst.stat().st_mtime)

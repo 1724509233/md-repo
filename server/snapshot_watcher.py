@@ -19,6 +19,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .db.file_entry import FileEntry
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,24 +41,22 @@ def _norm_rel(path: str, vault: Path) -> str | None:
         return None
 
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class _FileEntry:
-    """Snapshot entry: content hash + size for one file."""
-    hash: str
-    size: int
-
-
-def _full_scan(vault: Path) -> dict[str, _FileEntry]:
+def _full_scan(
+    vault: Path,
+    db: dict[str, tuple[str, float]] | None = None,
+) -> dict[str, FileEntry]:
     """Scan vault for .md files and build a snapshot dict.
 
-    Returns {rel_path: _FileEntry(hash, size)}.
+    Returns {rel_path: FileEntry(hash, size, mtime)}.
     Skips .sync/, .obsidian/, non-files, and unreadable files.
+
+    ``db`` (optional) is a {path: (hash, mtime)} map from the DB. When provided
+    and a file's mtime is unchanged, the stored hash is reused and the file is
+    not re-read (mtime fast-skip). The runtime periodic reconcile passes no db
+    so every file is re-read (full read, to catch watchdog-dropped events).
     """
     t0 = time.monotonic()
-    snap: dict[str, _FileEntry] = {}
+    snap: dict[str, FileEntry] = {}
     io_count = 0
     for f in vault.rglob("*.md"):
         if ".sync" in f.parts or ".obsidian" in f.parts:
@@ -67,20 +67,31 @@ def _full_scan(vault: Path) -> dict[str, _FileEntry]:
         if rel is None:
             continue
         try:
+            st = f.stat()
+        except OSError:
+            continue
+        # mtime fast-skip: DB has this path with an unchanged mtime → reuse hash.
+        if db and rel in db and st.st_mtime == db[rel][1]:
+            snap[rel] = FileEntry(
+                hash=db[rel][0], size=st.st_size, mtime=st.st_mtime
+            )
+            continue
+        try:
             io_count += 1
             content = f.read_bytes()
         except OSError:
             continue
-        snap[rel] = _FileEntry(
+        snap[rel] = FileEntry(
             hash=hashlib.sha256(content).hexdigest(),
             size=len(content),
+            mtime=st.st_mtime,
         )
     elapsed = (time.monotonic() - t0) * 1000
     logger.debug("full_scan: %d files, %d reads (%.1fms)", len(snap), io_count, elapsed)
     return snap
 
 
-def _read_stable(fp: Path, retry_count: dict[str, int]) -> _FileEntry | None:
+def _read_stable(fp: Path, retry_count: dict[str, int]) -> FileEntry | None:
     """Read a file and compute its hash with stability check.
 
     stat → read → stat. If size or mtime changed between the two stats,
@@ -103,22 +114,24 @@ def _read_stable(fp: Path, retry_count: dict[str, int]) -> _FileEntry | None:
         retry_count[key] = retry_count.get(key, 0) + 1
         if retry_count[key] > 5:
             retry_count.pop(key, None)
-            return _FileEntry(
+            return FileEntry(
                 hash=hashlib.sha256(content).hexdigest(),
                 size=st1.st_size,
+                mtime=st1.st_mtime,
             )
         return None
 
     retry_count.pop(str(fp), None)
-    return _FileEntry(
+    return FileEntry(
         hash=hashlib.sha256(content).hexdigest(),
         size=st1.st_size,
+        mtime=st1.st_mtime,
     )
 
 
 def _pair_moves(
-    gone: dict[str, _FileEntry],
-    new: dict[str, _FileEntry],
+    gone: dict[str, FileEntry],
+    new: dict[str, FileEntry],
 ) -> tuple[list[tuple[str, str]], list[str], list[str]]:
     """Pair gone and new entries by content hash (1:1 rule).
 
@@ -273,6 +286,7 @@ class SnapshotWatcher:
     def __init__(
         self,
         vault_dir: Path,
+        db_conn=None,
         on_file_created=None,
         on_file_modified=None,
         on_file_moved=None,
@@ -281,6 +295,7 @@ class SnapshotWatcher:
         reconcile_interval: float = 30.0,
     ) -> None:
         self._vault = vault_dir
+        self._db_conn = db_conn
         self._cb_created = on_file_created
         self._cb_modified = on_file_modified
         self._cb_moved = on_file_moved
@@ -290,12 +305,28 @@ class SnapshotWatcher:
 
         self._dirty: set[str] = set()
         self._lock = threading.Lock()
-        self._snapshot: dict[str, _FileEntry] = {}
+        self._snapshot: dict[str, FileEntry] = {}
         self._observer: Observer | None = None
         self._worker: _Worker | None = None
 
     def start(self) -> None:
-        """Start watching. Order: watchdog → full scan → worker."""
+        """Start watching. Order: full scan → reconcile → watchdog → worker."""
+        # 1. Query DB state (for the mtime fast-skip in _full_scan).
+        db_state = None
+        if self._db_conn:
+            db_state = {
+                row[0]: (row[1], row[2])
+                for row in self._db_conn.execute("SELECT path, hash, mtime FROM files")
+            }
+
+        # 2. Scan disk (single scan, with mtime skip).
+        self._snapshot = _full_scan(self._vault, db=db_state)
+
+        # 3. DB reconcile (if a conn was provided).
+        if self._db_conn:
+            from .db.reconcile import reconcile
+            reconcile(self._snapshot, self._db_conn, self._vault)
+        # 4. Start watchdog + worker.
         # Pass self as the notifier: handler calls .notify() on SnapshotWatcher,
         # which forwards to the worker once it exists.
         handler = _RawHandler(self._vault, self)
@@ -303,9 +334,6 @@ class SnapshotWatcher:
         self._observer.schedule(handler, str(self._vault), recursive=True)
         self._observer.daemon = True
         self._observer.start()
-
-        # Build snapshot baseline (covers events during scan)
-        self._snapshot = _full_scan(self._vault)
 
         # Start worker (first loop processes dirty from steps above)
         self._worker = _Worker(self)
@@ -348,7 +376,7 @@ class SnapshotWatcher:
         # converts / to \. Snapshot keys use as_posix() (forward slash).
         # Convert back to / after normcase so keys match.
         processing = {os.path.normcase(p).replace("\\", "/") for p in processing}
-        current: dict[str, _FileEntry] = {}
+        current: dict[str, FileEntry] = {}
         retry_count: dict[str, int] = {}
         io_count = 0
 
@@ -403,8 +431,8 @@ class SnapshotWatcher:
                 # File (exists or deleted): its snapshot entry is in scope.
                 processing_scope.add(path)
 
-        gone: dict[str, _FileEntry] = {}
-        new: dict[str, _FileEntry] = {}
+        gone: dict[str, FileEntry] = {}
+        new: dict[str, FileEntry] = {}
         modified: list[str] = []
 
         for rel, entry in current.items():

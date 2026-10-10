@@ -6,6 +6,7 @@ working. New code should import from the submodules directly, e.g.
 ``from server.db.segments import segments_search``.
 """
 from .changes import clear_changes, get_changes, log_change
+from .file_entry import FileEntry
 from .file_index import delete_file, get_all_files, upsert_file
 from .file_ops import (
     _is_filename_unique,
@@ -41,9 +42,14 @@ from .segments import (
     segment_markdown,
     segments_search,
 )
+from .reconcile import reconcile
 from .sessions import get_recent_sessions, load_session, save_session
 
 __all__ = [
+    # file_entry
+    "FileEntry",
+    # reconcile
+    "reconcile",
     # schema
     "init_db",
     "_db_lock",
