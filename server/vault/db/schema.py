@@ -30,6 +30,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
+    conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
         """
@@ -69,6 +70,23 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             created_at REAL NOT NULL
         )
         """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            alias TEXT NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_path TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            read INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications(ts)"
     )
 
     # Ensure the segments search index exists.
