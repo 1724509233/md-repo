@@ -18,7 +18,7 @@ class DeleteDocArgs(BaseModel):
 class DeleteDocTool(DocTool):
     name = "delete_doc"
     args_model = DeleteDocArgs
-    is_write = True
+    permission = "ask"
 
     def precheck(self, args: dict, ctx: ToolContext) -> str | None:
         """Existence check before asking the user to confirm."""

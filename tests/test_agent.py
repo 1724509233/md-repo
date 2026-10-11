@@ -70,12 +70,14 @@ def test_tools_schema_has_nine_tools():
     }
 
 
-def test_read_write_tool_sets():
-    from server.agent import READ_TOOLS, WRITE_TOOLS
+def test_tool_permission_declarations():
+    from server.agent.tools import TOOL_REGISTRY
 
-    assert READ_TOOLS == {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
-    assert WRITE_TOOLS == {"write_doc", "edit_doc", "delete_doc", "move_docs"}
-    assert READ_TOOLS.isdisjoint(WRITE_TOOLS)
+    ask = {name for name, t in TOOL_REGISTRY.items() if t.permission == "ask"}
+    allow = {name for name, t in TOOL_REGISTRY.items() if t.permission == "allow"}
+    assert ask == {"write_doc", "edit_doc", "delete_doc", "move_docs"}
+    assert allow == {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
+    assert ask.isdisjoint(allow)
 
 
 def test_execute_get_related_docs(vault_dir, db_conn):

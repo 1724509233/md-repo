@@ -20,7 +20,7 @@ class EditDocArgs(BaseModel):
 class EditDocTool(DocTool):
     name = "edit_doc"
     args_model = EditDocArgs
-    is_write = True
+    permission = "ask"
 
     def _missing_message(self, path: str, lookup) -> str:
         """Anti-cementation wording: never recreate from memory, verify first."""

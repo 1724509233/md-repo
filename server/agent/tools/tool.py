@@ -64,7 +64,7 @@ class Tool:
 
     name: ClassVar[str]
     args_model: ClassVar[type[BaseModel]]
-    is_write: ClassVar[bool] = False
+    permission: ClassVar[str] = "allow"
 
     def validate(self, args: dict) -> str | None:
         """Validate raw args against the pydantic model. Returns an error string or None."""

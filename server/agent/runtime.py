@@ -124,7 +124,7 @@ class LoopRuntime(Runtime):
                     yield self._tool_error(agent, tc, err_msg)
                     continue
 
-                # Dispatch via the registry (canonical tool instances: is_write,
+                # Dispatch via the registry (canonical tool instances: permission,
                 # precheck, on_success) — same semantics as the old WRITE_TOOLS set.
                 tool = TOOL_REGISTRY.get(tc["name"])
                 yield Event("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
@@ -143,7 +143,7 @@ class LoopRuntime(Runtime):
                         yield self._tool_error(agent, tc, pre)
                         continue
 
-                if tool is not None and tool.is_write:
+                if tool is not None and tool.permission == "ask":
                     entry = {"event": asyncio.Event(), "approved": None}
                     agent.pending_confirms[tc["id"]] = entry
                     yield Event("confirm_request", {

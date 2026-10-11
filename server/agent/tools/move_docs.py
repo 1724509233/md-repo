@@ -37,7 +37,7 @@ class MoveDocsArgs(BaseModel):
 class MoveDocsTool(DocTool):
     name = "move_docs"
     args_model = MoveDocsArgs
-    is_write = True
+    permission = "ask"
 
     @staticmethod
     def move_dest_exists(to_path: str) -> str:

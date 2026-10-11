@@ -2,7 +2,7 @@
 
 Each submodule holds a tool's args model + Tool subclass. This package
 builds the registry and derives the names the rest of the codebase imports:
-TOOL_ARGS, TOOLS, READ_TOOLS, WRITE_TOOLS.
+TOOL_ARGS, TOOLS.
 """
 from __future__ import annotations
 
@@ -38,15 +38,10 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {name: t.args_model for name, t in TOOL_
 
 TOOLS = [t.to_openai_tool() for t in _ALL_TOOLS]
 
-READ_TOOLS = {name for name, t in TOOL_REGISTRY.items() if not t.is_write}
-WRITE_TOOLS = {name for name, t in TOOL_REGISTRY.items() if t.is_write}
-
 __all__ = [
     "TOOL_REGISTRY",
     "TOOL_ARGS",
     "TOOLS",
-    "READ_TOOLS",
-    "WRITE_TOOLS",
     "ReadDocArgs",
     "SearchDocsArgs",
     "ListFilesArgs",

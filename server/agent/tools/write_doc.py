@@ -19,7 +19,7 @@ class WriteDocArgs(BaseModel):
 class WriteDocTool(Tool):
     name = "write_doc"
     args_model = WriteDocArgs
-    is_write = True
+    permission = "ask"
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...write_registry import register_write
