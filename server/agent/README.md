@@ -49,8 +49,8 @@
   - `precheck(args, ctx)`：执行前检查（delete_doc / move_docs 在确认提示**之前**做存在性检查），返回错误串短路。
   - `on_success(args, result, ctx)`：成功后钩子（read_doc 记录 last_read_ts）。
 - `DocTool(Tool)`：共享 `_missing_lookup`（变更日志查询：moved / deleted / 无历史）+ 每工具 `_missing_message`（模板方法，EditDocTool 覆写为防固化措辞）；`_file_not_found_hint` 是模板入口。
-- 注册表：`TOOL_REGISTRY`（name → 实例，canonical 实例），派生导出 `TOOLS` / `TOOL_ARGS` / `READ_TOOLS` / `WRITE_TOOLS`。
-- 分发用注册表而非 spec.tools：确认门（`is_write`）、precheck、on_success 在 spec.tools 为子集时同样生效。
+- 注册表：`TOOL_REGISTRY`（name → 实例，canonical 实例），派生导出 `TOOLS` / `TOOL_ARGS`（权限由每个工具的 `permission: "ask" | "allow"` 声明，无 READ/WRITE 集合）。
+- 分发用注册表而非 spec.tools：确认门（`permission == "ask"`，`AgentSpec.auto_approve=True` 时跳过）、precheck、on_success 在 spec.tools 为子集时同样生效。
 
 ### LoopRuntime 轮次流程
 
@@ -60,7 +60,7 @@
 4. 无 tool_calls → 追加 assistant message，发 `done` 事件返回。
 5. 否则追加 assistant（tool_calls）message，逐个处理调用：
    - JSON 解析失败 / `validate_tool_call` 拒绝 / `precheck` 失败 → `_tool_error`（追加 tool message + `tool_result(error)` 事件）
-   - `is_write` → 注册 pending_confirms，发 `confirm_request` 事件并 await；拒绝时回喂 "User rejected this operation."
+   - `permission == "ask"` 且未 auto_approve → 注册 pending_confirms，发 `confirm_request` 事件并 await；拒绝时回喂 "User rejected this operation."
    - `execute_tool` → `tool_result` 事件 + tool message；成功时调 `on_success`
 6. 轮次预算耗尽 → 发 `done` 事件（旧版静默返回）。
 

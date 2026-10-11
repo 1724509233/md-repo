@@ -20,3 +20,25 @@ ai:
   max_tokens: 4096
   context_window: 131072
   temperature: 0.7
+
+# 后台定时 agent（可选）— 各自独立 cron / provider / prompt
+# 启动时 fail-fast 校验：alias 唯一、cron 合法、prompt 文件存在、
+# target_dir 在 vault 内且各 agent 互不重叠
+background_agents:
+  - name: "笔记整理"
+    alias: notes-organizer
+    enabled: true
+    cron: "0 3 * * *"                # 5 段标准 cron，server 时区
+    target_dir: notes                 # 写操作 scope（vault 相对路径）
+    prompt: server/prompts/notes-organizer.md   # 相对 config.yaml 所在目录
+    report_dir: ""                    # 空 = <target_dir>/.reports/<alias>/
+    max_rounds: 30
+    timeout_s: 1800
+    model:                            # 独立 provider 配置（必填，不复用 ai 段）
+      provider: openai
+      model_id: qwen2.5:14b
+      base_url: "http://localhost:11434/v1"
+      api_key: ""
+      context_window: 16384
+      max_tokens: 4096
+      temperature: 0.7
