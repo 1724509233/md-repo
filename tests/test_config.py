@@ -21,7 +21,7 @@ def test_load_server_config(tmp_path: Path) -> None:
     cfg = load_server_config(str(cfg_file))
     assert cfg.host == "0.0.0.0"
     assert cfg.port == 9888
-    assert cfg.vault_dir == Path("./vault")
+    assert cfg.vault_dir == Path("./vault").resolve()
 
 
 def test_load_server_config_missing_file(tmp_path: Path) -> None:
