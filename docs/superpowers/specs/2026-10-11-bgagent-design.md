@@ -92,10 +92,10 @@ background_agents:
 
 `enabled: false` 或整段缺失 = 不启动调度器。`config.py` 增加 `BackgroundAgentConfig` dataclass + 加载逻辑。
 
-## 4. agent 层改动（5 处小改，Web UI agent 行为不变）
+## 4. agent 层改动（Web UI agent 行为不变）
 
-1. **`AgentSpec.auto_approve: bool = False`** — `LoopRuntime` 的 `tool.is_write` 分支：True 时跳过 `confirm_request`/await，直接执行
-2. **`AgentSpec.write_scope: Path | None = None`** — `validate_tool_call()` 增加可选参数：非 None 时，写类工具（edit_doc/write_doc/move_docs/delete_doc）的 `path`/`from_path`/`to_path` 必须 resolve 后落在 scope 内，越界返回错误串（agent 可见并自行纠正）；读类工具不受限
+1. **工具权限模型（替代 `is_write`）** — `Tool` 基类增加 `permission: ClassVar["ask" | "allow"] = "allow"`；4 个写工具（write_doc/edit_doc/move_docs/delete_doc）声明 `permission = "ask"`。`LoopRuntime` 确认门改按 `tool.permission == "ask"` 判断（`AgentSpec.auto_approve=True` 时跳过 ask 直接执行）。**删除 `READ_TOOLS`/`WRITE_TOOLS` 派生导出**（权限声明成为唯一事实来源）；同步删除 `server/agent/__init__.py` 再导出，更新 `tests/test_agent.py` 断言
+2. **`AgentSpec.write_scope: Path | None = None`** — `validate_tool_call()` 增加可选参数：非 None 时，`permission == "ask"` 工具的 `path`/`from_path`/`to_path` 必须 resolve 后落在 scope 内，越界返回错误串（agent 可见并自行纠正）；`allow` 工具不受限
 3. **`ToolContext.write_source: str = "agent"`** — 4 个写工具的 `register_write(path, "agent")` 改为 `register_write(path, ctx.write_source)`；后台 agent 传 `<alias>`
 4. **`ModelConfig` 增加 `max_tokens: int | None = None`、`temperature: float | None = None`** — `LoopRuntime` 透传给 `chat.completions.create()`（None 时 SDK 省略，现状不变）
 5. **runtime 事件扩展** — 每轮开始发 `Event("round", {"n": ...})`；`done` 事件 data 增加 `reason: "final" | "round_limit"`（API 层 SSE 忽略未知字段，无影响）
@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS notifications (
    - InAppHook 落库 → `GET /api/notifications` 返回 → `POST read` 标记已读
    - `/api/sync` 响应含 `ts > last_sync` 的未读通知
 5. agent 层回归（现有测试文件内补）
+   - 权限模型：`permission == "ask"` 触发确认门、`allow` 不触发；`READ_TOOLS`/`WRITE_TOOLS` 已移除
    - `validate_tool_call(write_scope=...)` 新参数；`ModelConfig.max_tokens/temperature` 透传
 
 **端到端手动验证（实现完成后）：**
@@ -255,7 +256,9 @@ CREATE TABLE IF NOT EXISTS notifications (
 | `server/agent/spec.py` | `auto_approve`、`write_scope`、`ModelConfig.max_tokens/temperature` |
 | `server/agent/runtime.py` | auto_approve 分支、max_tokens/temperature 透传、round/done(reason) 事件 |
 | `server/agent/validate.py` | `write_scope` 参数 |
-| `server/agent/tools/tool.py` + 4 个写工具 | `ToolContext.write_source` |
+| `server/agent/tools/tool.py` + 4 个写工具 | `permission` 声明、`ToolContext.write_source` |
+| `server/agent/tools/__init__.py`、`server/agent/__init__.py` | 删除 `READ_TOOLS`/`WRITE_TOOLS` |
+| `tests/test_agent.py`、`server/agent/README.md` | 权限模型断言与文档更新 |
 | `server/vault/db/schema.py` | `notifications` 表 |
 | `server/api.py` | `/api/notifications` 路由、`/api/sync` 响应字段 |
 | `client/sync.py` | 通知控制台输出 |
