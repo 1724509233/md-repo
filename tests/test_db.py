@@ -916,7 +916,7 @@ def test_apply_change_moved_migrates_db_indexes(vault_dir):
         assert "notes/old.md" not in {r[0] for r in ents}
 
         # change_log: recorded as a move
-        changes = conn.execute("SELECT op, path, old_path FROM change_log").fetchall()
+        changes = [tuple(r) for r in conn.execute("SELECT op, path, old_path FROM change_log").fetchall()]
         assert ("move", "notes/new.md", "notes/old.md") in changes
     finally:
         conn.close()

@@ -207,7 +207,7 @@ def test_move_after_modify(vault_dir, db_conn):
     assert _db_paths(db_conn) == {"archive/test.md"}
 
     # change_log: move + update, in that order.
-    changes = _reconcile_changes(db_conn)
+    changes = [tuple(r) for r in _reconcile_changes(db_conn)]
     assert ("move", "archive/test.md", "notes/test.md") in changes
     assert ("update", "archive/test.md", "") in changes
     ops = [op for op, _, _ in changes]
