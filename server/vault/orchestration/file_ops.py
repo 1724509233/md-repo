@@ -18,6 +18,7 @@ from ..db.changes import log_change
 from ..db.file_index import delete_file, upsert_file
 from ..db.schema import _db_lock
 from ..file_entry import FileEntry
+from .move_detect import pair_moves
 from .indexer import (
     delete_segments,
     fts_batch,
@@ -87,9 +88,23 @@ def apply_change(
                 digest = ""
             if dst.is_file():
                 upsert_file(conn, path, digest, dst.stat().st_mtime)
+            # Look up the old hash before deleting the old record.
+            old_hash = ""
+            if from_path:
+                row = conn.execute(
+                    "SELECT hash FROM files WHERE path = ?", (from_path,)
+                ).fetchone()
+                if row:
+                    old_hash = row[0]
             if from_path:
                 delete_file(conn, from_path)
             log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
+            # A move-after-edit produces two records (move + update): the move
+            # captures the path change, the update captures the content change.
+            # Semantically complete; a single call performs no duplicate index
+            # handling (index_segments runs once below for the new path).
+            if old_hash and old_hash != digest:
+                log_change(conn, path, "modified", source=source, new_hash=digest)
             if from_path:
                 delete_segments(conn, from_path)
                 graph_delete_file(conn, from_path)
@@ -115,6 +130,10 @@ def reconcile(
     Pure DB-layer operation: does NOT scan the filesystem.
     The caller (SnapshotWatcher) provides the disk state.
 
+    Move detection uses the shared two-level cascade
+    (``move_detect.pair_moves``, same rule as snapshot_watcher): hash
+    grouping first, then filename grouping for modified-content moves.
+
     Returns:
         {"created": n, "modified": n, "deleted": n, "moved": n,
          "unchanged": n, "duplicates": n}
@@ -138,30 +157,15 @@ def reconcile(
     modified = {p for p in common if disk[p].hash != db[p][0]}
     unchanged = {p for p in common if disk[p].hash == db[p][0]}
 
-    # Phase 3: move detection via 1:1 hash pairing (same rule as
-    # snapshot_watcher._pair_moves). Unpaired entries degrade to true
-    # delete / true create.
-    deleted_by_hash: dict[str, list[str]] = defaultdict(list)
-    for p in deleted:
-        deleted_by_hash[db[p][0]].append(p)
-
-    created_by_hash: dict[str, list[str]] = defaultdict(list)
-    for p in created:
-        created_by_hash[disk[p].hash].append(p)
-
-    moved: list[tuple[str, str]] = []  # [(old_path, new_path), ...]
-    paired_deleted: set[str] = set()
-    paired_created: set[str] = set()
-
-    for h, old_list in deleted_by_hash.items():
-        new_list = created_by_hash.get(h, [])
-        if len(old_list) == 1 and len(new_list) == 1:
-            moved.append((old_list[0], new_list[0]))
-            paired_deleted.add(old_list[0])
-            paired_created.add(new_list[0])
-
-    true_deleted = deleted - paired_deleted
-    true_created = created - paired_created
+    # Phase 3: move detection via the shared two-level cascade
+    # (move_detect.pair_moves, same rule as snapshot_watcher._pair_moves).
+    # Unpaired entries degrade to true delete / true create.
+    # The DB side is {path: (hash, mtime)}; build FileEntry with size=0
+    # (pairing only uses the hash).
+    db_entries = {p: FileEntry(hash=h, size=0, mtime=m) for p, (h, m) in db.items()}
+    gone = {p: db_entries[p] for p in deleted}
+    new = {p: disk[p] for p in created}
+    moved, true_deleted, true_created = pair_moves(gone, new)
 
     # Phase 4: apply each category via apply_change.
     # Pass new_hash from the disk scan to avoid redundant read+hash.

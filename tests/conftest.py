@@ -9,8 +9,21 @@ from fastapi.testclient import TestClient
 
 from server.api import create_app
 from server.vault import init_db, upsert_file
+from server.vault.db import conn as db_handle
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
+
+
+@pytest.fixture(autouse=True)
+def _db_handle_isolation():
+    """Reset the module-level DB handle around every test.
+
+    Tools resolve the connection lazily via ``db_handle.get_conn()``; this
+    prevents one test's registered connection leaking into the next.
+    """
+    db_handle.init(None)
+    yield
+    db_handle.init(None)
 
 
 @pytest.fixture
@@ -36,7 +49,9 @@ def db_conn(vault_dir: Path):
     digest = hashlib.sha256(content).hexdigest()
     mtime = (vault_dir / "notes" / "test.md").stat().st_mtime
     upsert_file(conn, "notes/test.md", digest, mtime)
+    db_handle.init(conn)
     yield conn
+    db_handle.init(None)
     conn.close()
 
 

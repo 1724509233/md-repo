@@ -378,3 +378,40 @@ pre code.hljs { background: transparent; padding: 0; }
   .heading-flash-out::before,
   .heading-flash-out::after { animation-duration: 0s; }
 }
+
+/* ============ 通知铃铛下拉面板 ============ */
+@keyframes notif-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes badge-pop {
+  from { transform: scale(0); }
+  50%  { transform: scale(1.2); }
+  to   { transform: scale(1); }
+}
+
+.notif-dropdown {
+  animation: notif-in .18s ease-out both;
+}
+.notif-badge {
+  animation: badge-pop .3s ease-out both;
+}
+
+/* 下拉面板滚动条细化 */
+.notif-list::-webkit-scrollbar { width: 4px; }
+.notif-list::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ink-soft) 25%, transparent); }
+
+/* 状态圆点 */
+.status-dot { width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
+.status-ok { background: #059669; }
+.status-error { background: #ef4444; }
+.status-round_limit { background: #f59e0b; }
+.status-timeout { background: #fb923c; }
+
+/* 列表项 hover 行高亮 */
+.notif-item { transition: background-color .12s ease; }
+
+@media (prefers-reduced-motion: reduce) {
+  .notif-dropdown { animation: none; }
+  .notif-badge { animation: none; }
+}

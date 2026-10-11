@@ -637,7 +637,7 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
 
 def test_move_docs_updates_references(vault_dir):
     """move_docs renames the file; reference updates are handled inline via _update_references_batch."""
-    from server.agent import execute_tool
+    from server.agent import ToolContext, execute_tool
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "old.md").write_text("# Old doc")
@@ -646,8 +646,7 @@ def test_move_docs_updates_references(vault_dir):
     result = execute_tool(
         "move_docs",
         {"moves": [{"from_path": "notes/old.md", "to_path": "notes/new.md"}]},
-        vault_dir,
-        None,
+        ToolContext(vault_dir=vault_dir),
     )
 
     assert "Moved" in result
@@ -917,8 +916,65 @@ def test_apply_change_moved_migrates_db_indexes(vault_dir):
         assert "notes/old.md" not in {r[0] for r in ents}
 
         # change_log: recorded as a move
-        changes = conn.execute("SELECT op, path, old_path FROM change_log").fetchall()
+        changes = [tuple(r) for r in conn.execute("SELECT op, path, old_path FROM change_log").fetchall()]
         assert ("move", "notes/new.md", "notes/old.md") in changes
+    finally:
+        conn.close()
+
+
+def test_apply_change_moved_content_changed_logs_move_and_update(vault_dir):
+    """A move-after-edit logs two records: move, then update (same source)."""
+    import hashlib
+
+    from server.vault.orchestration.file_ops import apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        old_content = b"# Old doc\n"
+        new_content = b"# Old doc\n\nEdited.\n"
+        (vault_dir / "notes" / "old.md").write_bytes(old_content)
+        upsert_file(conn, "notes/old.md", hashlib.sha256(old_content).hexdigest(), 1000.0)
+
+        # Move + edit on disk, then apply the move.
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "notes" / "new.md")
+        (vault_dir / "notes" / "new.md").write_bytes(new_content)
+        apply_change(conn, vault_dir, "notes/new.md", "moved", source="test", from_path="notes/old.md")
+
+        changes = conn.execute(
+            "SELECT op, path, old_path, new_hash FROM change_log ORDER BY seq"
+        ).fetchall()
+        assert len(changes) == 2
+        # First: the move (path change).
+        assert changes[0][0] == "move"
+        assert changes[0][1] == "notes/new.md"
+        assert changes[0][2] == "notes/old.md"
+        # Second: the update (content change), carrying the new hash.
+        assert changes[1][0] == "update"
+        assert changes[1][1] == "notes/new.md"
+        assert changes[1][3] == hashlib.sha256(new_content).hexdigest()
+    finally:
+        conn.close()
+
+
+def test_apply_change_moved_unchanged_logs_single_move(vault_dir):
+    """A pure rename (content unchanged) logs exactly one move record."""
+    import hashlib
+
+    from server.vault.orchestration.file_ops import apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes").mkdir(exist_ok=True)
+        content = b"# Old doc\n"
+        (vault_dir / "notes" / "old.md").write_bytes(content)
+        upsert_file(conn, "notes/old.md", hashlib.sha256(content).hexdigest(), 1000.0)
+
+        (vault_dir / "notes" / "old.md").rename(vault_dir / "notes" / "new.md")
+        apply_change(conn, vault_dir, "notes/new.md", "moved", source="test", from_path="notes/old.md")
+
+        ops = [r[0] for r in conn.execute("SELECT op FROM change_log ORDER BY seq")]
+        assert ops == ["move"]
     finally:
         conn.close()
 

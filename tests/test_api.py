@@ -197,7 +197,7 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         resp = tc.post(
             "/api/agent/chat",
             json={"message": "hi", "session_id": "test1"},
@@ -277,7 +277,7 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         resp = tc.post(
             "/api/agent/chat",
             json={"message": "hi", "session_id": "test1"},
@@ -329,7 +329,7 @@ def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.AsyncOpenAI", return_value=mock_client):
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
         resp = tc.post(
             "/api/agent/chat",
             json={"message": "hi", "session_id": "test-404"},
@@ -360,9 +360,9 @@ def test_new_session_clean(client, db_conn):
     assert new_id != "old-sess"
     loaded = load_session(db_conn, new_id)
     assert loaded is not None
-    assert len(loaded["messages"]) == 2
-    assert loaded["messages"][0]["role"] == "system"
-    assert loaded["messages"][1]["role"] == "system"
+    # System prompt + time reminder are seeded by the Agent on first chat,
+    # not at session creation.
+    assert loaded["messages"] == []
 
 
 def test_new_session_no_old(client, db_conn):
@@ -373,9 +373,9 @@ def test_new_session_no_old(client, db_conn):
     new_id = r.json()["session_id"]
     loaded = load_session(db_conn, new_id)
     assert loaded is not None
-    assert len(loaded["messages"]) == 2
-    assert loaded["messages"][0]["role"] == "system"
-    assert loaded["messages"][1]["role"] == "system"
+    # System prompt + time reminder are seeded by the Agent on first chat,
+    # not at session creation.
+    assert loaded["messages"] == []
 
 
 def test_new_session_no_injection_even_with_history(client, db_conn):

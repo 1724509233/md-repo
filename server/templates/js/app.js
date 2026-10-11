@@ -24,7 +24,10 @@ const state = reactive({
   sidebarOpen: false,   // 移动端 sidebar
   moreMenuOpen: false,  // 移动端更多菜单
   conflict: null,       // { toolName, path } | null
-  docContent: ''        // 当前文档内容
+  docContent: '',        // 当前文档内容
+  notifOpen: false,
+  notifications: [],
+  unreadCount: 0
 })
 
 // ─── EditorPane ref（用于调用 triggerPageTurn）───
@@ -141,6 +144,15 @@ function setMode(mode) {
   state.previewMode = mode === 'preview'
 }
 
+// ─── 通知轮询 ───
+async function pollNotifications() {
+  try {
+    const notifs = await api.getNotifications(true)
+    state.notifications = notifs
+    state.unreadCount = notifs.length
+  } catch (e) { /* silent */ }
+}
+
 // ─── 变更轮询 ───
 async function pollChanges() {
   try {
@@ -228,11 +240,16 @@ export function createApp() {
       onMounted(() => {
         loadDocs()
         setInterval(pollChanges, 10000)
+        setInterval(pollNotifications, 30000)
+        pollNotifications()
 
         // 移动端 sidebar 点击 overlay 关闭
         document.addEventListener('click', (e) => {
           if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
+          }
+          if (state.notifOpen && !e.target.closest('[data-notif-bell]')) {
+            state.notifOpen = false
           }
         })
 
@@ -241,10 +258,38 @@ export function createApp() {
 
       const isDesktop = () => window.innerWidth >= 1024
 
+      function toggleNotifDropdown() {
+        state.notifOpen = !state.notifOpen
+      }
+
+      async function markAllRead() {
+        await api.markNotificationsRead({ all: true })
+        state.notifications = []
+        state.unreadCount = 0
+        state.notifOpen = false
+      }
+
+      async function openNotif(n) {
+        await api.markNotificationsRead({ ids: [n.id] })
+        state.notifications = state.notifications.filter(x => x.id !== n.id)
+        state.unreadCount = Math.max(0, state.unreadCount - 1)
+        openDoc(n.report_path)
+        state.notifOpen = false
+      }
+
+      function relativeTime(ts) {
+        const diff = Math.floor((Date.now() / 1000) - ts)
+        if (diff < 60) return '刚刚'
+        if (diff < 3600) return Math.floor(diff / 60) + '分钟前'
+        if (diff < 86400) return Math.floor(diff / 86400) + '小时前'
+        return Math.floor(diff / 86400) + '天前'
+      }
+
       return {
         state, editorPaneRef, isDesktop,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
-        handleToolResult, startNewSession, toggleAI, renderMarkdown
+        handleToolResult, startNewSession, toggleAI, renderMarkdown,
+        toggleNotifDropdown, markAllRead, openNotif, relativeTime
       }
     },
     template: `
@@ -276,9 +321,37 @@ export function createApp() {
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
+              :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-sidebar="state.sidebarOpen = !state.sidebarOpen"
-              @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen" />
+              @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
+              @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
+
+            <!-- Notification bell dropdown -->
+            <div v-show="state.notifOpen"
+              class="absolute right-0 top-full mt-1.5 w-[380px] max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown"
+              style="animation: notif-in .18s ease-out both;">
+              <div v-if="state.notifications.length > 0" class="flex items-center justify-between px-3.5 py-2.5 border-b border-border shrink-0">
+                <span class="font-ui text-xs font-semibold text-text">{{ state.unreadCount }} 条未读</span>
+                <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
+                  @click="markAllRead">全部已读</button>
+              </div>
+              <div class="flex-1 overflow-y-auto min-h-0 notif-list">
+                <div v-if="state.notifications.length === 0" class="px-4 py-10 text-center">
+                  <p class="font-ui text-xs text-muted/60">暂无通知</p>
+                </div>
+                <button v-for="n in state.notifications" :key="n.id"
+                  class="w-full text-left px-3.5 py-2.5 hover:bg-[color-mix(in_srgb,var(--brass)_8%,transparent)] transition-colors border-b border-border last:border-b-0 notif-item"
+                  @click="openNotif(n)">
+                  <div class="flex items-center gap-2">
+                    <span class="status-dot" :class="'status-' + n.status"></span>
+                    <span class="font-ui text-xs font-medium text-text truncate flex-1">{{ n.name }}</span>
+                    <span class="font-ui text-[10px] text-muted/50 whitespace-nowrap">{{ relativeTime(n.ts) }}</span>
+                  </div>
+                  <p class="font-ui text-[12px] text-muted mt-0.5 truncate">{{ n.summary }}</p>
+                </button>
+              </div>
+            </div>
 
             <div class="flex-1 overflow-y-auto p-4 md:p-6">
               <ConflictBanner v-if="state.conflict"

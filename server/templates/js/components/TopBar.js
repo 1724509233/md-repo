@@ -7,9 +7,12 @@ export const TopBar = {
   props: {
     currentPath: { type: String, default: null },
     mode: { type: String, default: 'preview' },
-    moreMenuOpen: { type: Boolean, default: true }
+    moreMenuOpen: { type: Boolean, default: true },
+    notifOpen: { type: Boolean, default: false },
+    unreadCount: { type: Number, default: 0 },
+    notifications: { type: Array, default: () => [] }
   },
-  emits: ['setMode', 'save', 'download', 'toggleMoreMenu'],
+  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif'],
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
 
@@ -37,6 +40,23 @@ export const TopBar = {
 
       <!-- 当前文件路径 -->
       <span id="current-file" class="flex-1 truncate">{{ currentPath || '未选择文档' }}</span>
+
+      <!-- 通知铃铛 -->
+      <button data-notif-bell
+        class="w-11 h-11 flex items-center justify-center rounded-lg topbar-btn transition-colors"
+        :class="{ 'text-muted/40': unreadCount === 0 }"
+        @click="$emit('toggleNotifDropdown')" aria-label="通知">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span v-if="unreadCount > 0"
+          class="notif-badge absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold text-paper px-0.5"
+          :class="unreadCount > 99 ? 'px-1' : ''"
+          style="background:#9A6B32;">
+          {{ unreadCount > 99 ? '99+' : unreadCount }}
+        </span>
+      </button>
 
       <!-- 桌面端模式切换 -->
       <div class="hidden lg:flex rounded-lg overflow-hidden border border-border text-xs">

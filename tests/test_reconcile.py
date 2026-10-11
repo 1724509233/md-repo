@@ -184,6 +184,36 @@ def test_move_with_content_change_degrades(vault_dir, db_conn):
     assert stats["unchanged"] == 0
 
 
+def test_move_after_modify(vault_dir, db_conn):
+    """Move after edit: same filename, different hash → move (Phase 2).
+
+    The files table ends up with the new path only, and the change_log
+    carries two records: move (path change) then update (content change).
+    """
+    new_content = b"# Test note\n\nEdited while moving.\n"
+    _write(vault_dir, "archive/test.md", new_content)
+    (vault_dir / "notes" / "test.md").unlink()
+
+    # DB has notes/test.md (hash of SAMPLE); disk has archive/test.md (different hash,
+    # same filename) → Phase 2 filename pairing detects the move.
+    disk = {"archive/test.md": _entry(new_content)}
+    stats = reconcile(disk, db_conn, vault_dir)
+    assert stats["moved"] == 1
+    assert stats["created"] == 0
+    assert stats["deleted"] == 0
+    assert stats["unchanged"] == 0
+
+    # files table: new path present, old path gone.
+    assert _db_paths(db_conn) == {"archive/test.md"}
+
+    # change_log: move + update, in that order.
+    changes = [tuple(r) for r in _reconcile_changes(db_conn)]
+    assert ("move", "archive/test.md", "notes/test.md") in changes
+    assert ("update", "archive/test.md", "") in changes
+    ops = [op for op, _, _ in changes]
+    assert ops.index("move") < ops.index("update")
+
+
 # --- Duplicate detection --------------------------------------------------
 
 def test_duplicate_detection(vault_dir, db_conn):

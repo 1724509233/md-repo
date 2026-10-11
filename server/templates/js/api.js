@@ -98,5 +98,21 @@ export const api = {
   async graphRelated(path, hops = 1) {
     const res = await fetch('/api/graph/related?path=' + encodeURIComponent(path) + '&hops=' + hops)
     return res.json()
+  },
+
+  /** GET /api/notifications?unread=1 — 未读通知（最新 50） */
+  async getNotifications(unread = true) {
+    const res = await fetch('/api/notifications?unread=' + (unread ? 1 : 0))
+    return res.json()
+  },
+
+  /** POST /api/notifications/read — {ids: [...]} 或 {all: true} */
+  async markNotificationsRead(body) {
+    const res = await fetch('/api/notifications/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.json()
   }
 }

@@ -16,13 +16,17 @@ def _find_config() -> Path:
         return project_root
     raise FileNotFoundError("config.yaml not found in CWD or project root")
 
-from server.responses import (
-    _file_not_found_hint,
-    search_no_match,
-    fts_syntax_error,
-    related_no_file,
-    related_no_links,
-)
+from server.agent.tools.read_doc import ReadDocTool
+from server.agent.tools.edit_doc import EditDocTool
+from server.agent.tools.search_docs import SearchDocsTool
+from server.agent.tools.get_related_docs import GetRelatedDocsTool
+
+_read_doc_tool = ReadDocTool()
+_edit_doc_tool = EditDocTool()
+search_no_match = SearchDocsTool.search_no_match
+fts_syntax_error = SearchDocsTool.fts_syntax_error
+related_no_file = GetRelatedDocsTool.related_no_file
+related_no_links = GetRelatedDocsTool.related_no_links
 
 def main():
     from server.config import load_server_config
@@ -33,6 +37,11 @@ def main():
     config = load_server_config(str(_find_config()))
     vault_dir = config.vault_dir
     db_conn = init_db(vault_dir / ".sync" / "index.db")
+
+    # Register the module-level DB handle for lazy access (agent tools).
+    from server.vault.db.conn import init as register_db_conn
+
+    register_db_conn(db_conn)
     
     # Warm up jieba in background thread
     def _warmup():
@@ -99,7 +108,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return _file_not_found_hint(path, db_conn, tool="read_doc")
+            return _read_doc_tool._file_not_found_hint(path)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         return f"File: {path} ({len(content)} chars)\n\n{content}"
     
@@ -125,7 +134,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return _file_not_found_hint(path, db_conn, tool="edit_doc")
+            return _edit_doc_tool._file_not_found_hint(path)
         result = edit_file(vault_dir, path, old_string, new_string)
         return result
     

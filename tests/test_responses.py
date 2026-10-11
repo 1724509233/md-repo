@@ -1,4 +1,4 @@
-"""Tests for tool result message redesign (responses.py + execute_tool integration)."""
+"""Tests for tool result message redesign (execute_tool integration)."""
 from __future__ import annotations
 
 import time
@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from server.agent import execute_tool
+from server.agent import ToolContext, execute_tool
+from server.vault.db.conn import init as register_db_conn
 
 
 # ── P0: Data integrity / unhandled exceptions ────────────────────────────
@@ -19,7 +20,7 @@ def test_move_docs_dest_exists(tmp_path: Path):
     (vault / "a.md").write_bytes(b"content A")
     (vault / "b.md").write_bytes(b"content B")
 
-    result = execute_tool("move_docs", {"moves": [{"from_path": "a.md", "to_path": "b.md"}]}, vault, None)
+    result = execute_tool("move_docs", {"moves": [{"from_path": "a.md", "to_path": "b.md"}]}, ToolContext(vault_dir=vault))
     assert "destination already exists" in result
     # b.md must be unchanged
     assert (vault / "b.md").read_bytes() == b"content B"
@@ -33,9 +34,7 @@ def test_edit_doc_file_not_found(tmp_path: Path):
     vault.mkdir()
 
     result = execute_tool(
-        "edit_doc", {"path": "nonexistent.md", "old_string": "x", "new_string": "y"},
-        vault, None,
-    )
+        "edit_doc", {"path": "nonexistent.md", "old_string": "x", "new_string": "y"}, ToolContext(vault_dir=vault))
     assert "file not found" in result
 
 
@@ -49,8 +48,7 @@ def test_search_docs_empty_result(tmp_path: Path):
     (vault / "doc.md").write_bytes(b"# Hello\n\nSome content about cats.")
 
     result = execute_tool(
-        "search_docs", {"query": "zzz_nonexistent_keyword_xyz"}, vault, None
-    )
+        "search_docs", {"query": "zzz_nonexistent_keyword_xyz"}, ToolContext(vault_dir=vault))
     assert "remove one keyword" in result
     assert "list_files" in result
 
@@ -63,8 +61,7 @@ def test_search_docs_fts_syntax_error(tmp_path: Path):
 
     # FTS5 double-quoted string that's never closed triggers syntax error
     result = execute_tool(
-        "search_docs", {"query": '"unclosed'}, vault, None
-    )
+        "search_docs", {"query": '"unclosed'}, ToolContext(vault_dir=vault))
     # Either a syntax error was caught, or it returned empty results gracefully
     assert "invalid search query" in result or "remove one keyword" in result
 
@@ -74,7 +71,7 @@ def test_get_related_docs_file_not_found(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
 
-    result = execute_tool("get_related_docs", {"path": "nonexistent.md"}, vault, None)
+    result = execute_tool("get_related_docs", {"path": "nonexistent.md"}, ToolContext(vault_dir=vault))
     assert "file not found" in result
 
 
@@ -88,7 +85,8 @@ def test_get_related_docs_no_links(tmp_path: Path):
     conn = init_db(vault / ".sync" / "index.db")
     (vault / "isolated.md").write_bytes(b"# Isolated\n\nNo links here.")
 
-    result = execute_tool("get_related_docs", {"path": "isolated.md"}, vault, conn)
+    register_db_conn(conn)
+    result = execute_tool("get_related_docs", {"path": "isolated.md"}, ToolContext(vault_dir=vault))
     assert "[[wikilinks]]" in result
     conn.close()
 
@@ -98,7 +96,7 @@ def test_list_files_empty_dir(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
 
-    result = execute_tool("list_files", {"dir": "nonexistent_dir"}, vault, None)
+    result = execute_tool("list_files", {"dir": "nonexistent_dir"}, ToolContext(vault_dir=vault))
     assert 'use list_files with dir=""' in result
 
 
@@ -111,7 +109,8 @@ def test_recent_changes_empty(tmp_path: Path):
     (vault / ".sync").mkdir()
     conn = init_db(vault / ".sync" / "index.db")
 
-    result = execute_tool("recent_changes", {"since": "1m"}, vault, conn)
+    register_db_conn(conn)
+    result = execute_tool("recent_changes", {"since": "1m"}, ToolContext(vault_dir=vault))
     assert "check the path/source filters" in result
     conn.close()
 
@@ -132,7 +131,8 @@ def test_read_doc_moved_hint(tmp_path: Path):
     log_change(conn, "new.md", "moved", from_path="old.md", source="agent")
     (vault / "new.md").write_bytes(b"moved content")
 
-    result = execute_tool("read_doc", {"path": "old.md"}, vault, conn)
+    register_db_conn(conn)
+    result = execute_tool("read_doc", {"path": "old.md"}, ToolContext(vault_dir=vault))
     assert "moved to" in result
     assert "new.md" in result
     conn.close()
@@ -150,7 +150,8 @@ def test_delete_doc_deleted_hint(tmp_path: Path):
     # Simulate: temp.md was deleted 5 minutes ago
     log_change(conn, "temp.md", "deleted", source="agent", ts=time.time() - 300)
 
-    result = execute_tool("delete_doc", {"path": "temp.md"}, vault, conn)
+    register_db_conn(conn)
+    result = execute_tool("delete_doc", {"path": "temp.md"}, ToolContext(vault_dir=vault))
     assert "previously deleted" in result
     conn.close()
 
@@ -161,7 +162,7 @@ def test_read_doc_offset_exceeds(tmp_path: Path):
     vault.mkdir()
     (vault / "short.md").write_bytes(b"line1\nline2\n")
 
-    result = execute_tool("read_doc", {"path": "short.md", "offset": 9999}, vault, None)
+    result = execute_tool("read_doc", {"path": "short.md", "offset": 9999}, ToolContext(vault_dir=vault))
     assert "offset <= " in result
 
 
@@ -170,15 +171,19 @@ def test_read_doc_offset_exceeds(tmp_path: Path):
 
 def test_responses_parity():
     """Key response strings contain the expected actionable phrases."""
-    from server import responses
+    from server.agent.tools.tool import DocTool
+    from server.agent.tools.search_docs import SearchDocsTool
+    from server.agent.tools.move_docs import MoveDocsTool
+    from server.agent.tools.recent_changes import RecentChangesTool
+    from server.agent.tools.read_doc import ReadDocTool
 
-    assert "remove one keyword" in responses.search_no_match("test")
-    assert "list_files" in responses.search_no_match("test")
-    assert "file not found" in responses.file_not_found("x.md")
-    assert "destination already exists" in responses.move_dest_exists("y.md")
-    assert "Do not overwrite or relocate on your own" in responses.move_dest_exists("y.md")
-    assert "do NOT create a new file" in responses.edit_not_found_moved("a.md", "b.md")
-    assert "Do NOT recreate it from memory" in responses.edit_not_found_deleted("a.md")
-    assert "check the path/source filters" in responses.changes_empty()
-    assert "offset <=" in responses.read_offset_exceeds(10, 5)
-    assert "invalid search query" in responses.fts_syntax_error('bad"query')
+    assert "remove one keyword" in SearchDocsTool.search_no_match("test")
+    assert "list_files" in SearchDocsTool.search_no_match("test")
+    assert "file not found" in DocTool.file_not_found("x.md")
+    assert "destination already exists" in MoveDocsTool.move_dest_exists("y.md")
+    assert "Do not overwrite or relocate on your own" in MoveDocsTool.move_dest_exists("y.md")
+    assert "do NOT create a new file" in DocTool.edit_not_found_moved("a.md", "b.md")
+    assert "Do NOT recreate it from memory" in DocTool.edit_not_found_deleted("a.md")
+    assert "check the path/source filters" in RecentChangesTool.changes_empty()
+    assert "offset <=" in ReadDocTool.read_offset_exceeds(10, 5)
+    assert "invalid search query" in SearchDocsTool.fts_syntax_error('bad"query')

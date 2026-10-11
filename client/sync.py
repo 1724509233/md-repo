@@ -131,6 +131,16 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
         to_delete: list[str] = result.get("to_delete", [])
         conflicts: list[str] = result.get("conflicts", [])
 
+        notifications: list[dict] = result.get("notifications", [])
+        for n in notifications:
+            logger.info(
+                "[bg:%s] %s：%s（报告 %s）",
+                n.get("alias", "?"),
+                "整理完成" if n.get("status") == "ok" else f"运行 {n.get('status')}",
+                n.get("summary", ""),
+                n.get("report_path", ""),
+            )
+
         with httpx.Client(timeout=60) as client:
             for path in to_pull:
                 try:

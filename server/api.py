@@ -15,6 +15,11 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .agent import SessionManager
+from .agent.agent import Agent
+from .agent.prompts import SYSTEM_PROMPT, sse
+from .agent.reminders import DocPathUserReminder, TimeSystemReminder
+from .agent.spec import AgentSpec, ModelConfig
+from .agent.tools import TOOL_REGISTRY
 from .vault.service import get_all_files, upsert_file
 from .sync import compare_files
 
@@ -65,6 +70,36 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
 
     session_mgr = SessionManager(db_conn, vault_dir)
+
+    # Agent instances per session (created on first chat, reused afterwards).
+    agent_cache: dict[str, Agent] = {}
+
+    def _build_agent_spec() -> AgentSpec:
+        """Declarative agent spec from the server's AI config."""
+        return AgentSpec(
+            system_prompt=SYSTEM_PROMPT,
+            model=ModelConfig(
+                model_id=ai_config.model,
+                provider="openai",
+                base_url=ai_config.base_url,
+                api_key=ai_config.api_key,
+                context_window=ai_config.context_window,
+            ),
+            tools=list(TOOL_REGISTRY.values()),
+            system_reminders=[TimeSystemReminder()],
+            user_reminders=[DocPathUserReminder()],
+            max_rounds=ai_config.max_rounds,
+            vault_dir=vault_dir,
+            read_doc_max_chars=ai_config.read_doc_max_chars,
+        )
+
+    def _get_agent(session_id: str) -> Agent:
+        agent = agent_cache.get(session_id)
+        if agent is None:
+            messages = session_mgr.get_or_create(session_id)
+            agent = Agent(_build_agent_spec(), messages=messages)
+            agent_cache[session_id] = agent
+        return agent
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -132,6 +167,31 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         register_write(rel_str, "web")
         return {"path": rel_str, "hash": digest}
 
+    @app.get("/api/notifications")
+    async def list_notifications(unread: int = 0) -> list[dict]:
+        query = "SELECT id, ts, alias, name, status, report_path, summary, read FROM notifications"
+        params: list = []
+        if unread:
+            query += " WHERE read = 0"
+        query += " ORDER BY ts DESC LIMIT 50"
+        rows = db_conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+
+    @app.post("/api/notifications/read")
+    async def mark_notifications_read(request: Request) -> dict:
+        body = await request.json()
+        if body.get("all"):
+            db_conn.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+        else:
+            ids = body.get("ids", [])
+            if not isinstance(ids, list) or not all(isinstance(i, int) for i in ids):
+                raise HTTPException(status_code=400, detail="ids must be a list of ints")
+            if ids:
+                marks = ",".join("?" * len(ids))
+                db_conn.execute(f"UPDATE notifications SET read = 1 WHERE id IN ({marks})", ids)
+        db_conn.commit()
+        return {"ok": True}
+
     @app.post("/api/sync")
     async def sync(request: Request) -> JSONResponse:
         try:
@@ -171,6 +231,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 ]
 
             result = compare_files(local_files, server_files, recent_moves=recent_moves)
+
+            # Background agent notifications since the client's last sync (cap 50).
+            rows = db_conn.execute(
+                "SELECT ts, alias, name, status, report_path, summary FROM notifications "
+                "WHERE read = 0 AND ts > ? ORDER BY ts DESC LIMIT 50",
+                (float(last_sync),)).fetchall()
+            result["notifications"] = [dict(r) for r in rows]
 
             # Save client logs to vault_dir/.sync/logs/{device_name}.log
             safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", device_name)
@@ -260,8 +327,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         doc_path = body.get("doc_path", "")
 
         session_mgr.cleanup()
-        session = session_mgr.get_or_create(session_id)
-        session["last_active"] = time.time()
+        session_mgr.get_or_create(session_id)
 
         # Pre-check doc_path（不修改 session，只验证；409 走 HTTP 异常）
         doc_context = None
@@ -277,51 +343,20 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         lock = session_mgr.get_lock(session_id)
         await lock.acquire()
 
-        from .agent import TOOLS, agent_loop
-
         async def event_generator():
+            agent = _get_agent(session_id)
             try:
-                # doc_context 注入（在 lock 内，修改 session["messages"]）
-                if doc_context:
-                    rel_str = doc_context.as_posix()
-                    last_read_ts = session.get("last_read_ts", {}).get(rel_str, 0)
-                    warning = ""
-                    if last_read_ts > 0 and db_conn:
-                        from .vault.db.changes import get_changes
-                        changes = get_changes(db_conn, since=last_read_ts, path=rel_str, limit=1)
-                        if changes:
-                            warning = " ⚠ 自上次读取后有修改"
-                    doc_ctx = f"[当前打开: {rel_str}{warning}]"
-                    # Remove any previous doc context (user message prefix)
-                    session["messages"] = [
-                        m for m in session["messages"]
-                        if not (m.get("role") == "user" and m.get("content", "").startswith("[当前打开:"))
-                    ]
-                    session["messages"].append({"role": "user", "content": doc_ctx})
-                    logger.info("doc_context injected: %s (msgs=%d)", doc_ctx, len(session["messages"]))
-
-                # user message append（在 lock 内）
-                session["messages"].append({"role": "user", "content": message})
-
-                async for event in agent_loop(
-                    messages=session["messages"],
-                    tools=TOOLS,
-                    ai_config=ai_config,
-                    pending_confirms=session["pending_confirms"],
-                    vault_dir=vault_dir,
-                    db_conn=db_conn,
-                    last_read_ts=session.setdefault("last_read_ts", {}),
-                    context_window=ai_config.context_window,
-                    max_rounds=ai_config.max_rounds,
-                    read_doc_max_chars=ai_config.read_doc_max_chars,
+                # doc_context 注入 + user message 由 agent.chat 处理（user reminder）
+                async for event in agent.chat(
+                    message, doc_path=doc_context.as_posix() if doc_context else None
                 ):
-                    yield event
-                # Persist session after agent_loop completes
-                session_mgr.save(session_id)
+                    yield sse(event.type, event.data)
+                # Persist session after chat completes
+                session_mgr.save(session_id, agent.messages)
             except (GeneratorExit, asyncio.CancelledError):
                 logger.error(
                     "SSE stream disconnected (session=%s, pending_confirms=%d)",
-                    session_id, len(session["pending_confirms"]),
+                    session_id, len(agent.pending_confirms),
                     exc_info=True,
                 )
                 raise
@@ -339,16 +374,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         tool_call_id = body.get("id", "")
         approved = bool(body.get("approved", False))
 
-        session = session_mgr.get(session_id)
-        if session is None:
+        agent = agent_cache.get(session_id)
+        if agent is None:
             raise HTTPException(status_code=404, detail="session not found")
 
-        entry = session["pending_confirms"].get(tool_call_id)
-        if entry is None:
+        if not agent.confirm(tool_call_id, approved):
             raise HTTPException(status_code=404, detail="no pending confirm for this tool call")
 
-        entry["approved"] = approved
-        entry["event"].set()
         return {"ok": True}
 
     @app.post("/api/agent/new-session")

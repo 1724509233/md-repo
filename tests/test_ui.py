@@ -43,8 +43,8 @@ def test_ai_panel_component_has_expected_elements():
 
 def test_ai_panel_css_has_expected_rules():
     css = read_template("style.css")
-    # 面板滑动动画时长应为 .25s
-    assert re.search(r"#ai-panel\s*{[^}]*transition:\s*transform\s+\.25s", css)
+    # 面板滑动动画时长应为 .25s（right 属性过渡）
+    assert re.search(r"#ai-panel\s*{[^}]*transition:\s*right\s+\.25s", css)
     # 消息入场动画时长应为 .15s
     assert re.search(r"\.msg-in\s*{[^}]*animation:\s*msgIn\s+\.15s", css)
     # 流式光标颜色应为 --ink-soft

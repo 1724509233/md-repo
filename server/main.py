@@ -9,7 +9,9 @@ from pathlib import Path
 import uvicorn
 
 from .api import create_app
-from .config import load_server_config
+from .bgagent import InAppHook, start_background_agents
+from .bgagent.notify import cleanup_old_notifications
+from .config import load_background_agents, load_server_config
 from .vault.service import apply_change, graph_rebuild_all, init_db
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
@@ -25,6 +27,11 @@ def main(argv: list[str] | None = None) -> None:
     config = load_server_config(config_path)
     vault_dir = config.vault_dir
     vault_dir.mkdir(parents=True, exist_ok=True)
+
+    bg_agents = load_background_agents(config_path, vault_dir)
+    if bg_agents:
+        logging.getLogger("md-vault.bgagent").info(
+            "background agents: %s", [a.alias for a in bg_agents])
 
     # Log to both console and file
     log_level = getattr(logging, config.log_level, logging.INFO)
@@ -46,6 +53,11 @@ def main(argv: list[str] | None = None) -> None:
 
     db_path = vault_dir / ".sync" / "index.db"
     conn = init_db(db_path)
+
+    # Register the module-level DB handle for lazy access (agent tools, reminders).
+    from .vault.db.conn import init as register_db_conn
+
+    register_db_conn(conn)
 
     # Ensure the FTS and graph indexes are populated. On first run they are
     # empty; on later runs the FTS table may also be empty (e.g. an older
@@ -90,6 +102,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         watcher.start()
         await asyncio.sleep(0)  # let the task start
+
+        if bg_agents:
+            cleanup_old_notifications(conn)
+            start_background_agents(
+                bg_agents, vault_dir, hooks=[InAppHook(conn)])
+            await asyncio.sleep(0)  # let the bgagent tasks start
 
     config_obj = uvicorn.Config(
         app, host=config.host, port=config.port, log_level="info"
