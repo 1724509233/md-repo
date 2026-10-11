@@ -54,3 +54,13 @@ class InAppHook(NotificationHook):
                  report.report_path, report.summary),
             )
             self._conn.commit()
+
+
+def cleanup_old_notifications(db_conn, max_age_s: float = 30 * 86400) -> None:
+    """Delete notification rows older than max_age_s (startup housekeeping)."""
+    from ..vault.db.schema import _db_lock
+
+    cutoff = time.time() - max_age_s
+    with _db_lock:
+        db_conn.execute("DELETE FROM notifications WHERE ts < ?", (cutoff,))
+        db_conn.commit()
