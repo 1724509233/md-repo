@@ -22,6 +22,8 @@ class ModelConfig:
     base_url: str | None = None
     api_key: str | None = None
     context_window: int = 16384
+    max_tokens: int | None = None
+    temperature: float | None = None
 
 
 @dataclass

@@ -37,7 +37,7 @@ class LoopRuntime(Runtime):
     async def run(self, agent) -> AsyncIterator[Event]:
         spec = agent.spec
         model = spec.model
-        client = AsyncOpenAI(base_url=model.base_url, api_key=model.api_key)
+        client = AsyncOpenAI(base_url=model.base_url, api_key=model.api_key, timeout=120)
         ctx = ToolContext(
             vault_dir=spec.vault_dir,
             read_doc_max_chars=spec.read_doc_max_chars,
@@ -54,13 +54,18 @@ class LoopRuntime(Runtime):
             else:
                 call_messages = agent.messages
 
-            stream = await client.chat.completions.create(
+            create_kwargs = dict(
                 model=model.model_id,
                 messages=call_messages,
                 tools=[t.to_openai_tool() for t in spec.tools] if spec.tools else None,
                 stream=True,
                 stream_options={"include_usage": True},
             )
+            if model.max_tokens is not None:
+                create_kwargs["max_tokens"] = model.max_tokens
+            if model.temperature is not None:
+                create_kwargs["temperature"] = model.temperature
+            stream = await client.chat.completions.create(**create_kwargs)
 
             content = ""
             tool_calls = {}

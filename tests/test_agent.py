@@ -1051,3 +1051,101 @@ def test_vault_boundary_uses_is_relative_to(tmp_path: Path):
     result = validate_tool_call("read_doc", {"path": "../vault2/a.md"}, vault)
     assert result is not None
     assert "outside vault" in result
+
+
+def test_model_config_max_tokens_temperature_passthrough(tmp_path: Path):
+    """max_tokens/temperature 透传给 chat.completions.create；None 时省略。"""
+    import asyncio
+
+    captured = {}
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "ok"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    async def capture_create(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = capture_create
+
+    agent, vault = _make_agent(tmp_path)
+    agent.spec.model.max_tokens = 1234
+    agent.spec.model.temperature = 0.2
+
+    async def run():
+        async for _ in agent.chat("hi"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+
+    assert captured["max_tokens"] == 1234
+    assert captured["temperature"] == 0.2
+
+
+def test_model_config_none_omits_params(tmp_path: Path):
+    """max_tokens/temperature 为 None 时不传给 SDK（现状不变）。"""
+    import asyncio
+
+    captured = {}
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "ok"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    async def capture_create(**kwargs):
+        captured.update(kwargs)
+        return fake_stream()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = capture_create
+
+    agent, vault = _make_agent(tmp_path)
+
+    async def run():
+        async for _ in agent.chat("hi"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+
+    assert "max_tokens" not in captured
+    assert "temperature" not in captured
+
+
+def test_async_openai_client_timeout_120(tmp_path: Path):
+    """AsyncOpenAI 显式 timeout=120（防 SDK 默认 600s 挂起）。"""
+    import asyncio
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "ok"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+
+    agent, vault = _make_agent(tmp_path)
+
+    async def run():
+        async for _ in agent.chat("hi"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client) as m:
+        asyncio.run(run())
+
+    _, kwargs = m.call_args
+    assert kwargs.get("timeout") == 120
