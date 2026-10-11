@@ -89,3 +89,27 @@ def test_cleanup_old_notifications(db_conn):
 
     rows = db_conn.execute("SELECT alias FROM notifications").fetchall()
     assert [r["alias"] for r in rows] == ["notes-organizer"]
+
+
+def test_sync_response_includes_notifications(app, db_conn):
+    """/api/sync 响应含 ts > last_sync 的未读通知，上限 50。"""
+    from fastapi.testclient import TestClient
+
+    InAppHook(db_conn).notify(_report())
+    client = TestClient(app)
+
+    r = client.post("/api/sync", json={
+        "device_name": "test", "local_files": {}, "logs": [], "last_sync": 0,
+    })
+    assert r.status_code == 200
+    body = r.json()
+    notifs = body.get("notifications", [])
+    assert len(notifs) == 1
+    assert notifs[0]["alias"] == "notes-organizer"
+
+    # last_sync 设为未来 → 无通知
+    r = client.post("/api/sync", json={
+        "device_name": "test", "local_files": {}, "logs": [],
+        "last_sync": time.time() + 3600,
+    })
+    assert r.json().get("notifications", []) == []

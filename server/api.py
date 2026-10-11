@@ -232,6 +232,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
             result = compare_files(local_files, server_files, recent_moves=recent_moves)
 
+            # Background agent notifications since the client's last sync (cap 50).
+            rows = db_conn.execute(
+                "SELECT ts, alias, name, status, report_path, summary FROM notifications "
+                "WHERE read = 0 AND ts > ? ORDER BY ts DESC LIMIT 50",
+                (float(last_sync),)).fetchall()
+            result["notifications"] = [dict(r) for r in rows]
+
             # Save client logs to vault_dir/.sync/logs/{device_name}.log
             safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", device_name)
             logs_dir = vault_dir / ".sync" / "logs"
