@@ -95,7 +95,7 @@ background_agents:
 ## 4. agent 层改动（Web UI agent 行为不变）
 
 1. **工具权限模型（替代 `is_write`）** — `Tool` 基类增加 `permission: ClassVar["ask" | "allow"] = "allow"`；4 个写工具（write_doc/edit_doc/move_docs/delete_doc）声明 `permission = "ask"`。`LoopRuntime` 确认门改按 `tool.permission == "ask"` 判断（`AgentSpec.auto_approve=True` 时跳过 ask 直接执行）。**删除 `READ_TOOLS`/`WRITE_TOOLS` 派生导出**（权限声明成为唯一事实来源）；同步删除 `server/agent/__init__.py` 再导出，更新 `tests/test_agent.py` 断言
-2. **`AgentSpec.write_scope: Path | None = None`** — `validate_tool_call()` 增加可选参数：非 None 时，`permission == "ask"` 工具的 `path`/`from_path`/`to_path` 必须 resolve 后落在 scope 内，越界返回错误串（agent 可见并自行纠正）；`allow` 工具不受限
+2. **`AgentSpec.write_scope: Path | None = None`**（**绝对路径，resolved**；runner 由 `(vault_dir / target_dir).resolve()` 构造，配置层 `target_dir` 保持 vault 相对）— `validate_tool_call()` 增加可选参数：非 None 时，`permission == "ask"` 工具的 `path`/`from_path`/`to_path` resolve 后必须 `is_relative_to(write_scope)`，越界返回错误串（agent 可见并自行纠正）；`allow` 工具不受限
 3. **`ToolContext.write_source: str = "agent"`** — 4 个写工具的 `register_write(path, "agent")` 改为 `register_write(path, ctx.write_source)`；后台 agent 传 `<alias>`
 4. **`ModelConfig` 增加 `max_tokens: int | None = None`、`temperature: float | None = None`** — `LoopRuntime` 透传给 `chat.completions.create()`（None 时 SDK 省略，现状不变）
 5. **runtime 事件扩展** — 每轮开始发 `Event("round", {"n": ...})`；`done` 事件 data 增加 `reason: "final" | "round_limit"`（API 层 SSE 忽略未知字段，无影响）
@@ -110,7 +110,7 @@ background_agents:
 
 `run_once(cfg)`：
 
-1. 构建 `AgentSpec`：prompt 文件内容 + `ModelConfig`（含 max_tokens/temperature）+ 全部 9 个工具（read_doc、search_docs、list_files、get_related_docs、recent_changes、edit_doc、write_doc、move_docs、delete_doc）+ `auto_approve=True` + `write_scope=vault/target_dir` + `max_rounds`
+1. 构建 `AgentSpec`：prompt 文件内容 + `ModelConfig`（含 max_tokens/temperature）+ 全部 9 个工具（read_doc、search_docs、list_files、get_related_docs、recent_changes、edit_doc、write_doc、move_docs、delete_doc）+ `auto_approve=True` + `write_scope=(vault_dir / target_dir).resolve()`（绝对路径）+ `max_rounds`
 2. 消费事件流：
    - `tool_call`/`tool_result` → 操作清单（时间、工具、参数、结果摘要截断 200 字）
    - `token` → 累积 agent 最终总结文本
