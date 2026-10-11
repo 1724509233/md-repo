@@ -83,7 +83,7 @@ class MoveDocsTool(DocTool):
             src = ctx.vault_dir / from_path
             dst = ctx.vault_dir / to_path
             dst.parent.mkdir(parents=True, exist_ok=True)
-            register_write(to_path, "agent")
+            register_write(to_path, ctx.write_source)
             src.rename(dst)
 
         lines = [f"Moved {len(moves)} file(s):"]

@@ -25,6 +25,7 @@ class ToolContext:
     vault_dir: Path
     read_doc_max_chars: int = 4000
     last_read_ts: dict | None = None
+    write_source: str = "agent"
 
 
 # ── Shared path validators ──────────────────────────────────────────────

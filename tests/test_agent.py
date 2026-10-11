@@ -1230,3 +1230,21 @@ def test_done_reason_final_vs_round_limit(tmp_path: Path):
         events2 = asyncio.run(run2())
     done2 = [e for e in events2 if e.type == "done"]
     assert done2 and done2[0].data.get("reason") == "round_limit"
+
+
+def test_write_source_attribution(tmp_path: Path):
+    """register_write 使用 ctx.write_source（默认 "agent"，后台 agent 传 alias）。"""
+    from server.agent import execute_tool, ToolContext
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+
+    with patch("server.write_registry.register_write") as m:
+        execute_tool("write_doc", {"path": "a.md", "content": "x"},
+                     ToolContext(vault_dir=vault, write_source="notes-organizer"))
+    m.assert_called_once_with("a.md", "notes-organizer")
+
+    with patch("server.write_registry.register_write") as m:
+        execute_tool("write_doc", {"path": "b.md", "content": "x"},
+                     ToolContext(vault_dir=vault))
+    m.assert_called_once_with("b.md", "agent")

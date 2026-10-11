@@ -28,7 +28,7 @@ class WriteDocTool(Tool):
         existed = fp.is_file()
         fp.parent.mkdir(parents=True, exist_ok=True)
 
-        register_write(args.path, "agent")
+        register_write(args.path, ctx.write_source)
         fp.write_bytes(args.content.encode("utf-8"))
         if existed:
             return f"Saved: {args.path} ({len(args.content)} chars, overwritten)"

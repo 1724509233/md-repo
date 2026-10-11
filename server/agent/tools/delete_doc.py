@@ -35,7 +35,7 @@ class DeleteDocTool(DocTool):
         if not fp.is_file():
             return self._file_not_found_hint(args.path)
 
-        register_write(args.path, "agent")
+        register_write(args.path, ctx.write_source)
         fp.unlink()
         conn = get_conn()
         if conn:
