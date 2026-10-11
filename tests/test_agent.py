@@ -966,3 +966,88 @@ def test_agent_loop_auto_approve_skips_confirm(tmp_path: Path):
 
     assert not any('"type": "confirm_request"' in e for e in events)
     assert (vault / "auto.md").is_file()
+
+
+def test_write_scope_allows_in_scope(tmp_path: Path):
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    scope = vault / "notes"
+    assert validate_tool_call(
+        "write_doc", {"path": "notes/a.md", "content": "x"}, vault,
+        write_scope=scope) is None
+
+
+def test_write_scope_rejects_out_of_scope(tmp_path: Path):
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    scope = vault / "notes"
+    result = validate_tool_call(
+        "write_doc", {"path": "other/a.md", "content": "x"}, vault,
+        write_scope=scope)
+    assert result is not None
+    assert "write scope" in result
+
+
+def test_write_scope_rejects_move_docs_nested_cross_scope(tmp_path: Path):
+    """move_docs 的 moves[] 嵌套路径必须逐个检查；任一项越界整批拒绝。"""
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    scope = vault / "notes"
+    result = validate_tool_call(
+        "move_docs",
+        {"moves": [
+            {"from_path": "notes/a.md", "to_path": "notes/sub/a.md"},
+            {"from_path": "notes/b.md", "to_path": "topics/b.md"},
+        ]},
+        vault, write_scope=scope)
+    assert result is not None
+    assert "topics/b.md" in result
+
+
+def test_write_scope_ignores_allow_tools(tmp_path: Path):
+    """read 类工具（permission=allow）不受 write_scope 限制。"""
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    scope = vault / "notes"
+    assert validate_tool_call(
+        "read_doc", {"path": "other/a.md"}, vault, write_scope=scope) is None
+
+
+def test_report_dir_guard_rejects_ask_tools(tmp_path: Path):
+    """ask 工具路径落在 report_dir 下 → 拒绝（防 agent 摧毁自己的报告）。"""
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    scope = vault / "notes"
+    report_dir = vault / "notes" / ".reports" / "notes-organizer"
+    result = validate_tool_call(
+        "delete_doc", {"path": "notes/.reports/notes-organizer/2026-10-11_0300.md"},
+        vault, write_scope=scope, report_dir=report_dir)
+    assert result is not None
+    assert "report" in result
+
+
+def test_report_dir_guard_allows_reads(tmp_path: Path):
+    """agent 需要读最近报告（开工前了解上次状态）——read 不受守卫限制。"""
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    report_dir = vault / "notes" / ".reports" / "notes-organizer"
+    assert validate_tool_call(
+        "read_doc", {"path": "notes/.reports/notes-organizer/2026-10-11_0300.md"},
+        vault, report_dir=report_dir) is None
+
+
+def test_vault_boundary_uses_is_relative_to(tmp_path: Path):
+    """既有 startswith 前缀误判修复：/vault2 不得匹配 /vault。"""
+    from server.agent import validate_tool_call
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = validate_tool_call("read_doc", {"path": "../vault2/a.md"}, vault)
+    assert result is not None
+    assert "outside vault" in result

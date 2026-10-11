@@ -40,5 +40,7 @@ class AgentSpec:
     user_reminders: list[UserReminder] = field(default_factory=list)
     max_rounds: int = 15
     auto_approve: bool = False
+    write_scope: Path | None = None
+    report_dir: Path | None = None
     vault_dir: Path | None = None
     read_doc_max_chars: int = 4000

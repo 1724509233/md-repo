@@ -8,11 +8,39 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from .tools import TOOL_ARGS
+from .tools import TOOL_ARGS, TOOL_REGISTRY
 
 
-def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
-    """Validate args against the tool's Pydantic model + vault boundary check."""
+def _extract_paths(args: dict) -> list[tuple[str, str]]:
+    """Extract all path-like args, including nested move_docs moves[].
+
+    Returns (label, value) pairs; label is used in error messages.
+    """
+    out: list[tuple[str, str]] = []
+    for key in ("path", "from_path", "to_path"):
+        v = args.get(key)
+        if isinstance(v, str):
+            out.append((key, v))
+    moves = args.get("moves")
+    if isinstance(moves, list):
+        for i, item in enumerate(moves):
+            if isinstance(item, dict):
+                for key in ("from_path", "to_path"):
+                    v = item.get(key)
+                    if isinstance(v, str):
+                        out.append((f"moves[{i}].{key}", v))
+    return out
+
+
+def validate_tool_call(name: str, args: dict, vault_dir: Path,
+                       write_scope: Path | None = None,
+                       report_dir: Path | None = None) -> str | None:
+    """Validate args against the tool's Pydantic model + boundary/scope checks.
+
+    ``write_scope`` / ``report_dir`` are resolved absolute paths; they only
+    constrain tools with ``permission == "ask"`` (writes). Reads stay
+    unrestricted so the agent can consult reports and the wider vault.
+    """
     model = TOOL_ARGS.get(name)
     if model is None:
         return f"Error: unknown tool '{name}'"
@@ -24,14 +52,19 @@ def validate_tool_call(name: str, args: dict, vault_dir: Path) -> str | None:
             loc = ".".join(str(x) for x in err["loc"]) if err["loc"] else ""
             parts.append(f"{loc}: {err['msg']}" if loc else err["msg"])
         return f"Error: {'; '.join(parts)}"
-    # vault_dir boundary check (needs filesystem context)
-    for key in ("path", "from_path", "to_path"):
-        p = args.get(key)
-        if p is None:
-            continue
+
+    tool = TOOL_REGISTRY.get(name)
+    is_ask = tool is not None and tool.permission == "ask"
+    vault_resolved = vault_dir.resolve()
+
+    for label, p in _extract_paths(args):
         full = (vault_dir / p).resolve()
-        if not str(full).startswith(str(vault_dir.resolve())):
+        if not full.is_relative_to(vault_resolved):
             return f"Error: path '{p}' resolves outside vault"
+        if is_ask and write_scope is not None and not full.is_relative_to(write_scope):
+            return f"Error: path '{p}' ({label}) is outside the allowed write scope"
+        if is_ask and report_dir is not None and full.is_relative_to(report_dir):
+            return f"Error: path '{p}' ({label}) is in the protected report directory"
     return None
 
 

@@ -130,7 +130,9 @@ class LoopRuntime(Runtime):
                 yield Event("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
                 logger.info("tool_call %s args=%s", tc["name"], json.dumps(args, ensure_ascii=False))
 
-                error = validate_tool_call(tc["name"], args, spec.vault_dir)
+                error = validate_tool_call(tc["name"], args, spec.vault_dir,
+                                           write_scope=spec.write_scope,
+                                           report_dir=spec.report_dir)
                 if error:
                     logger.warning("tool_call %s rejected: %s", tc["name"], error)
                     yield self._tool_error(agent, tc, error)
