@@ -109,9 +109,12 @@ def _prune_reports(report_dir: Path, vault: Path, alias: str) -> None:
     if not report_dir.is_dir():
         return
     files = sorted(report_dir.glob("*.md"))
-    for fp in files[:-RETENTION] if len(files) > RETENTION else []:
+    to_delete = files[:-RETENTION] if len(files) > RETENTION else []
+    for fp in to_delete:
         register_write(fp.relative_to(vault).as_posix(), alias)
         fp.unlink()
+    if to_delete:
+        logger.info("[bg:%s] pruned %d old reports (kept %d)", alias, len(to_delete), RETENTION)
 
 
 def _report_name(started_at: float) -> str:
@@ -161,7 +164,7 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
     return body, summary
 
 
-async def _consume(agent: Agent, message: str, stats: _RunStats) -> str:
+async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = "") -> str:
     """Consume the event stream; return the done reason ('final' | 'round_limit')."""
     async for event in agent.chat(message):
         if event.type == "round":
@@ -171,11 +174,18 @@ async def _consume(agent: Agent, message: str, stats: _RunStats) -> str:
             if stats.round_texts:
                 stats.round_texts[-1] += event.data.get("text") or ""
         elif event.type == "tool_call":
+            name = event.data["name"]
+            logger.debug("[bg:%s] tool=%s args=%s", alias, name,
+                         _brief_args(name, event.data.get("args") or {}))
             stats.record_call(event.data)
         elif event.type == "tool_result":
             stats.record_result(event.data)
         elif event.type == "token_usage":
-            stats.record_usage(int(event.data.get("used", 0)))
+            used = int(event.data.get("used", 0))
+            total = int(event.data.get("total", 0))
+            logger.debug("[bg:%s] round=%d tokens=%d/%d (%.0f%%)",
+                         alias, stats.rounds, used, total, event.data.get("percent", 0))
+            stats.record_usage(used)
         elif event.type == "done":
             return event.data.get("reason", "final")
     return "final"
@@ -194,6 +204,10 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     stats = _RunStats()
     status, error_msg = "ok", ""
 
+    target_rel = cfg.target_dir.relative_to(vault).as_posix()
+    logger.info("[bg:%s] starting target=%s rounds=%d timeout=%ds",
+                cfg.alias, target_rel, cfg.max_rounds, cfg.timeout_s)
+
     _prune_reports(cfg.report_dir, vault, cfg.alias)
 
     spec = AgentSpec(
@@ -207,11 +221,10 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         report_dir=cfg.report_dir,
     )
     agent = Agent(spec, runtime=runtime_cls())
-    target_rel = cfg.target_dir.relative_to(vault).as_posix()
 
     try:
         reason = await asyncio.wait_for(
-            _consume(agent, f"开始整理 {target_rel}/", stats),
+            _consume(agent, f"开始整理 {target_rel}/", stats, cfg.alias),
             timeout=cfg.timeout_s)
         if reason == "round_limit":
             status = "round_limit"
@@ -252,3 +265,4 @@ def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
     fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(fp.relative_to(vault).as_posix(), cfg.alias)
     fp.write_bytes(body.encode("utf-8"))
+    logger.info("[bg:%s] report written: %s", cfg.alias, fp.relative_to(vault).as_posix())

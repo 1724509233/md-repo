@@ -65,12 +65,16 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
     """Spawn one cron task per enabled agent. Must be called from a running loop."""
     run_fn = run_fn or run_once
     hooks = hooks or []
+    aliases = []
     tasks: list[asyncio.Task] = []
     for cfg in agents:
         if not cfg.enabled:
             continue
+        aliases.append(cfg.alias)
         lock = asyncio.Lock()
         tasks.append(asyncio.create_task(
             _agent_loop(cfg, vault_dir.resolve(), lock, hooks, run_fn),
             name=f"bgagent-{cfg.alias}"))
+    if aliases:
+        logger.info("[bg] started %d agents: %s", len(aliases), ", ".join(aliases))
     return tasks

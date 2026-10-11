@@ -6,6 +6,7 @@ delivery lives in the API layer (/api/sync reads the same table).
 """
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 
@@ -54,6 +55,8 @@ class InAppHook(NotificationHook):
                  report.report_path, report.summary),
             )
             self._conn.commit()
+        logger = logging.getLogger("md-vault.bgagent")
+        logger.debug("[bg:%s] notification inserted: status=%s", report.alias, report.status)
 
 
 def cleanup_old_notifications(db_conn, max_age_s: float = 30 * 86400) -> None:
@@ -62,5 +65,10 @@ def cleanup_old_notifications(db_conn, max_age_s: float = 30 * 86400) -> None:
 
     cutoff = time.time() - max_age_s
     with _db_lock:
+        cursor = db_conn.execute("SELECT count(*) FROM notifications WHERE ts < ?", (cutoff,))
+        count = cursor.fetchone()[0]
         db_conn.execute("DELETE FROM notifications WHERE ts < ?", (cutoff,))
         db_conn.commit()
+    logger = logging.getLogger("md-vault.bgagent")
+    if count:
+        logger.info("[bg] cleaned %d old notifications (age>30d)", count)
