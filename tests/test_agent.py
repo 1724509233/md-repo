@@ -1149,3 +1149,84 @@ def test_async_openai_client_timeout_120(tmp_path: Path):
 
     _, kwargs = m.call_args
     assert kwargs.get("timeout") == 120
+
+
+def test_round_events_emitted(tmp_path: Path):
+    """每轮开始发 round 事件（n 从 1 起）。"""
+    import asyncio
+
+    async def fake_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "done"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=fake_stream())
+
+    agent, vault = _make_agent(tmp_path)
+
+    async def run():
+        return [e async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    round_events = [e for e in events if e.type == "round"]
+    assert [e.data["n"] for e in round_events] == [1]
+
+
+def test_done_reason_final_vs_round_limit(tmp_path: Path):
+    """正常结束 reason=final；轮次耗尽 reason=round_limit。"""
+    import asyncio
+
+    # 场景 1：第一轮就给出最终文本 → final
+    async def text_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = "final"
+        chunk.choices[0].delta.tool_calls = None
+        chunk.usage = None
+        yield chunk
+
+    mock_client1 = MagicMock()
+    mock_client1.chat.completions.create = AsyncMock(return_value=text_stream())
+
+    agent, vault = _make_agent(tmp_path)
+    async def run1():
+        return [e async for e in agent.chat("hi")]
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client1):
+        events = asyncio.run(run1())
+    done = [e for e in events if e.type == "done"]
+    assert done and done[0].data.get("reason") == "final"
+
+    # 场景 2：每轮都发 tool_call（list_files 可重复执行）→ 耗尽 max_rounds
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_x"
+    tc.function = MagicMock()
+    tc.function.name = "list_files"
+    tc.function.arguments = "{}"
+
+    async def tool_stream():
+        chunk = MagicMock()
+        chunk.choices = [MagicMock()]
+        chunk.choices[0].delta.content = None
+        chunk.choices[0].delta.tool_calls = [tc]
+        chunk.usage = None
+        yield chunk
+
+    mock_client2 = MagicMock()
+    mock_client2.chat.completions.create = AsyncMock(
+        side_effect=[tool_stream() for _ in range(3)]
+    )
+
+    agent2, _ = _make_agent(tmp_path, max_rounds=3)
+    async def run2():
+        return [e async for e in agent2.chat("hi")]
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client2):
+        events2 = asyncio.run(run2())
+    done2 = [e for e in events2 if e.type == "done"]
+    assert done2 and done2[0].data.get("reason") == "round_limit"

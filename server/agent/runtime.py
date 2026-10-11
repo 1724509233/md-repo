@@ -45,6 +45,7 @@ class LoopRuntime(Runtime):
         )
 
         for _round in range(spec.max_rounds):
+            yield Event("round", {"n": _round + 1})
             # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
             if _round >= spec.max_rounds - 3:
                 call_messages = agent.messages + [
@@ -108,7 +109,7 @@ class LoopRuntime(Runtime):
 
             if not tool_calls:
                 agent.messages.append({"role": "assistant", "content": content})
-                yield Event("done", {})
+                yield Event("done", {"reason": "final"})
                 return
 
             agent.messages.append({
@@ -177,7 +178,7 @@ class LoopRuntime(Runtime):
                     tool.on_success(args, result, ctx)
 
         # Round budget exhausted: close the stream so listeners get a terminal event.
-        yield Event("done", {})
+        yield Event("done", {"reason": "round_limit"})
 
     @staticmethod
     def _tool_error(agent, tc: dict, msg: str) -> Event:
