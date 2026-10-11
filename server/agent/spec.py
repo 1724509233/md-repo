@@ -39,5 +39,6 @@ class AgentSpec:
     system_reminders: list[SystemReminder] = field(default_factory=list)
     user_reminders: list[UserReminder] = field(default_factory=list)
     max_rounds: int = 15
+    auto_approve: bool = False
     vault_dir: Path | None = None
     read_doc_max_chars: int = 4000

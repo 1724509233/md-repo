@@ -434,7 +434,7 @@ def _make_chunk(content=None, tool_calls=None, finish_reason=None):
     return chunk
 
 
-def _make_agent(tmp_path: Path, max_rounds: int = 15):
+def _make_agent(tmp_path: Path, max_rounds: int = 15, auto_approve: bool = False):
     """Build an Agent with a mock model config and an empty vault."""
     from server.agent import Agent, AgentSpec, ModelConfig
 
@@ -446,6 +446,7 @@ def _make_agent(tmp_path: Path, max_rounds: int = 15):
         tools=[],
         max_rounds=max_rounds,
         vault_dir=vault,
+        auto_approve=auto_approve,
     )
     return Agent(spec), vault
 
@@ -932,3 +933,36 @@ def test_read_doc_max_chars_backward_compat(vault_dir):
     result = execute_tool("read_doc", {"path": "test_compat.md"}, ToolContext(vault_dir=vault_dir))
     # 3000 chars < 4000 default, so no truncation
     assert "truncated" not in result.lower()
+
+
+def test_agent_loop_auto_approve_skips_confirm(tmp_path: Path):
+    """auto_approve=True → write tool executes without confirm_request."""
+    agent, vault = _make_agent(tmp_path, auto_approve=True)
+
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_w"
+    tc.function = MagicMock()
+    tc.function.name = "write_doc"
+    tc.function.arguments = '{"path": "auto.md", "content": "# Auto"}'
+    chunk1 = _make_chunk(tool_calls=[tc], finish_reason="tool_calls")
+    chunk2 = _make_chunk(content="Saved.", finish_reason="stop")
+
+    mock_stream1 = AsyncMock()
+    mock_stream1.__aiter__ = lambda s: _async_iter([chunk1])
+    mock_stream2 = AsyncMock()
+    mock_stream2.__aiter__ = lambda s: _async_iter([chunk2])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=[mock_stream1, mock_stream2]
+    )
+
+    async def run():
+        return [_sse(e) async for e in agent.chat("write auto.md")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    assert not any('"type": "confirm_request"' in e for e in events)
+    assert (vault / "auto.md").is_file()

@@ -143,7 +143,7 @@ class LoopRuntime(Runtime):
                         yield self._tool_error(agent, tc, pre)
                         continue
 
-                if tool is not None and tool.permission == "ask":
+                if tool is not None and tool.permission == "ask" and not spec.auto_approve:
                     entry = {"event": asyncio.Event(), "approved": None}
                     agent.pending_confirms[tc["id"]] = entry
                     yield Event("confirm_request", {
