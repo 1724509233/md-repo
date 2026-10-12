@@ -13,30 +13,46 @@ const TreeNode = {
   },
   emits: ['select', 'toggle'],
   setup(props, { emit }) {
+    const treeOps = inject('treeOps')
     const ICONS_LOCAL = ICONS
     // 从 FileTree 父组件注入展开状态
-    const treeState = inject('treeState')
 
     function isExpanded(dirPath) {
       const dirs = treeState.expandedDirs.value || treeState.expandedDirs
       return dirs.has(dirPath)
     }
 
-    return { ICONS_LOCAL, isExpanded }
+    return { treeOps, ICONS_LOCAL, isExpanded }
   },
   template: `
     <div>
       <!-- 子目录 -->
       <template v-for="(child, name) in node.dirs" :key="name">
-        <div class="tree-group" :class="{ open: isExpanded(dirPath + '/' + name) }" :data-dir="dirPath + '/' + name">
+        <div class="tree-group group" :class="{ open: isExpanded(dirPath + '/' + name) }" :data-dir="dirPath + '/' + name">
           <button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left"
-            @click="$emit('toggle', dirPath + '/' + name)">
+            :class="{ 'tree-drop-target': treeOps.dropTarget === dirPath + '/' + name }"
+            @click="$emit('toggle', dirPath + '/' + name)"
+            @contextmenu.prevent="treeOps.openMenu($event, dirPath + '/' + name, true)"
+            draggable="true"
+            @dragstart="treeOps.onDragStart($event, dirPath + '/' + name, true)"
+            @dragenter="treeOps.onDragEnter($event, dirPath + '/' + name)"
+            @dragleave="treeOps.onDragLeave($event)"
+            @dragover="treeOps.onDragOver($event, dirPath + '/' + name)"
+            @drop="treeOps.onDrop($event, dirPath + '/' + name)">
             <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(dirPath + '/' + name) }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
             <span v-html="ICONS_LOCAL.folder"></span>
-            <span class="font-medium">{{ name }}</span>
+            <input v-if="treeOps.editing && treeOps.editing.path === dirPath + '/' + name"
+              class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
+              v-model="treeOps.editing.name" @keydown="treeOps.onEditKeydown($event)"
+              @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
+            <span v-else class="font-medium">{{ name }}</span>
+            <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
+              @click.stop="treeOps.openMenu($event, dirPath + '/' + name, true)" aria-label="操作">
+              <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+            </button>
             <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
           </button>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
@@ -50,12 +66,24 @@ const TreeNode = {
       </template>
 
       <!-- 文件 -->
-      <button v-for="f in node.files" :key="f.path"
-        class="tree-file w-full text-left px-2 py-1.5 rounded-md"
-        :class="{ active: f.path === currentPath }"
-        @click="$emit('select', f.path)">
-        {{ f.name }}
-      </button>
+      <div v-for="f in node.files" :key="f.path" class="group">
+        <button class="tree-file w-full text-left px-2 py-1.5 rounded-md"
+          :class="{ active: f.path === currentPath }"
+          @click="$emit('select', f.path)"
+          @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
+          draggable="true"
+          @dragstart="treeOps.onDragStart($event, f.path, false)">
+          <input v-if="treeOps.editing && treeOps.editing.path === f.path"
+            class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
+            v-model="treeOps.editing.name" @keydown="treeOps.onEditKeydown($event)"
+            @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
+          <span v-else class="font-medium">{{ f.name }}</span>
+          <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
+            @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
+            <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+        </button>
+      </div>
     </div>
   `
 }
@@ -113,6 +141,123 @@ export const FileTree = {
     function selectFile(path) {
       emit('select', path)
     }
+
+    const manage = inject('manage')
+    const fileState = inject('state')
+
+    // 操作菜单：{ path, isDir, x, y } | null
+    const menu = ref(null)
+    // 行内编辑：{ path, isDir, name, mode: 'rename' | 'new-file' | 'new-folder' } | null
+    const editing = ref(null)
+    // 拖拽移动
+    const dragPath = ref(null)
+    const dropTarget = ref(null)
+    let dragCounter = 0
+
+    function openMenu(e, path, isDir) {
+      menu.value = { path, isDir, x: e?.clientX ?? null, y: e?.clientY ?? null }
+    }
+
+    function closeMenu() { menu.value = null }
+
+    function startRename(path, isDir) {
+      const name = path.split('/').pop()
+      editing.value = { path, isDir, name: isDir ? name : (name.endsWith('.md') ? name.slice(0, -3) : name), mode: 'rename' }
+      menu.value = null
+    }
+
+    function startNew(dirPath, mode) {
+      editing.value = { path: dirPath, isDir: mode === 'new-folder', name: mode === 'new-file' ? '未命名' : '新建文件夹', mode }
+      menu.value = null
+    }
+
+    async function confirmEdit() {
+      const ed = editing.value
+      if (!ed) return
+      editing.value = null
+      const name = ed.name.trim()
+      if (!name) return
+      if (ed.mode === 'rename') {
+        const to = ed.path.replace(/[^/]+$/, name + (ed.isDir ? '' : '.md'))
+        await manage('rename', { from_path: ed.path, to_path: to })
+      } else if (ed.mode === 'new-file') {
+        await manage('create_file', { path: (ed.path ? ed.path + '/' : '') + name + '.md' })
+      } else {
+        await manage('create_folder', { path: (ed.path ? ed.path + '/' : '') + name })
+      }
+    }
+
+    function onEditKeydown(e) {
+      if (e.key === 'Enter') confirmEdit()
+      else if (e.key === 'Escape') editing.value = null
+    }
+
+    function confirmDelete() {
+      const m = menu.value
+      if (!m) return
+      const count = fileState.files.filter(f => f.path === m.path || f.path.startsWith(m.path + '/')).length
+      const msg = m.isDir
+        ? `将删除该文件夹及其中 ${count} 个文档，确定？`
+        : `确定删除「${m.path.split('/').pop()}」？`
+      if (confirm(msg)) {
+        manage('delete', { path: m.path })
+        menu.value = null
+      }
+    }
+
+    function moveItem() {
+      const m = menu.value
+      if (!m) return
+      const target = prompt('移动到哪个目录？（留空 = 根目录）', '')
+      menu.value = null
+      if (target === null) return
+      const dir = target.trim().replace(/\/+$/, '')
+      const name = m.path.split('/').pop()
+      manage('move', { from_path: m.path, to_path: (dir ? dir + '/' : '') + name })
+    }
+
+    function onDragStart(e, path, isDir) {
+      dragPath.value = path
+      e.dataTransfer.effectAllowed = 'move'
+      e.dataTransfer.setData('text/plain', path)
+    }
+
+    function canDropOn(dirPath) {
+      const p = dragPath.value
+      return p && p !== dirPath && !p.startsWith(dirPath + '/')
+    }
+
+    function onDragEnter(e, dirPath) {
+      if (!canDropOn(dirPath)) return
+      e.preventDefault()
+      dragCounter++
+      dropTarget.value = dirPath
+    }
+
+    function onDragOver(e, dirPath) {
+      if (canDropOn(dirPath)) e.preventDefault()
+    }
+
+    function onDragLeave(e) {
+      if (!dropTarget.value) return
+      e.preventDefault()
+      if (--dragCounter <= 0) { dragCounter = 0; dropTarget.value = null }
+    }
+
+    async function onDrop(e, dirPath) {
+      e.preventDefault()
+      dragCounter = 0
+      dropTarget.value = null
+      const from = e.dataTransfer.getData('text/plain') || dragPath.value
+      dragPath.value = null
+      if (!from || !canDropOn(dirPath)) return
+      const name = from.split('/').pop()
+      await manage('move', { from_path: from, to_path: dirPath + '/' + name })
+    }
+
+    // treeOps 供 TreeNode 递归层 inject
+    const treeOps = { menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dropTarget, onDragStart, canDropOn, onDragEnter, onDragOver, onDragLeave, onDrop }
+    provide('treeOps', treeOps)
 
     // ============ RAG 搜索下拉框 ============
     const results = ref([])
@@ -236,8 +381,10 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS
+      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem
     }
+
+  directives: { 'focus-select': { mounted(el) { el.focus(); el.select() } } }
   },
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
@@ -286,6 +433,22 @@ export const FileTree = {
           @select="selectFile"
           @toggle="toggleDir" />
       </nav>
+
+      <!-- 操作菜单浮层 -->
+      <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+      <div v-if="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
+        :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
+        <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          @click="startNew(menu.path, 'new-file')">新建文件</button>
+        <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
+        <button class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          @click="startRename(menu.path, menu.isDir)">重命名</button>
+        <button class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          @click="moveItem()">移动</button>
+        <button class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          @click="confirmDelete()">删除</button>
+      </div>
     </div>
   `
 }
