@@ -130,6 +130,25 @@ async function saveDoc() {
   }
 }
 
+// 当前文档受变更影响时的状态同步（pollChanges 与 manage 共用）
+async function _applyChangeToCurrentDoc(changes) {
+  const curAffected = changes.some(c =>
+    c.path === state.currentPath || (c.action === 'moved' && c.from_path === state.currentPath)
+  )
+  if (!curAffected || !state.currentPath) return
+  const deleted = changes.some(c => c.path === state.currentPath && c.action === 'deleted')
+  const moved = changes.find(c => c.action === 'moved' && c.from_path === state.currentPath)
+  if (deleted) {
+    state.docContent = ''
+    state.currentPath = null
+  } else {
+    if (moved) state.currentPath = moved.path
+    try {
+      state.docContent = await api.getDoc(state.currentPath)
+    } catch (e) { }
+  }
+}
+
 function downloadDoc() {
   if (!state.currentPath) return
   const blob = new Blob([state.docContent], { type: 'text/markdown' })
@@ -169,21 +188,7 @@ async function pollChanges() {
     if (treeChanged) await loadDocs()
 
     // 当前文档受影响？
-    const curAffected = changes.some(c =>
-      c.path === state.currentPath || (c.action === 'moved' && c.from_path === state.currentPath)
-    )
-    if (curAffected && state.currentPath) {
-      const deleted = changes.some(c => c.path === state.currentPath && c.action === 'deleted')
-      const moved = changes.find(c => c.action === 'moved' && c.from_path === state.currentPath)
-      if (deleted) {
-        state.docContent = ''
-      } else {
-        if (moved) state.currentPath = moved.path
-        try {
-          state.docContent = await api.getDoc(state.currentPath)
-        } catch (e) { }
-      }
-    }
+    await _applyChangeToCurrentDoc(changes)
   } catch (e) { }
 }
 
@@ -230,12 +235,31 @@ function toggleAI(open) {
   state.aiOpen = open
 }
 
+// 文件管理操作（FileTree 通过 inject('manage') 调用）
+async function manage(action, payload) {
+  try {
+    await api.manage(action, payload)
+    await loadDocs()
+    // 构造合成 change 走共用逻辑（后端已同步 apply_change，loadDocs 读到的是新 DB）
+    const changes = []
+    if (action === 'delete' && payload.path) {
+      changes.push({ path: payload.path, action: 'deleted' })
+    } else if ((action === 'rename' || action === 'move') && payload.from_path) {
+      changes.push({ path: payload.to_path, from_path: payload.from_path, action: 'moved' })
+    }
+    if (changes.length) await _applyChangeToCurrentDoc(changes)
+  } catch (e) {
+    alert('操作失败: ' + e.message)
+  }
+}
+
 // ─── 创建 App ───
 export function createApp() {
   const app = Vue.createApp({
     setup() {
       provide('state', state)
       provide('api', api)
+      provide('manage', manage)
 
       onMounted(() => {
         loadDocs()

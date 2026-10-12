@@ -30,6 +30,17 @@ export const api = {
     return res.json()
   },
 
+  /** POST /api/docs/manage — 文件管理（create_file/create_folder/rename/move/delete） */
+  async manage(action, payload) {
+    const res = await fetch('/api/docs/manage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload })
+    })
+    if (!res.ok) throw new Error(`manage ${action} → ${res.status}`)
+    return res.json()
+  },
+
   /** POST /api/docs/{path} — 上传文档（multipart） */
   async uploadDoc(path, file) {
     const form = new FormData()
