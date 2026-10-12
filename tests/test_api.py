@@ -393,3 +393,51 @@ def test_new_session_no_injection_even_with_history(client, db_conn):
     assert loaded is not None
     non_system = [m for m in loaded["messages"] if m["role"] != "system"]
     assert len(non_system) == 0
+
+# ─── manage endpoint tests (Task 1-3) ───
+
+
+def test_manage_create_file(client, vault_dir, db_conn) -> None:
+    r = client.post("/api/docs/manage", json={"action": "create_file", "path": "new/file.md"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "path": "new/file.md"}
+    on_disk = vault_dir / "new" / "file.md"
+    assert on_disk.is_file()
+    assert on_disk.read_bytes() == b""
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "new/file.md" in paths
+
+
+def test_manage_create_file_with_content(client, vault_dir, db_conn) -> None:
+    content = "# Hello\n"
+    r = client.post(
+        "/api/docs/manage",
+        json={"action": "create_file", "path": "doc.md", "content": content},
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "doc.md").read_bytes() == content.encode("utf-8")
+    entry = next(f for f in get_all_files(db_conn) if f["path"] == "doc.md")
+    assert entry["hash"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def test_manage_create_file_conflict(client) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_file", "path": "notes/test.md"}
+    )
+    assert r.status_code == 409
+
+
+def test_manage_create_folder(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_folder", "path": "new/sub"}
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "new" / "sub").is_dir()
+
+
+def test_manage_invalid_path(client) -> None:
+    for path in ("../x.md", "/abs.md"):
+        r = client.post(
+            "/api/docs/manage", json={"action": "create_file", "path": path}
+        )
+        assert r.status_code == 400

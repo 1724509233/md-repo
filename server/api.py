@@ -21,9 +21,13 @@ from .agent.prompts import SYSTEM_PROMPT, sse
 from .agent.reminders import DocPathUserReminder, TimeSystemReminder
 from .agent.spec import AgentSpec, ModelConfig
 from .agent.tools import TOOL_REGISTRY
-from .vault.service import get_all_files, upsert_file
+from .vault.service import (
+    apply_change,
+    fts_batch,
+    get_all_files,
+    upsert_file,
+)
 from .sync import compare_files
-
 logger = logging.getLogger("md-vault.api")
 
 # In-memory sync lock: {"locked_at": float} or None
@@ -148,6 +152,47 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="file not found")
         content = file_path.read_bytes().decode("utf-8", errors="replace")
         return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
+
+    @app.post("/api/docs/manage")
+    async def manage_docs(request: Request) -> dict:
+        # Must be registered before POST /api/docs/{path:path} (upload),
+        # otherwise the path converter swallows "manage"
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        action = body.get("action")
+        if action == "create_file":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            file_path = vault_dir / rel
+            if file_path.exists():
+                raise HTTPException(status_code=409, detail="already exists")
+            content = (body.get("content") or "").encode("utf-8")
+            from .write_registry import register_write
+
+            register_write(rel.as_posix(), "web")
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(content)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"failed to create file: {e}")
+            apply_change(db_conn, vault_dir, rel.as_posix(), "created", source="web")
+            return {"ok": True, "path": rel.as_posix()}
+        if action == "create_folder":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            dir_path = vault_dir / rel
+            if dir_path.exists():
+                raise HTTPException(status_code=409, detail="already exists")
+            try:
+                dir_path.mkdir(parents=True)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"failed to create folder: {e}")
+            return {"ok": True, "path": rel.as_posix()}
+        raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
     @app.post("/api/docs/{path:path}")
     async def upload_doc(path: str, file: UploadFile = File(...)) -> dict:
