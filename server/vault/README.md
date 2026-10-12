@@ -1,0 +1,92 @@
+# server/vault/ — 索引子系统
+
+Vault 索引子系统负责 SQLite FTS5 全文检索、知识图谱 (wikilink/tag/related)、文件 CRUD 和变更追踪。
+
+## 架构概览
+
+```
+server/vault/
+├── service.py          ← 公共 API (上层模块从此导入)
+├── file_entry.py       ← FileEntry 数据类 (hash/size/mtime)
+├── __init__.py         ← 废弃兼容层 (tests 仍使用，将移除)
+│
+├── db/                 ← 数据库层 (纯 SQL，无磁盘 I/O)
+│   ├── schema.py       ← init_db, _db_lock, 建表 + 迁移
+│   ├── conn.py         ← db_handle 单例 (agent tools 懒加载)
+│   ├── file_index.py   ← files 表 CRUD
+│   ├── changes.py      ← change_log 追加日志
+│   ├── sessions.py     ← agent 会话持久化
+│   ├── segments_sql.py ← FTS5 搜索 (BM25, AND→OR fallback)
+│   └── graph_sql.py    ← 知识图谱实体/边 + backlinks/related
+│
+├── fs/                 ← 文件系统操作 (无 DB)
+│   ├── segmenter.py    ← Markdown 分段 + jieba 分词
+│   ├── link_parser.py  ← wikilink 解析 + 缓存
+│   └── vault_ops.py    ← _iter_vault_md, edit_file
+│
+└── orchestration/      ← 协调层 (FS + DB 组合操作)
+    ├── indexer.py      ← index_segments, fts_batch, rebuild_*
+    ├── move_detect.py  ← pair_moves (两阶段级联重命名检测)
+    ├── refs.py         ← _update_references, _remove_dead_links
+    └── file_ops.py     ← apply_change, reconcile (变更应用入口)
+```
+
+## 公共 API (`server.vault.service`)
+
+上层模块 (agent, webapi, mcp_server) 从此导入:
+
+| 函数 | 说明 |
+|------|------|
+| `init_db(db_path)` → Connection | 创建 SQLite 连接，建表，WAL 模式 |
+| `apply_change(conn, vault_dir, path, action, ...)` | 变更应用入口 (create/update/delete/move) |
+| `reconcile(disk, conn, vault_dir)` → dict | 启动时/定期全量比对，返回 created/modified/deleted/moved/unchanged/duplicates |
+| `edit_file(vault_dir, path, old_string, new_string)` → str | 精确文本替换 |
+| `segments_search(conn, query, top_k, expand)` → list[dict] | FTS5 BM25 搜索 |
+| `graph_get_backlinks(conn, path)` → list[dict] | 反向链接 (谁引用了这篇) |
+| `graph_get_related(conn, path, hops)` → list[dict] | 关联文档 (N-hop BFS) |
+| `rebuild_segments_all(conn, vault_dir)` → int | 全量重建 segments FTS 索引 |
+| `graph_rebuild_all(conn, vault_dir)` → int | 全量重建知识图谱 |
+| `fts_batch()` → ContextManager | 批量模式上下文管理器 (抑制单次 FTS rebuild) |
+| `get_all_files(conn)` → list[dict] | 获取 files 表所有记录 |
+| `upsert_file(conn, path, hash, mtime)` → None | 文件索引写入 |
+
+## 数据库表结构
+
+| 表 | 说明 |
+|----|------|
+| `files` | 文件索引 (path, hash, mtime) |
+| `change_log` | 追加日志 (seq, source, op, path, from_path, ts, new_hash) |
+| `sessions` | Agent 会话 (session_id, messages JSON, token_count, last_active) |
+| `notifications` | 后台 agent 通知 (ts, alias, name, status, report_path, summary) |
+| `segments` | 分段内容 (id, path, mtime, seg_index, heading_path, kind, content, body, meta, code) |
+| `segments_fts` | FTS5 虚拟表 (索引 body/meta/code) |
+| `entities` | 知识图谱实体 (id, name, type: doc/tag/concept, path) |
+| `edges` | 知识图谱边 (src_id, dst_id, type: wikilink/tag/related, path) |
+
+## 关键设计决策
+
+### FTS5 搜索策略
+- **分词**: jieba `cut_for_search`，过滤停用词，空格连接
+- **搜索**: AND-first → OR fallback；BM25 权重 `[1.0, 0.4, 0.1]` (body/meta/code)
+- **去重**: 查询 `top_k * 3` 行，按文件去重，取每个文件最高 segment score
+- **返回**: top_k 文件，每文件最多 3 个 segment
+
+### 重命名检测 (`pair_moves`)
+- **Phase 1 (哈希分组)**: 按内容 hash 分组 gone/new，1:1 直接配对；大组按文件名精化
+- **Phase 2 (文件名分组)**: 未配对池按文件名分组，1:1 配对；大组按父目录距离最近邻分配
+- **盲区**: 重命名 + 内容变更 (hash 不同，文件名不同) → 误判为 delete + create
+
+### 引用维护 (`refs.py`)
+- **批量替换**: 预编译每个 move 的正则 (全路径 + 短名称)，通过 edges 表找 referrer，一次读取→内存替换→一次写入
+- **死链清理**: 删除文件后移除指向它的 wikilink (全路径/无扩展名/短名称)
+
+### 线程安全
+- `_db_lock` (threading.Lock): 保护共享 SQLite 连接的所有写操作 (watchdog 线程 + async 事件循环)
+- `fts_batch()`: 批量模式下抑制单次 FTS rebuild，退出时统一执行
+
+## 依赖的 server/ 模块
+
+| 模块 | 用途 |
+|------|------|
+| `server.ai` | `rag_search()` — 搜索工具调用 |
+| `server.write_registry` | `register_write()` — 写操作归因 |
