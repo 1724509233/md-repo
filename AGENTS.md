@@ -4,7 +4,7 @@
 
 ```bash
 pip install -e ".[dev]"          # install (do this first)
-pytest tests/ -v                 # run all tests
+pytest tests/ -v                 # run all tests (~20 files, ~72 tests)
 pytest tests/test_api.py::test_health -v  # single test
 python -m server.main config.yaml   # start server (default port 9888)
 python -m client.main config.yaml   # start client polling loop
@@ -14,6 +14,9 @@ md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 ## Architecture
 
 - **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ai_config)` factory; all routes are closures inside it. `main.py` is the entry point that wires config → db → app → uvicorn.
+- **server/vault/** — Index subsystem, split into submodules: `db/` (SQLite schema, file_index, segments_sql, graph_sql, changes, sessions), `fs/` (segmenter, link_parser, vault_ops), `orchestration/` (indexer, move_detect, refs, file_ops). Public API: `from server.vault.service import ...`.
+- **server/agent/** — LLM agent system: `agent.py` (Agent class), `session.py` (SessionManager), `tools/` (read/write/delete/move/search/edit/list_files/recent_changes), `prompts.py`, `runtime.py`.
+- **server/bgagent/** — Background cron-scheduled agents with independent model configs. `scheduler.py` + `runner.py` + `notify.py`.
 - **client/** — Python polling client. `sync.py` has `scan_local_files()`, `sync_once()`, `run_polling_loop()`. `main.py` is the entry point.
 - **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn`, `app`, `client`, `ai_config` fixtures.
 
@@ -27,9 +30,11 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 - **Deletion is not synced**: if a client deletes a file, it simply won't appear in `local_files`. The server keeps it. On next sync it shows up in `to_pull` (server has it, client doesn't). This is by design.
 - **Conflict files**: saved as `{stem}.conflict-{device_name}{suffix}` (e.g. `notes/test.conflict-mac.md`). The local version is kept untouched.
 - **Config**: both server and client read a single `config.yaml` with both `server:` and `client:` sections. Each side only reads its own section. Copy `config.example.yaml` to `config.yaml` and edit.
-- **First-run indexing**: `server/main.py` scans the vault for `.md` files and populates the SQLite db only if the db is empty. Subsequent runs skip this.
-- **Self-heal**: on startup, `_self_heal()` in `server/main.py` matches stale DB paths (files renamed while server was down) to live files by SHA-256 content hash and migrates them. Only unambiguous 1:1 matches are migrated.
+- **First-run indexing**: `server/main.py` checks FTS segment count; if zero, rebuilds segments + graph. Not DB emptiness — the old `_self_heal` pattern is gone.
 - **No auth, no HTTPS**: LAN-only by design. Don't add authentication unless the spec changes.
+- **`server.vault` is deprecated**: imports should come from `server.vault.service`. The shim in `server/vault/__init__.py` emits a DeprecationWarning and will be removed. Tests still use the shim — don't break them.
+- **Write source tracking**: `server/write_registry.py` (pop_source) tracks which process wrote a file, used by the SnapshotWatcher to attribute change events.
+- **Background agents**: configured under `background_agents:` in config.yaml. Each has independent cron, model config, target_dir scope, and prompt file. Alias must be unique; target_dirs must not overlap.
 
 ## Design Spec
 
