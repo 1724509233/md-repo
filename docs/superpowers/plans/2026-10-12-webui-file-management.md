@@ -55,7 +55,7 @@ spec 未明说、但真实使用会踩的输入/失败模式，各钉到所属 t
 - Consumes: `_safe_rel_path(raw: str) -> Path | None`（api.py:49）；`register_write(rel_path: str, source: str) -> None`（write_registry.py:18）；`apply_change(conn, vault_dir, path, action, source="unknown", from_path="", new_hash="", update_refs=True) -> None`（service 公共 API，action 取 `"created"`）；`get_all_files(db_conn) -> list[dict]`（测试断言用，test_api.py:10 已 import）
 - Produces: `POST /api/docs/manage`，body `{action, ...}`；成功 `{"ok": true, "path": str}`；错误 400（路径非法/JSON 非法/未知 action）、409（已存在）。Task 2/3 在同一 handler 的 dispatch 上加分支。
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 在 `tests/test_api.py` 末尾追加（`hashlib`、`get_all_files` 已在文件头 import）：
 
@@ -97,12 +97,12 @@ def test_manage_invalid_path(client) -> None:
         assert r.status_code == 400
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_api.py -k manage -v`
 Expected: 5 个全 FAIL（404，路由不存在）
 
-- [ ] **Step 3: Implement the route**
+- [x] **Step 3: Implement the route**
 
 `server/api.py` line 24 改为：
 
@@ -156,17 +156,17 @@ from .vault.service import apply_change, fts_batch, get_all_files, upsert_file
 
 要点：`register_write` 在写盘**前**调用（registry docstring 契约）；`create_folder` 不写 DB（空目录不进索引，与现状一致）。
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_api.py -k manage -v`
 Expected: 5 个全 PASS
 
-- [ ] **Step 5: Run full API suite for regressions**
+- [x] **Step 5: Run full API suite for regressions**
 
 Run: `pytest tests/test_api.py -v`
 Expected: 全部 PASS（重点确认 upload/save 路由未被新路由抢匹配）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/api.py tests/test_api.py
@@ -185,7 +185,7 @@ git commit -m "feat(api): POST /api/docs/manage — create_file/create_folder"
 - Consumes: Task 1 的 `manage_docs` handler；`_update_references_batch(conn, vault_dir, moves: list[tuple[str, str]], pre_rename: bool = False) -> int`（`server/vault/orchestration/refs.py:38`，handler 内局部导入）；`fts_batch()`（Task 1 已加入 line 24 import）
 - Produces: `rename`/`move` 两 action（实现相同，move 仅语义为跨目录）；成功 `{"ok": true, "path": to_path}`；404（from 不存在）、409（to 已存在）、400（to 在 from 子目录内）。Task 3 继续在同一 dispatch 加分支。
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 在 `tests/test_api.py` 追加：
 
@@ -248,12 +248,12 @@ def test_manage_not_found(client) -> None:
 
 （`test_manage_move_into_own_subdir` 只断言 400——校验在 FS 操作前返回，无需验证磁盘状态。）
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_api.py -k "manage_rename or manage_move or manage_not_found" -v`
 Expected: 7 个全 FAIL（400 unknown action）
 
-- [ ] **Step 3: Implement rename/move 分支**
+- [x] **Step 3: Implement rename/move 分支**
 
 在 `manage_docs` 的 `create_folder` 分支之后、`raise ... unknown action` 之前插入：
 
@@ -299,12 +299,12 @@ Expected: 7 个全 FAIL（400 unknown action）
 
 要点：`update_refs=False` 避免 `apply_change("moved")` 内部再跑一遍单文件引用更新（批量已做）；文件夹 rename 的 moves 列表即 spec「风险与注意」的方案（先 rglob 收集、批量更新引用、再 rename 目录）。
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_api.py -k manage -v`
 Expected: 12 个全 PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/api.py tests/test_api.py
@@ -323,7 +323,7 @@ git commit -m "feat(api): manage rename/move with batch wikilink ref updates"
 - Consumes: Task 1/2 的 handler；`apply_change(..., action="deleted", source="web")`（deleted 分支内部自动调 `_remove_dead_links` 清理指向被删文件的 wikilink，无需额外调用）
 - Produces: `delete` action；成功 `{"ok": true, "path": str, "deleted_count": int}`（文件=1，文件夹=内部 .md 数）；404（不存在）、400（路径非法）。manage 端点至此完整，Task 4+ 只动前端。
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 在 `tests/test_api.py` 追加：
 
@@ -367,12 +367,12 @@ def test_manage_delete_not_found(client) -> None:
     assert r.status_code == 404
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_api.py -k "manage_delete" -v`
 Expected: 4 个全 FAIL（400 unknown action）
 
-- [ ] **Step 3: Implement delete 分支**
+- [x] **Step 3: Implement delete 分支**
 
 在 `manage_docs` 的 rename/move 分支之后、`raise ... unknown action` 之前插入：
 
@@ -416,17 +416,17 @@ Expected: 4 个全 FAIL（400 unknown action）
 
 要点：`apply_change("deleted")` 内部已调 `_remove_dead_links`（refs.py:119）清理指向被删文件的 wikilink，不要重复处理；`rmdir` 失败即目录非空，静默保留。
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `pytest tests/test_api.py -k manage -v`
 Expected: 16 个全 PASS
 
-- [ ] **Step 5: Run full suite**
+- [x] **Step 5: Run full suite**
 
 Run: `pytest tests/ -v`
 Expected: 全部 PASS（~72+16 个测试）
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add server/api.py tests/test_api.py
@@ -445,7 +445,7 @@ git commit -m "feat(api): manage delete — file + recursive folder with empty-d
 - Consumes: Task 1-3 的 `POST /api/docs/manage`（成功 `{"ok": true, "path", "deleted_count"?}`，失败 HTTP 4xx）
 - Produces: `api.manage(action, payload) -> Promise<object>`（失败 throw `Error("manage <action> → <status>")`）；app 层 `manage(action, payload)`（成功后 `loadDocs()` + 当前文档受影响处理，失败 `alert`）；`_applyChangeToCurrentDoc(changes)`（changes 元素形如 `{path, from_path?, action}`，与 `/api/docs/changes` 返回同形）。Task 5/6 的 FileTree 通过 `inject('manage')` 调用。
 
-- [ ] **Step 1: api.js 加 manage 封装**
+- [x] **Step 1: api.js 加 manage 封装**
 
 在 `api` 对象的 `saveDoc` 方法（line 31 `},` 之后）插入：
 
@@ -462,7 +462,7 @@ git commit -m "feat(api): manage delete — file + recursive folder with empty-d
   },
 ```
 
-- [ ] **Step 2: app.js 抽取 `_applyChangeToCurrentDoc` 并接入 `pollChanges`**
+- [x] **Step 2: app.js 抽取 `_applyChangeToCurrentDoc` 并接入 `pollChanges`**
 
 在 `saveDoc`（line 131）之后新增：
 
@@ -496,7 +496,7 @@ async function _applyChangeToCurrentDoc(changes) {
     await _applyChangeToCurrentDoc(changes)
 ```
 
-- [ ] **Step 3: app.js 加 `manage()` 方法并 provide**
+- [x] **Step 3: app.js 加 `manage()` 方法并 provide**
 
 在 `_applyChangeToCurrentDoc` 之后新增：
 
@@ -522,13 +522,13 @@ async function manage(action, payload) {
 
 在 `setup()` 内（`provide('api', api)` line 238 之后）加 `provide('manage', manage)`。
 
-- [ ] **Step 4: 手动验证**
+- [x] **Step 4: 手动验证**
 
 启动 `python -m server.main config.yaml`，浏览器打开 UI：
 - 现有功能不回归：打开文档、编辑保存、轮询（pollChanges 重构后，用另一设备/终端 `curl -X POST` 触发外部变更，确认当前文档跟随逻辑仍工作）
 - 控制台无报错；`state.currentPath` 在文档被外部删除后变为 `null`（原行为是残留旧路径）
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/templates/js/api.js server/templates/js/app.js
@@ -547,7 +547,7 @@ git commit -m "feat(ui): api.manage + app manage() with shared current-doc chang
 - Consumes: Task 4 的 `manage`（`inject('manage')`）；`state.files`（`inject('state')`，元素 `{path, hash, mtime}`）；TopBar more-menu 浮层样式模式（`TopBar.js:89-107`：`absolute ... bg-surface border border-border rounded-lg shadow-lg z-50`，hover 项 `hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]`）
 - Produces: 行级操作菜单（新建文件/新建文件夹/重命名/删除）+ 行内 input 编辑（Enter 确认、Esc 取消）。Task 6 在同一菜单里加「移动」项并复用行级 drag 属性。
 
-- [ ] **Step 1: FileTree 加菜单状态与操作函数**
+- [x] **Step 1: FileTree 加菜单状态与操作函数**
 
 在 `FileTree` 的 `setup()` 中（`selectFile` line 113-115 附近）加：
 
@@ -618,7 +618,7 @@ git commit -m "feat(ui): api.manage + app manage() with shared current-doc chang
 
 `treeOps` 对象（供 TreeNode 递归层 `inject('treeOps')`）：`{ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete }`，在 setup 中 `provide('treeOps', treeOps)`。FileTree 自身模板（菜单浮层）用到的 `menu, editing, closeMenu, startNew, startRename, confirmDelete` 同时加入 `return` 对象（line 236-240）。
 
-- [ ] **Step 2: TreeNode 模板加 ⋯ 按钮、右键、行内 input**
+- [x] **Step 2: TreeNode 模板加 ⋯ 按钮、右键、行内 input**
 
 `TreeNode` 的 `setup` 中加 `const treeOps = inject('treeOps')`（FileTree 已在 Step 1 provide）。
 
@@ -652,7 +652,7 @@ const vFocusSelect = { mounted(el) { el.focus(); el.select() } }
 // FileTree 组件定义加 directives: { 'focus-select': vFocusSelect }
 ```
 
-- [ ] **Step 3: FileTree 模板加菜单浮层**
+- [x] **Step 3: FileTree 模板加菜单浮层**
 
 在 `#file-tree` 根 div 内（`<nav>` 之后）加：
 
@@ -674,7 +674,7 @@ const vFocusSelect = { mounted(el) { el.focus(); el.select() } }
 
 （Task 5 不需要改 style.css；浮层样式完全复用 TopBar more-menu 的 class 模式。）
 
-- [ ] **Step 4: 手动验证**
+- [x] **Step 4: 手动验证**
 
 浏览器打开 UI：
 - hover 文件行/文件夹行出现 `⋯`；点击与右键都能打开菜单，位置正确，点外部/再按右键关闭
@@ -684,7 +684,7 @@ const vFocusSelect = { mounted(el) { el.focus(); el.select() } }
 - 删除：文件弹「确定删除…」，文件夹弹「将删除该文件夹及其中 N 个文档」；确认后树刷新
 - 移动端（<1024px）：菜单可点、浮层不溢出屏幕
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/templates/js/components/FileTree.js server/templates/style.css
@@ -703,7 +703,7 @@ git commit -m "feat(ui): FileTree action menu + inline rename/create"
 - Consumes: Task 4 的 `manage`；Task 5 的 `menu`/`openMenu`/菜单浮层、`treeOps` provide
 - Produces: 桌面拖拽移动（drop 到文件夹行）+ 移动端菜单「移动」项（prompt 输入目标目录）。功能完整，无后续 task。
 
-- [ ] **Step 1: 行级拖拽（TreeNode）**
+- [x] **Step 1: 行级拖拽（TreeNode）**
 
 目录行 `button.tree-row` 与文件行外层 div 加：
 
@@ -769,7 +769,7 @@ style.css 加（brass 未注册进 Tailwind，用 color-mix 任意值/原生写�
 .tree-drop-target { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 40%, transparent); background: color-mix(in srgb, var(--brass) 10%, transparent); }
 ```
 
-- [ ] **Step 2: 移动端「移动」菜单项**
+- [x] **Step 2: 移动端「移动」菜单项**
 
 Task 5 的菜单浮层中，「重命名」与「删除」之间加（仅移动端显示；桌面用拖拽）：
 
@@ -796,7 +796,7 @@ Task 5 的菜单浮层中，「重命名」与「删除」之间加（仅移动�
 
 `moveItem` 加入 `treeOps`（TreeNode 不用，但保持单一来源）并加入 FileTree 的 `return` 对象（菜单浮层模板调用）。
 
-- [ ] **Step 3: 手动验证**
+- [x] **Step 3: 手动验证**
 
 浏览器打开 UI：
 - 拖文件到文件夹行：dragover 时目标行高亮（brass ring + 浅底），drop 后树刷新、文件出现在目标目录
@@ -806,7 +806,7 @@ Task 5 的菜单浮层中，「重命名」与「删除」之间加（仅移动�
 - 移动端（<1024px）：菜单出现「移动」项，prompt 输入目录后移动成功；留空移到根目录
 - 失败路径：目标重名时后端 409 → `alert('操作失败: manage move → 409')`，树不变
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add server/templates/js/components/FileTree.js server/templates/style.css
@@ -817,6 +817,6 @@ git commit -m "feat(ui): FileTree drag-move with drop highlight + mobile move fa
 
 ## 收尾（全部 task 完成后）
 
-- [ ] 跑全量测试：`pytest tests/ -v`，确认无回归
-- [ ] 浏览器过一遍 spec「测试计划 → 前端（手动验证）」全部 7 条
-- [ ] 多端同步冒烟：Web UI 重命名一个文档 → 确认 `/api/sync` 的 `recent_moves` 链路生效（客户端不会回推旧路径）；`/api/docs/changes` 轮询能看到 source="web" 的 moved 事件
+- [x] 跑全量测试：`pytest tests/ -v`，确认无回归
+- [x] 浏览器过一遍 spec「测试计划 → 前端（手动验证）」全部 7 条
+- [x] 多端同步冒烟：Web UI 重命名一个文档 → 确认 `/api/sync` 的 `recent_moves` 链路生效（客户端不会回推旧路径）；`/api/docs/changes` 轮询能看到 source="web" 的 moved 事件
