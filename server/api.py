@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import time
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -345,23 +346,32 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
         async def event_generator():
             agent = _get_agent(session_id)
+            exc_to_raise: BaseException | None = None
             try:
                 # doc_context 注入 + user message 由 agent.chat 处理（user reminder）
                 async for event in agent.chat(
                     message, doc_path=doc_context.as_posix() if doc_context else None
                 ):
                     yield sse(event.type, event.data)
-                # Persist session after chat completes
-                session_mgr.save(session_id, agent.messages)
             except (GeneratorExit, asyncio.CancelledError):
                 logger.error(
                     "SSE stream disconnected (session=%s, pending_confirms=%d)",
                     session_id, len(agent.pending_confirms),
                     exc_info=True,
                 )
-                raise
+                exc_to_raise = sys.exc_info()[1]
+            except Exception:
+                logger.exception("Agent chat failed (session=%s)", session_id)
+                exc_to_raise = sys.exc_info()[1]
             finally:
+                # Persist session on every exit (normal, interrupt, or error)
+                try:
+                    session_mgr.save(session_id, agent.messages)
+                except Exception:
+                    logger.exception("Failed to persist session (session=%s)", session_id)
                 lock.release()
+                if exc_to_raise is not None:
+                    raise exc_to_raise
 
         from fastapi.responses import StreamingResponse
 

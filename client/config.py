@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
-
+import os
 
 @dataclass
 class ClientConfig:
@@ -33,7 +33,7 @@ def load_client_config(config_path: str) -> ClientConfig:
 
     return ClientConfig(
         server_url=client["server_url"].rstrip("/"),
-        vault_dir=Path(client["vault_dir"]),
+        vault_dir=Path(os.path.expanduser(client["vault_dir"])).resolve(),
         device_name=client["device_name"],
         poll_interval=int(client.get("poll_interval", 300)),
     )

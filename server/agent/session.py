@@ -11,7 +11,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-
+import logging
 from ..vault.db.sessions import load_session, save_session
 
 
@@ -25,6 +25,7 @@ class SessionManager:
         self._last_active: dict[str, float] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._ttl = 1800  # 30 minutes
+        self._logger = logging.getLogger(__name__)
 
     def get_or_create(self, session_id: str) -> list[dict]:
         """Return the session's messages. Restores from DB if not in memory."""
@@ -35,9 +36,11 @@ class SessionManager:
         if saved:
             self._messages[session_id] = saved["messages"]
             self._last_active[session_id] = saved["last_active"]
+            self._logger.debug(f"Restored session {session_id} from DB with {len(saved['messages'])} messages.")
         else:
             self._messages[session_id] = []
             self._last_active[session_id] = time.time()
+            self._logger.debug(f"Created new session {session_id}.")
         return self._messages[session_id]
 
     def create_new(self) -> str:
@@ -47,6 +50,7 @@ class SessionManager:
         self._last_active[new_id] = time.time()
         if self._db:
             save_session(self._db, new_id, [], token_count=0)
+            self._logger.debug(f"Created new session {new_id} and saved to DB.")
         return new_id
 
     def get_lock(self, session_id: str) -> asyncio.Lock:
@@ -68,17 +72,21 @@ class SessionManager:
                 continue
             self._messages.pop(sid, None)
             self._last_active.pop(sid, None)
+            self._logger.debug(f"Evicted session {sid} due to inactivity.")
 
     def save(self, session_id: str, messages: list[dict] | None = None) -> None:
         """Persist session messages to DB (no-op if db_conn is None)."""
         if self._db is None:
+            self._logger.warning(f"Attempted to save session {session_id} but no DB connection is available.")
             return
         if messages is None:
             messages = self._messages.get(session_id)
         if messages is None:
+            self._logger.warning(f"Attempted to save session {session_id} but no messages found.")
             return
         self._last_active[session_id] = time.time()
         save_session(self._db, session_id, messages)
+        self._logger.debug(f"Saved session {session_id} to DB.")
 
     def get(self, session_id: str) -> list[dict] | None:
         """Return the session's messages if in memory, else None."""
