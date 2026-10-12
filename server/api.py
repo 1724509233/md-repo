@@ -238,6 +238,46 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                         update_refs=False,
                     )
             return {"ok": True, "path": dst_rel.as_posix()}
+        if action == "delete":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            target = vault_dir / rel
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="not found")
+            from .write_registry import register_write
+
+            if target.is_file():
+                register_write(rel.as_posix(), "web")
+                try:
+                    target.unlink()
+                except OSError as e:
+                    raise HTTPException(status_code=500, detail=f"failed to delete: {e}")
+                apply_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
+                return {"ok": True, "path": rel.as_posix(), "deleted_count": 1}
+            # Folder: delete .md files one by one, clean up empty dirs bottom-up
+            md_files = sorted(p for p in target.rglob("*.md") if p.is_file())
+            rels = []
+            for p in md_files:
+                r = p.relative_to(vault_dir).as_posix()
+                register_write(r, "web")
+                p.unlink()
+                rels.append(r)
+            for d in sorted(
+                [target] + list(target.rglob("*")),
+                key=lambda x: len(x.parts),
+                reverse=True,
+            ):
+                if not d.is_dir():
+                    continue
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass  # non-empty (contains non-.md files) → keep
+            with fts_batch():
+                for r in rels:
+                    apply_change(db_conn, vault_dir, r, "deleted", source="web")
+            return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels)}
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
     @app.post("/api/docs/{path:path}")

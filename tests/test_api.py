@@ -545,3 +545,49 @@ def test_manage_not_found(client) -> None:
         },
     )
     assert r.status_code == 404
+
+def test_manage_delete_file(client, vault_dir, db_conn) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/test.md"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "path": "notes/test.md", "deleted_count": 1}
+    assert not (vault_dir / "notes" / "test.md").exists()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/test.md" not in paths
+
+
+def test_manage_delete_folder_recursive(client, vault_dir, db_conn) -> None:
+    sub = vault_dir / "notes" / "sub"
+    (sub / "deep").mkdir(parents=True)
+    (sub / "a.md").write_bytes(b"# A")
+    (sub / "deep" / "b.md").write_bytes(b"# B")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/sub"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 2
+    assert not (vault_dir / "notes" / "sub").exists()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/sub/a.md" not in paths and "notes/sub/deep/b.md" not in paths
+
+
+def test_manage_delete_folder_keeps_nonmd(client, vault_dir) -> None:
+    sub = vault_dir / "notes" / "mixed"
+    sub.mkdir()
+    (sub / "a.md").write_bytes(b"# A")
+    (sub / "b.txt").write_bytes(b"keep me")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/mixed"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 1
+    assert (sub / "b.txt").is_file()  # non-.md preserved
+    assert sub.is_dir()  # dir not empty, keep it
+
+
+def test_manage_delete_not_found(client) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "nope.md"}
+    )
+    assert r.status_code == 404
