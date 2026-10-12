@@ -31,9 +31,9 @@ export const TopBar = {
     return { ICONS_LOCAL, setMode, save, download }
   },
   template: `
-    <div class="flex items-center gap-3 px-4 h-14 border-b border-border bg-surface shrink-0">
+    <div class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0">
       <!-- 移动端 hamburger -->
-      <button class="lg:hidden w-11 h-11 flex items-center justify-center text-muted hover:text-text"
+      <button class="lg:hidden topbar-btn topbar-btn--icon"
         @click="$emit('toggleSidebar')" aria-label="打开侧边栏">
         <svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
@@ -43,46 +43,43 @@ export const TopBar = {
 
       <!-- 通知铃铛 -->
       <button data-notif-bell
-        class="w-11 h-11 flex items-center justify-center rounded-lg topbar-btn transition-colors"
+        class="topbar-btn topbar-btn--icon"
         :class="{ 'text-muted/40': unreadCount === 0 }"
         @click="$emit('toggleNotifDropdown')" aria-label="通知">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M13.73 21a2 2 0 0 1-3.46 0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-        <span v-if="unreadCount > 0"
-          class="notif-badge absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[10px] font-bold text-paper px-0.5"
-          :class="unreadCount > 99 ? 'px-1' : ''"
-          style="background:#9A6B32;">
+        <span v-if="unreadCount > 0" class="notif-badge">
           {{ unreadCount > 99 ? '99+' : unreadCount }}
         </span>
       </button>
 
-      <!-- 桌面端模式切换 -->
-      <div class="hidden lg:flex rounded-lg overflow-hidden border border-border text-xs">
-        <button class="mode-btn flex items-center gap-1.5 px-3 py-1.5" :class="{ active: mode === 'edit' }"
+      <!-- 桌面端模式切换：无外框分段控件，仅激活态黄铜 -->
+      <div class="hidden lg:flex mode-pill">
+        <button class="mode-btn topbar-btn" :class="{ active: mode === 'edit' }"
           @click="setMode('edit')">
-          <span v-html="ICONS_LOCAL.pencil"></span>编辑
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
         </button>
-        <button class="mode-btn flex items-center gap-1.5 px-3 py-1.5" :class="{ active: mode === 'preview' }"
+        <button class="mode-btn topbar-btn" :class="{ active: mode === 'preview' }"
           @click="setMode('preview')">
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
         </button>
       </div>
 
-      <!-- 桌面端保存/下载 -->
-      <button class="hidden lg:block topbar-btn flex items-center gap-1.5 text-xs px-3 py-1.5 border border-border rounded-lg"
+      <!-- 桌面端保存/下载：下载为幽灵，保存为主操作（实心黄铜） -->
+      <button class="hidden lg:block topbar-btn"
         @click="download">
         <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
       </button>
-      <button class="hidden lg:block btn-save flex items-center gap-1.5 px-3 py-1.5 rounded-lg"
+      <button class="hidden lg:block topbar-btn btn-save"
         @click="save">
-        <span v-html="ICONS_LOCAL.pencil"></span>保存
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>保存
       </button>
 
       <!-- 移动端更多菜单 -->
       <div class="lg:hidden relative" data-more-menu>
-        <button class="w-11 h-11 flex items-center justify-center border border-border rounded-lg text-muted topbar-btn"
+        <button class="topbar-btn topbar-btn--icon"
           @click="$emit('toggleMoreMenu')" aria-label="更多操作">
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
         </button>

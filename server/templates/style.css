@@ -71,16 +71,32 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #search-input::placeholder { color: var(--ink-soft); opacity: .7; }
 #search-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
 
-/* ============ 顶栏 ============ */
+/* ============ 顶栏（轻盈：少描边、多留白）============ */
 #current-file { font-family: 'Source Serif 4', serif; font-size: 15px; color: var(--ink); }
-.topbar-btn { font-family: 'Inter', sans-serif; font-size: 13px; transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
-.topbar-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); }
-.mode-btn { font-family: 'Inter', sans-serif; font-size: 12px; transition: background-color .15s ease, color .15s ease; }
+
+/* 顶栏按钮公共基类：铃铛 / 下载 / 保存 / 模式切换 / 移动端更多 / hamburger */
+.topbar-btn {
+  font-family: 'Inter', sans-serif; font-size: 12px;
+  height: 28px; padding: 0 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 8px; color: var(--ink-soft);
+  transition: background-color .15s ease, color .15s ease;
+}
+.topbar-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+/* 正方形图标按钮：铃铛 / hamburger / 移动端更多 */
+.topbar-btn--icon { width: 28px; padding: 0; position: relative; }
+/* 模式分段控件：无外框，仅激活态黄铜 */
 .mode-btn.active { background: var(--brass); color: var(--paper); font-weight: 500; }
-.mode-btn:not(.active) { background: var(--surface); color: var(--ink-soft); }
-.mode-btn:not(.active):hover { background: color-mix(in srgb, var(--brass) 10%, transparent); }
-.btn-save { font-family: 'Inter', sans-serif; font-size: 13px; background: var(--surface); color: var(--ink); border: 1px solid var(--line); transition: background-color .15s ease, color .15s ease, border-color .15s ease; }
-.btn-save:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); border-color: var(--brass); color: var(--brass); }
+.mode-btn:not(.active):hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+/* 保存：唯一的主操作，实心黄铜 */
+.btn-save { font-weight: 500; color: var(--paper); background: var(--brass); }
+.btn-save:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); color: var(--paper); }
+/* 模式切换 pill 容器 */
+.mode-pill {
+  display: flex; align-items: center; gap: 2px;
+  height: 36px; padding: 0 2px; border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
 
 /* ============ 文档区 ============ */
 #content-area { background: var(--paper); }
@@ -385,16 +401,22 @@ pre code.hljs { background: transparent; padding: 0; }
   to   { opacity: 1; transform: translateY(0); }
 }
 @keyframes badge-pop {
-  from { transform: scale(0); }
-  50%  { transform: scale(1.2); }
-  to   { transform: scale(1); }
+  from { transform: scale(0.6); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }
 
 .notif-dropdown {
   animation: notif-in .18s ease-out both;
 }
 .notif-badge {
-  animation: badge-pop .3s ease-out both;
+  position: absolute; top: -6px; right: -6px;
+  min-width: 16px; height: 16px; padding: 0 2px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 9999px;
+  background: var(--brass); color: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  animation: badge-pop .25s ease-out both;
+  box-shadow: 0 0 0 2px var(--surface);
 }
 
 /* 下拉面板滚动条细化 */
