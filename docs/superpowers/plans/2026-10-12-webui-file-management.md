@@ -818,5 +818,22 @@ git commit -m "feat(ui): FileTree drag-move with drop highlight + mobile move fa
 ## 收尾（全部 task 完成后）
 
 - [x] 跑全量测试：`pytest tests/ -v`，确认无回归
-- [x] 浏览器过一遍 spec「测试计划 → 前端（手动验证）」全部 7 条
-- [x] 多端同步冒烟：Web UI 重命名一个文档 → 确认 `/api/sync` 的 `recent_moves` 链路生效（客户端不会回推旧路径）；`/api/docs/changes` 轮询能看到 source="web" 的 moved 事件
+- [ ] 浏览器过一遍 spec「测试计划 → 前端（手动验证）」全部 7 条
+- [ ] 多端同步冒烟：Web UI 重命名一个文档 → 确认 `/api/sync` 的 `recent_moves` 链路生效（客户端不会回推旧路径）；`/api/docs/changes` 轮询能看到 source="web" 的 moved 事件
+
+### 前端手动验证（2026-10-13 补记）
+
+agent-browser CDP 在 `fill` + `press Enter` 后反复断开（os error 10060），无法连续操作。已验证 1/7，剩余 6 条需手动或换工具完成：
+
+- [x] **1. 菜单出现且定位正确** — 点击「项目笔记」操作按钮，弹出菜单含「新建文件 / 新建文件夹 / 重命名 / 删除」，定位在按钮右侧（截图 `v1-menu.png`）
+- [ ] **2. 新建文件/文件夹后树即时刷新** — 菜单→「新建文件」→输入框出现（默认值"未命名"）→填入文件名→Enter。已走到输入框，但 Enter 提交后文件未落盘（`D:/md-vault/项目笔记/webui-verify-test.md` 不存在），且 CDP 断开。需排查 `confirmEdit()` → `manage('create_file')` 链路
+- [ ] **3. 行内重命名 Enter/Esc 行为** — 菜单→「重命名」→输入框出现（默认值为当前文件名去 `.md`）→Enter 提交 / Esc 取消
+- [ ] **4. 拖拽文件/文件夹到文件夹，高亮与禁止自身子目录** — 拖文件到文件夹行：dragover 时目标行高亮（brass ring + 浅底），drop 后树刷新；拖到自身或自身子目录时不高亮、drop 无效；拖出窗口/取消（Esc）高亮消失
+- [ ] **5. 删除确认弹窗文案** — 文件夹显示"将删除该文件夹及其中 N 个文档，确定？"（N 由前端从 `state.files` 统计前缀匹配）；文件显示"确定删除「xxx」？"
+- [ ] **6. 当前打开文档被移动/删除时编辑器状态正确** — 被拖走：编辑器跟随新路径（`_applyChangeToCurrentDoc`）；被删除：编辑器清空、`currentPath` 为 null
+- [ ] **7. 移动端（<1024px）** — 菜单出现「移动」项，prompt 输入目录后移动成功；留空移到根目录
+
+### 多端同步冒烟
+
+- [ ] Web UI 重命名一个文档 → 确认 `/api/sync` 的 `recent_moves` 链路生效（客户端不会回推旧路径）
+- [ ] `/api/docs/changes` 轮询能看到 source="web" 的 moved 事件
