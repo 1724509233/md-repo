@@ -441,3 +441,107 @@ def test_manage_invalid_path(client) -> None:
             "/api/docs/manage", json={"action": "create_file", "path": path}
         )
         assert r.status_code == 400
+
+def test_manage_rename_file_updates_refs(client, vault_dir, db_conn) -> None:
+    (vault_dir / "notes" / "old.md").write_bytes(b"# Old")
+    (vault_dir / "notes" / "ref.md").write_bytes(b"See [[notes/old.md]]")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/old.md",
+            "to_path": "notes/new.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "notes" / "new.md").is_file()
+    assert not (vault_dir / "notes" / "old.md").exists()
+    assert "[[notes/new.md]]" in (vault_dir / "notes" / "ref.md").read_text()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/new.md" in paths and "notes/old.md" not in paths
+
+
+def test_manage_rename_conflict(client, vault_dir) -> None:
+    (vault_dir / "notes" / "other.md").write_bytes(b"# Other")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/test.md",
+            "to_path": "notes/other.md",
+        },
+    )
+    assert r.status_code == 409
+    assert (vault_dir / "notes" / "test.md").is_file()  # source unchanged
+
+
+def test_manage_move_file(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "move",
+            "from_path": "notes/test.md",
+            "to_path": "docs/test.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "docs" / "test.md").is_file()
+    assert not (vault_dir / "notes" / "test.md").exists()
+
+
+def test_manage_move_into_nonexistent_dir(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "move",
+            "from_path": "notes/test.md",
+            "to_path": "a/b/c/test.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "a" / "b" / "c" / "test.md").is_file()
+
+
+def test_manage_rename_folder_updates_refs(client, vault_dir, db_conn) -> None:
+    sub = vault_dir / "notes" / "sub"
+    sub.mkdir()
+    (sub / "a.md").write_bytes(b"# A")
+    (vault_dir / "notes" / "ref.md").write_bytes(b"See [[notes/sub/a.md]]")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/sub",
+            "to_path": "notes/sub2",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "notes" / "sub2" / "a.md").is_file()
+    assert not (vault_dir / "notes" / "sub").exists()
+    assert "[[notes/sub2/a.md]]" in (vault_dir / "notes" / "ref.md").read_text()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/sub2/a.md" in paths and "notes/sub/a.md" not in paths
+
+
+def test_manage_move_into_own_subdir(client) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes",
+            "to_path": "notes/inner",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_manage_not_found(client) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "nope.md",
+            "to_path": "x.md",
+        },
+    )
+    assert r.status_code == 404
