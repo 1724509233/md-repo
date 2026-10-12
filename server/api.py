@@ -210,9 +210,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
             if src.is_file():
                 moves = [(src_rel.as_posix(), dst_rel.as_posix())]
-            else:  # folder: expand to internal .md files
+            else:  # folder: expand to internal .md files, preserving nested structure
                 moves = [
-                    (p.relative_to(vault_dir).as_posix(), dst_rel.as_posix() + "/" + p.name)
+                    (p.relative_to(vault_dir).as_posix(), (dst_rel / p.relative_to(src)).as_posix())
                     for p in sorted(src.rglob("*.md")) if p.is_file()
                 ]
             from .write_registry import register_write

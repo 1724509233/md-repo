@@ -1,5 +1,5 @@
 /* FileTree 组件：递归文件树 + RAG 搜索下拉框 + 展开/折叠 */
-const { ref, computed, watch, provide, inject, onBeforeUnmount } = Vue
+const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
 import { api } from '../api.js'
 
@@ -12,8 +12,10 @@ const TreeNode = {
     currentPath: { type: String, default: null }
   },
   emits: ['select', 'toggle'],
+  directives: { 'focus-select': { mounted(el) { el.focus(); el.select() } } },
   setup(props, { emit }) {
     const treeOps = inject('treeOps')
+    const treeState = inject('treeState')
     const ICONS_LOCAL = ICONS
     // 从 FileTree 父组件注入展开状态
 
@@ -29,9 +31,11 @@ const TreeNode = {
       <!-- 子目录 -->
       <template v-for="(child, name) in node.dirs" :key="name">
         <div class="tree-group group" :class="{ open: isExpanded(dirPath + '/' + name) }" :data-dir="dirPath + '/' + name">
-          <button class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left"
+          <div class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left cursor-pointer"
             :class="{ 'tree-drop-target': treeOps.dropTarget === dirPath + '/' + name }"
+            role="button" tabindex="0"
             @click="$emit('toggle', dirPath + '/' + name)"
+            @keydown.enter.prevent="$emit('toggle', dirPath + '/' + name)"
             @contextmenu.prevent="treeOps.openMenu($event, dirPath + '/' + name, true)"
             draggable="true"
             @dragstart="treeOps.onDragStart($event, dirPath + '/' + name, true)"
@@ -46,15 +50,15 @@ const TreeNode = {
             <span v-html="ICONS_LOCAL.folder"></span>
             <input v-if="treeOps.editing && treeOps.editing.path === dirPath + '/' + name"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
-              v-model="treeOps.editing.name" @keydown="treeOps.onEditKeydown($event)"
+              v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
               @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
             <span v-else class="font-medium">{{ name }}</span>
+            <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
               @click.stop="treeOps.openMenu($event, dirPath + '/' + name, true)" aria-label="操作">
               <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
-            <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
-          </button>
+          </div>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
             <div class="tree-children-inner space-y-0.5 py-0.5" v-show="isExpanded(dirPath + '/' + name)">
               <TreeNode :node="child" :dir-path="dirPath + '/' + name" :current-path="currentPath"
@@ -67,22 +71,24 @@ const TreeNode = {
 
       <!-- 文件 -->
       <div v-for="f in node.files" :key="f.path" class="group">
-        <button class="tree-file w-full text-left px-2 py-1.5 rounded-md"
+        <div class="tree-file w-full text-left px-2 py-1.5 rounded-md cursor-pointer"
           :class="{ active: f.path === currentPath }"
+          role="button" tabindex="0"
           @click="$emit('select', f.path)"
+          @keydown.enter.prevent="$emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
           @dragstart="treeOps.onDragStart($event, f.path, false)">
           <input v-if="treeOps.editing && treeOps.editing.path === f.path"
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
-            v-model="treeOps.editing.name" @keydown="treeOps.onEditKeydown($event)"
+            v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
             @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
           <span v-else class="font-medium">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
             @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
-        </button>
+        </div>
       </div>
     </div>
   `
@@ -255,8 +261,8 @@ export const FileTree = {
       await manage('move', { from_path: from, to_path: dirPath + '/' + name })
     }
 
-    // treeOps 供 TreeNode 递归层 inject
-    const treeOps = { menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dropTarget, onDragStart, canDropOn, onDragEnter, onDragOver, onDragLeave, onDrop }
+    // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
+    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dropTarget, onDragStart, canDropOn, onDragEnter, onDragOver, onDragLeave, onDrop })
     provide('treeOps', treeOps)
 
     // ============ RAG 搜索下拉框 ============
@@ -383,8 +389,6 @@ export const FileTree = {
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
       ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem
     }
-
-  directives: { 'focus-select': { mounted(el) { el.focus(); el.select() } } }
   },
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">

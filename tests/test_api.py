@@ -7,7 +7,7 @@ import time
 import pytest
 
 from server import api as api_module
-from server.vault import get_all_files
+from server.vault import get_all_files, upsert_file
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
@@ -521,6 +521,35 @@ def test_manage_rename_folder_updates_refs(client, vault_dir, db_conn) -> None:
     assert "[[notes/sub2/a.md]]" in (vault_dir / "notes" / "ref.md").read_text()
     paths = [f["path"] for f in get_all_files(db_conn)]
     assert "notes/sub2/a.md" in paths and "notes/sub/a.md" not in paths
+
+
+def test_manage_rename_nested_folder_preserves_structure(client, vault_dir, db_conn) -> None:
+    """Renaming a folder with subdirs must keep nested paths intact in DB and on disk."""
+    deep = vault_dir / "notes" / "sub" / "deep"
+    deep.mkdir(parents=True)
+    (vault_dir / "notes" / "sub" / "a.md").write_bytes(b"# A")
+    (deep / "b.md").write_bytes(b"# B")
+    # Index both files so the move has DB records to update (as in a real vault)
+    for rel in ("notes/sub/a.md", "notes/sub/deep/b.md"):
+        p = vault_dir / rel
+        upsert_file(db_conn, rel, hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_mtime)
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/sub",
+            "to_path": "notes/sub2",
+        },
+    )
+    assert r.status_code == 200
+    # Disk: whole tree moved, nested structure preserved
+    assert (vault_dir / "notes" / "sub2" / "a.md").is_file()
+    assert (vault_dir / "notes" / "sub2" / "deep" / "b.md").is_file()
+    assert not (vault_dir / "notes" / "sub").exists()
+    # DB: paths must match disk exactly (no flattening, no stale records)
+    paths = {f["path"] for f in get_all_files(db_conn)}
+    assert "notes/sub2/a.md" in paths and "notes/sub2/deep/b.md" in paths
+    assert not ({"notes/sub/a.md", "notes/sub/deep/b.md"} & paths)
 
 
 def test_manage_move_into_own_subdir(client) -> None:
