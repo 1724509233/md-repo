@@ -165,11 +165,13 @@ export const FileTree = {
     const dropTarget = ref(null)
     let dragCounter = 0
 
-    // 视口钳制 + 翻转：w-40=160px 宽；菜单高 = 项数*32 + 8（桌面 4 项，移动端含「移动」5 项）
+    // 视口钳制 + 翻转：w-40=160px 宽；菜单高 = 项数*32 + 8
+    // 项数：文件夹 = 新建文件/新建文件夹/重命名/删除（移动端 +移动），文件 = 重命名/删除（移动端 +移动）
     // 下方放不下时翻到触发点上方（跟随按钮），仍放不下则贴顶
     function openMenu(e, path, isDir) {
       const menuW = 160
-      const menuH = (window.innerWidth >= 1024 ? 4 : 5) * 32 + 8
+      const items = (isDir ? 2 : 0) + (window.innerWidth < 1024 ? 1 : 0) + 2
+      const menuH = items * 32 + 8
       const x = e?.clientX != null ? Math.max(0, Math.min(e.clientX, window.innerWidth - menuW)) : null
       let y = e?.clientY != null ? e.clientY : null
       if (y != null && y + menuH > window.innerHeight) y = Math.max(0, y - menuH)
