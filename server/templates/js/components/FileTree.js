@@ -24,44 +24,49 @@ const TreeNode = {
       return dirs.has(dirPath)
     }
 
-    return { treeOps, ICONS_LOCAL, isExpanded }
+    // 子目录路径：根层 dirPath 为空串，直接拼会多出前导 /（后端 _safe_rel_path 拒绝）
+    function childPath(name) {
+      return (props.dirPath ? props.dirPath + '/' : '') + name
+    }
+
+    return { treeOps, ICONS_LOCAL, isExpanded, childPath }
   },
   template: `
     <div>
       <!-- 子目录 -->
       <template v-for="(child, name) in node.dirs" :key="name">
-        <div class="tree-group group" :class="{ open: isExpanded(dirPath + '/' + name) }" :data-dir="dirPath + '/' + name">
+        <div class="tree-group group" :class="{ open: isExpanded(childPath(name)) }" :data-dir="childPath(name)">
           <div class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left cursor-pointer"
-            :class="{ 'tree-drop-target': treeOps.dropTarget === dirPath + '/' + name }"
+            :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
             role="button" tabindex="0"
-            @click="$emit('toggle', dirPath + '/' + name)"
-            @keydown.enter.prevent="$emit('toggle', dirPath + '/' + name)"
-            @contextmenu.prevent="treeOps.openMenu($event, dirPath + '/' + name, true)"
+            @click="$emit('toggle', childPath(name))"
+            @keydown.enter.prevent="$emit('toggle', childPath(name))"
+            @contextmenu.prevent="treeOps.openMenu($event, childPath(name), true)"
             draggable="true"
-            @dragstart="treeOps.onDragStart($event, dirPath + '/' + name, true)"
-            @dragenter="treeOps.onDragEnter($event, dirPath + '/' + name)"
+            @dragstart="treeOps.onDragStart($event, childPath(name), true)"
+            @dragenter="treeOps.onDragEnter($event, childPath(name))"
             @dragleave="treeOps.onDragLeave($event)"
-            @dragover="treeOps.onDragOver($event, dirPath + '/' + name)"
-            @drop="treeOps.onDrop($event, dirPath + '/' + name)">
-            <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(dirPath + '/' + name) }"
+            @dragover="treeOps.onDragOver($event, childPath(name))"
+            @drop="treeOps.onDrop($event, childPath(name))">
+            <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
             <span v-html="ICONS_LOCAL.folder"></span>
-            <input v-if="treeOps.editing && treeOps.editing.path === dirPath + '/' + name"
+            <input v-if="treeOps.editing && treeOps.editing.path === childPath(name)"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
               @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
             <span v-else class="font-medium">{{ name }}</span>
             <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
-              @click.stop="treeOps.openMenu($event, dirPath + '/' + name, true)" aria-label="操作">
+              @click.stop="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
               <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
           </div>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
-            <div class="tree-children-inner space-y-0.5 py-0.5" v-show="isExpanded(dirPath + '/' + name)">
-              <TreeNode :node="child" :dir-path="dirPath + '/' + name" :current-path="currentPath"
+            <div class="tree-children-inner space-y-0.5 py-0.5" v-show="isExpanded(childPath(name))">
+              <TreeNode :node="child" :dir-path="childPath(name)" :current-path="currentPath"
                 @select="$emit('select', $event)"
                 @toggle="$emit('toggle', $event)" />
             </div>
@@ -250,15 +255,15 @@ export const FileTree = {
       if (--dragCounter <= 0) { dragCounter = 0; dropTarget.value = null }
     }
 
-    async function onDrop(e, dirPath) {
+    async function onDrop(e, targetDir) {
       e.preventDefault()
       dragCounter = 0
       dropTarget.value = null
       const from = e.dataTransfer.getData('text/plain') || dragPath.value
       dragPath.value = null
-      if (!from || !canDropOn(dirPath)) return
+      if (!from || !canDropOn(targetDir)) return
       const name = from.split('/').pop()
-      await manage('move', { from_path: from, to_path: dirPath + '/' + name })
+      await manage('move', { from_path: from, to_path: targetDir + '/' + name })
     }
 
     // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
