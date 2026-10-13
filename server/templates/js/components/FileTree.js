@@ -165,8 +165,15 @@ export const FileTree = {
     const dropTarget = ref(null)
     let dragCounter = 0
 
+    // 视口钳制 + 翻转：w-40=160px 宽；菜单高 = 项数*32 + 8（桌面 4 项，移动端含「移动」5 项）
+    // 下方放不下时翻到触发点上方（跟随按钮），仍放不下则贴顶
     function openMenu(e, path, isDir) {
-      menu.value = { path, isDir, x: e?.clientX ?? null, y: e?.clientY ?? null }
+      const menuW = 160
+      const menuH = (window.innerWidth >= 1024 ? 4 : 5) * 32 + 8
+      const x = e?.clientX != null ? Math.max(0, Math.min(e.clientX, window.innerWidth - menuW)) : null
+      let y = e?.clientY != null ? e.clientY : null
+      if (y != null && y + menuH > window.innerHeight) y = Math.max(0, y - menuH)
+      menu.value = { path, isDir, x, y }
     }
 
     function closeMenu() { menu.value = null }
@@ -189,7 +196,13 @@ export const FileTree = {
       const name = ed.name.trim()
       if (!name) return
       if (ed.mode === 'rename') {
+        // 重命名无法修改后缀：输入带后缀（如 a.md / a.txt）会拼出双扩展名，拦截并提示
+        if (/\.\w+$/.test(name)) {
+          alert('名称不能带后缀（如 .md、.txt）：重命名无法修改文件后缀')
+          return
+        }
         const to = ed.path.replace(/[^/]+$/, name + (ed.isDir ? '' : '.md'))
+        if (to === ed.path) return  // 名称未变：跳过 API（否则 to_path 已存在 → 409）
         await manage('rename', { from_path: ed.path, to_path: to })
       } else if (ed.mode === 'new-file') {
         await manage('create_file', { path: (ed.path ? ed.path + '/' : '') + name + '.md' })
