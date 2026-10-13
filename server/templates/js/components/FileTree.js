@@ -76,7 +76,7 @@ const TreeNode = {
 
       <!-- 文件 -->
       <div v-for="f in node.files" :key="f.path" class="group">
-        <div class="tree-file w-full text-left px-2 py-1.5 rounded-md cursor-pointer"
+        <div class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
           :class="{ active: f.path === currentPath }"
           role="button" tabindex="0"
           @click="$emit('select', f.path)"
@@ -88,7 +88,7 @@ const TreeNode = {
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
             v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
             @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
-          <span v-else class="font-medium">{{ f.name }}</span>
+          <span v-else class="font-medium flex-1 truncate">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
             @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
