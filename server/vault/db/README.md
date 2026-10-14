@@ -12,7 +12,7 @@ Vault 索引数据库（SQLite）持久层。负责 `index.db` 的连接创建�
 | `file_index.py` | `files` 表：path/hash/mtime 索引的增删查 |
 | `changes.py` | `change_log` 表：append-only 变更事件流（seq/ts/source/op） |
 | `sessions.py` | `sessions` 表：Agent 聊天会话持久化（messages 以 JSON 存储） |
-| `segments_sql.py` | `segments` + `segments_fts`：FTS5 分段检索（BM25 排序） |
+| `segments_sql.py` | `segments` + `segments_fts`：FTS5 分段检索（BM25 排序）+ 同步 triggers |
 | `graph_sql.py` | `entities` + `edges`：知识图谱 upsert/查询、backlinks、N-hop 关联 |
 
 ## Schema
@@ -26,6 +26,7 @@ sessions(id PK, messages JSON, token_count, -- Agent 会话
 segments(id PK, path, mtime, seg_index,     -- 文档分段
          heading_path, kind, content, body, meta, code)
 segments_fts(body, meta, code)              -- FTS5 虚拟表，external content='segments'
+segments_fts_ai/ad/au (triggers ON segments) -- 逐行增量维护 FTS（INSERT/DELETE/UPDATE）
 entities(id PK AUTOINC, name, type CHECK(doc|tag|concept), path)
 edges(src_id, dst_id, type CHECK(wikilink|tag|related), path,
       PK(src_id, dst_id, type))
@@ -49,7 +50,9 @@ edges(src_id, dst_id, type CHECK(wikilink|tag|related), path,
 ### FTS5 检索（segments_sql）
 
 - `segments` 表列语义：`content` 存原文；`body`/`meta`/`code` 存 **jieba 分词后的空格拼接文本**（按 kind 只填对应一列，且 body/meta 会追加 heading_path 使标题可检索）。写入由 `orchestration/indexer.py` 完成。
-- `segments_fts` 是 **external-content** 虚拟表（`content='segments'`），不自动同步。indexer 在每次 segments 写入后执行全量重建（`INSERT INTO segments_fts(segments_fts) VALUES('rebuild')`）；批量场景（reconcile、watcher flush）用 `fts_batch()` 上下文抑制逐文件重建，退出时只重建一次。
+- `segments_fts` 是 **external-content** 虚拟表（`content='segments'`）；`segments` 表上的三个 trigger（`segments_fts_ai/ad/au`）逐行、事务性地维护 FTS 索引（INSERT/DELETE/UPDATE），常规写入无需显式重建。
+- 显式 FTS5 `rebuild` 命令（`INSERT INTO segments_fts(segments_fts) VALUES('rebuild')`）保留给全量重建（`rebuild_segments_all`）与启动修复（`ensure_indexed`：docsize shadow 表的 FTS 索引条目数 ≠ segments 行数时，仅从内容表修复 FTS）。
+- 注意：external-content 表的 `count(*) FROM segments_fts` 扫描的是内容表（segments），无法检测索引失步；`segments_fts_docsize` shadow 表每个索引条目一行，才是真实的 FTS 索引状态。
 - 查询词需**预先分词**后传入 `segments_search()`，且必须与入库侧走同一函数：`fs/segmenter._tokenize_for_index`（jieba `cut_for_search` + 停用词过滤，见 `fs/README.md`）。查询侧调用点在 `server/ai.py`。
 - BM25 权重：body 1.0 / meta 0.4 / code 0.1；先按 `AND` 匹配，无结果时降级为 `OR`。
 - 结果按文件聚合：每个文件最多返回 3 个分段，文件按最高分段得分排序，取 top_k。

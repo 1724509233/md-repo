@@ -429,19 +429,16 @@ class SnapshotWatcher:
             self._snapshot[rel] = entry
 
         # Step 5: Emit callbacks (exception-isolated).
-        # Batch mode: a flush can apply many files in one round; suppress the
-        # per-call FTS rebuild and rebuild once on exit. Callbacks that call
-        # apply_change (main.py) are unaffected when fts_batch is not in scope.
-        from .vault.service import fts_batch
-        with fts_batch():
-            for rel in creates:
-                _safe_call(self._cb_created, rel)
-            for rel in modified:
-                _safe_call(self._cb_modified, rel)
-            for old, new_rel in moves:
-                _safe_call(self._cb_moved, old, new_rel)
-            for rel in deletes:
-                _safe_call(self._cb_deleted, rel)
+        # A flush can apply many files in one round; the segments_fts_*
+        # triggers keep FTS in sync per row, so no batch suppression is needed.
+        for rel in creates:
+            _safe_call(self._cb_created, rel)
+        for rel in modified:
+            _safe_call(self._cb_modified, rel)
+        for old, new_rel in moves:
+            _safe_call(self._cb_moved, old, new_rel)
+        for rel in deletes:
+            _safe_call(self._cb_deleted, rel)
 
         elapsed = (time.monotonic() - t0) * 1000
         logger.info(

@@ -25,7 +25,7 @@ server/vault/
 │   └── vault_ops.py    ← _iter_vault_md, edit_file
 │
 └── orchestration/      ← 协调层 (FS + DB 组合操作)
-    ├── indexer.py      ← index_segments, fts_batch, rebuild_*
+    ├── indexer.py      ← index_segments, ensure_indexed, rebuild_*
     ├── move_detect.py  ← pair_moves (两阶段级联重命名检测)
     ├── refs.py         ← _update_references, _remove_dead_links
     └── file_ops.py     ← apply_change, reconcile (变更应用入口)
@@ -46,7 +46,7 @@ server/vault/
 | `graph_get_related(conn, path, hops)` → list[dict] | 关联文档 (N-hop BFS) |
 | `rebuild_segments_all(conn, vault_dir)` → int | 全量重建 segments FTS 索引 |
 | `graph_rebuild_all(conn, vault_dir)` → int | 全量重建知识图谱 |
-| `fts_batch()` → ContextManager | 批量模式上下文管理器 (抑制单次 FTS rebuild) |
+| `ensure_indexed(conn, vault_dir)` → None | 启动索引检查: 首跑全量重建 (segments+graph)；FTS 失步时从内容表修复 |
 | `get_all_files(conn)` → list[dict] | 获取 files 表所有记录 |
 | `upsert_file(conn, path, hash, mtime)` → None | 文件索引写入 |
 
@@ -71,6 +71,12 @@ server/vault/
 - **去重**: 查询 `top_k * 3` 行，按文件去重，取每个文件最高 segment score
 - **返回**: top_k 文件，每文件最多 3 个 segment
 
+### FTS 增量同步 (triggers)
+- `segments_fts` 是 external-content FTS5 表；`segments` 表上的三个 trigger (`segments_fts_ai/ad/au`) 逐行、事务性地维护 FTS 索引 (INSERT/DELETE/UPDATE)
+- 单文件操作 (apply_change) 与批量操作 (reconcile、watcher flush) 均无需显式 rebuild，旧的 `fts_batch()` 批量抑制机制已移除
+- 显式 FTS5 `rebuild` 命令保留给: 全量重建 (`rebuild_segments_all`) 与启动修复 (`ensure_indexed`)
+- `ensure_indexed()` 两级启动检查 (server/main.py 与 server/mcp_server.py 共用): ① segments 为空 → 首跑，全量重建 segments+graph；② FTS 索引条目数 (docsize shadow 表) ≠ segments 行数 → FTS 失步，仅从内容表修复 FTS (比全量重建便宜)
+
 ### 重命名检测 (`pair_moves`)
 - **Phase 1 (哈希分组)**: 按内容 hash 分组 gone/new，1:1 直接配对；大组按文件名精化
 - **Phase 2 (文件名分组)**: 未配对池按文件名分组，1:1 配对；大组按父目录距离最近邻分配
@@ -82,7 +88,6 @@ server/vault/
 
 ### 线程安全
 - `_db_lock` (threading.Lock): 保护共享 SQLite 连接的所有写操作 (watchdog 线程 + async 事件循环)
-- `fts_batch()`: 批量模式下抑制单次 FTS rebuild，退出时统一执行
 
 ## 依赖的 server/ 模块
 

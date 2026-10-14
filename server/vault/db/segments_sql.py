@@ -32,6 +32,35 @@ def init_segments(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    # Triggers on the content table keep segments_fts in sync incrementally,
+    # transactionally, per row (FTS5 external-content pattern). Triggers must
+    # live on `segments` — they cannot be created on virtual tables.
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS segments_fts_ai AFTER INSERT ON segments BEGIN
+          INSERT INTO segments_fts(rowid, body, meta, code)
+          VALUES (new.id, new.body, new.meta, new.code);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS segments_fts_ad AFTER DELETE ON segments BEGIN
+          INSERT INTO segments_fts(segments_fts, rowid, body, meta, code)
+          VALUES ('delete', old.id, old.body, old.meta, old.code);
+        END;
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS segments_fts_au AFTER UPDATE ON segments BEGIN
+          INSERT INTO segments_fts(segments_fts, rowid, body, meta, code)
+          VALUES ('delete', old.id, old.body, old.meta, old.code);
+          INSERT INTO segments_fts(rowid, body, meta, code)
+          VALUES (new.id, new.body, new.meta, new.code);
+        END;
+        """
+    )
     conn.commit()
 
 

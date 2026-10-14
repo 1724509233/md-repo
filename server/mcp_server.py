@@ -30,7 +30,7 @@ related_no_links = GetRelatedDocsTool.related_no_links
 
 def main():
     from server.config import load_server_config
-    from server.vault.service import init_db, rebuild_segments_all, graph_rebuild_all, edit_file
+    from server.vault.service import init_db, ensure_indexed, edit_file
     from server.ai import rag_search
     from server.agent import validate_tool_call
     
@@ -49,11 +49,8 @@ def main():
         jieba.cut("warmup")
     threading.Thread(target=_warmup, daemon=True).start()
     
-    # Ensure segments + graph indexes exist
-    cursor = db_conn.execute("SELECT count(*) FROM segments")
-    if cursor.fetchone()[0] == 0:
-        rebuild_segments_all(db_conn, vault_dir)
-        graph_rebuild_all(db_conn, vault_dir)
+    # Ensure segments + FTS (+ graph on first run) are populated and in sync.
+    ensure_indexed(db_conn, vault_dir)
     
     from mcp.server import MCPServer
     mcp = MCPServer("md-vault")

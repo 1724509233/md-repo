@@ -12,7 +12,7 @@ from .api import create_app
 from .bgagent import InAppHook, start_background_agents
 from .bgagent.notify import cleanup_old_notifications
 from .config import load_background_agents, load_server_config
-from .vault.service import apply_change, graph_rebuild_all, init_db
+from .vault.service import apply_change, ensure_indexed, init_db
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 from .write_registry import pop_source
@@ -59,15 +59,9 @@ def main(argv: list[str] | None = None) -> None:
 
     register_db_conn(conn)
 
-    # Ensure the FTS and graph indexes are populated. On first run they are
-    # empty; on later runs the FTS table may also be empty (e.g. an older
-    # version of the server never built it), so rebuild whenever it is.
-    fts_count = conn.execute("SELECT count(*) FROM segments_fts").fetchone()[0]
-    if fts_count == 0:
-        from .vault.service import rebuild_segments_all
-
-        rebuild_segments_all(conn, vault_dir)
-        graph_rebuild_all(conn, vault_dir)
+    # Ensure FTS + graph indexes are populated and in sync (first run: full
+    # rebuild; legacy/desynced FTS: cheap repair from the content table).
+    ensure_indexed(conn, vault_dir)
 
     app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai)
 

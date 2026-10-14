@@ -12,7 +12,7 @@ from .orchestration.file_ops import apply_change, reconcile
 from .fs.vault_ops import edit_file
 from .db.segments_sql import segments_search
 from .db.graph_sql import graph_get_backlinks, graph_get_related
-from .orchestration.indexer import rebuild_segments_all, graph_rebuild_all, fts_batch
+from .orchestration.indexer import rebuild_segments_all, graph_rebuild_all, ensure_indexed
 from .db.file_index import get_all_files, upsert_file
 
 __all__ = [
@@ -26,7 +26,7 @@ __all__ = [
     "graph_get_related",
     "rebuild_segments_all",
     "graph_rebuild_all",
-    "fts_batch",
+    "ensure_indexed",
     "get_all_files",
     "upsert_file",
 ]

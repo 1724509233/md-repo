@@ -5,7 +5,6 @@ Builds the segments FTS index and the knowledge graph from vault files.
 from __future__ import annotations
 
 import sqlite3
-from contextlib import contextmanager
 from pathlib import Path
 
 from ..db.graph_sql import (
@@ -18,31 +17,6 @@ from ..fs.link_parser import _clear_wikilink_cache, _resolve_wikilink
 from ..fs.segmenter import _tokenize_for_index, segment_markdown
 from ..fs.vault_ops import _iter_vault_md
 
-# ── FTS batch mode ─────────────────────────────────────────────────────────
-# Per-call FTS rebuild is the default (correct for single-file ops). Batch
-# callers that process many files in a loop (reconcile, watcher flush) wrap
-# the loop in `with fts_batch():` to suppress per-call rebuilds and rebuild
-# FTS exactly once on exit. Nesting is supported via a depth counter.
-_fts_batch_depth = 0
-
-
-@contextmanager
-def fts_batch():
-    """Opt-in batch mode: suppress per-call FTS rebuild.
-
-    Callers that process many files in a loop (reconcile, watcher flush)
-    wrap the loop in ``with fts_batch():`` to rebuild FTS only once at the
-    end. Single-file callers (agent edit, direct apply_change) are unaffected
-    — they don't use fts_batch and get the default per-call rebuild.
-    """
-    global _fts_batch_depth
-    _fts_batch_depth += 1
-    try:
-        yield
-    finally:
-        _fts_batch_depth -= 1
-
-
 def _rebuild_fts(conn: sqlite3.Connection) -> None:
     """Rebuild the segments FTS index from the segments table."""
     conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
@@ -52,8 +26,8 @@ def _rebuild_fts(conn: sqlite3.Connection) -> None:
 def _index_one_file(conn: sqlite3.Connection, vault_dir: Path, path: str, mtime: float | None = None) -> bool:
     """Read a file, segment it, tokenize, and INSERT into segments table.
 
-    Does NOT do FTS rebuild (caller handles that). Returns False if the file
-    does not exist on disk.
+    FTS is updated per row by the segments_fts_* triggers. Returns False if
+    the file does not exist on disk.
     """
     fp = vault_dir / path
     if not fp.is_file():
@@ -91,22 +65,25 @@ def _index_one_file(conn: sqlite3.Connection, vault_dir: Path, path: str, mtime:
 
 
 def index_segments(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
-    """Read a file, segment it, tokenize, and upsert into segments table."""
+    """Read a file, segment it, tokenize, and upsert into segments table.
+
+    FTS is maintained per row by the segments_fts_* triggers (see
+    db/segments_sql.py); no explicit rebuild is needed here.
+    """
     if not _index_one_file(conn, vault_dir, path):
         delete_segments(conn, path)
         return
 
     conn.commit()
-    if _fts_batch_depth == 0:
-        _rebuild_fts(conn)
 
 
 def delete_segments(conn: sqlite3.Connection, path: str) -> None:
-    """Remove all segments for a path."""
+    """Remove all segments for a path.
+
+    FTS rows are removed per row by the segments_fts_ad trigger.
+    """
     conn.execute("DELETE FROM segments WHERE path = ?", (path,))
     conn.commit()
-    if _fts_batch_depth == 0:
-        _rebuild_fts(conn)
 
 
 def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
@@ -124,8 +101,38 @@ def rebuild_segments_all(conn: sqlite3.Connection, vault_dir: Path) -> int:
     except Exception:
         conn.execute("ROLLBACK")
         raise
+    # The bulk DELETE+INSERT above already updated FTS row-by-row via the
+    # triggers (redundant but correct); this explicit 'rebuild' is the
+    # authoritative full rebuild that guarantees index consistency.
     _rebuild_fts(conn)
     return count
+
+
+def ensure_indexed(conn: sqlite3.Connection, vault_dir: Path) -> None:
+    """Ensure segments + FTS (+ graph on first run) are populated and in sync.
+
+    Two-level check:
+    1. segments empty → first run / wiped DB: full rebuild from disk
+       (scan + segment + tokenize) for both segments and graph.
+    2. segments non-empty but FTS index entry count differs → FTS shadow
+       missing or desynced (legacy DB, crash, manual tampering): repair FTS
+       only. The FTS5 'rebuild' command re-reads the content table
+       (segments), not disk, so this is far cheaper than rebuild_segments_all.
+
+    Note: ``count(*) FROM segments_fts`` cannot detect desync — on an
+    external-content FTS5 table it scans the content table (segments), so it
+    always equals the segments count. The ``segments_fts_docsize`` shadow
+    table holds one row per indexed entry, so its count reflects the actual
+    FTS index state.
+    """
+    n_segments = conn.execute("SELECT count(*) FROM segments").fetchone()[0]
+    if n_segments == 0:
+        rebuild_segments_all(conn, vault_dir)
+        graph_rebuild_all(conn, vault_dir)
+        return
+    n_fts = conn.execute("SELECT count(*) FROM segments_fts_docsize").fetchone()[0]
+    if n_fts != n_segments:
+        _rebuild_fts(conn)
 
 
 def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> None:
