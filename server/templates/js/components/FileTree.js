@@ -35,8 +35,9 @@ const TreeNode = {
     <div>
       <!-- 子目录 -->
       <template v-for="(child, name) in node.dirs" :key="name">
-        <div class="tree-group group" :class="{ open: isExpanded(childPath(name)) }" :data-dir="childPath(name)">
+        <div class="tree-group group" :class="{ open: isExpanded(childPath(name)) }">
           <div class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left cursor-pointer"
+            :data-dir="childPath(name)"
             :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
             role="button" tabindex="0"
             @click="$emit('toggle', childPath(name))"
@@ -44,8 +45,7 @@ const TreeNode = {
             @contextmenu.prevent="treeOps.openMenu($event, childPath(name), true)"
             draggable="true"
             @dragstart="treeOps.onDragStart($event, childPath(name), true)"
-            @dragenter="treeOps.onDragEnter($event, childPath(name))"
-            @dragleave="treeOps.onDragLeave($event)"
+            @dragend="treeOps.onDragEnd()"
             @dragover="treeOps.onDragOver($event, childPath(name))"
             @drop="treeOps.onDrop($event, childPath(name))">
             <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
@@ -83,7 +83,8 @@ const TreeNode = {
           @keydown.enter.prevent="$emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
-          @dragstart="treeOps.onDragStart($event, f.path, false)">
+          @dragstart="treeOps.onDragStart($event, f.path, false)"
+          @dragend="treeOps.onDragEnd()">
           <input v-if="treeOps.editing && treeOps.editing.path === f.path"
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
             v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
@@ -162,8 +163,9 @@ export const FileTree = {
     const editing = ref(null)
     // 拖拽移动
     const dragPath = ref(null)
+    const dragIsDir = ref(false)
     const dropTarget = ref(null)
-    let dragCounter = 0
+    const ROOT_TARGET = '__root__'  // dropTarget 哨兵：根目录（nav 非目录行区域）
 
     // 视口钳制 + 翻转：w-40=160px 宽；菜单高 = 项数*32 + 8
     // 项数：文件夹 = 新建文件/新建文件夹/重命名/删除（移动端 +移动），文件 = 重命名/删除（移动端 +移动）
@@ -244,45 +246,78 @@ export const FileTree = {
 
     function onDragStart(e, path, isDir) {
       dragPath.value = path
+      dragIsDir.value = isDir
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', path)
     }
 
+    // 禁止 drop 到自身行；文件可放任意目录（父目录=上移）；
+    // 文件夹禁止 drop 到自身子树（target 是 source 后代）：文件系统不可能、后端 400，前端过滤高亮与 API 调用
     function canDropOn(dirPath) {
       const p = dragPath.value
-      return p && p !== dirPath && !p.startsWith(dirPath + '/')
+      if (!p || p === dirPath) return false
+      if (dragIsDir.value && dirPath.startsWith(p + '/')) return false
+      return true
     }
 
-    function onDragEnter(e, dirPath) {
+    // 高亮由 dragover 驱动（行内跨子元素持续触发，无需 enter/leave 配对计数）；
+    // 切行时直接改 dropTarget，旧行高亮随 class 绑定自动消失
+    function onDragOver(e, dirPath) {
       if (!canDropOn(dirPath)) return
       e.preventDefault()
-      dragCounter++
-      dropTarget.value = dirPath
+      if (dropTarget.value !== dirPath) dropTarget.value = dirPath
     }
 
-    function onDragOver(e, dirPath) {
-      if (canDropOn(dirPath)) e.preventDefault()
+    // nav 级兜底：行 handler 先于本 handler 执行（冒泡）；
+    // 目录行上则与行级写入同值（幂等）。根底色仅在 nav 自身背景（树下方空白）显示——
+    // 文件行/行间隙/border 条若也算根目标，指针在树内移动时会在「行高亮↔根底色」间高频切换（闪烁）
+    function onNavDragOver(e) {
+      const row = e.target.closest('.tree-row')
+      const dirPath = row?.dataset.dir || null
+      if (dirPath && canDropOn(dirPath)) {
+        e.preventDefault()
+        if (dropTarget.value !== dirPath) dropTarget.value = dirPath
+      } else if (!row && e.target === e.currentTarget) {
+        e.preventDefault()
+        if (dropTarget.value !== ROOT_TARGET) dropTarget.value = ROOT_TARGET
+      } else if (dropTarget.value) {
+        dropTarget.value = null  // 文件行/间隙/自身行：清除高亮
+      }
     }
 
-    function onDragLeave(e) {
-      if (!dropTarget.value) return
+    async function onNavDrop(e) {
       e.preventDefault()
-      if (--dragCounter <= 0) { dragCounter = 0; dropTarget.value = null }
+      dropTarget.value = null
+      const from = e.dataTransfer.getData('text/plain') || dragPath.value
+      dragPath.value = null
+      if (!from) return
+      const name = from.split('/').pop()
+      if (from === name) return  // 已在根目录：no-op（否则 to_path 已存在 → 409）
+      await manage('move', { from_path: from, to_path: name })
+    }
+
+    // 拖拽结束（drop 或 Esc/拖出窗口取消）：清状态，防高亮残留
+    function onDragEnd() {
+      dragPath.value = null
+      dragIsDir.value = false
+      dropTarget.value = null
     }
 
     async function onDrop(e, targetDir) {
       e.preventDefault()
-      dragCounter = 0
+      e.stopPropagation()  // 防冒泡到 nav onNavDrop 重复移动
       dropTarget.value = null
       const from = e.dataTransfer.getData('text/plain') || dragPath.value
+      if (!from || !canDropOn(targetDir)) return  // 必须在清空 dragPath 前检查（canDropOn 读它）
       dragPath.value = null
-      if (!from || !canDropOn(targetDir)) return
       const name = from.split('/').pop()
-      await manage('move', { from_path: from, to_path: targetDir + '/' + name })
+      const to = targetDir + '/' + name
+      if (to === from) return  // 已在此目录：no-op（否则 to_path 已存在 → 409）
+      await manage('move', { from_path: from, to_path: to })
     }
 
     // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
-    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dropTarget, onDragStart, canDropOn, onDragEnter, onDragOver, onDragLeave, onDrop })
+    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop })
     provide('treeOps', treeOps)
 
     // ============ RAG 搜索下拉框 ============
@@ -407,7 +442,7 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem
+      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem, onNavDragOver, onNavDrop, ROOT_TARGET
     }
   },
   template: `
@@ -450,7 +485,10 @@ export const FileTree = {
           </button>
         </div>
       </div>
-      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen">
+      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
+        :class="{ 'tree-drop-root': dropTarget === ROOT_TARGET }"
+        @dragover="onNavDragOver($event)"
+        @drop="onNavDrop($event)">
         <div v-if="!tree.files.length && !Object.keys(tree.dirs).length"
           class="text-muted text-xs px-2 py-3 text-center">无匹配文档</div>
         <TreeNode :node="tree" dir-path="" :current-path="currentPath"
