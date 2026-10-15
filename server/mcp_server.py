@@ -58,11 +58,11 @@ def main():
     # --- Tools ---
     
     @mcp.tool()
-    async def search_docs(query: str, top_k: int = 5, expand: bool = True) -> str:
-        """Search vault documents by keyword using segments-based FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content."""
+    async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
+        """Search vault documents by keyword using segments-based FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content. recall: strict (maximal keywords in one section), near (keywords within 5 words in one section), relaxed (keywords may span sections of the same doc), fuzzy (partial/prefix match, OR semantics)."""
         import html as _html
         try:
-            results = rag_search(str(vault_dir), query, top_k=top_k, expand=expand)
+            results = rag_search(str(vault_dir), query, top_k=top_k, expand=expand, recall=recall)
         except Exception as e:
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
                 return fts_syntax_error(query)

@@ -3,6 +3,11 @@ const { ref, computed, watch, provide, inject, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
 import { api } from '../api.js'
 
+// 分层召回档位（spec §6）：strict → near → relaxed → fuzzy
+const TIER_ORDER = ['strict', 'near', 'relaxed', 'fuzzy']
+const TIER_LABELS = { near: '邻近匹配', relaxed: '宽松匹配', fuzzy: '模糊匹配' }
+const SEARCH_TOP_K = 8
+
 // 递归子组件：渲染树节点
 const TreeNode = {
   name: 'TreeNode',
@@ -120,6 +125,22 @@ export const FileTree = {
     const activeIndex = ref(-1)
     const searchOpen = computed(() => searchQuery.value.trim().length > 0)
 
+    // 分层召回状态（spec §6）：已展开到的档位，null = 仅 strict
+    const expandedTier = ref(null) // null | 'near' | 'relaxed' | 'fuzzy'
+
+    // 下一级待取档位（null = 已到 fuzzy，无更多）
+    const nextTier = computed(() => {
+      if (expandedTier.value === null) return 'near'
+      const idx = TIER_ORDER.indexOf(expandedTier.value)
+      return idx >= 0 && idx < TIER_ORDER.length - 1 ? TIER_ORDER[idx + 1] : null
+    })
+    // "展示更多"按钮：还有下一档且结果未达 top_k（含 0 条）
+    const showMoreButton = computed(() => nextTier.value !== null && results.value.length < SEARCH_TOP_K)
+    // 已到 fuzzy 且仍不足 top_k → "没有更多结果"
+    const showNoMore = computed(() => nextTier.value === null && results.value.length < SEARCH_TOP_K)
+    // 文案由"下一档"决定：strict 后 → 邻近匹配；near 后 → 宽松匹配；relaxed 后 → 模糊匹配
+    const showMoreLabel = computed(() => nextTier.value ? `展示更多（${TIER_LABELS[nextTier.value]}）` : '')
+
     let debounceTimer = null
     let abortController = null
     let requestId = 0
@@ -148,6 +169,46 @@ export const FileTree = {
       results.value = []
       loading.value = false
       activeIndex.value = -1
+      expandedTier.value = null // 清空 → 回到 strict
+    }
+
+    // "展示更多"：用户点击触发（不走防抖），沿 strict→near→relaxed→fuzzy 逐级放宽。
+    // 该档零新增结果 → 自动进下一档（文案随之更新），直到有新增或到 fuzzy。
+    // 复用现有 requestId 过期守卫 + AbortController；结果按 path 去重后追加到列表尾部。
+    async function expandMore() {
+      const q = searchQuery.value.trim()
+      if (!q || loading.value || !nextTier.value) return
+      let tier = nextTier.value
+      while (tier) {
+        if (abortController) abortController.abort()
+        const controller = new AbortController()
+        abortController = controller
+        const id = ++requestId
+        loading.value = true
+        let data
+        try {
+          data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal, tier)
+        } catch (err) {
+          if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
+          if (id !== requestId) return
+          loading.value = false
+          return // 网络/服务端错误：保留当前结果，按钮仍在可重试
+        }
+        if (id !== requestId) return // 过期响应，丢弃
+        loading.value = false
+        expandedTier.value = tier
+        const seen = new Set(results.value.map(r => r.path))
+        let added = 0
+        for (const item of data) {
+          if (!seen.has(item.path)) {
+            seen.add(item.path)
+            results.value.push(item) // 追加到尾部，不加分组分隔线
+            added++
+          }
+        }
+        if (added > 0 || tier === 'fuzzy') break
+        tier = TIER_ORDER[TIER_ORDER.indexOf(tier) + 1] || null // 零新增 → 自动进下一档
+      }
     }
 
     async function runSearch(q) {
@@ -157,7 +218,7 @@ export const FileTree = {
       const id = ++requestId
       loading.value = true
       try {
-        const data = await api.aiSearch(q, 8, controller.signal)
+        const data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal) // 缺省 recall=strict
         if (id !== requestId) return // 过期响应，丢弃
         results.value = data
         loading.value = false
@@ -170,7 +231,7 @@ export const FileTree = {
       }
     }
 
-    // 300ms 尾随防抖
+    // 300ms 尾随防抖；query 变化即重置分层状态，回到 strict
     watch(searchQuery, (q) => {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
       const trimmed = q.trim()
@@ -178,6 +239,7 @@ export const FileTree = {
         resetToIdle()
         return
       }
+      expandedTier.value = null
       debounceTimer = setTimeout(() => {
         debounceTimer = null
         runSearch(trimmed)
@@ -236,6 +298,7 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
+      showMoreButton, showNoMore, showMoreLabel, expandMore,
       ICONS
     }
   },
@@ -264,8 +327,12 @@ export const FileTree = {
             <span class="search-spinner"></span>
             <span>搜索中…</span>
           </div>
-          <!-- 空 -->
-          <div v-else-if="!loading && !results.length" class="search-empty">无匹配文档</div>
+          <!-- 空：strict 零结果 → "无精确匹配" + 展示更多（spec §6） -->
+          <div v-else-if="!loading && !results.length" class="search-empty">
+            <div>无精确匹配</div>
+            <button v-if="showMoreButton" class="search-item search-more mt-2" @click="expandMore">{{ showMoreLabel }}</button>
+            <div v-else-if="showNoMore" class="search-more-no">没有更多结果</div>
+          </div>
           <!-- 结果 -->
           <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
             class="search-item" :class="{ active: i === activeIndex }"
@@ -277,6 +344,9 @@ export const FileTree = {
             </div>
             <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
           </button>
+          <!-- 展示更多：下拉框底部全宽行（有结果且未达 top_k 时；0 结果由空状态块内的按钮承担） -->
+          <button v-if="!loading && results.length > 0 && showMoreButton" class="search-item search-more" @click="expandMore">{{ showMoreLabel }}</button>
+          <div v-if="!loading && results.length > 0 && showNoMore" class="search-more-no">没有更多结果</div>
         </div>
       </div>
       <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen">

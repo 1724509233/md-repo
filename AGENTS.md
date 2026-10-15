@@ -97,3 +97,4 @@ After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
 ## Todo
 
 - [ ] 拆分 server / client 为独立发布的包（当前 `pip install md-sync` 一并安装两者，client 用户被迫带上 fastapi/openai 等 server 依赖）
+- [ ] 分层召回「展示更多」UI 样式优化（2026-10-15 首版已提交，交互已验证；按钮/空状态样式留待后续提交打磨）

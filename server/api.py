@@ -264,9 +264,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         body = await request.json()
         query = body.get("query", "")
         top_k = int(body.get("top_k", 5))
+        recall = body.get("recall", "strict")
+        if recall not in ("strict", "near", "relaxed", "fuzzy"):
+            raise HTTPException(status_code=400, detail="invalid recall tier")
         from .ai import rag_search
-        results = rag_search(str(vault_dir), query, top_k=top_k)
-        return {"results": results}
+        results = rag_search(str(vault_dir), query, top_k=top_k, recall=recall)
+        return {"results": results, "recall": recall}
 
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):

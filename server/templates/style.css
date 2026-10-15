@@ -338,6 +338,10 @@ pre code.hljs { background: transparent; padding: 0; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 .search-empty { padding: 1rem; text-align: center; color: var(--ink-soft); font-size: 12px; }
+/* "展示更多"按钮行：复用 .search-item 的布局与 hover 高亮，仅覆盖字号/颜色 */
+.search-more { font-size: 12px; color: var(--ink-soft); }
+.search-item + .search-more { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.search-more-no { padding: .5rem .75rem; text-align: center; color: var(--ink-soft); font-size: 12px; }
 
 /* ============ RAG 跳转：持久标记线（淡入保持，交互淡出）============ */
 .heading-flash {

@@ -74,14 +74,21 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
     return results[:top_k]
 
 
-def rag_search(vault_dir: str, query: str, top_k: int = 5, expand: bool = True) -> list[dict]:
+def rag_search(
+    vault_dir: str,
+    query: str,
+    top_k: int = 5,
+    expand: bool = True,
+    recall: str = "strict",
+    include_code: bool = False,
+) -> list[dict]:
     """Segments-based search over vault markdown files.
 
-    Uses jieba cut_for_search for Chinese tokenization and SQLite FTS5 BM25 ranking.
+    Passes the RAW query to ``segments_search``, which owns tokenization
+    (jieba cut_for_search + stopword filter) and the recall-tier selection.
     Falls back to TF-overlap if the index is unavailable.
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
-    import jieba
     from .vault.service import segments_search, rebuild_segments_all
 
     vault = Path(vault_dir)
@@ -97,14 +104,9 @@ def rag_search(vault_dir: str, query: str, top_k: int = 5, expand: bool = True) 
     except Exception:
         return _legacy_rag_search(vault_dir, query, top_k)
 
-    # Tokenize query with jieba cut_for_search + stopword filtering
-    from .vault.fs.segmenter import _tokenize_for_index
-    tokens = _tokenize_for_index(query)
-    if not tokens:
-        return []
-
-    results = segments_search(conn, tokens, top_k=top_k, expand=expand)
-    return results
+    return segments_search(
+        conn, query, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+    )
 
 
 import httpx
