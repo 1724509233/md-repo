@@ -337,11 +337,35 @@ pre code.hljs { background: transparent; padding: 0; }
   animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
-.search-empty { padding: 1rem; text-align: center; color: var(--ink-soft); font-size: 12px; }
-/* "展示更多"按钮行：复用 .search-item 的布局与 hover 高亮，仅覆盖字号/颜色 */
-.search-more { font-size: 12px; color: var(--ink-soft); }
-.search-item + .search-more { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
-.search-more-no { padding: .5rem .75rem; text-align: center; color: var(--ink-soft); font-size: 12px; }
+/* 空状态：状态文案（弱）+ 行动按钮（强），纵向居中排布 */
+.search-empty { display: flex; flex-direction: column; align-items: center; gap: .75rem; padding: 1.25rem 1rem; }
+.search-empty-title { font-size: 12px; color: var(--ink-soft); }
+/* "展示更多"：居中胶囊按钮，与左对齐的结果行明确区分；hover 黄铜化（同 .topbar-btn 语言） */
+.search-more {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 5px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 500;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.search-more svg { transition: transform .15s ease; }
+.search-more:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--brass); }
+.search-more:hover svg { transform: translateY(1px); }
+.search-more:active { background: color-mix(in srgb, var(--brass) 14%, transparent); }
+/* 列表底部：分隔线 + 居中容器，把"行动区"与结果列表隔开 */
+.search-more-wrap { display: flex; justify-content: center; padding: .5rem .75rem; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+/* "没有更多结果"：收尾提示，弱化（更浅、更小），与可点击按钮区分 */
+.search-more-no { padding: .5rem .75rem; text-align: center; font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+.search-item + .search-more-no { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+/* 预取占位"正在加载更多…"：居中行 + 顶部 hairline（同 .search-more-wrap 规格），12px 弱化 */
+.search-prefetching {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: .5rem .75rem; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent);
+  font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 60%, transparent);
+}
+.search-spinner-sm { width: 12px; height: 12px; }
+/* 全空终态提示行（弱化规格，同 .search-more-no） */
+.search-empty-hint { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
 
 /* ============ RAG 跳转：持久标记线（淡入保持，交互淡出）============ */
 .heading-flash {
