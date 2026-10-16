@@ -1,7 +1,7 @@
 # 空文件夹可见性设计（文件树显示目录实体）
 
 日期：2026-10-16
-状态：已批准（方向 A 于 2026-10-16 确认：树显示空文件夹）
+状态：已批准（方向 A 于 2026-10-16 确认：树显示空文件夹；目录扫描方式经基准测试定为 `os.walk` + 剪枝，见「后端设计」）
 
 ## 背景
 
@@ -24,13 +24,14 @@ Web UI「新建文件夹」目前是假功能：
 - 空文件夹跨设备同步（同步协议基于文件 manifest，见「风险与注意」）
 - 非 `.md` 文件在树中显示（目录可见，内容仍只索引 `.md`）
 - 跨 web tab 的变更广播（现有 `pollChanges` 跳过 `source=web`，文件创建同样如此，不在本次范围）
+- 删除「包含当前打开文档的文件夹」后编辑器不清空——既有 bug（`_applyChangeToCurrentDoc` 只精确匹配 `c.path === currentPath`，不匹配子路径），与空文件夹无关，本次不修，单独开任务
 
 ## 交互决策（已确认）
 
 | 问题 | 决策 |
 |------|------|
 | 空文件夹是否显示 | 显示（方向 A）。后端返回目录列表，前端合入树 |
-| 目录数据源 | 磁盘扫描，并入 `GET /api/docs` 返回 `{files, dirs}`（单请求，ETag 覆盖两者）。DB 是文件的事实源，磁盘是目录的事实源 |
+| 目录数据源 | 磁盘扫描（`os.walk` + 剪枝），并入 `GET /api/docs` 返回 `{files, dirs}`（单请求，ETag 覆盖两者）。DB 是文件的事实源，磁盘是目录的事实源 |
 | 操作后反馈 | `manage()` 成功后自动展开父目录，新条目立即可见 |
 | 文件夹事件 | `create_folder`/文件夹删除/文件夹重命名移动 补写 `change_log`（`log_change`，非 `apply_change`） |
 
@@ -60,13 +61,11 @@ Web UI「新建文件夹」目前是假功能：
 async def list_docs(request: Request):
     files = get_all_files(db_conn)
     dirs = []
-    for p in sorted(vault_dir.rglob("*")):
-        if not p.is_dir():
-            continue
-        rel = p.relative_to(vault_dir)
-        if any(part.startswith(".") for part in rel.parts):
-            continue  # .sync / .obsidian / 任意深度隐藏目录
-        dirs.append(rel.as_posix())
+    for root, dirnames, _ in os.walk(vault_dir):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # 剪枝：不 descend 隐藏目录
+        rel_root = Path(root).relative_to(vault_dir)
+        dirs.extend((rel_root / d).as_posix() for d in dirnames)
+    dirs.sort()
     body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
     etag = hashlib.sha256(body).hexdigest()
     if request.headers.get("if-none-match") == f'"{etag}"':
@@ -74,9 +73,10 @@ async def list_docs(request: Request):
     return Response(content=body, media_type="application/json", headers={"ETag": f'"{etag}"'})
 ```
 
-- 排除规则：任一路径段以 `.` 开头即跳过（覆盖 `.sync`、`.obsidian` 及任意深度隐藏目录）。
+- 排除规则：`os.walk` 原地剪掉以 `.` 开头的目录（不 descend），覆盖 `.sync`、`.obsidian` 及任意深度隐藏目录。
+- 扫描方式：`os.walk` + 剪枝，而非 `rglob("*")`（需 `import os`，`api.py` 当前未 import）。基准测试（`docs/benchmarks/2026-10-16-dir-scan-benchmark.md`）显示 `os.walk` 在 1k/5k/20k 文件规模下比 `rglob` 快 5–18×、少触碰 1.1–2.9× 目录项，且输出逐字节一致（正确性门通过）——纯性能替换。
 - 响应 shape 变更：`[...]` → `{"files": [...], "dirs": [...]}`。生产消费方仅 web UI（`api.js getDocs`）一处；client 走 `/api/sync`、agent 直接读盘，blast radius 小。
-- 扫盘在每次非 304 请求执行（与独立端点方案总工作量相同；304 省的是响应体，不是扫描）。
+- 扫盘在每次非 304 请求执行（304 省的是响应体，不是扫描）。剪枝后不 descend 隐藏树，个人 vault 规模（千级文件）为数十毫秒级。
 
 ### `create_folder` 补事件（`api.py:182-193`）
 
@@ -177,6 +177,15 @@ const tree = computed(() => {
 ```
 
 4. 重命名/移动/删除空文件夹：无需新代码——操作走现有 `manage()` → `loadDocs()` 刷新 dirs，树自动更新。
+5. **删除确认文案特判**（`confirmDelete`，`:227-238`）：空文件夹 `count=0` 时现状会显示「将删除该文件夹及其中 0 个文档」，特判为「将删除空文件夹「X」，确定？」：
+
+```js
+const msg = m.isDir
+  ? (count === 0
+      ? `将删除空文件夹「${m.path.split('/').pop()}」，确定？`
+      : `将删除该文件夹及其中 ${count} 个文档，确定？`)
+  : `确定删除「${m.path.split('/').pop()}」？`
+```
 
 ## 测试计划
 
@@ -205,15 +214,15 @@ const tree = computed(() => {
 
 | 文件 | 改动 |
 |------|------|
-| `server/api.py` | `GET /api/docs` 扩展为 `{files, dirs}`；create_folder/delete/rename 三分支补 `log_change` |
+| `server/api.py` | `GET /api/docs` 扩展为 `{files, dirs}`（`os.walk` + 剪枝，需 `import os`）；create_folder/delete/rename 三分支补 `log_change` |
 | `server/templates/js/api.js` | `getDocs()` 返回 `{files, dirs}` |
 | `server/templates/js/app.js` | `state.dirs`；`loadDocs()` 单请求取两者；`manage()` 返回布尔 |
-| `server/templates/js/components/FileTree.js` | `dirs` prop；tree computed 播种；confirmEdit 自动展开 |
+| `server/templates/js/components/FileTree.js` | `dirs` prop；tree computed 播种；confirmEdit 自动展开；confirmDelete 空文件夹文案特判 |
 | `tests/test_api.py` | 4 个新用例 + 现有 `/api/docs` 断言适配新 shape |
 
 ## 风险与注意
 
-- **`/api/docs` 扫盘成本**：每次非 304 请求执行 `rglob("*")`（mount/manage/pollChanges treeChanged/toolResult，约每分钟数次）。个人 vault 规模（千级文件）为毫秒级；若成为瓶颈再优化（如目录快照缓存）。
+- **`/api/docs` 扫盘成本**：每次非 304 请求执行 `os.walk` + 剪枝（mount/manage/pollChanges treeChanged/toolResult，约每分钟数次）。基准测试（`docs/benchmarks/2026-10-16-dir-scan-benchmark.md`）：剪枝后不 descend 隐藏树，20k 文件规模约 50ms（`rglob` 为 ~1s）；若成为瓶颈再优化（如目录快照缓存）。
 - **`/api/docs` shape 变更**：`[...]` → `{files, dirs}`。生产消费方仅 web UI 一处，测试同步适配；无外部 API 契约（LAN-only、无鉴权）。
 - **空文件夹不跨设备同步**：client 同步协议基于文件 manifest（`scan_local_files` 只扫 `*.md`），空文件夹仅存在于服务器磁盘。其他设备的 Obsidian 要等目录内有文档（被同步）才出现。固有限制，文档说明即可。
 - **跨 web tab 刷新**：`pollChanges` 跳过 `source=web`（`app.js:183`），其他 tab 感知不到本 tab 的文件夹操作——与文件创建现状一致，不在本次范围。
