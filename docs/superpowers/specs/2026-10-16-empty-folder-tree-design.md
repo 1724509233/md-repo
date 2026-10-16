@@ -24,14 +24,13 @@ Web UI「新建文件夹」目前是假功能：
 - 空文件夹跨设备同步（同步协议基于文件 manifest，见「风险与注意」）
 - 非 `.md` 文件在树中显示（目录可见，内容仍只索引 `.md`）
 - 跨 web tab 的变更广播（现有 `pollChanges` 跳过 `source=web`，文件创建同样如此，不在本次范围）
-- `/api/dirs` 的 ETag 缓存（负载小，后续按需加）
 
 ## 交互决策（已确认）
 
 | 问题 | 决策 |
 |------|------|
 | 空文件夹是否显示 | 显示（方向 A）。后端返回目录列表，前端合入树 |
-| 目录数据源 | 磁盘扫描（`GET /api/dirs`）。DB 是文件的事实源，磁盘是目录的事实源 |
+| 目录数据源 | 磁盘扫描，并入 `GET /api/docs` 返回 `{files, dirs}`（单请求，ETag 覆盖两者）。DB 是文件的事实源，磁盘是目录的事实源 |
 | 操作后反馈 | `manage()` 成功后自动展开父目录，新条目立即可见 |
 | 文件夹事件 | `create_folder`/文件夹删除/文件夹重命名移动 补写 `change_log`（`log_change`，非 `apply_change`） |
 
@@ -52,13 +51,14 @@ Web UI「新建文件夹」目前是假功能：
 
 ## 后端设计
 
-### 新增端点：`GET /api/dirs`
+### 扩展 `GET /api/docs` 返回 `{files, dirs}`
 
-返回 vault 内全部非隐藏目录的相对 POSIX 路径数组（排序）：
+现端点返回文件扁平数组（ETag 缓存，`api.py:117-124`）。改为返回文件 + 目录的对象，ETag 按整体 body 计算，304 语义不变：
 
 ```python
-@app.get("/api/dirs")
-async def list_dirs() -> list[str]:
+@app.get("/api/docs")
+async def list_docs(request: Request):
+    files = get_all_files(db_conn)
     dirs = []
     for p in sorted(vault_dir.rglob("*")):
         if not p.is_dir():
@@ -67,11 +67,16 @@ async def list_dirs() -> list[str]:
         if any(part.startswith(".") for part in rel.parts):
             continue  # .sync / .obsidian / 任意深度隐藏目录
         dirs.append(rel.as_posix())
-    return dirs
+    body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
+    etag = hashlib.sha256(body).hexdigest()
+    if request.headers.get("if-none-match") == f'"{etag}"':
+        return Response(content=b"", status_code=304, headers={"ETag": f'"{etag}"'})
+    return Response(content=body, media_type="application/json", headers={"ETag": f'"{etag}"'})
 ```
 
 - 排除规则：任一路径段以 `.` 开头即跳过（覆盖 `.sync`、`.obsidian` 及任意深度隐藏目录）。
-- 无 ETag（见非目标）。
+- 响应 shape 变更：`[...]` → `{"files": [...], "dirs": [...]}`。生产消费方仅 web UI（`api.js getDocs`）一处；client 走 `/api/sync`、agent 直接读盘，blast radius 小。
+- 扫盘在每次非 304 请求执行（与独立端点方案总工作量相同；304 省的是响应体，不是扫描）。
 
 ### `create_folder` 补事件（`api.py:182-193`）
 
@@ -109,25 +114,30 @@ log_change(db_conn, dst_rel.as_posix(), "moved", from_path=src_rel.as_posix(), s
 
 ### `api.js`
 
+`getDocs()` 返回值改为 `{files, dirs}`（304 时仍返回 null）：
+
 ```js
-/** GET /api/dirs — 目录列表（磁盘扫描，排除隐藏目录） */
-async listDirs() {
-  const res = await fetch('/api/dirs')
-  if (!res.ok) throw new Error(`GET /api/dirs → ${res.status}`)
-  return res.json()
+/** GET /api/docs — 文件 + 目录（ETag 缓存） */
+async getDocs() {
+  const headers = lastTreeHash ? { 'If-None-Match': lastTreeHash } : {}
+  const res = await fetch('/api/docs', { headers })
+  if (res.status === 304) return null // 无变化
+  lastTreeHash = res.headers.get('ETag') || ''
+  return res.json()  // { files: [...], dirs: [...] }
 }
 ```
+
+（无需新增 `listDirs()`——目录随同一请求返回。）
 
 ### `app.js`
 
 1. `state` 增加 `dirs: []`（`app.js:17-31`）。
-2. `loadDocs()`（`app.js:39-42`）并行拉取：
+2. `loadDocs()`（`app.js:39-42`）单请求取两者：
 
 ```js
 async function loadDocs() {
-  const [files, dirs] = await Promise.all([api.getDocs(), api.listDirs()])
-  if (files) state.files = files   // getDocs 304 时返回 null，保持旧值
-  state.dirs = dirs
+  const data = await api.getDocs()
+  if (data) { state.files = data.files; state.dirs = data.dirs }  // 304 → null，保持旧值
 }
 ```
 
@@ -174,7 +184,7 @@ const tree = computed(() => {
 
 | 用例 | 验证点 |
 |------|--------|
-| `test_list_dirs` | fixture 含 `a/b/c.md`、`empty/`、`.sync/`、`hidden/.x` → 返回含 `a`、`a/b`、`empty`，不含 `.sync`/`hidden` 及隐藏子目录 |
+| `test_docs_includes_dirs` | fixture 含 `a/b/c.md`、`empty/`、`.sync/`、`hidden/.x` → `/api/docs` 返回 `{files, dirs}`，dirs 含 `a`、`a/b`、`empty`，不含 `.sync`/`hidden` 及隐藏子目录；files 字段与现有断言一致 |
 | `test_manage_create_folder_logs_change` | create_folder 后 `get_changes(db_conn)` 含 `{path: 文件夹, action: created, source: web}` |
 | `test_manage_delete_empty_folder_logs_change` | 删空文件夹 → 目录消失 + change_log 含 deleted 事件；删含非 `.md` 文件的文件夹 → 目录保留、无目录级事件 |
 | `test_manage_rename_empty_folder_logs_moved` | 重命名空文件夹 → change_log 含 moved 事件（from_path 正确） |
@@ -195,17 +205,17 @@ const tree = computed(() => {
 
 | 文件 | 改动 |
 |------|------|
-| `server/api.py` | 新增 `GET /api/dirs`；create_folder/delete/rename 三分支补 `log_change` |
-| `server/templates/js/api.js` | 新增 `listDirs()` |
-| `server/templates/js/app.js` | `state.dirs`；`loadDocs()` 并行拉取；`manage()` 返回布尔 |
+| `server/api.py` | `GET /api/docs` 扩展为 `{files, dirs}`；create_folder/delete/rename 三分支补 `log_change` |
+| `server/templates/js/api.js` | `getDocs()` 返回 `{files, dirs}` |
+| `server/templates/js/app.js` | `state.dirs`；`loadDocs()` 单请求取两者；`manage()` 返回布尔 |
 | `server/templates/js/components/FileTree.js` | `dirs` prop；tree computed 播种；confirmEdit 自动展开 |
-| `tests/test_api.py` | 4 个新用例 |
+| `tests/test_api.py` | 4 个新用例 + 现有 `/api/docs` 断言适配新 shape |
 
 ## 风险与注意
 
-- **`/api/dirs` 扫盘成本**：每次 `loadDocs()` 触发一次 `rglob("*")`（mount/manage/pollChanges treeChanged/toolResult，约每分钟数次）。个人 vault 规模（千级文件）为毫秒级；若成为瓶颈再加 ETag。
+- **`/api/docs` 扫盘成本**：每次非 304 请求执行 `rglob("*")`（mount/manage/pollChanges treeChanged/toolResult，约每分钟数次）。个人 vault 规模（千级文件）为毫秒级；若成为瓶颈再优化（如目录快照缓存）。
+- **`/api/docs` shape 变更**：`[...]` → `{files, dirs}`。生产消费方仅 web UI 一处，测试同步适配；无外部 API 契约（LAN-only、无鉴权）。
 - **空文件夹不跨设备同步**：client 同步协议基于文件 manifest（`scan_local_files` 只扫 `*.md`），空文件夹仅存在于服务器磁盘。其他设备的 Obsidian 要等目录内有文档（被同步）才出现。固有限制，文档说明即可。
 - **跨 web tab 刷新**：`pollChanges` 跳过 `source=web`（`app.js:183`），其他 tab 感知不到本 tab 的文件夹操作——与文件创建现状一致，不在本次范围。
 - **`apply_change` 不可用于文件夹**：`is_file()` 检查会 skip。直接调 `log_change`（`changes.py:10`，纯 append，任意路径可用）。全部消费方已审计 inert 或有益（见融合审计表）。
-- **`/api/docs` 与 `/api/dirs` 竞态**：两次请求之间磁盘变化 → 树短暂不一致，下次 `loadDocs()` 自愈。
 - **只含隐藏内容的目录**（如 vault 内嵌 git 仓库的 `foo/.git`）：`foo` 本身非隐藏，会显示为空文件夹。可接受的边缘情况；删除时 `.git` 保留、目录不消失，行为自洽。
