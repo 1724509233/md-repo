@@ -3,6 +3,10 @@ const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
 import { api } from '../api.js'
 
+// 分层召回档位（spec §6）：strict → near → relaxed → fuzzy
+const TIER_ORDER = ['strict', 'near', 'relaxed', 'fuzzy']
+const SEARCH_TOP_K = 8
+
 // 递归子组件：渲染树节点
 const TreeNode = {
   name: 'TreeNode',
@@ -326,6 +330,13 @@ export const FileTree = {
     const activeIndex = ref(-1)
     const searchOpen = computed(() => searchQuery.value.trim().length > 0)
 
+    // 分层召回预取状态（spec §6）：strict 之后剩余档位（near→relaxed→fuzzy）
+    // 在后台顺序预取，新增项按 path 对 results 去重后暂存于 prefetched；
+    // 点击按钮时同步追加（无异步），焦点回到输入框。
+    const prefetched = ref([])   // 剩余档位的新增项（已去重）
+    const prefetching = ref(false) // 预取流程进行中（含 strict 零结果时的自动续档）
+    const prefetchDone = ref(false) // 预取流程已结束（完成/耗尽/中止）
+
     let debounceTimer = null
     let abortController = null
     let requestId = 0
@@ -348,12 +359,77 @@ export const FileTree = {
       return items
     })
 
+    // 行数统计：每个文件按 segment 数展开（无 segment 计 1 行），与下拉框渲染一致
+    function countRows(items) {
+      let n = 0
+      for (const item of items) {
+        const segs = item.segments || []
+        n += segs.length ? segs.length : 1
+      }
+      return n
+    }
+    const moreRowCount = computed(() => countRows(prefetched.value))
+    const shownRowCount = computed(() => countRows(results.value))
+
     function resetToIdle() {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
       if (abortController) { abortController.abort(); abortController = null }
       results.value = []
       loading.value = false
       activeIndex.value = -1
+      prefetched.value = []
+      prefetching.value = false
+      prefetchDone.value = false // 中止 → 回到初始态，不显示任何终态文案
+    }
+
+    // 预取循环：按 TIER_ORDER 顺序逐档 fetch（fromIdx 起），新增项按 path 对
+    // results 去重后暂存 prefetched；results + prefetched 达到 top_k 即提前停止。
+    // 复用现有 requestId 过期守卫 + AbortController；query 变化/resetToIdle 时中止。
+    // strict 零结果时由 runSearch 以 loading=true 调用（"搜索中…"可见）：
+    // 某档有结果 → 显示并转入后台预取（占位"正在加载更多…"）；全空 → 耗尽终态。
+    async function runPrefetch(q, id, controller, fromIdx) {
+      prefetching.value = true
+      const seen = new Set(results.value.map(r => r.path))
+      for (let i = fromIdx; i < TIER_ORDER.length; i++) {
+        if (results.value.length + prefetched.value.length >= SEARCH_TOP_K) break // 够了就不多取
+        let data
+        try {
+          data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal, TIER_ORDER[i])
+        } catch (err) {
+          if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
+          if (id !== requestId) return
+          if (results.value.length === 0) loading.value = false // 避免"搜索中…"卡死
+          prefetching.value = false
+          prefetchDone.value = true // 网络/服务端错误：停止预取，保留当前结果
+          return
+        }
+        if (id !== requestId) return // 过期响应，丢弃
+        for (const item of data) {
+          if (!seen.has(item.path)) {
+            seen.add(item.path)
+            prefetched.value.push(item)
+          }
+        }
+        if (results.value.length === 0 && prefetched.value.length > 0) {
+          // strict 零结果 → 该档有结果：显示，转入后台预取剩余档位
+          results.value = prefetched.value
+          prefetched.value = []
+          loading.value = false
+        }
+      }
+      if (results.value.length === 0) loading.value = false // 全空 → 结束"搜索中…"，进入全空终态
+      prefetching.value = false
+      prefetchDone.value = true
+    }
+
+    // "展示 N 条更多"：同步追加全部预取结果（无异步），清空 prefetched，焦点回输入框
+    function showMore() {
+      if (prefetching.value || !prefetchDone.value || !prefetched.value.length) return
+      results.value = results.value.concat(prefetched.value)
+      prefetched.value = []
+      activeIndex.value = -1
+      const input = document.querySelector('#search-input')
+      if (input) input.focus() // 保证 ArrowUp/Down 继续可用
     }
 
     async function runSearch(q) {
@@ -362,21 +438,36 @@ export const FileTree = {
       abortController = controller
       const id = ++requestId
       loading.value = true
+      prefetching.value = false
+      prefetchDone.value = false
+      prefetched.value = []
+      let data
       try {
-        const data = await api.aiSearch(q, 8, controller.signal)
-        if (id !== requestId) return // 过期响应，丢弃
-        results.value = data
-        loading.value = false
-        activeIndex.value = -1
+        data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal) // 缺省 recall=strict
       } catch (err) {
         if (err.name === 'AbortError') return // 中止：忽略，不修改 results
         if (id !== requestId) return
         loading.value = false
         results.value = []
+        prefetchDone.value = true // 搜索失败 → 终态（全空文案）
+        return
       }
+      if (id !== requestId) return // 过期响应，丢弃
+      results.value = data
+      activeIndex.value = -1
+      if (results.value.length >= SEARCH_TOP_K) {
+        loading.value = false // 够了：不预取，无底部区域
+        prefetchDone.value = true
+        return
+      }
+      // 不足 top_k → 预取剩余档位（near→relaxed→fuzzy，顺序执行）
+      // strict 有结果：loading=false，占位"正在加载更多…"；
+      // strict 零结果：loading 保持 true，"搜索中…"可见，自动续档
+      if (results.value.length > 0) loading.value = false
+      await runPrefetch(q, id, controller, 1) // 1 = 'near'
     }
 
-    // 300ms 尾随防抖
+    // 300ms 尾随防抖；query 变化即重置预取状态，回到 strict
     watch(searchQuery, (q) => {
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
       const trimmed = q.trim()
@@ -442,7 +533,8 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem, onNavDragOver, onNavDrop, ROOT_TARGET
+      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem, onNavDragOver, onNavDrop, ROOT_TARGET,
+      prefetched, prefetching, prefetchDone, showMore, moreRowCount, shownRowCount, SEARCH_TOP_K
     }
   },
   template: `
@@ -465,13 +557,16 @@ export const FileTree = {
 
         <!-- RAG 搜索下拉框 -->
         <div class="search-dropdown" v-show="searchOpen">
-          <!-- 加载 -->
+          <!-- 加载（含 strict 零结果时的自动续档） -->
           <div v-if="loading && !results.length" class="search-loading">
             <span class="search-spinner"></span>
             <span>搜索中…</span>
           </div>
-          <!-- 空 -->
-          <div v-else-if="!loading && !results.length" class="search-empty">无匹配文档</div>
+          <!-- 全空终态：所有档位取完仍零结果 -->
+          <div v-else-if="!loading && !results.length && prefetchDone" class="search-empty">
+            <div class="search-empty-title">无匹配</div>
+            <div class="search-empty-hint">换个关键词试试</div>
+          </div>
           <!-- 结果 -->
           <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
             class="search-item" :class="{ active: i === activeIndex }"
@@ -483,6 +578,22 @@ export const FileTree = {
             </div>
             <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
           </button>
+          <!-- 底部区域：预取占位 → "展示 N 条更多"按钮 → 耗尽终态 -->
+          <div v-if="prefetching && results.length > 0" class="search-prefetching">
+            <span class="search-spinner search-spinner-sm"></span>
+            <span>正在加载更多…</span>
+          </div>
+          <div v-else-if="!prefetching && prefetchDone && prefetched.length > 0" class="search-more-wrap">
+            <button class="search-more" @click="showMore">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+              展示 {{ moreRowCount }} 条更多
+            </button>
+          </div>
+          <div v-else-if="!prefetching && prefetchDone && !prefetched.length && results.length > 0 && results.length < SEARCH_TOP_K" class="search-more-no">
+            已展示全部 {{ shownRowCount }} 条匹配
+          </div>
         </div>
       </div>
       <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
