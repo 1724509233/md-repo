@@ -7,7 +7,7 @@ import time
 import pytest
 
 from server import api as api_module
-from server.vault import get_all_files
+from server.vault import get_all_files, upsert_file
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
@@ -393,3 +393,230 @@ def test_new_session_no_injection_even_with_history(client, db_conn):
     assert loaded is not None
     non_system = [m for m in loaded["messages"] if m["role"] != "system"]
     assert len(non_system) == 0
+
+# ─── manage endpoint tests (Task 1-3) ───
+
+
+def test_manage_create_file(client, vault_dir, db_conn) -> None:
+    r = client.post("/api/docs/manage", json={"action": "create_file", "path": "new/file.md"})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "path": "new/file.md"}
+    on_disk = vault_dir / "new" / "file.md"
+    assert on_disk.is_file()
+    assert on_disk.read_bytes() == b""
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "new/file.md" in paths
+
+
+def test_manage_create_file_with_content(client, vault_dir, db_conn) -> None:
+    content = "# Hello\n"
+    r = client.post(
+        "/api/docs/manage",
+        json={"action": "create_file", "path": "doc.md", "content": content},
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "doc.md").read_bytes() == content.encode("utf-8")
+    entry = next(f for f in get_all_files(db_conn) if f["path"] == "doc.md")
+    assert entry["hash"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def test_manage_create_file_conflict(client) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_file", "path": "notes/test.md"}
+    )
+    assert r.status_code == 409
+
+
+def test_manage_create_folder(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_folder", "path": "new/sub"}
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "new" / "sub").is_dir()
+
+
+def test_manage_invalid_path(client) -> None:
+    for path in ("../x.md", "/abs.md"):
+        r = client.post(
+            "/api/docs/manage", json={"action": "create_file", "path": path}
+        )
+        assert r.status_code == 400
+
+def test_manage_rename_file_updates_refs(client, vault_dir, db_conn) -> None:
+    (vault_dir / "notes" / "old.md").write_bytes(b"# Old")
+    (vault_dir / "notes" / "ref.md").write_bytes(b"See [[notes/old.md]]")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/old.md",
+            "to_path": "notes/new.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "notes" / "new.md").is_file()
+    assert not (vault_dir / "notes" / "old.md").exists()
+    assert "[[notes/new.md]]" in (vault_dir / "notes" / "ref.md").read_text()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/new.md" in paths and "notes/old.md" not in paths
+
+
+def test_manage_rename_conflict(client, vault_dir) -> None:
+    (vault_dir / "notes" / "other.md").write_bytes(b"# Other")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/test.md",
+            "to_path": "notes/other.md",
+        },
+    )
+    assert r.status_code == 409
+    assert (vault_dir / "notes" / "test.md").is_file()  # source unchanged
+
+
+def test_manage_move_file(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "move",
+            "from_path": "notes/test.md",
+            "to_path": "docs/test.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "docs" / "test.md").is_file()
+    assert not (vault_dir / "notes" / "test.md").exists()
+
+
+def test_manage_move_into_nonexistent_dir(client, vault_dir) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "move",
+            "from_path": "notes/test.md",
+            "to_path": "a/b/c/test.md",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "a" / "b" / "c" / "test.md").is_file()
+
+
+def test_manage_rename_folder_updates_refs(client, vault_dir, db_conn) -> None:
+    sub = vault_dir / "notes" / "sub"
+    sub.mkdir()
+    (sub / "a.md").write_bytes(b"# A")
+    (vault_dir / "notes" / "ref.md").write_bytes(b"See [[notes/sub/a.md]]")
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/sub",
+            "to_path": "notes/sub2",
+        },
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "notes" / "sub2" / "a.md").is_file()
+    assert not (vault_dir / "notes" / "sub").exists()
+    assert "[[notes/sub2/a.md]]" in (vault_dir / "notes" / "ref.md").read_text()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/sub2/a.md" in paths and "notes/sub/a.md" not in paths
+
+
+def test_manage_rename_nested_folder_preserves_structure(client, vault_dir, db_conn) -> None:
+    """Renaming a folder with subdirs must keep nested paths intact in DB and on disk."""
+    deep = vault_dir / "notes" / "sub" / "deep"
+    deep.mkdir(parents=True)
+    (vault_dir / "notes" / "sub" / "a.md").write_bytes(b"# A")
+    (deep / "b.md").write_bytes(b"# B")
+    # Index both files so the move has DB records to update (as in a real vault)
+    for rel in ("notes/sub/a.md", "notes/sub/deep/b.md"):
+        p = vault_dir / rel
+        upsert_file(db_conn, rel, hashlib.sha256(p.read_bytes()).hexdigest(), p.stat().st_mtime)
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes/sub",
+            "to_path": "notes/sub2",
+        },
+    )
+    assert r.status_code == 200
+    # Disk: whole tree moved, nested structure preserved
+    assert (vault_dir / "notes" / "sub2" / "a.md").is_file()
+    assert (vault_dir / "notes" / "sub2" / "deep" / "b.md").is_file()
+    assert not (vault_dir / "notes" / "sub").exists()
+    # DB: paths must match disk exactly (no flattening, no stale records)
+    paths = {f["path"] for f in get_all_files(db_conn)}
+    assert "notes/sub2/a.md" in paths and "notes/sub2/deep/b.md" in paths
+    assert not ({"notes/sub/a.md", "notes/sub/deep/b.md"} & paths)
+
+
+def test_manage_move_into_own_subdir(client) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "notes",
+            "to_path": "notes/inner",
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_manage_not_found(client) -> None:
+    r = client.post(
+        "/api/docs/manage",
+        json={
+            "action": "rename",
+            "from_path": "nope.md",
+            "to_path": "x.md",
+        },
+    )
+    assert r.status_code == 404
+
+def test_manage_delete_file(client, vault_dir, db_conn) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/test.md"}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "path": "notes/test.md", "deleted_count": 1}
+    assert not (vault_dir / "notes" / "test.md").exists()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/test.md" not in paths
+
+
+def test_manage_delete_folder_recursive(client, vault_dir, db_conn) -> None:
+    sub = vault_dir / "notes" / "sub"
+    (sub / "deep").mkdir(parents=True)
+    (sub / "a.md").write_bytes(b"# A")
+    (sub / "deep" / "b.md").write_bytes(b"# B")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/sub"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 2
+    assert not (vault_dir / "notes" / "sub").exists()
+    paths = [f["path"] for f in get_all_files(db_conn)]
+    assert "notes/sub/a.md" not in paths and "notes/sub/deep/b.md" not in paths
+
+
+def test_manage_delete_folder_keeps_nonmd(client, vault_dir) -> None:
+    sub = vault_dir / "notes" / "mixed"
+    sub.mkdir()
+    (sub / "a.md").write_bytes(b"# A")
+    (sub / "b.txt").write_bytes(b"keep me")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/mixed"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 1
+    assert (sub / "b.txt").is_file()  # non-.md preserved
+    assert sub.is_dir()  # dir not empty, keep it
+
+
+def test_manage_delete_not_found(client) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "nope.md"}
+    )
+    assert r.status_code == 404

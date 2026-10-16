@@ -21,9 +21,13 @@ from .agent.prompts import SYSTEM_PROMPT, sse
 from .agent.reminders import DocPathUserReminder, TimeSystemReminder
 from .agent.spec import AgentSpec, ModelConfig
 from .agent.tools import TOOL_REGISTRY
-from .vault.service import get_all_files, upsert_file
+from .vault.service import (
+    apply_change,
+    fts_batch,
+    get_all_files,
+    upsert_file,
+)
 from .sync import compare_files
-
 logger = logging.getLogger("md-vault.api")
 
 # In-memory sync lock: {"locked_at": float} or None
@@ -148,6 +152,133 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="file not found")
         content = file_path.read_bytes().decode("utf-8", errors="replace")
         return PlainTextResponse(content, media_type="text/markdown; charset=utf-8")
+
+    @app.post("/api/docs/manage")
+    async def manage_docs(request: Request) -> dict:
+        # Must be registered before POST /api/docs/{path:path} (upload),
+        # otherwise the path converter swallows "manage"
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        action = body.get("action")
+        if action == "create_file":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            file_path = vault_dir / rel
+            if file_path.exists():
+                raise HTTPException(status_code=409, detail="already exists")
+            content = (body.get("content") or "").encode("utf-8")
+            from .write_registry import register_write
+
+            register_write(rel.as_posix(), "web")
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_bytes(content)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"failed to create file: {e}")
+            apply_change(db_conn, vault_dir, rel.as_posix(), "created", source="web")
+            return {"ok": True, "path": rel.as_posix()}
+        if action == "create_folder":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            dir_path = vault_dir / rel
+            if dir_path.exists():
+                raise HTTPException(status_code=409, detail="already exists")
+            try:
+                dir_path.mkdir(parents=True)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"failed to create folder: {e}")
+            return {"ok": True, "path": rel.as_posix()}
+        if action in ("rename", "move"):
+            src_rel = _safe_rel_path(body.get("from_path") or "")
+            dst_rel = _safe_rel_path(body.get("to_path") or "")
+            if src_rel is None or dst_rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            src, dst = vault_dir / src_rel, vault_dir / dst_rel
+            if not src.exists():
+                raise HTTPException(status_code=404, detail="not found")
+            if dst.exists():
+                raise HTTPException(status_code=409, detail="already exists")
+            if dst_rel.as_posix().startswith(src_rel.as_posix() + "/"):
+                raise HTTPException(
+                    status_code=400, detail="cannot move into own subdirectory"
+                )
+            from .vault.orchestration.refs import _update_references_batch
+
+            if src.is_file():
+                moves = [(src_rel.as_posix(), dst_rel.as_posix())]
+            else:  # folder: expand to internal .md files, preserving nested structure
+                moves = [
+                    (p.relative_to(vault_dir).as_posix(), (dst_rel / p.relative_to(src)).as_posix())
+                    for p in sorted(src.rglob("*.md")) if p.is_file()
+                ]
+            from .write_registry import register_write
+
+            for _, new in moves:
+                register_write(new, "web")
+            # pre_rename=True: update refs before rename so uniqueness check is correct
+            _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                src.rename(dst)
+            except OSError as e:
+                raise HTTPException(status_code=500, detail=f"failed to rename: {e}")
+            with fts_batch():
+                for old, new in moves:
+                    apply_change(
+                        db_conn,
+                        vault_dir,
+                        new,
+                        "moved",
+                        source="web",
+                        from_path=old,
+                        update_refs=False,
+                    )
+            return {"ok": True, "path": dst_rel.as_posix()}
+        if action == "delete":
+            rel = _safe_rel_path(body.get("path") or "")
+            if rel is None:
+                raise HTTPException(status_code=400, detail="invalid path")
+            target = vault_dir / rel
+            if not target.exists():
+                raise HTTPException(status_code=404, detail="not found")
+            from .write_registry import register_write
+
+            if target.is_file():
+                register_write(rel.as_posix(), "web")
+                try:
+                    target.unlink()
+                except OSError as e:
+                    raise HTTPException(status_code=500, detail=f"failed to delete: {e}")
+                apply_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
+                return {"ok": True, "path": rel.as_posix(), "deleted_count": 1}
+            # Folder: delete .md files one by one, clean up empty dirs bottom-up
+            md_files = sorted(p for p in target.rglob("*.md") if p.is_file())
+            rels = []
+            for p in md_files:
+                r = p.relative_to(vault_dir).as_posix()
+                register_write(r, "web")
+                p.unlink()
+                rels.append(r)
+            for d in sorted(
+                [target] + list(target.rglob("*")),
+                key=lambda x: len(x.parts),
+                reverse=True,
+            ):
+                if not d.is_dir():
+                    continue
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass  # non-empty (contains non-.md files) → keep
+            with fts_batch():
+                for r in rels:
+                    apply_change(db_conn, vault_dir, r, "deleted", source="web")
+            return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels)}
+        raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
     @app.post("/api/docs/{path:path}")
     async def upload_doc(path: str, file: UploadFile = File(...)) -> dict:
