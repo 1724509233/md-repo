@@ -23,7 +23,6 @@ from .agent.spec import AgentSpec, ModelConfig
 from .agent.tools import TOOL_REGISTRY
 from .vault.service import (
     apply_change,
-    fts_batch,
     get_all_files,
     upsert_file,
 )
@@ -226,17 +225,17 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 src.rename(dst)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to rename: {e}")
-            with fts_batch():
-                for old, new in moves:
-                    apply_change(
-                        db_conn,
-                        vault_dir,
-                        new,
-                        "moved",
-                        source="web",
-                        from_path=old,
-                        update_refs=False,
-                    )
+            # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
+            for old, new in moves:
+                apply_change(
+                    db_conn,
+                    vault_dir,
+                    new,
+                    "moved",
+                    source="web",
+                    from_path=old,
+                    update_refs=False,
+                )
             return {"ok": True, "path": dst_rel.as_posix()}
         if action == "delete":
             rel = _safe_rel_path(body.get("path") or "")
@@ -274,9 +273,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     d.rmdir()
                 except OSError:
                     pass  # non-empty (contains non-.md files) → keep
-            with fts_batch():
-                for r in rels:
-                    apply_change(db_conn, vault_dir, r, "deleted", source="web")
+            # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
+            for r in rels:
+                apply_change(db_conn, vault_dir, r, "deleted", source="web")
             return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels)}
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
