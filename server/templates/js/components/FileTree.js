@@ -109,6 +109,7 @@ export const FileTree = {
   components: { TreeNode },
   props: {
     files: { type: Array, default: () => [] },
+    dirs: { type: Array, default: () => [] },
     currentPath: { type: String, default: null }
   },
   emits: ['select'],
@@ -129,6 +130,15 @@ export const FileTree = {
     // 构建树形结构
     const tree = computed(() => {
       const root = { dirs: {}, files: [] }
+      // 先由后端 dirs 播种目录节点（空文件夹也可见）
+      function ensureDir(path) {
+        let node = root
+        for (const part of path.split('/')) {
+          if (!node.dirs[part]) node.dirs[part] = { dirs: {}, files: [] }
+          node = node.dirs[part]
+        }
+      }
+      for (const d of props.dirs) ensureDir(d)
       for (const f of props.files) {
         const parts = f.path.split('/')
         let node = root
@@ -213,9 +223,11 @@ export const FileTree = {
         if (to === ed.path) return  // 名称未变：跳过 API（否则 to_path 已存在 → 409）
         await manage('rename', { from_path: ed.path, to_path: to })
       } else if (ed.mode === 'new-file') {
-        await manage('create_file', { path: (ed.path ? ed.path + '/' : '') + name + '.md' })
+        const ok = await manage('create_file', { path: (ed.path ? ed.path + '/' : '') + name + '.md' })
+        if (ok) expandedDirs.value.add(ed.path)
       } else {
-        await manage('create_folder', { path: (ed.path ? ed.path + '/' : '') + name })
+        const ok = await manage('create_folder', { path: (ed.path ? ed.path + '/' : '') + name })
+        if (ok) expandedDirs.value.add(ed.path)
       }
     }
 
@@ -229,7 +241,9 @@ export const FileTree = {
       if (!m) return
       const count = fileState.files.filter(f => f.path === m.path || f.path.startsWith(m.path + '/')).length
       const msg = m.isDir
-        ? `将删除该文件夹及其中 ${count} 个文档，确定？`
+        ? (count === 0
+          ? `将删除空文件夹「${m.path.split('/').pop()}」，确定？`
+          : `将删除该文件夹及其中 ${count} 个文档，确定？`)
         : `确定删除「${m.path.split('/').pop()}」？`
       if (confirm(msg)) {
         manage('delete', { path: m.path })

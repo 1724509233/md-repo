@@ -8,6 +8,7 @@ import pytest
 
 from server import api as api_module
 from server.vault import get_all_files, upsert_file
+from server.vault.db.changes import get_changes
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
@@ -27,12 +28,44 @@ def test_index_page(client) -> None:
 def test_list_docs(client) -> None:
     r = client.get("/api/docs")
     assert r.status_code == 200
-    docs = r.json()
-    assert len(docs) == 1
-    entry = docs[0]
+    body = r.json()
+    files = body["files"]
+    assert len(files) == 1
+    entry = files[0]
     assert entry["path"] == "notes/test.md"
     expected_hash = hashlib.sha256(SAMPLE_CONTENT).hexdigest()
     assert entry["hash"] == expected_hash
+    assert isinstance(entry["mtime"], float)
+    assert isinstance(body["dirs"], list)
+
+
+def test_docs_includes_dirs(client, vault_dir) -> None:
+    # Extra dirs on disk before hitting the endpoint.
+    (vault_dir / "a" / "b").mkdir(parents=True)
+    (vault_dir / "a" / "b" / "c.md").write_bytes(b"# C\n")
+    (vault_dir / "empty").mkdir()
+    # A hidden top-level dir (spec calls it "hidden") holding a hidden subdir:
+    # the whole hidden tree must be pruned, not just the top entry.
+    (vault_dir / ".hidden" / ".x").mkdir(parents=True)
+    r = client.get("/api/docs")
+    assert r.status_code == 200
+    body = r.json()
+    dirs = body["dirs"]
+    # Visible dirs (incl. empty + nested) are present.
+    assert "a" in dirs
+    assert "a/b" in dirs
+    assert "empty" in dirs
+    # Hidden dirs (and their hidden subdirs) are pruned.
+    assert ".sync" not in dirs
+    assert ".hidden" not in dirs
+    assert ".x" not in dirs
+    # files field keeps the existing shape (path/hash/mtime).
+    paths = [f["path"] for f in body["files"]]
+    assert "notes/test.md" in paths
+    for f in body["files"]:
+        assert set(f) >= {"path", "hash", "mtime"}
+    entry = next(f for f in body["files"] if f["path"] == "notes/test.md")
+    assert entry["hash"] == hashlib.sha256(SAMPLE_CONTENT).hexdigest()
     assert isinstance(entry["mtime"], float)
 
 
@@ -620,3 +653,60 @@ def test_manage_delete_not_found(client) -> None:
         "/api/docs/manage", json={"action": "delete", "path": "nope.md"}
     )
     assert r.status_code == 404
+
+
+def test_manage_create_folder_logs_change(client, vault_dir, db_conn) -> None:
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_folder", "path": "newfolder"}
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "newfolder").is_dir()
+    changes = get_changes(db_conn)
+    assert any(
+        c["path"] == "newfolder" and c["action"] == "created" and c["source"] == "web"
+        for c in changes
+    )
+
+
+def test_manage_delete_empty_folder_logs_change(client, vault_dir, db_conn) -> None:
+    # Empty folder → dir disappears + a deleted event is logged.
+    (vault_dir / "empt").mkdir()
+    r = client.post("/api/docs/manage", json={"action": "delete", "path": "empt"})
+    assert r.status_code == 200
+    assert not (vault_dir / "empt").exists()
+    changes = get_changes(db_conn)
+    assert any(
+        c["path"] == "empt" and c["action"] == "deleted" and c["source"] == "web"
+        for c in changes
+    )
+
+    # Folder holding a non-.md file → dir is kept, no dir-level deleted event.
+    mixed = vault_dir / "mixed2"
+    mixed.mkdir()
+    (mixed / "img.png").write_bytes(b"\x89PNG")
+    r = client.post("/api/docs/manage", json={"action": "delete", "path": "mixed2"})
+    assert r.status_code == 200
+    assert mixed.is_dir()  # dir not empty (non-.md) → keep
+    changes = get_changes(db_conn)
+    assert not any(
+        c["path"] == "mixed2" and c["action"] == "deleted" for c in changes
+    )
+
+
+def test_manage_rename_empty_folder_logs_moved(client, vault_dir, db_conn) -> None:
+    (vault_dir / "srcdir").mkdir()
+    r = client.post(
+        "/api/docs/manage",
+        json={"action": "rename", "from_path": "srcdir", "to_path": "dstdir"},
+    )
+    assert r.status_code == 200
+    assert (vault_dir / "dstdir").is_dir()
+    assert not (vault_dir / "srcdir").exists()
+    changes = get_changes(db_conn)
+    assert any(
+        c["path"] == "dstdir"
+        and c["action"] == "moved"
+        and c["from_path"] == "srcdir"
+        and c["source"] == "web"
+        for c in changes
+    )

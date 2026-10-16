@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import time
 import sys
@@ -26,6 +27,7 @@ from .vault.service import (
     get_all_files,
     upsert_file,
 )
+from .vault.db.changes import log_change
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
 
@@ -117,7 +119,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
     @app.get("/api/docs")
     async def list_docs(request: Request):
         files = get_all_files(db_conn)
-        body = json.dumps(files, sort_keys=True).encode()
+        dirs = []
+        for root, dirnames, _ in os.walk(vault_dir):
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # 剪枝：不 descend 隐藏目录
+            rel_root = Path(root).relative_to(vault_dir)
+            dirs.extend((rel_root / d).as_posix() for d in dirnames)
+        dirs.sort()
+        body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
         etag = hashlib.sha256(body).hexdigest()
         if request.headers.get("if-none-match") == f'"{etag}"':
             return Response(content=b"", status_code=304, headers={"ETag": f'"{etag}"'})
@@ -190,6 +198,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 dir_path.mkdir(parents=True)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to create folder: {e}")
+            log_change(db_conn, rel.as_posix(), "created", source="web")
             return {"ok": True, "path": rel.as_posix()}
         if action in ("rename", "move"):
             src_rel = _safe_rel_path(body.get("from_path") or "")
@@ -220,11 +229,14 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 register_write(new, "web")
             # pre_rename=True: update refs before rename so uniqueness check is correct
             _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
+            was_dir = src.is_dir()
             try:
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 src.rename(dst)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to rename: {e}")
+            if was_dir:
+                log_change(db_conn, dst_rel.as_posix(), "moved", from_path=src_rel.as_posix(), source="web")
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for old, new in moves:
                 apply_change(
@@ -273,6 +285,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                     d.rmdir()
                 except OSError:
                     pass  # non-empty (contains non-.md files) → keep
+            if not target.exists():
+                log_change(db_conn, rel.as_posix(), "deleted", source="web")
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for r in rels:
                 apply_change(db_conn, vault_dir, r, "deleted", source="web")

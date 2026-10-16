@@ -20,6 +20,7 @@ const state = reactive({
   dirty: false,
   sessionId: 'web-' + Date.now(),
   files: [],
+  dirs: [],
   aiOpen: false,
   sidebarOpen: false,   // 移动端 sidebar
   moreMenuOpen: false,  // 移动端更多菜单
@@ -37,8 +38,8 @@ const editorPaneRef = ref(null)
 let lastChangeTs = Date.now() / 1000
 
 async function loadDocs() {
-  const files = await api.getDocs()
-  if (files) state.files = files
+  const data = await api.getDocs()
+  if (data) { state.files = data.files; state.dirs = data.dirs }  // 304 → null，保持旧值
 }
 
 async function openDoc(path, heading) {
@@ -248,8 +249,10 @@ async function manage(action, payload) {
       changes.push({ path: payload.to_path, from_path: payload.from_path, action: 'moved' })
     }
     if (changes.length) await _applyChangeToCurrentDoc(changes)
+    return true
   } catch (e) {
     alert('操作失败: ' + e.message)
+    return false
   }
 }
 
@@ -330,7 +333,7 @@ export function createApp() {
             </button>
           </div>
           <div class="px-3 pt-3 pb-2 flex-1 min-h-0 overflow-hidden">
-            <FileTree :files="state.files" :current-path="state.currentPath" @select="openDoc" />
+            <FileTree :files="state.files" :dirs="state.dirs" :current-path="state.currentPath" @select="openDoc" />
           </div>
         </aside>
 

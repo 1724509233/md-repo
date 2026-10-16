@@ -3,13 +3,13 @@
 let lastTreeHash = ''
 
 export const api = {
-  /** GET /api/docs — 文件列表（ETag 缓存） */
+  /** GET /api/docs — 文件 + 目录（ETag 缓存） */
   async getDocs() {
     const headers = lastTreeHash ? { 'If-None-Match': lastTreeHash } : {}
     const res = await fetch('/api/docs', { headers })
     if (res.status === 304) return null // 无变化
     lastTreeHash = res.headers.get('ETag') || ''
-    return res.json()
+    return res.json()  // { files: [...], dirs: [...] }
   },
 
   /** GET /api/docs/{path} — 读取文档内容 */
