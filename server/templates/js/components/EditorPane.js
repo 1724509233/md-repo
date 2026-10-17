@@ -26,8 +26,9 @@ export const EditorPane = {
     })
 
     // 渲染后的 HTML（computed，Vue 自动更新 v-html）
+    // frontmatter: true → 开头 --- 块提取为可折叠元数据卡片（聊天面板不传，保持原渲染）
     const renderedHtml = computed(() => {
-      return renderMarkdown(localContent.value)
+      return renderMarkdown(localContent.value, { frontmatter: true })
     })
 
     // v-html 更新后执行 postProcess（hljs + mermaid）
