@@ -58,6 +58,21 @@ def test_validate_accepts_valid_path(tmp_path: Path):
     assert result is None
 
 
+def test_validate_error_replays_input_and_type_hint(tmp_path: Path):
+    """设计 §7：类型错误回放收到的原值 + int 正确写法提示。"""
+    from server.agent.tools.read_doc import ReadDocTool
+
+    tool = ReadDocTool()
+    err = tool.validate({"path": "notes/test.md", "limit": "50 lines"})
+    assert err is not None
+    assert "got '50 lines'" in err
+    assert "pass an integer, e.g. 50 (no quotes)" in err
+    # call() 模板方法走同一条 validate 路径
+    result = tool.call({"path": "notes/test.md", "limit": "50 lines"},
+                       ToolContext(vault_dir=tmp_path))
+    assert result == err
+
+
 def test_tools_schema_has_nine_tools():
     from server.agent import TOOLS
 
@@ -508,6 +523,9 @@ def test_agent_loop_token_usage(tmp_path: Path):
     payload = _json.loads(usage_events[0].split("data: ", 1)[1])
     assert payload["used"] == 150
     assert payload["total"] == 16384
+    # 增量键 prompt/completion（bgagent runner 口径用；used/total/percent 保留）
+    assert payload["prompt"] == 100
+    assert payload["completion"] == 50
 
 
 def test_agent_loop_with_tool_call(tmp_path: Path):

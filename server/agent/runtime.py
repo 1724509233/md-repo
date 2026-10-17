@@ -101,10 +101,14 @@ class LoopRuntime(Runtime):
                 completion_tokens = getattr(usage, "completion_tokens", 0) or 0
                 if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
                     current_tokens = prompt_tokens + completion_tokens
+                    # 增量键 prompt/completion（bgagent runner 口径用）；
+                    # used/total/percent 保留 —— Web UI AIChatPanel 只读这三个键
                     yield Event("token_usage", {
                         "used": current_tokens,
                         "total": model.context_window,
                         "percent": round(current_tokens / model.context_window * 100, 1) if model.context_window else 0,
+                        "prompt": prompt_tokens,
+                        "completion": completion_tokens,
                     })
 
             if not tool_calls:

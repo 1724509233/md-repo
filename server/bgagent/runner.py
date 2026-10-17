@@ -8,6 +8,7 @@ the snapshot watcher logs ``source=<alias>``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from datetime import datetime
@@ -33,18 +34,20 @@ class _RunStats:
     def __init__(self) -> None:
         self.rounds = 0
         self.round_texts: list[str] = []      # assistant text per round
-        self.ops: list[dict] = []            # {ts, name, args_brief, result}
+        # {ts, name, args_brief, result, status} —— status ∈
+        # {pending, ok, error, interrupted}（pending 仅在 finalize 前存在）
+        self.ops: list[dict] = []
         self._open: dict[str, dict] = {}     # tool_call id -> op row
         self.ops_by_tool: dict[str, int] = {}
         self.files_changed: set[str] = set()
-        self.prompt_tokens = 0               # peak of token_usage.used
-        self.completion_tokens = 0           # sum of per-round used
+        self.prompt_tokens = 0               # 峰值：prompt_tokens 各轮最大值
+        self.completion_tokens = 0           # 累加：completion_tokens 各轮之和
 
     def record_call(self, data: dict) -> None:
         name = data["name"]
         op = {"ts": time.time(), "name": name,
               "args_brief": _brief_args(name, data.get("args") or {}),
-              "result": ""}
+              "result": "", "status": "pending"}
         self.ops.append(op)
         self._open[data["id"]] = op
         self.ops_by_tool[name] = self.ops_by_tool.get(name, 0) + 1
@@ -53,12 +56,31 @@ class _RunStats:
 
     def record_result(self, data: dict) -> None:
         op = self._open.pop(data.get("id"), None)
-        if op is not None:
-            op["result"] = str(data.get("result", ""))[:200]
+        if op is None:
+            return
+        result = str(data.get("result", ""))[:200]
+        op["result"] = result
+        # 三级判定（按序）：
+        # 1. runtime _tool_error 路径（参数 JSON 坏 / validate 拒绝 / precheck 失败）
+        # 2. 用户拒绝（bgagent 恒 auto_approve，实际不触发，保留兼容）
+        # 3. execute_tool 业务错误（文件不存在等）
+        if data.get("error") or data.get("rejected") or result.startswith("Error"):
+            op["status"] = "error"
+        else:
+            op["status"] = "ok"
 
-    def record_usage(self, used: int) -> None:
-        self.prompt_tokens = max(self.prompt_tokens, used)
-        self.completion_tokens += used
+    def record_usage(self, prompt: int, completion: int) -> None:
+        # 口径：prompt_tokens = 各轮请求侧峰值（最挤的一轮，含 system+history+tool 结果）；
+        # completion_tokens = 各轮输出累加。同名字段旧报告是错口径，不可跨新旧对比。
+        self.prompt_tokens = max(self.prompt_tokens, prompt)
+        self.completion_tokens += completion
+
+    def finalize(self) -> None:
+        """收口：未闭合的 op（timeout/cancel 半行）标 interrupted、清空结果。"""
+        for op in self._open.values():
+            op["status"] = "interrupted"
+            op["result"] = ""
+        self._open.clear()
 
     @property
     def summary(self) -> str:
@@ -76,13 +98,22 @@ def _brief_args(name: str, args: dict) -> str:
             for m in args.get("moves", []) if isinstance(m, dict))
     if name in ("write_doc", "edit_doc", "delete_doc"):
         return str(args.get("path", ""))
+    if name == "read_doc":
+        out = str(args.get("path", ""))
+        # 非默认读取窗口时标注起点（示例：relay/BOARD.md @107）
+        if (args.get("offset") or 1) != 1 or args.get("limit") is not None:
+            out += f" @{args.get('offset') or 1}"
+        return out
+    if name == "list_files":
+        return str(args.get("dir", "")) or "(root)"
     if name == "search_docs":
         return str(args.get("query", ""))[:80]
     if name == "recent_changes":
         return str(args.get("since", ""))
     if name == "get_related_docs":
         return str(args.get("path", ""))
-    return ""
+    # 通用 fallback：未覆盖的工具不再返回空（消除白名单结构）
+    return json.dumps(args, ensure_ascii=False)[:80]
 
 
 def _changed_paths(args: dict) -> set[str]:
@@ -98,6 +129,20 @@ def _changed_paths(args: dict) -> set[str]:
             if isinstance(m, dict) and isinstance(m.get("to_path"), str):
                 out.add(m["to_path"])
     return out
+
+
+def _status_icon(op: dict) -> str:
+    return {"ok": "✓", "error": "✗"}.get(op.get("status"), "⏳")
+
+
+def _cell(op: dict) -> str:
+    """结果摘要单元格：interrupted 固定 —；否则取首行截断 80 字；| 转义兜底。"""
+    if op.get("status") == "interrupted":
+        return "—"
+    first = (op.get("result") or "—").splitlines()[0] if op.get("result") else "—"
+    if len(first) > 80:
+        first = first[:80] + "…"
+    return first.replace("|", "\\|")
 
 
 def _prune_reports(report_dir: Path, vault: Path, alias: str) -> None:
@@ -117,8 +162,9 @@ def _prune_reports(report_dir: Path, vault: Path, alias: str) -> None:
         logger.info("[bg:%s] pruned %d old reports (kept %d)", alias, len(to_delete), RETENTION)
 
 
-def _report_name(started_at: float) -> str:
-    return datetime.fromtimestamp(started_at).strftime("%Y-%m-%d_%H%M") + ".md"
+def _report_name(started_at: float, alias: str) -> str:
+    # alias 前缀：共享 report_dir 时不同 agent 互不覆盖（spec §6）
+    return f"{alias}_" + datetime.fromtimestamp(started_at).strftime("%Y-%m-%d_%H%M") + ".md"
 
 
 def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
@@ -126,7 +172,9 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
                    error_msg: str = "") -> tuple[str, str]:
     """Render the report markdown. Returns (markdown_text, summary_for_notify)."""
     target_rel = cfg.target_dir.relative_to(vault).as_posix()
-    summary = stats.summary or ("（轮次耗尽，无总结）" if status == "round_limit" else "")
+    summary = stats.summary or (
+        "（轮次耗尽，无总结）" if status == "round_limit"
+        else "（模型无输出）" if status == "empty" else "")
     if status == "timeout":
         summary = f"（运行超时：{error_msg}）"
     if status == "error":
@@ -134,8 +182,10 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
 
     ops_rows = "\n".join(
         f"| {datetime.fromtimestamp(o['ts']).strftime('%H:%M:%S')} "
-        f"| {o['name']} | {o['args_brief']} | {o['result'] or '—'} |"
-        for o in stats.ops) or "| — | — | — | 无操作 |"
+        f"| {o['name']} | {o['args_brief']} "
+        f"| {_status_icon(o)} "
+        f"| {_cell(o)} |"
+        for o in stats.ops) or "| — | — | — | — | 无操作 |"
 
     changed = "\n".join(f"- {p}" for p in sorted(stats.files_changed)) or "- 无"
 
@@ -152,13 +202,16 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
         "alias": cfg.alias,
         "ops_total": len(stats.ops),
         "ops_by_tool": stats.ops_by_tool,
+        "ops_ok": sum(1 for o in stats.ops if o.get("status") == "ok"),
+        "ops_error": sum(1 for o in stats.ops if o.get("status") == "error"),
+        "ops_interrupted": sum(1 for o in stats.ops if o.get("status") == "interrupted"),
         "files_changed": len(stats.files_changed),
     }
     body = (
         f"---\n{yaml.safe_dump(fm, allow_unicode=True, sort_keys=False)}---\n\n"
         f"# 整理报告 {datetime.fromtimestamp(started_at).strftime('%Y-%m-%d %H:%M')}\n\n"
         f"## 总结（agent 原文）\n{summary or '（无）'}\n\n"
-        f"## 操作清单\n| 时间 | 工具 | 参数 | 结果摘要 |\n| --- | --- | --- | --- |\n"
+        f"## 操作清单\n| 时间 | 工具 | 参数 | 状态 | 结果摘要 |\n| --- | --- | --- | --- | --- |\n"
         f"{ops_rows}\n\n## 变更文件\n{changed}\n"
     )
     return body, summary
@@ -185,7 +238,10 @@ async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = ""
             total = int(event.data.get("total", 0))
             logger.debug("[bg:%s] round=%d tokens=%d/%d (%.0f%%)",
                          alias, stats.rounds, used, total, event.data.get("percent", 0))
-            stats.record_usage(used)
+            stats.record_usage(
+                int(event.data.get("prompt", 0)),
+                int(event.data.get("completion", 0)),
+            )
         elif event.type == "done":
             return event.data.get("reason", "final")
     return "final"
@@ -207,8 +263,6 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     target_rel = cfg.target_dir.relative_to(vault).as_posix()
     logger.info("[bg:%s] starting target=%s rounds=%d timeout=%ds",
                 cfg.alias, target_rel, cfg.max_rounds, cfg.timeout_s)
-
-    _prune_reports(cfg.report_dir, vault, cfg.alias)
 
     spec = AgentSpec(
         # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
@@ -235,16 +289,25 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         status, error_msg = "timeout", f"exceeded {cfg.timeout_s}s"
     except asyncio.CancelledError:
         status, error_msg = "error", "cancelled"
-        _write_report(cfg, vault, started_at, status, stats, error_msg)
-        raise
+        # 取消路径也走写后剪枝收口（spec §6）：写成功才剪枝，之后 re-raise
+        stats.finalize()
+        try:
+            _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
+        finally:
+            raise
     except Exception as e:
         status, error_msg = "error", f"{type(e).__name__}: {e}"
         logger.exception("[bg:%s] run failed", cfg.alias)
 
-    finished_at = time.time()
-    _write_report(cfg, vault, started_at, status, stats, error_msg)
+    # 空运行：0 ops 且 0 文本（"无需整理"类有文本的 0-ops 运行保持 ok）
+    if status == "ok" and not stats.ops and not stats.summary:
+        status = "empty"
 
-    report_path = (cfg.report_dir / _report_name(started_at)).relative_to(vault).as_posix()
+    stats.finalize()
+    finished_at = time.time()
+    _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
+
+    report_path = (cfg.report_dir / _report_name(started_at, cfg.alias)).relative_to(vault).as_posix()
     report = RunReport(
         alias=cfg.alias, name=cfg.name, status=status,
         started_at=started_at, finished_at=finished_at,
@@ -264,8 +327,18 @@ def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
     finished_at = time.time()
     body, _ = _render_report(cfg, vault, started_at, finished_at, status,
                              stats, error_msg)
-    fp = cfg.report_dir / _report_name(started_at)
+    fp = cfg.report_dir / _report_name(started_at, cfg.alias)
     fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(fp.relative_to(vault).as_posix(), cfg.alias)
     fp.write_bytes(body.encode("utf-8"))
     logger.info("[bg:%s] report written: %s", cfg.alias, fp.relative_to(vault).as_posix())
+
+
+def _write_report_and_prune(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
+                            status: str, stats: _RunStats, error_msg: str) -> None:
+    """写后剪枝：写成功才剪枝（spec §6 候选 1），崩溃窗口缩到写→剪之间。
+
+    所有收口路径（正常/timeout/round_limit/cancelled）统一经它。
+    """
+    _write_report(cfg, vault, started_at, status, stats, error_msg)
+    _prune_reports(cfg.report_dir, vault, cfg.alias)

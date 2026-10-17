@@ -152,3 +152,24 @@ def test_disjoint_target_dirs_ok(tmp_path: Path):
     cfg = _write_config(tmp_path, _two_agents_yaml())
     agents = load_background_agents(str(cfg), vault)
     assert [a.alias for a in agents] == ["a", "b"]
+
+
+def test_overlapping_report_dirs_rejected(tmp_path: Path):
+    """两 agent 共享 report_dir → fail-fast（互覆盖报告 / 互挤剪枝额度）。"""
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "p.md").write_text("x", encoding="utf-8")
+    body = (
+        "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
+        "background_agents:\n"
+        "  - alias: a\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
+        "    report_dir: shared/reports\n"
+        "    model:\n      model_id: qwen\n      base_url: http://x\n"
+        "  - alias: b\n    cron: \"0 4 * * *\"\n    target_dir: docs\n    prompt: prompts/p.md\n"
+        "    report_dir: shared/reports\n"
+        "    model:\n      model_id: qwen\n      base_url: http://x\n"
+    )
+    cfg = _write_config(tmp_path, body)
+    with pytest.raises(ValueError, match="overlapping report_dir"):
+        load_background_agents(str(cfg), vault)

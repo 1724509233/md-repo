@@ -59,6 +59,12 @@ def _tool(model: type[BaseModel], name: str) -> dict:
 # Sentinel: change-log history could not be queried (no db_conn / lookup error).
 _UNAVAILABLE = object()
 
+# pydantic 校验错误类型 → 给模型的正确写法提示（int/float 字段最常见）
+_TYPE_HINTS = {
+    "int_parsing": "pass an integer, e.g. 50 (no quotes)",
+    "float_parsing": "pass a number, e.g. 1.5 (no quotes)",
+}
+
 
 class Tool:
     """Base class for vault tools (template method)."""
@@ -68,14 +74,24 @@ class Tool:
     permission: ClassVar[str] = "allow"
 
     def validate(self, args: dict) -> str | None:
-        """Validate raw args against the pydantic model. Returns an error string or None."""
+        """Validate raw args against the pydantic model. Returns an error string or None.
+
+        每个错误项回放收到的原值（``err['input']``）并按类型提示正确写法，
+        帮助模型下一轮自我纠正（如 limit="50 lines" → pass an integer, e.g. 50）。
+        """
         try:
             self.args_model.model_validate(args)
         except ValidationError as e:
             parts = []
             for err in e.errors():
                 loc = ".".join(str(x) for x in err["loc"]) if err["loc"] else ""
-                parts.append(f"{loc}: {err['msg']}" if loc else err["msg"])
+                if loc:
+                    # 类型错误时附带收到的原值 + 类型示例提示
+                    tip = _TYPE_HINTS.get(err.get("type", ""))
+                    got = f", got {err['input']!r}" if tip else ""
+                    parts.append(f"{loc}: {err['msg']}{got}" + (f" — {tip}" if tip else ""))
+                else:
+                    parts.append(err["msg"])
             return f"Error: {'; '.join(parts)}"
         return None
 

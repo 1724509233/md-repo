@@ -128,6 +128,12 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
                 raise ValueError(
                     f"background agents '{agents[i].alias}' and '{agents[j].alias}' "
                     f"have overlapping target_dir")
+            # report_dir 重叠同理 fail-fast：共享目录会互覆盖报告、互挤 30 份剪枝额度
+            ra, rb = agents[i].report_dir, agents[j].report_dir
+            if ra.is_relative_to(rb) or rb.is_relative_to(ra):
+                raise ValueError(
+                    f"background agents '{agents[i].alias}' and '{agents[j].alias}' "
+                    f"have overlapping report_dir")
 
     return agents
 
