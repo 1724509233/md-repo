@@ -211,7 +211,10 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     _prune_reports(cfg.report_dir, vault, cfg.alias)
 
     spec = AgentSpec(
-        system_prompt=cfg.prompt.read_text(encoding="utf-8"),
+        # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
+        # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。
+        system_prompt=cfg.prompt.read_text(encoding="utf-8")
+        + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
         model=cfg.model,
         tools=list(TOOL_REGISTRY.values()),
         max_rounds=cfg.max_rounds,

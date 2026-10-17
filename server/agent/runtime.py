@@ -163,13 +163,13 @@ class LoopRuntime(Runtime):
                     del agent.pending_confirms[tc["id"]]
                     if not entry["approved"]:
                         result = "User rejected this operation."
-                        logger.info("tool_call %s rejected by user", tc["name"])
+                        logger.warning("tool_call %s rejected by user", tc["name"])
                         agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
                         yield Event("tool_result", {"id": tc["id"], "result": result, "rejected": True})
                         continue
 
                 result = execute_tool(tc["name"], args, ctx)
-                logger.info("tool_result %s => %s", tc["name"], result[:500])
+                logger.debug("tool_result %s => %s", tc["name"], result[:200])
                 yield Event("tool_result", {"id": tc["id"], "result": result})
                 agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 

@@ -16,3 +16,4 @@ start.sh
 issues/
 .vscode/
 .DS_Store
+.relay/
