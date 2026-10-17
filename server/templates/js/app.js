@@ -385,6 +385,8 @@ export function createApp() {
                   <span class="font-ui text-[10px] text-muted/50 whitespace-nowrap">{{ relativeTime(n.ts) }}</span>
                 </div>
                 <p class="font-ui text-[12px] text-muted mt-0.5 truncate">{{ n.summary }}</p>
+                <p v-if="n.ops_total || n.files_changed"
+                   class="font-ui text-[10px] text-muted/50 mt-0.5">{{ n.ops_total }} 次操作 · {{ n.files_changed }} 个文件</p>
               </button>
             </div>
           </div>

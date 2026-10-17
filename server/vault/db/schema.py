@@ -22,6 +22,20 @@ _ACTION_TO_OP = {
 _OP_TO_ACTION = {v: k for k, v in _ACTION_TO_OP.items()}
 
 
+def _ensure_notification_cols(conn: sqlite3.Connection) -> None:
+    """幂等迁移：旧库补 notifications 的 ops_total / files_changed 两列。
+
+    PRAGMA table_info 检查缺列才 ALTER（常量默认值 = 元数据操作，万行表毫秒级）；
+    重复调用/重复启动不报错。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(notifications)")}
+    for col in ("ops_total", "files_changed"):
+        if col not in cols:
+            conn.execute(
+                f"ALTER TABLE notifications ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0"
+            )
+
+
 def init_db(db_path: Path) -> sqlite3.Connection:
     """Create (or open) the index database and ensure the schema exists.
 
@@ -81,10 +95,13 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             status TEXT NOT NULL,
             report_path TEXT NOT NULL,
             summary TEXT NOT NULL DEFAULT '',
-            read INTEGER NOT NULL DEFAULT 0
+            read INTEGER NOT NULL DEFAULT 0,
+            ops_total INTEGER NOT NULL DEFAULT 0,
+            files_changed INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    _ensure_notification_cols(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications(ts)"
     )

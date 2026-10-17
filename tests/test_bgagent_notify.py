@@ -30,6 +30,32 @@ def test_inapp_hook_inserts_row(db_conn):
     assert row["read"] == 0
 
 
+def test_inapp_hook_writes_ops_stats(db_conn):
+    """notify 落库 ops_total / files_changed == RunReport 传入值。"""
+    InAppHook(db_conn).notify(_report(ops_total=7, files_changed=3))
+    row = db_conn.execute(
+        "SELECT ops_total, files_changed FROM notifications").fetchone()
+    assert row["ops_total"] == 7
+    assert row["files_changed"] == 3
+
+
+def test_notifications_migration_is_idempotent(tmp_path: Path, db_conn):
+    """连调两次 schema 迁移不报错（PRAGMA 检查缺列才 ALTER）。"""
+    from server.vault.db import schema
+
+    schema._ensure_notification_cols(db_conn)
+    schema._ensure_notification_cols(db_conn)
+    # 旧行默认 0，API/UI 消费无感
+    db_conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path) "
+        "VALUES (?, 'old', 'old', 'ok', 'x.md')", (time.time(),))
+    db_conn.commit()
+    row = db_conn.execute(
+        "SELECT ops_total, files_changed FROM notifications WHERE alias='old'").fetchone()
+    assert row["ops_total"] == 0
+    assert row["files_changed"] == 0
+
+
 def test_inapp_hook_holds_db_lock(db_conn):
     """INSERT 必须持 _db_lock（代码库写路径约定）。"""
     from server.vault.db.schema import _db_lock
@@ -53,6 +79,9 @@ def test_notifications_api_roundtrip(app, db_conn):
     assert len(items) == 1
     assert items[0]["alias"] == "notes-organizer"
     assert items[0]["read"] == 0
+    # /api/notifications 返回含 ops 统计两列
+    assert items[0]["ops_total"] == 5
+    assert items[0]["files_changed"] == 2
 
     r = client.post("/api/notifications/read", json={"all": True})
     assert r.status_code == 200

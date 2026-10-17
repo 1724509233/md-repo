@@ -49,10 +49,11 @@ class InAppHook(NotificationHook):
 
         with _db_lock:
             self._conn.execute(
-                "INSERT INTO notifications (ts, alias, name, status, report_path, summary) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
+                "ops_total, files_changed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (time.time(), report.alias, report.name, report.status,
-                 report.report_path, report.summary),
+                 report.report_path, report.summary,
+                 report.ops_total, report.files_changed),
             )
             self._conn.commit()
         logger = logging.getLogger("md-vault.bgagent")

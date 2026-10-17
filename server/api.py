@@ -314,7 +314,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
     @app.get("/api/notifications")
     async def list_notifications(unread: int = 0) -> list[dict]:
-        query = "SELECT id, ts, alias, name, status, report_path, summary, read FROM notifications"
+        query = ("SELECT id, ts, alias, name, status, report_path, summary, read, "
+                 "ops_total, files_changed FROM notifications")
         params: list = []
         if unread:
             query += " WHERE read = 0"
