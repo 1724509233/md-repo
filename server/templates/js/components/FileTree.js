@@ -1,11 +1,17 @@
 /* FileTree 组件：递归文件树 + RAG 搜索下拉框 + 展开/折叠 */
-const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount } = Vue
+const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount, nextTick } = Vue
 import { ICONS } from '../utils/icons.js'
 import { api } from '../api.js'
+import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 
-// 分层召回档位（spec §6）：strict → near → relaxed → fuzzy
-const TIER_ORDER = ['strict', 'near', 'relaxed', 'fuzzy']
 const SEARCH_TOP_K = 8
+
+// 递归统计目录总文件数（含所有子目录），用于目录行徽标与文件页头部计数
+export function countFiles(node) {
+  let total = node.files.length
+  for (const child of Object.values(node.dirs)) total += countFiles(child)
+  return total
+}
 
 // 递归子组件：渲染树节点
 const TreeNode = {
@@ -119,13 +125,6 @@ export const FileTree = {
 
     // 提供给递归子组件
     provide('treeState', { expandedDirs })
-
-    // 递归统计目录总文件数（含所有子目录），用于目录行徽标
-    function countFiles(node) {
-      let total = node.files.length
-      for (const child of Object.values(node.dirs)) total += countFiles(child)
-      return total
-    }
 
     // 构建树形结构
     const tree = computed(() => {
@@ -338,167 +337,39 @@ export const FileTree = {
     const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop })
     provide('treeOps', treeOps)
 
-    // ============ RAG 搜索下拉框 ============
-    const results = ref([])
-    const loading = ref(false)
-    const activeIndex = ref(-1)
+    // ============ RAG 搜索下拉框（共享控制器，spec §4.3）============
+    // 控制器状态容器：字段必须是 ref（控制器经 .value 读写）；
+    // 不能包 reactive——reactive 会自动解包 ref，.value 即变 undefined
+    const searchState = {
+      results: ref([]),
+      loading: ref(false),
+      activeIndex: ref(-1),
+      prefetched: ref([]),
+      prefetching: ref(false),
+      prefetchDone: ref(false)
+    }
+    const search = createSearchController({
+      api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
+      focusInput() {
+        const input = document.querySelector('#search-input')
+        if (input) input.focus() // 保证 ArrowUp/Down 继续可用
+      }
+    })
+    const { results, loading, activeIndex, prefetched, prefetching, prefetchDone } = searchState
     const searchOpen = computed(() => searchQuery.value.trim().length > 0)
 
-    // 分层召回预取状态（spec §6）：strict 之后剩余档位（near→relaxed→fuzzy）
-    // 在后台顺序预取，新增项按 path 对 results 去重后暂存于 prefetched；
-    // 点击按钮时同步追加（无异步），焦点回到输入框。
-    const prefetched = ref([])   // 剩余档位的新增项（已去重）
-    const prefetching = ref(false) // 预取流程进行中（含 strict 零结果时的自动续档）
-    const prefetchDone = ref(false) // 预取流程已结束（完成/耗尽/中止）
-
-    let debounceTimer = null
-    let abortController = null
-    let requestId = 0
-
     // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
-    const shapedResults = computed(() => {
-      const items = []
-      for (const item of results.value) {
-        const base = item.path.split('/').pop() || item.path
-        const name = base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base
-        const segments = item.segments || []
-        if (!segments.length) {
-          items.push({ path: item.path, name, heading: '' })
-          continue
-        }
-        for (const seg of segments) {
-          items.push({ path: item.path, name, heading: seg.heading_path || '' })
-        }
-      }
-      return items
-    })
-
-    // 行数统计：每个文件按 segment 数展开（无 segment 计 1 行），与下拉框渲染一致
-    function countRows(items) {
-      let n = 0
-      for (const item of items) {
-        const segs = item.segments || []
-        n += segs.length ? segs.length : 1
-      }
-      return n
-    }
+    const shapedResults = computed(() => shapeSegments(results.value))
     const moreRowCount = computed(() => countRows(prefetched.value))
     const shownRowCount = computed(() => countRows(results.value))
 
-    function resetToIdle() {
-      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
-      if (abortController) { abortController.abort(); abortController = null }
-      results.value = []
-      loading.value = false
-      activeIndex.value = -1
-      prefetched.value = []
-      prefetching.value = false
-      prefetchDone.value = false // 中止 → 回到初始态，不显示任何终态文案
-    }
-
-    // 预取循环：按 TIER_ORDER 顺序逐档 fetch（fromIdx 起），新增项按 path 对
-    // results 去重后暂存 prefetched；results + prefetched 达到 top_k 即提前停止。
-    // 复用现有 requestId 过期守卫 + AbortController；query 变化/resetToIdle 时中止。
-    // strict 零结果时由 runSearch 以 loading=true 调用（"搜索中…"可见）：
-    // 某档有结果 → 显示并转入后台预取（占位"正在加载更多…"）；全空 → 耗尽终态。
-    async function runPrefetch(q, id, controller, fromIdx) {
-      prefetching.value = true
-      const seen = new Set(results.value.map(r => r.path))
-      for (let i = fromIdx; i < TIER_ORDER.length; i++) {
-        if (results.value.length + prefetched.value.length >= SEARCH_TOP_K) break // 够了就不多取
-        let data
-        try {
-          data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal, TIER_ORDER[i])
-        } catch (err) {
-          if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
-          if (id !== requestId) return
-          if (results.value.length === 0) loading.value = false // 避免"搜索中…"卡死
-          prefetching.value = false
-          prefetchDone.value = true // 网络/服务端错误：停止预取，保留当前结果
-          return
-        }
-        if (id !== requestId) return // 过期响应，丢弃
-        for (const item of data) {
-          if (!seen.has(item.path)) {
-            seen.add(item.path)
-            prefetched.value.push(item)
-          }
-        }
-        if (results.value.length === 0 && prefetched.value.length > 0) {
-          // strict 零结果 → 该档有结果：显示，转入后台预取剩余档位
-          results.value = prefetched.value
-          prefetched.value = []
-          loading.value = false
-        }
-      }
-      if (results.value.length === 0) loading.value = false // 全空 → 结束"搜索中…"，进入全空终态
-      prefetching.value = false
-      prefetchDone.value = true
-    }
-
-    // "展示 N 条更多"：同步追加全部预取结果（无异步），清空 prefetched，焦点回输入框
-    function showMore() {
-      if (prefetching.value || !prefetchDone.value || !prefetched.value.length) return
-      results.value = results.value.concat(prefetched.value)
-      prefetched.value = []
-      activeIndex.value = -1
-      const input = document.querySelector('#search-input')
-      if (input) input.focus() // 保证 ArrowUp/Down 继续可用
-    }
-
-    async function runSearch(q) {
-      if (abortController) abortController.abort()
-      const controller = new AbortController()
-      abortController = controller
-      const id = ++requestId
-      loading.value = true
-      prefetching.value = false
-      prefetchDone.value = false
-      prefetched.value = []
-      let data
-      try {
-        data = await api.aiSearch(q, SEARCH_TOP_K, controller.signal) // 缺省 recall=strict
-      } catch (err) {
-        if (err.name === 'AbortError') return // 中止：忽略，不修改 results
-        if (id !== requestId) return
-        loading.value = false
-        results.value = []
-        prefetchDone.value = true // 搜索失败 → 终态（全空文案）
-        return
-      }
-      if (id !== requestId) return // 过期响应，丢弃
-      results.value = data
-      activeIndex.value = -1
-      if (results.value.length >= SEARCH_TOP_K) {
-        loading.value = false // 够了：不预取，无底部区域
-        prefetchDone.value = true
-        return
-      }
-      // 不足 top_k → 预取剩余档位（near→relaxed→fuzzy，顺序执行）
-      // strict 有结果：loading=false，占位"正在加载更多…"；
-      // strict 零结果：loading 保持 true，"搜索中…"可见，自动续档
-      if (results.value.length > 0) loading.value = false
-      await runPrefetch(q, id, controller, 1) // 1 = 'near'
-    }
-
     // 300ms 尾随防抖；query 变化即重置预取状态，回到 strict
-    watch(searchQuery, (q) => {
-      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
-      const trimmed = q.trim()
-      if (!trimmed) {
-        resetToIdle()
-        return
-      }
-      debounceTimer = setTimeout(() => {
-        debounceTimer = null
-        runSearch(trimmed)
-      }, 300)
-    })
+    watch(searchQuery, (q) => search.setInput(q))
 
     function pickResult(item) {
       emit('select', item.path, item.heading)
       searchQuery.value = ''
-      resetToIdle()
+      search.resetToIdle()
     }
 
     function onKeydown(e) {
@@ -515,7 +386,7 @@ export const FileTree = {
         if (shapedResults.value[idx]) pickResult(shapedResults.value[idx])
       } else if (e.key === 'Escape') {
         searchQuery.value = ''
-        resetToIdle()
+        search.resetToIdle()
       }
     }
 
@@ -529,7 +400,7 @@ export const FileTree = {
       const container = document.querySelector('#file-tree .relative')
       if (container && !container.contains(e.target)) {
         searchQuery.value = ''
-        resetToIdle()
+        search.resetToIdle()
       }
     }
 
@@ -538,35 +409,59 @@ export const FileTree = {
       else document.removeEventListener('mousedown', onDocMouseDown)
     })
 
+    // ============ 搜索跳转联动（spec §4.1）============
+    // 展开 path 的所有祖先前缀（幂等：Set 去重）
+    function expandToPath(path) {
+      if (!path) return
+      const parts = path.split('/')
+      let prefix = ''
+      for (let i = 0; i < parts.length - 1; i++) {
+        prefix = prefix ? prefix + '/' + parts[i] : parts[i]
+        expandedDirs.value.add(prefix)
+      }
+    }
+
+    // 当前文档行滚动到可视区中部（active class 由 currentPath prop 驱动）
+    async function revealActive() {
+      await nextTick()
+      const el = document.querySelector('#file-tree .tree-file.active')
+      if (el) el.scrollIntoView({ block: 'center' })
+    }
+
+    // 收起全部文件夹（spec §4.2）
+    function collapseAll() {
+      expandedDirs.value.clear()
+    }
+
+    // 常规树点击/路由变化：展开到当前文档并滚动（幂等）
+    watch(() => props.currentPath, (p) => {
+      if (p) {
+        expandToPath(p)
+        revealActive()
+      }
+    })
+
     onBeforeUnmount(() => {
       document.removeEventListener('mousedown', onDocMouseDown)
-      if (debounceTimer) clearTimeout(debounceTimer)
-      if (abortController) abortController.abort()
+      search.destroy()
     })
 
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
       ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem, onNavDragOver, onNavDrop, ROOT_TARGET,
-      prefetched, prefetching, prefetchDone, showMore, moreRowCount, shownRowCount, SEARCH_TOP_K
+      prefetched, prefetching, prefetchDone, showMore: search.showMore, moreRowCount, shownRowCount, SEARCH_TOP_K,
+      expandToPath, revealActive, collapseAll
     }
   },
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
-      <div class="relative mb-2">
-        <span class="absolute inset-y-0 left-0 flex items-center pl-3">
-          <svg class="w-4 h-4 text-muted" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 10a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
-        </span>
-        <input id="search-input" v-model="searchQuery" type="text"
-          class="w-full pl-9 pr-8 py-2 text-sm border border-border rounded-lg outline-none"
-          placeholder="搜索文档…" @keydown="onKeydown">
-        <button v-if="searchQuery" class="absolute inset-y-0 right-0 flex items-center pr-3 text-muted hover:text-ink"
-          title="清除搜索" @click="searchQuery = ''">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12"/>
-          </svg>
+      <div class="sp-input">
+        <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
+          placeholder="快速跳转…" @keydown="onKeydown">
+        <button v-if="searchQuery" class="sp-q-clear" title="清除" @click="searchQuery = ''">
+          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
 
         <!-- RAG 搜索下拉框 -->

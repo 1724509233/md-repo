@@ -442,7 +442,19 @@ pre code.hljs { background: transparent; padding: 0; }
 }
 
 .notif-dropdown {
+  /* 定位桌面/移动一致（top-12 / right-2）；宽度：桌面 380px，移动 342px（2026-10-19 用户微调） */
+  top: 48px;
+  right: 8px;
+  width: 380px;
   animation: notif-in .18s ease-out both;
+  transition: right .25s cubic-bezier(.32,.72,0,1);
+}
+@media (max-width: 1023px) {
+  .notif-dropdown { width: 342px; }
+}
+/* AI 面板打开时（桌面 40% 右抽屉）通知栏让位到 AI 面板左缘；与 #ai-panel 的 width:40% 联动，改宽需同步 */
+@media (min-width: 1024px) {
+  .ai-open .notif-dropdown { right: calc(40% + 8px); }
 }
 .notif-badge {
   position: absolute; top: -6px; right: -6px;
@@ -471,7 +483,7 @@ pre code.hljs { background: transparent; padding: 0; }
 .notif-item { transition: background-color .12s ease; }
 
 @media (prefers-reduced-motion: reduce) {
-  .notif-dropdown { animation: none; }
+  .notif-dropdown { animation: none; transition: none; }
   .notif-badge { animation: none; }
 }
 
@@ -520,3 +532,154 @@ pre code.hljs { background: transparent; padding: 0; }
 #preview .v1-s-li { margin: 0; padding: 1px 0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.75; color: var(--ink); word-break: break-word; }
 .v1-s-li .v1-s-bullet { color: var(--brass); margin-right: 8px; }
 .v1-s-deep { margin-left: 18px; }   /* 比基准缩进更深一层的子行（如 tool_requirements 下的列表项） */
+
+/* ============ 二级边栏：图标 rail + 面板（spec §3，移植设计稿变体 B「书房」）============ */
+.sidebar-shell {
+  height: 100%;
+  background: var(--paper);
+}
+/* rail：桌面 64px（--surface 自成一层）；移动 48px（去文字标签） */
+.rail {
+  width: 64px; flex-shrink: 0;
+  display: flex; flex-direction: column; align-items: center;
+  padding: 12px 0;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+}
+.rail .rsep { width: 22px; height: 1px; background: color-mix(in srgb, var(--line) 90%, transparent); margin: 8px 0; }
+/* 主图标（文件/搜索）之间 6px 间隙（与底部预留组 gap 一致，2026-10-19 用户要求） */
+.rail > .rbtn + .rbtn { margin-top: 6px; }
+/* rail 按钮：52×44，图标 20px（stroke 1.5）+ 10px 标签 */
+.rbtn {
+  border: none; background: transparent; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  width: 52px; height: 44px; border-radius: 9px;
+  color: var(--ink-soft); position: relative;
+  transition: background-color .15s ease, color .15s ease;
+}
+.rbtn .ricon { display: inline-flex; }
+.rbtn .ricon svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.rbtn .rlabel { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10px; letter-spacing: .02em; line-height: 1; }
+/* 三态：hover = brass 8% 底 + ink 图标 */
+.rbtn:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--ink); }
+/* active = brass 10% 底 + brass 图标 + 左缘 3px brass 条（条上下 9px 圆角） */
+.rbtn.on { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
+.rbtn.on::before {
+  content: ''; position: absolute; left: -6px; top: 9px; bottom: 9px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--brass);
+}
+/* 预留位：虚线框 + 降透明 + 不可点 */
+.rbtn.reserved {
+  width: 48px; height: 40px;
+  color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+  border: 1.5px dashed color-mix(in srgb, var(--ink-soft) 30%, transparent);
+  pointer-events: none;
+}
+.rbtn.reserved .rlabel { color: color-mix(in srgb, var(--ink-soft) 55%, transparent); }
+/* 底部预留「设置」：margin-top:auto 贴底，分隔线区隔 */
+.rail .rbottom { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 6px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent); }
+
+/* 面板容器：文件页 260px / 搜索页 300px（spec §3.2 / §3.3） */
+.panel-shell { flex-shrink: 0; position: relative; background: var(--paper); border-right: 1px solid var(--line); overflow: hidden; }
+.panel-shell > .panel-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); animation: panelInFade .2s ease-out both; }
+.panel-face:has(.sp-root) { background: var(--surface); }  /* 搜索页面板整体 surface 底（B 变体） */
+@keyframes panelInFade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .panel-shell > .panel-face { animation: none; }
+  .panel-shell, .search-drawer { transition: none; } /* 移动 overlay/抽屉直切（spec §3.5） */
+}
+
+/* 面板头：48px，surface 底（B 变体 .p-head） */
+.p-head { height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); background: var(--surface); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; position: relative; }
+.p-head .ptitle { font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--ink); }
+.p-head .pcount { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.p-head .pacts { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.ibtn { width: 26px; height: 26px; border-radius: 7px; border: none; background: transparent; color: var(--ink-soft); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color .15s ease, color .15s ease; position: relative; }
+.ibtn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.ibtn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 顶栏 logo（spec §3.1：22px mark + 14px wordmark） */
+.topbar-logo .logo-mark--top { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
+.topbar-logo .logo-word { font-size: 14px; }
+
+/* ============ 搜索页（spec §3.3）============ */
+/* 搜索输入区：树内（FileTree）与搜索页（SearchPanel）共用同一套类，勿另起（2026-10-19 统一） */
+.sp-input { flex-shrink: 0; padding: 12px 14px 10px; position: relative; background: transparent; }
+.sp-q-ic { position: absolute; left: 26px; top: 50%; transform: translateY(-30%); width: 16px; height: 16px; stroke: var(--ink-soft); fill: none; stroke-width: 2; stroke-linecap: round; pointer-events: none; }
+.sp-q-input {
+  width: 100%; padding: 9px 34px 9px 36px; font-size: 13px;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; color: var(--ink); outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.sp-q-input::placeholder { color: var(--ink-soft); opacity: .7; }
+.sp-q-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
+.sp-q-clear { position: absolute; right: 24px; top: 50%; transform: translateY(-30%); width: 22px; height: 22px; border: none; background: transparent; color: var(--ink-soft); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.sp-q-clear:hover { color: var(--ink); }
+.sp-q-clear svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+/* 分层召回 meta 行 */
+.sp-meta { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 14px 8px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft); }
+.sp-meta .sp-tier { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); }
+/* 结果列表 */
+.sp-results { flex: 1; overflow-y: auto; padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+/* 加载态 */
+.sp-loading { display: flex; align-items: center; gap: 8px; padding: 14px; color: var(--ink-soft); font-size: 12px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+/* 空态 */
+.sp-empty { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-empty-ring { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--ink-soft); }
+.sp-empty-ring svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; }
+.sp-empty-t1 { font-size: 12px; color: var(--ink-soft); }
+.sp-empty-t2 { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: center; }
+/* 平铺卡片：每个 segment 独立成卡（B 变体 .f-card）；flex-shrink:0 —— 卡片不可压缩，
+   超出由 .sp-results 滚动（否则默认 shrink:1 + overflow:hidden 会让卡片被压矮而非出滚动条） */
+.sp-card { flex-shrink: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px 0; overflow: hidden; cursor: pointer; transition: border-color .15s, background-color .15s; }
+.sp-card:hover, .sp-card.active { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.sp-top { display: flex; align-items: baseline; gap: 8px; }
+.sp-name { font-size: 13px; font-weight: 500; flex-shrink: 0; color: var(--ink); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-path { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* heading pill chip */
+.sp-hchip { display: inline-block; margin: 6px 0 5px; font-size: 10px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; color: var(--ink-soft); background: color-mix(in srgb, var(--ink) 4%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); padding: 1px 8px; border-radius: 999px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 片段：12px 3 行 clamp，匹配词黄铜高亮 */
+.sp-snip { font-size: 12px; line-height: 1.65; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sp-snip :is(mark) { background: color-mix(in srgb, var(--brass) 22%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+/* 相关性条：3px，宽度 ∝ 相对 score（最高分 = 100%），无数字 */
+.sp-bar { height: 3px; background: color-mix(in srgb, var(--ink) 6%, transparent); margin-top: 8px; }
+.sp-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, var(--line))); border-radius: 0 999px 999px 0; }
+/* "展示更多"：复用现有 .search-more 胶囊规格 */
+.sp-more-wrap { flex-shrink: 0; display: flex; justify-content: center; padding: 8px 0 2px; }
+/* 预取占位 */
+.sp-prefetching { flex-shrink: 0; display: flex; align-items: center; justify-content: center; gap: 6px; padding: .5rem .25rem; font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+
+/* ============ 移动端搜索抽屉（<1024px，spec §3.5：完全复用 #ai-panel 抽屉 CSS 规格）============ */
+@media (max-width: 1023px) {
+  /* rail 48px 无标签；面板 260px overlay 贴左缘（left:0，打开时覆盖 rail——2026-10-19 用户确认） */
+  .rail { width: 48px; padding: 8px 0; }
+  .rbtn { width: 40px; height: 44px; }
+  .rbtn .ricon svg { width: 19px; height: 19px; }
+  .rbtn .rlabel { display: none; }
+  .rbtn.reserved { width: 36px; height: 38px; }
+  .panel-shell {
+    width: 260px !important; position: fixed; left: 0px; top: 0; bottom: 0; z-index: 40;
+    background: var(--paper); border-right: 1px solid var(--line);
+    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1);
+  }
+  .panel-shell.open { transform: translateX(0); }
+
+  /* 搜索抽屉：80vh 底部抽屉（同 #ai-panel 移动抽屉：圆角 24、backdrop、拖拽手柄） */
+  .search-drawer {
+    top: auto; bottom: -80vh; height: 80vh; width: 100%;
+    background: var(--surface);
+    border-top: 2px solid var(--brass);
+    border-radius: 24px 24px 0 0;
+    box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
+    transition: bottom .38s cubic-bezier(.32,.72,0,1);
+  }
+  .search-drawer.open { bottom: 0; }
+  #search-sheet-handle { display: flex; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
+  #search-sheet-handle::before { content: ''; width: 44px; height: 5px; border-radius: 9999px; background: var(--line); transition: background .15s; }
+  #search-sheet-handle:active::before { background: var(--brass); }
+}
+@media (min-width: 1024px) {
+  /* ID 选择器：优先级必须高于 Tailwind .flex（Play CDN 生成的样式表在 link 之后，class 规则会覆盖同优先级的 display:none） */
+  #search-drawer, #search-drawer-backdrop { display: none; }
+}

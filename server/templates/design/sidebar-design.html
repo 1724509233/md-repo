@@ -1,0 +1,1032 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>md-vault 左侧栏重构 · 二级边栏对比稿</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   对比稿自包含样式。token 全部取自 md-repo/server/templates/style.css
+   （纸墨风「书房」）：--paper / --ink / --ink-soft / --brass / --line / --surface
+   字体：Source Serif 4（正文/标题）、Inter（UI）、JetBrains Mono（路径/数字）
+   ================================================================ */
+:root{
+  --paper:#F4EFE6;
+  --ink:#211D18;
+  --ink-soft:#6E655A;
+  --brass:#9A6B32;
+  --line:#D8CFBF;
+  --surface:#FBF8F2;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{background:var(--paper)}
+body{
+  font-family:var(--serif);color:var(--ink);background:var(--paper);
+  padding:32px 28px 72px;line-height:1.7;
+}
+/* 细滚动条（同 style.css） */
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--ink-soft) 35%,transparent) transparent}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--ink-soft) 35%,transparent);border-radius:9999px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--brass);border-radius:6px}
+
+/* ============ 页面头部（中性说明） ============ */
+.page-head{max-width:1460px;margin:0 auto 30px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.page-head h1{font-size:26px;font-weight:700;letter-spacing:.01em}
+.page-head .sub{font-family:var(--sans);font-size:13px;color:var(--ink-soft);margin-top:6px;max-width:860px;line-height:1.8}
+.page-head .sub b{color:var(--ink);font-weight:600}
+.page-head .meta{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:8px}
+
+/* ============ 变体区块 ============ */
+.variant{max-width:1460px;margin:0 auto 56px}
+.v-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:14px}
+.v-head .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--paper);background:var(--ink);padding:3px 10px;border-radius:999px}
+.v-head .tag.brass{background:var(--brass)}
+.v-head h2{font-size:21px;font-weight:700}
+.v-head .diff{font-family:var(--sans);font-size:13px;color:var(--ink-soft)}
+.v-body{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:24px;align-items:start}
+@media (max-width:1120px){.v-body{grid-template-columns:1fr}}
+
+/* ============ 舞台（模拟应用窗口） ============ */
+.stage{
+  position:relative;display:flex;height:600px;background:var(--paper);
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  box-shadow:0 10px 30px rgba(33,29,24,.06), 0 1px 0 rgba(33,29,24,.03);
+}
+.stage .viewport{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+
+/* 主区提示（TopBar 复刻 + 占位文档） */
+.topbar{height:48px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px;font-family:var(--sans)}
+.topbar .hamb{display:none;width:28px;height:28px;border-radius:8px;border:none;background:transparent;color:var(--ink-soft);align-items:center;justify-content:center;cursor:pointer}
+.topbar .file{font-family:var(--serif);font-size:15px}
+.topbar .file .dim{color:var(--ink-soft)}
+.topbar .spacer{flex:1}
+.topbar .mode-pill{display:flex;align-items:center;gap:2px;height:30px;padding:0 2px;border-radius:8px;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.topbar .mode-pill span{font-size:12px;padding:3px 12px;border-radius:6px;color:var(--ink-soft)}
+.topbar .mode-pill span.on{background:var(--brass);color:var(--paper);font-weight:500}
+.topbar .btn-save{font-family:var(--sans);font-size:12px;font-weight:500;height:28px;padding:0 14px;border-radius:8px;border:none;background:var(--brass);color:var(--paper);cursor:pointer}
+.doc-hint{flex:1;overflow:hidden;padding:28px 36px;display:flex;flex-direction:column;gap:10px}
+.doc-hint .dw{width:min(560px,86%)}
+.doc-hint .dh{font-size:22px;font-weight:700;padding-bottom:8px;border-bottom:1px solid color-mix(in srgb,var(--brass) 45%,transparent)}
+.doc-hint .dline{height:9px;border-radius:99px;background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.doc-hint .dline.mid{width:88%}
+.doc-hint .dline.short{width:55%}
+.doc-hint .dline.brass{background:color-mix(in srgb,var(--brass) 22%,transparent);width:70%}
+.stage-badge{position:absolute;right:14px;top:60px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--surface) 80%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);padding:2px 8px;border-radius:999px;letter-spacing:.05em}
+
+/* ============ 二级面板（文件页 / 搜索页 通用） ============ */
+.panel{width:var(--pw,260px);flex-shrink:0;background:var(--paper);border-right:1px solid var(--line);position:relative;display:flex;flex-direction:column;overflow:hidden}
+.panel[hidden]{display:none}
+.p-head{height:48px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface);font-family:var(--sans);position:relative}
+.p-head .ptitle{font-size:13px;font-weight:600;letter-spacing:.02em}
+.p-head .pcount{font-size:11px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.p-head .pacts{margin-left:auto;display:flex;align-items:center;gap:4px}
+.ibtn{width:26px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-center;cursor:pointer;transition:background-color .15s ease,color .15s ease;position:relative}
+.ibtn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.ibtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* 注记标注点（黄铜虚线圈 + 序号，只在 mockup 中可见） */
+.callout{position:absolute;z-index:20;font-family:var(--sans);font-size:10px;font-weight:600;color:var(--paper);background:var(--brass);border-radius:999px;padding:1px 7px;box-shadow:0 2px 8px rgba(33,29,24,.25);white-space:nowrap;pointer-events:none}
+.callout::after{content:'';position:absolute;inset:-4px;border:1.5px dashed color-mix(in srgb,var(--brass) 55%,transparent);border-radius:999px}
+
+/* ============ 文件树 ============ */
+.tree{flex:1;overflow-y:auto;padding:8px 10px 14px;font-family:var(--sans);font-size:13px}
+.tree .row{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:8px;cursor:pointer;color:var(--ink);transition:background-color .15s ease,color .15s ease}
+.tree .row:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.tree .row.active{background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass);font-weight:500}
+.tree .chev{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;color:var(--ink-soft);flex-shrink:0;transition:transform .2s ease}
+.tree .chev.open{transform:rotate(90deg)}
+.tree .ti{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.tree .tname{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.tree .file-row{padding-left:26px}
+.tree .count{display:inline-flex;align-items:center;justify-content:center;min-width:1.25rem;height:1.125rem;padding:0 .375rem;border-radius:9999px;background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);font-size:10px;line-height:1;font-weight:500;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.tree .indent{padding-left:18px}
+.tree .indent2{padding-left:36px}
+.tree .drop-zone{margin-top:2px;padding:8px;border:1px dashed color-mix(in srgb,var(--line) 90%,transparent);border-radius:8px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);font-size:11px;display:flex;align-items:center;justify-content:center;gap:6px}
+
+/* 树内轻量搜索框（仅 B 保留） */
+.tree-search{position:relative;margin:0;padding:10px 14px 10px}
+.tree-search svg.q-ic{position:absolute;left:25px;top:50%;transform:translateY(-28%);width:15px;height:15px;stroke:var(--ink-soft);fill:none;stroke-width:2;stroke-linecap:round;pointer-events:none}
+.tree-search input{
+  width:100%;padding:7px 30px 7px 34px;font-size:13px;font-family:var(--sans);
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink);outline:none;
+}
+.tree-search input::placeholder{color:var(--ink-soft);opacity:.7}
+.tree-search .q-clear{position:absolute;right:20px;top:50%;transform:translateY(-28%);width:20px;height:20px;border:none;background:transparent;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.tree-search .q-clear svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+
+/* 面板底部 footer（C 的收起全部位置） */
+.p-foot{flex-shrink:0;display:flex;align-items:center;justify-content:center;gap:12px;padding:7px 12px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent);background:color-mix(in srgb,var(--surface) 60%,transparent);font-family:var(--sans);position:relative}
+.p-foot .ftxt{font-size:11px;color:var(--ink-soft);background:none;border:none;cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;transition:background-color .15s,color .15s}
+.p-foot .ftxt:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.p-foot .ftxt svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.p-foot .reserved{font-size:10px;color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+
+/* ============ 搜索输入（搜索页） ============ */
+.s-input{flex-shrink:0;padding:12px 14px 10px;position:relative;background:var(--paper)}
+.s-input .q-ic{position:absolute;left:26px;top:50%;transform:translateY(-30%);width:16px;height:16px;stroke:var(--ink-soft);fill:none;stroke-width:2;stroke-linecap:round;pointer-events:none}
+.s-input input{
+  width:100%;padding:9px 34px 9px 36px;font-size:13px;font-family:var(--sans);
+  background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink);outline:none;
+  transition:border-color .15s,box-shadow .15s;
+}
+.s-input input::placeholder{color:var(--ink-soft);opacity:.7}
+.s-input input:focus{border-color:var(--brass);box-shadow:0 0 0 3px color-mix(in srgb,var(--brass) 25%,transparent)}
+.s-input .q-clear{position:absolute;right:24px;top:50%;transform:translateY(-30%);width:22px;height:22px;border:none;background:transparent;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.s-input .q-clear:hover{color:var(--ink)}
+.s-input .q-clear svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+.s-meta{flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px 8px;font-family:var(--sans);font-size:11px;color:var(--ink-soft)}
+.s-meta .tier{font-family:var(--mono);font-size:10px;padding:1px 8px;border-radius:999px;border:1px solid color-mix(in srgb,var(--brass) 35%,var(--line));background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--brass)}
+
+/* ============ 结果列表 ============ */
+.results{flex:1;overflow-y:auto;padding:4px 12px 14px;display:flex;flex-direction:column;gap:8px}
+/* 加载态 */
+.r-loading{display:flex;align-items:center;gap:8px;padding:14px;color:var(--ink-soft);font-size:12px;font-family:var(--sans)}
+.spinner{width:13px;height:13px;border:2px solid var(--line);border-top-color:var(--brass);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* 展示更多（沿用 style.css .search-more 语言） */
+.r-more{display:flex;justify-content:center;padding:8px 0 2px}
+.r-more button{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink-soft);cursor:pointer;font-family:var(--sans);font-size:12px;font-weight:500;transition:background-color .15s,color .15s,border-color .15s}
+.r-more button:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);border-color:color-mix(in srgb,var(--brass) 40%,var(--line));color:var(--brass)}
+.r-more button svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.r-end{padding:6px;text-align:center;font-size:11px;font-family:var(--sans);color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+/* 空态 */
+.r-empty{flex:1;display:flex;flex-direction:column;align-items:center;gap:10px;padding:28px 16px;font-family:var(--sans)}
+.r-empty .ring{width:44px;height:44px;border-radius:50%;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;color:var(--ink-soft)}
+.r-empty .ring svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round}
+.r-empty .t1{font-size:12px;color:var(--ink-soft)}
+.r-empty .t2{font-size:11px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+mark{background:color-mix(in srgb,var(--brass) 22%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+
+/* ---- A：按文件分组的卡片（score 数字 + 高亮） ---- */
+.g-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden;transition:border-color .15s}
+.g-card:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.g-head{display:flex;align-items:center;gap:7px;padding:8px 10px}
+.g-head svg{width:14px;height:14px;stroke:var(--brass);fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.g-name{font-size:13px;font-weight:500;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-score{font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 5%,transparent);padding:1px 6px;border-radius:999px;font-variant-numeric:tabular-nums}
+.g-path{font-family:var(--mono);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);padding:0 10px 6px 31px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.g-seg{padding:7px 10px 8px;border-top:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
+.g-h{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ink-soft);margin-bottom:4px}
+.g-h::before{content:'';width:5px;height:5px;border-radius:999px;background:var(--brass);flex-shrink:0}
+.g-snip{font-size:12px;line-height:1.65;color:var(--ink);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ---- B：平铺卡片（相关性条，无数字，无分组） ---- */
+.f-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px 0;overflow:hidden;transition:border-color .15s}
+.f-card:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.f-top{display:flex;align-items:baseline;gap:8px}
+.f-name{font-size:13px;font-weight:500;flex-shrink:0}
+.f-path{font-family:var(--mono);font-size:10px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.f-hchip{display:inline-block;margin:6px 0 5px;font-size:10px;font-family:var(--sans);color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);padding:1px 8px;border-radius:999px}
+.f-snip{font-size:12px;line-height:1.65;color:var(--ink);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.f-bar{height:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);margin-top:8px}
+.f-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 55%,var(--line)));border-radius:0 999px 999px 0}
+
+/* ---- C：档案式开栏（无卡片、无高亮、衬线） ---- */
+.e-block{padding:10px 2px 12px;border-bottom:1px solid color-mix(in srgb,var(--line) 80%,transparent)}
+.e-block:last-of-type{border-bottom:none}
+.e-frow{display:flex;align-items:baseline;gap:10px;padding-bottom:6px;margin-bottom:8px;border-bottom:1px solid color-mix(in srgb,var(--brass) 30%,transparent)}
+.e-fname{font-family:var(--serif);font-size:15px;font-weight:600;flex-shrink:0}
+.e-fpath{font-family:var(--mono);font-size:10px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.e-seg{padding:2px 0 10px 12px;border-left:2px solid color-mix(in srgb,var(--line) 90%,transparent)}
+.e-seg + .e-seg{border-top:1px dashed color-mix(in srgb,var(--line) 80%,transparent);margin-top:2px;padding-top:10px}
+.e-h{font-family:var(--mono);font-size:10px;color:var(--ink-soft);letter-spacing:.02em;margin-bottom:3px}
+.e-snip{font-family:var(--serif);font-size:12.5px;line-height:1.7;color:var(--ink);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* 搜索结果面板在搜索页时面板背景微亮一档（B） */
+.panel.b-surface{background:var(--surface)}
+
+/* ============ 图标栏 rail ============ */
+.rail{flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:10px 0;background:var(--paper);border-right:1px solid var(--line)}
+.rail .rlogo{margin-bottom:14px}
+.rail .rnav{display:flex;flex-direction:column;align-items:center;gap:6px}
+.rail .rsep{width:22px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:8px 0}
+.rbtn{border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--ink-soft);position:relative;transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.rbtn svg{stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1}
+.rbtn .rdot{position:absolute;top:5px;right:8px;width:5px;height:5px;border-radius:999px;background:var(--brass)}
+/* 预留位 */
+.rbtn.reserved{color:color-mix(in srgb,var(--ink-soft) 55%,transparent);border:1.5px dashed color-mix(in srgb,var(--ink-soft) 30%,transparent);pointer-events:none}
+.rbtn.reserved .rlabel{color:color-mix(in srgb,var(--ink-soft) 55%,transparent)}
+
+/* ---- A rail：48px，浅底，active 实心黄铜 ---- */
+.vA .rail{width:48px}
+.vA .rail .rlogo{width:28px;height:28px;border:1px solid var(--brass);border-radius:7px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:13px;color:var(--brass);background:transparent}
+.vA .rbtn{width:36px;height:36px;border-radius:9px}
+.vA .rbtn svg{width:19px;height:19px;stroke-width:1.6}
+.vA .rbtn:hover{background:color-mix(in srgb,var(--ink) 5%,transparent);color:var(--ink)}
+.vA .rbtn.on{background:var(--brass);color:var(--paper);box-shadow:0 2px 8px color-mix(in srgb,var(--brass) 35%,transparent)}
+.vA .rbtn.reserved{width:32px;height:32px}
+
+/* ---- B rail：64px 带文字标签，surface 底，active 左侧黄铜条 ---- */
+.vB .rail{width:64px;background:var(--surface);padding:12px 0}
+.vB .rnav{gap:4px}
+.vB .rbtn{width:52px;height:44px;border-radius:9px}
+.vB .rbtn svg{width:20px;height:20px;stroke-width:1.5}
+.vB .rbtn:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--ink)}
+.vB .rbtn.on{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.vB .rbtn.on::before{content:'';position:absolute;left:-6px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+.vB .rbtn.reserved{width:48px;height:40px}
+.vB .rail .rbottom{margin-top:auto;display:flex;flex-direction:column;align-items:center;gap:6px;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+
+/* ---- C rail：56px 墨色深底（唯一深色 rail），active paper 底 + 黄铜点 ---- */
+.vC .rail{width:56px;background:var(--ink);border-right:1px solid color-mix(in srgb,var(--ink) 80%,transparent);padding:12px 0}
+.vC .rail .rlogo{width:28px;height:28px;border:1px solid var(--brass);border-radius:7px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:13px;color:var(--brass);background:transparent;margin-bottom:16px}
+.vC .rail .rsep{background:color-mix(in srgb,#F4EFE6 22%,transparent)}
+.vC .rbtn{width:38px;height:38px;border-radius:9px;color:color-mix(in srgb,#F4EFE6 55%,transparent)}
+.vC .rbtn svg{width:19px;height:19px;stroke-width:1.6}
+.vC .rbtn:hover{background:color-mix(in srgb,#F4EFE6 10%,transparent);color:#F4EFE6}
+.vC .rbtn.on{background:color-mix(in srgb,#F4EFE6 14%,transparent);color:#F4EFE6}
+.vC .rbtn.on .rdot{display:block}
+.vC .rbtn .rdot{display:none}
+.vC .rbtn.reserved{width:34px;height:34px;color:color-mix(in srgb,#F4EFE6 30%,transparent);border-color:color-mix(in srgb,#F4EFE6 25%,transparent)}
+.vC .rbtn.reserved .rlabel{color:color-mix(in srgb,#F4EFE6 30%,transparent)}
+
+/* ============ 页面切换动画（mockup 用：点 rail 换面板） ============ */
+@keyframes panelInSlide{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+@keyframes panelInFade{from{opacity:0}to{opacity:1}}
+.vA .panel.anim{animation:panelInSlide .18s ease-out both}
+.vB .panel.anim{animation:panelInFade .2s ease-out both}
+.vC .panel.anim{animation:panelInFade .16s ease-out both}
+@media (prefers-reduced-motion:reduce){
+  .vA .panel.anim,.vB .panel.anim,.vC .panel.anim{animation:none}
+}
+
+/* ============ 设计注记（右侧） ============ */
+.notes{
+  position:sticky;top:16px;background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:18px 18px 20px;font-family:var(--sans);font-size:12.5px;line-height:1.8;color:var(--ink);
+  max-height:calc(100vh - 32px);overflow-y:auto;
+}
+.notes h3{font-family:var(--serif);font-size:15px;font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.notes h3 .n{font-family:var(--mono);font-size:10px;color:var(--brass);letter-spacing:.1em}
+.notes .stance{font-size:12px;color:var(--ink-soft);margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent);line-height:1.7}
+.notes .nblock{margin-top:14px}
+.notes .nblock h4{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--brass);margin-bottom:4px;text-transform:uppercase;font-family:var(--sans)}
+.notes .nblock p,.notes .nblock li{color:var(--ink);font-size:12.5px}
+.notes ul{padding-left:16px}
+.notes li{margin:2px 0}
+.notes .dim{color:var(--ink-soft)}
+.notes .tok{font-family:var(--mono);font-size:11px;background:color-mix(in srgb,var(--ink) 5%,transparent);padding:1px 5px;border-radius:4px;color:color-mix(in srgb,var(--brass) 85%,var(--ink))}
+.notes .pos{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--brass);font-weight:600;background:color-mix(in srgb,var(--brass) 8%,transparent);border:1px dashed color-mix(in srgb,var(--brass) 40%,transparent);padding:1px 8px;border-radius:999px}
+.notes .states{display:flex;gap:8px;margin-top:6px}
+.notes .states .s{flex:1;border:1px solid var(--line);border-radius:8px;padding:6px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;background:var(--paper)}
+.notes .states .s b{font-size:10px;font-weight:600;color:var(--ink-soft);letter-spacing:.03em}
+.notes .states .chip{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center}
+.notes .states .chip svg{width:16px;height:16px;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+
+/* 三态示例的通用小图 */
+.st-inactive{background:transparent;color:var(--ink-soft);border:1px dashed color-mix(in srgb,var(--line) 100%,transparent)}
+.st-inactive svg{stroke:var(--ink-soft)}
+.st-hover{background:color-mix(in srgb,var(--ink) 5%,transparent);color:var(--ink)}
+.st-hover svg{stroke:var(--ink)}
+/* A 三态 */
+.st-a-active{background:var(--brass);color:var(--paper)}
+.st-a-active svg{stroke:var(--paper)}
+/* B 三态 */
+.st-b-active{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass);position:relative}
+.st-b-active svg{stroke:var(--brass)}
+.st-b-active::before{content:'';position:absolute;left:-5px;top:7px;bottom:7px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+/* C 三态 */
+.st-c-active{background:color-mix(in srgb,#F4EFE6 14%,transparent);color:#F4EFE6;position:relative}
+.st-c-active svg{stroke:#F4EFE6}
+.st-c-active::after{content:'';position:absolute;top:4px;right:4px;width:5px;height:5px;border-radius:999px;background:var(--brass)}
+
+/* 移动端示意（小窗） */
+.mphone{margin-top:6px;border:1px solid var(--line);border-radius:12px;background:var(--paper);padding:8px;display:flex;gap:8px}
+.mphone .mcell{flex:1;border-radius:8px;background:color-mix(in srgb,var(--ink) 3%,var(--surface));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);padding:8px;display:flex;flex-direction:column;gap:5px}
+.mphone .mcell .mcap{font-size:10px;color:var(--ink-soft);letter-spacing:.02em}
+.mphone .mbox{height:14px;border-radius:4px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.mphone .mbox.brass{background:color-mix(in srgb,var(--brass) 30%,transparent)}
+.mphone .mbox.dash{border:1px dashed color-mix(in srgb,var(--ink-soft) 45%,transparent);background:transparent}
+.mphone .mdrawer{position:relative;height:14px}
+.mphone .mdrawer i{position:absolute;top:2px;height:10px;border-radius:3px;background:var(--surface);border:1px solid var(--line);width:62%;left:0}
+
+/* 推荐横幅 */
+.recap{max-width:1460px;margin:8px auto 0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px 20px;font-family:var(--sans);font-size:13px;line-height:1.9}
+.recap h2{font-family:var(--serif);font-size:18px;font-weight:700;margin-bottom:8px}
+.recap .r1{color:var(--brass);font-weight:600}
+.recap p{margin:4px 0}
+</style>
+</head>
+<body>
+
+<!-- ================= 页面头部（中性说明） ================= -->
+<header class="page-head">
+  <h1>md-vault 左侧栏重构 · 二级边栏对比稿</h1>
+  <p class="sub">
+    方向：把 260px 单列侧栏拆成 <b>图标栏 rail + 二级页面面板</b>（文件页 / 搜索页），为后续功能预留 rail 位而不让侧栏膨胀。
+    本次重构主要解决 <b>RAG 搜索下拉信息不足</b>（当前下拉只有文件名 + heading 一行小字，API 返回的 content 片段、score 都没用上）。
+    下面三个变体是<strong>不同设计立场</strong>，不是换皮。每个变体可点左侧 rail 图标切换「文件页 / 搜索页」两态；右侧为设计注记。
+  </p>
+  <p class="meta">self-contained mockup · tokens from server/templates/style.css · 2026-10-18 · 示例 query：「A/B test orchestrator」</p>
+</header>
+
+<!-- =================================================================
+     变体 A · 索引 —— 48px 细 rail + 卡片分组搜索 + 收起树内搜索
+     ================================================================= -->
+<section class="variant vA" id="vA">
+  <div class="v-head">
+    <span class="tag">变体 A</span>
+    <h2>索引</h2>
+    <span class="diff">最贴近现状的轻改造：48px 细 rail、logo 置顶、搜索按文件分组成卡片、树内搜索框移除（搜索统一到搜索页）。</span>
+  </div>
+  <div class="v-body">
+
+    <!-- 舞台 -->
+    <div class="stage">
+      <div class="stage-badge">desktop · ≥1024px</div>
+
+      <!-- rail -->
+      <div class="rail">
+        <div class="rlogo">M</div>
+        <div class="rnav" data-rail>
+          <button class="rbtn on" data-goto="file" title="文件" aria-label="文件页">
+            <svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+          </button>
+          <button class="rbtn" data-goto="search" title="搜索" aria-label="搜索页">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          </button>
+          <div class="rsep"></div>
+          <button class="rbtn reserved" title="预留：最近变更">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          </button>
+          <button class="rbtn reserved" title="预留：通知">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 文件页 -->
+      <div class="panel anim" data-panel="file" style="--pw:260px">
+        <div class="p-head">
+          <span class="ptitle">文档</span>
+          <span class="pcount">12</span>
+          <span class="pacts">
+            <button class="ibtn" title="收起全部文件夹（预留控件）">
+              <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+            </button>
+          </span>
+          <span class="callout" style="right:10px;top:38px">① 收起全部</span>
+        </div>
+        <div class="tree">
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">relay</span><span class="count">3</span></div>
+          <div class="indent">
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">README</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">BOARD</span></div>
+            <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">.reports</span><span class="count">1</span></div>
+          </div>
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">abtest</span><span class="count">2</span></div>
+          <div class="indent">
+            <div class="row file-row active"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">skill</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">scoring-rubric</span></div>
+          </div>
+          <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">notes</span><span class="count">3</span></div>
+          <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">welcome</span></div>
+          <div class="drop-zone">拖动文件到目录行可移动（现有能力保留）</div>
+        </div>
+      </div>
+
+      <!-- 搜索页 -->
+      <div class="panel" data-panel="search" style="--pw:260px" hidden>
+        <div class="p-head"><span class="ptitle">搜索</span></div>
+        <div class="s-input">
+          <svg class="q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" value="A/B test orchestrator" placeholder="搜索文档…（RAG 全文）">
+          <button class="q-clear" title="清除"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="results">
+          <div class="g-card">
+            <div class="g-head"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="g-name">skill</span><span class="g-score">0.91</span></div>
+            <div class="g-path">abtest/skill.md</div>
+            <div class="g-seg">
+              <div class="g-h">编排流程</div>
+              <div class="g-snip"><mark>orchestrator</mark> 按 skill.md 定义的流程执行：先读取 scoring-rubric.md 的评分标准，再对 <mark>A/B</mark> 两组输出并行打分，最后写入 .reports/ 目录。</div>
+            </div>
+            <div class="g-seg">
+              <div class="g-h">输出格式</div>
+              <div class="g-snip">每次 <mark>A/B</mark> test 结束，<mark>orchestrator</mark> 在 relay/.reports/ 下生成日期命名的报告，包含两组得分对比与失败原因。</div>
+            </div>
+          </div>
+          <div class="g-card">
+            <div class="g-head"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="g-name">scoring-rubric</span><span class="g-score">0.82</span></div>
+            <div class="g-path">abtest/scoring-rubric.md</div>
+            <div class="g-seg">
+              <div class="g-h">评分维度</div>
+              <div class="g-snip">rubric 定义 0–5 分档：1 分 = 未回答核心问题，3 分 = 部分覆盖 <mark>A/B</mark> 差异，5 分 = 给出可复现的对比证据。</div>
+            </div>
+          </div>
+          <div class="g-card">
+            <div class="g-head"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="g-name">BOARD</span><span class="g-score">0.74</span></div>
+            <div class="g-path">relay/BOARD.md</div>
+            <div class="g-seg">
+              <div class="g-h">任务看板</div>
+              <div class="g-snip"><mark>orchestrator</mark> 的后台任务列表：每日 23:52 自动触发 <mark>A/B</mark> 回归，失败时写入 BOARD 的待办列。</div>
+            </div>
+          </div>
+          <div class="g-card">
+            <div class="g-head"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="g-name">README</span><span class="g-score">0.67</span></div>
+            <div class="g-path">relay/README.md</div>
+            <div class="g-seg">
+              <div class="g-h">架构</div>
+              <div class="g-snip">relay 目录承载后台编排器 <mark>orchestrator</mark>，通过 cron 调度对 <mark>A/B</mark> 两组提示词进行对照实验。</div>
+            </div>
+          </div>
+          <div class="g-card">
+            <div class="g-head"><svg viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="g-name">welcome</span><span class="g-score">0.58</span></div>
+            <div class="g-path">welcome.md</div>
+            <div class="g-seg">
+              <div class="g-h">快速上手</div>
+              <div class="g-snip">首次使用建议先阅读 abtest/skill.md，它描述 <mark>orchestrator</mark> 的执行约定与 <mark>A/B</mark> 对比流程。</div>
+            </div>
+          </div>
+          <div class="r-more">
+            <button><svg viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>展示 1 个文档 · 1 段更多</button>
+          </div>
+          <div class="r-end">已展示 5/6 个文档 · strict 档</div>
+        </div>
+      </div>
+
+      <!-- 主区提示 -->
+      <div class="viewport">
+        <div class="topbar">
+          <button class="hamb" aria-label="菜单"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <span class="file"><span class="dim">abtest/</span>skill.md</span>
+          <span class="spacer"></span>
+          <div class="mode-pill"><span class="on">预览</span><span>编辑</span></div>
+          <button class="btn-save">保存</button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">skill.md</div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+            <div style="height:14px"></div>
+            <div class="dline brass"></div>
+            <div style="height:6px"></div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 注记 -->
+    <aside class="notes">
+      <h3><span class="n">A</span> 索引</h3>
+      <p class="stance">立场：改动最小、最贴近现有纸墨风。48px 细 rail 只做导航，搜索升级为「按文件分组的富卡片」。树内搜索框移除，搜索统一收进搜索页。</p>
+
+      <div class="nblock">
+        <h4>token 取用</h4>
+        <p>全部复用 <span class="tok">--paper</span> <span class="tok">--ink</span> <span class="tok">--ink-soft</span> <span class="tok">--brass</span> <span class="tok">--line</span> <span class="tok">--surface</span>，零新增颜色。rail 与面板同 <span class="tok">--paper</span> 底，靠 1px <span class="tok">--line</span> 分隔；面板头用 <span class="tok">--surface</span> 提一档。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>rail 宽度与间距</h4>
+        <ul>
+          <li>宽 <b>48px</b>（按钮 36×36，圆角 9，图标 19px，stroke 1.6）</li>
+          <li>垂直节奏：上 padding 10px → logo 28px → 14px 间隙 → 图标组 gap 6px → 分隔线 → 预留位</li>
+          <li>logo：28px 方形「M」mark（复用 <span class="tok">.logo-mark</span> 缩小），只留 mark 不放字，宽度放不下</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>active 态策略（三态）</h4>
+        <div class="states">
+          <div class="s"><div class="chip st-inactive"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>inactive</b></div>
+          <div class="s"><div class="chip st-hover"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>hover</b></div>
+          <div class="s"><div class="chip st-a-active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>active</b></div>
+        </div>
+        <p class="dim" style="margin-top:6px">active = <b>实心黄铜底 + paper 图标</b>（与「保存」按钮同权重语言，全 rail 唯一高亮）；hover = ink 5%；inactive = <span class="tok">--ink-soft</span>。预留位：虚线框 + 55% 透明度 + 不可点。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>文件页 · 树内搜索 & 收起全部</h4>
+        <ul>
+          <li>树内搜索框：<b>移除</b>。理由：它正是「信息不足」问题的来源（260px 下拉只能塞一行小字）；去掉后文件页回归纯文件管理，且树不再因「搜索打开时隐藏」而闪烁（现状 <span class="tok">v-show="!searchOpen"</span> 会整棵隐藏）。</li>
+          <li><span class="pos">① 收起全部</span> 放在面板头右侧（mockup 中标注 ①）：结构化工具栏位，与「文档」标题同行，常驻可见；未来「展开全部 / 过滤」加在旁边即可，不会溢出。</li>
+          <li>树本体：行高、chevron、count pill、active 黄铜态、拖拽全部保留不动。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>搜索卡片字段取舍</h4>
+        <ul>
+          <li><b>按文件分组</b>（同一文件的 segment 收进一张卡片，skill.md 演示 2 段）：vault 里「文档」才是单元，平铺会让同一文件名重复 6 次。</li>
+          <li>保留：文件名 / 完整路径（mono 10.5px 截断）/ heading 路径（黄铜点引导）/ content 片段（12px，3 行 clamp，<b>匹配词黄铜高亮</b>）/ score（mono 数字 pill，取该文件最高 segment 分）。</li>
+          <li>去掉：kind（段类型）、segment 级 score（组内无区分度，噪声）。</li>
+          <li>「展示更多」沿用现有 <span class="tok">.search-more</span> 胶囊按钮规格（预取式交互不变，文案改为「N 个文档 · M 段更多」）。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>页面切换 & 状态保持</h4>
+        <ul>
+          <li>过渡：<b>180ms slide+fade</b>（translateX 10px → 0，ease-out，GPU，无 reflow）。选 slide 的理由：rail 图标 = 「翻页」心智，方向感有助于确认切到哪页。</li>
+          <li>实现：两面板常驻 DOM（<span class="tok">v-show</span>），切页时给新面板加 <span class="tok">anim</span> class；<b>搜索词、结果、滚动位置、树展开态全部保留</b>（状态在组件 ref 里，v-show 不销毁）。</li>
+          <li>prefers-reduced-motion：退化为无动画直切。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>移动端（&lt;1024px）</h4>
+        <div class="mphone">
+          <div class="mcell"><span class="mcap">桌面：rail + 面板</span><div class="mbox brass"></div><div class="mbox"></div><div class="mbox"></div></div>
+          <div class="mcell"><span class="mcap">移动：rail 隐藏，整栏滑出（现状）</span><div class="mdrawer"><i></i></div><div class="mbox"></div><div class="mbox dash"></div></div>
+        </div>
+        <ul style="margin-top:8px">
+          <li>保留现状整栏 drawer（hamburger 唤出 260px 全宽面板 + overlay），<b>不在手机上放 rail</b>：48px 占屏 ~13%，无增益。</li>
+          <li>drawer 顶部加一个「文件 | 搜索」分段切换，搜索页在 drawer 内渲染同样的富卡片（竖屏全宽，卡片反而更舒展）。</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- =================================================================
+     变体 B · 书房 —— 64px 带标签 rail + 宽搜索面板 + 平铺卡片 + 双轨搜索
+     ================================================================= -->
+<section class="variant vB" id="vB">
+  <div class="v-head">
+    <span class="tag brass">变体 B</span>
+    <h2>书房</h2>
+    <span class="diff">rail 自带 11px 文字标签（自解释）、logo 移到页面顶栏、搜索面板放宽到 300px，卡片平铺不分组、用相关性条代替 score 数字、树内保留轻量搜索。</span>
+  </div>
+  <div class="v-body">
+
+    <!-- 舞台 -->
+    <div class="stage">
+      <div class="stage-badge">desktop · ≥1024px</div>
+
+      <!-- rail（带标签） -->
+      <div class="rail">
+        <div class="rnav" data-rail>
+          <button class="rbtn on" data-goto="file" title="文件" aria-label="文件页">
+            <svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="rlabel">文件</span>
+          </button>
+          <button class="rbtn" data-goto="search" title="搜索" aria-label="搜索页">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <span class="rlabel">搜索</span>
+          </button>
+          <div class="rsep"></div>
+          <button class="rbtn reserved" title="预留：最近变更">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+            <span class="rlabel">最近</span>
+          </button>
+          <button class="rbtn reserved" title="预留：通知">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span class="rlabel">通知</span>
+          </button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn" title="设置（预留）" style="pointer-events:none">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span class="rlabel" style="opacity:.55">设置</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 文件页 -->
+      <div class="panel anim" data-panel="file" style="--pw:250px">
+        <div class="p-head">
+          <span class="ptitle">文档</span>
+          <span class="pcount">12</span>
+          <span class="pacts">
+            <button class="ibtn" title="收起全部文件夹（预留控件）">
+              <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+            </button>
+          </span>
+          <span class="callout" style="right:10px;top:38px">① 收起全部</span>
+        </div>
+        <div class="tree-search">
+          <svg class="q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" value="orchestr" placeholder="快速跳转…（RAG 快速匹配）">
+          <button class="q-clear" title="清除"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="tree">
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">relay</span><span class="count">3</span></div>
+          <div class="indent">
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">README</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">BOARD</span></div>
+            <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">.reports</span><span class="count">1</span></div>
+          </div>
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">abtest</span><span class="count">2</span></div>
+          <div class="indent">
+            <div class="row file-row active"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">skill</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">scoring-rubric</span></div>
+          </div>
+          <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">notes</span><span class="count">3</span></div>
+          <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">welcome</span></div>
+        </div>
+      </div>
+
+      <!-- 搜索页（宽面板 300px） -->
+      <div class="panel b-surface" data-panel="search" style="--pw:300px" hidden>
+        <div class="p-head" style="background:var(--surface)"><span class="ptitle">搜索</span><span class="pcount">6 个文档</span></div>
+        <div class="s-input">
+          <svg class="q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" value="A/B test orchestrator" placeholder="搜索文档…">
+          <button class="q-clear" title="清除"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="s-meta">7 个片段 · 当前档 <span class="tier">strict</span> · 不足时自动补档</div>
+        <div class="results">
+          <div class="f-card">
+            <div class="f-top"><span class="f-name">skill</span><span class="f-path">abtest/skill.md</span></div>
+            <span class="f-hchip">编排流程</span>
+            <div class="f-snip"><mark>orchestrator</mark> 按 skill.md 定义的流程执行：先读取 scoring-rubric.md 的评分标准，再对 <mark>A/B</mark> 两组输出并行打分，最后写入 .reports/ 目录。</div>
+            <div class="f-bar"><i style="width:100%"></i></div>
+          </div>
+          <div class="f-card">
+            <div class="f-top"><span class="f-name">skill</span><span class="f-path">abtest/skill.md</span></div>
+            <span class="f-hchip">输出格式</span>
+            <div class="f-snip">每次 <mark>A/B</mark> test 结束，<mark>orchestrator</mark> 在 relay/.reports/ 下生成日期命名的报告，包含两组得分对比与失败原因。</div>
+            <div class="f-bar"><i style="width:97%"></i></div>
+          </div>
+          <div class="f-card">
+            <div class="f-top"><span class="f-name">scoring-rubric</span><span class="f-path">abtest/scoring-rubric.md</span></div>
+            <span class="f-hchip">评分维度</span>
+            <div class="f-snip">rubric 定义 0–5 分档：1 分 = 未回答核心问题，3 分 = 部分覆盖 <mark>A/B</mark> 差异，5 分 = 给出可复现的对比证据。</div>
+            <div class="f-bar"><i style="width:90%"></i></div>
+          </div>
+          <div class="f-card">
+            <div class="f-top"><span class="f-name">BOARD</span><span class="f-path">relay/BOARD.md</span></div>
+            <span class="f-hchip">任务看板</span>
+            <div class="f-snip"><mark>orchestrator</mark> 的后台任务列表：每日 23:52 自动触发 <mark>A/B</mark> 回归，失败时写入 BOARD 的待办列。</div>
+            <div class="f-bar"><i style="width:81%"></i></div>
+          </div>
+          <div class="f-card">
+            <div class="f-top"><span class="f-name">README</span><span class="f-path">relay/README.md</span></div>
+            <span class="f-hchip">架构</span>
+            <div class="f-snip">relay 目录承载后台编排器 <mark>orchestrator</mark>，通过 cron 调度对 <mark>A/B</mark> 两组提示词进行对照实验。</div>
+            <div class="f-bar"><i style="width:74%"></i></div>
+          </div>
+          <div class="r-more">
+            <button><svg viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>展示 2 条更多</button>
+          </div>
+          <div class="r-end">已展示 5/7 条匹配 · strict 档</div>
+        </div>
+      </div>
+
+      <!-- 主区提示（B 的 logo 在页面顶栏） -->
+      <div class="viewport">
+        <div class="topbar">
+          <button class="hamb" aria-label="菜单"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <span style="display:flex;align-items:center;gap:8px">
+            <span style="width:22px;height:22px;border:1px solid var(--brass);border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:11px;color:var(--brass)">M</span>
+            <span style="font-family:var(--serif);font-weight:600;font-size:14px;letter-spacing:.02em">md-vault</span>
+          </span>
+          <span class="dim" style="color:var(--line)">/</span>
+          <span class="file"><span class="dim">abtest/</span>skill.md</span>
+          <span class="spacer"></span>
+          <div class="mode-pill"><span class="on">预览</span><span>编辑</span></div>
+          <button class="btn-save">保存</button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">skill.md</div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+            <div style="height:14px"></div>
+            <div class="dline brass"></div>
+            <div style="height:6px"></div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 注记 -->
+    <aside class="notes">
+      <h3><span class="n">B</span> 书房</h3>
+      <p class="stance">立场：左侧是「正经导航区」，对新手自解释（rail 带 11px 中文标签）；搜索是第一公民——面板放宽到 300px，结果平铺、视觉化（相关性条），不堆数字；树内保留轻量搜索作快速跳转，双轨并行。</p>
+
+      <div class="nblock">
+        <h4>token 取用</h4>
+        <p>同 A，零新增颜色。差异在<b>分层</b>：rail 用 <span class="tok">--surface</span>（比 <span class="tok">--paper</span> 亮一档）自成一层，文件页保持 paper 底；搜索页面板整体 <span class="tok">--surface</span> 底，卡片仍是 surface + 1px <span class="tok">--line</span>，靠 border 分离。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>rail 宽度与间距</h4>
+        <ul>
+          <li>宽 <b>64px</b>：按钮 52×44，图标 20px（stroke 1.5）+ 下方 10px 标签，gap 4px，垂直 padding 12px</li>
+          <li><b>logo 不在 rail</b>：移到主区 TopBar（mark + wordmark，mockup 顶栏可见）。理由：64px 要装图标+文字，再塞 logo 会挤；wordmark 属于品牌识别、不属于导航。</li>
+          <li>底部预留「设置」位（margin-top:auto 贴底），与上方导航组用分隔线区隔。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>active 态策略（三态）</h4>
+        <div class="states">
+          <div class="s"><div class="chip st-inactive"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>inactive</b></div>
+          <div class="s"><div class="chip st-hover"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>hover</b></div>
+          <div class="s"><div class="chip st-b-active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>active</b></div>
+        </div>
+        <p class="dim" style="margin-top:6px">active = <b>黄铜 10% 底 + 黄铜图标 + 左缘 3px 黄铜条</b>（条宽 3px、上下 9px 圆角）。选「条」而非实心：带标签的 rail 本身信息量大，实心块会让 64px 看起来太重；条与正文区 <span class="tok">#preview h1</span> 的黄铜下划线呼应。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>文件页 · 树内搜索 & 收起全部</h4>
+        <ul>
+          <li>树内搜索框：<b>保留</b>（现状原位，树顶）。理由：快速跳转场景留在手边（树旁边 1 次点击可达），下拉行可以保持现在的名 + heading 两行（它负责「找到文件」）；深阅读交给搜索页（负责「看到内容」）。双轨分工，互不重复。</li>
+          <li><span class="pos">① 收起全部</span> 同样放在面板头右侧（mockup 标注 ①）——与 A 相同位置，但头部只承担标题 + 一个动作，更安静。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>搜索卡片字段取舍</h4>
+        <ul>
+          <li><b>平铺不分组</b>：每个 segment 独立成卡（skill 的两段是两张相邻卡片）。理由：命中即单元，用户扫的是「哪段命中」，不是「哪个文件命中」；文件名片可重复。</li>
+          <li>保留：文件名 / 路径（同行，mono 10px 截断）/ heading（做成 pill chip）/ content 片段（12px 3 行 clamp，<b>高亮</b>）。</li>
+          <li>score 呈现：<b>不用数字</b>，用卡底 3px 黄铜相关性条（宽度 ∝ score，最高分 = 100%）。理由：数字（0.91 vs 0.88）无绝对意义，条只表达相对强弱，且是纯视觉、零认知负担。kind 同样去掉。</li>
+          <li>输入框下方加一行 meta：「N 个片段 · 当前档 strict · 不足时自动补档」，把分层召回机制显性化（现有机制只在 agent 端可见）。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>页面切换 & 状态保持</h4>
+        <ul>
+          <li>过渡：<b>200ms 纯 fade</b>，无位移。理由：64px 带标签 rail 的切换更像「翻标签页」，纯淡入最安静；slide 在宽 rail 上会显得面板在「挤」。</li>
+          <li>两面板常驻（v-show），搜索词 / 滚动 / 树展开全部保留。搜索面板宽度不同（300 vs 250），切换时主区内容会重新排——接受，因为搜索是主动行为。</li>
+          <li>prefers-reduced-motion：直切。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>移动端（&lt;1024px）</h4>
+        <div class="mphone">
+          <div class="mcell"><span class="mcap">文件页：48px rail（去标签）+ 面板</span><div class="mbox brass"></div><div class="mbox"></div><div class="mbox"></div></div>
+          <div class="mcell"><span class="mcap">搜索页：80vh 底部抽屉（同 AI 抽屉）</span><div class="mdrawer"><i style="left:19%;width:62%"></i></div><div class="mbox"></div><div class="mbox"></div></div>
+        </div>
+        <ul style="margin-top:8px">
+          <li>文件浏览保留 <b>48px rail（去文字标签，只留图标）+ 面板</b>常驻：rail 在竖屏是省空间的二级导航（260px 全宽面板 + 48px = 只吃掉 ~12%）。</li>
+          <li>搜索页改用 <b>80vh 底部抽屉</b>（完全复用现有 <span class="tok">#ai-panel</span> 移动抽屉的 CSS：圆角 24、backdrop、拖拽手柄）：竖屏下卡片是「内容」，全屏阅读比侧栏更合理；rail 的搜索图标 = 抽屉的 toggle。代价：比 A 多一套抽屉状态，实现量略高。</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- =================================================================
+     变体 C · 档案 —— 墨色 rail + 档案式检索列表 + 衬线排版
+     ================================================================= -->
+<section class="variant vC" id="vC">
+  <div class="v-head">
+    <span class="tag">变体 C</span>
+    <h2>档案</h2>
+    <span class="diff">墨色（--ink 底）深色 rail 作为视觉锚点，logo 回归 rail 顶部；检索结果做成「档案开栏」——无卡片、无高亮、衬线排版；收起全部收在面板底部。</span>
+  </div>
+  <div class="v-body">
+
+    <!-- 舞台 -->
+    <div class="stage">
+      <div class="stage-badge">desktop · ≥1024px</div>
+
+      <!-- 深色 rail -->
+      <div class="rail">
+        <div class="rlogo">M</div>
+        <div class="rnav" data-rail>
+          <button class="rbtn on" data-goto="file" title="文件" aria-label="文件页">
+            <svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>
+            <span class="rdot"></span>
+          </button>
+          <button class="rbtn" data-goto="search" title="搜索" aria-label="搜索页">
+            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <span class="rdot"></span>
+          </button>
+          <div class="rsep"></div>
+          <button class="rbtn reserved" title="预留：最近变更">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          </button>
+          <button class="rbtn reserved" title="预留：通知">
+            <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- 文件页 -->
+      <div class="panel anim" data-panel="file" style="--pw:260px">
+        <div class="p-head">
+          <span class="ptitle">文档</span>
+          <span class="pcount">12</span>
+        </div>
+        <div class="tree">
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">relay</span><span class="count">3</span><button class="ibtn" style="width:22px;height:22px" title="收起本目录（每目录单收）"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
+          <div class="indent">
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">README</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">BOARD</span></div>
+            <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">.reports</span><span class="count">1</span></div>
+          </div>
+          <div class="row"><svg class="chev open" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">abtest</span><span class="count">2</span><button class="ibtn" style="width:22px;height:22px" title="收起本目录"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
+          <div class="indent">
+            <div class="row file-row active"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">skill</span></div>
+            <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">scoring-rubric</span></div>
+          </div>
+          <div class="row"><svg class="chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg><svg class="ti" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><span class="tname">notes</span><span class="count">3</span><button class="ibtn" style="width:22px;height:22px" title="收起本目录"><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button></div>
+          <div class="row file-row"><svg class="ti" viewBox="0 0 24 24"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span class="tname">welcome</span></div>
+        </div>
+        <div class="p-foot">
+          <button class="ftxt">
+            <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+            收起全部文件夹
+          </button>
+          <span class="reserved">预留：展开全部</span>
+          <span class="callout" style="right:14px;top:-14px">① 收起全部</span>
+        </div>
+      </div>
+
+      <!-- 搜索页 -->
+      <div class="panel" data-panel="search" style="--pw:260px" hidden>
+        <div class="p-head"><span class="ptitle">检索</span><span class="pcount">6 个文档</span></div>
+        <div class="s-input" style="padding-bottom:6px">
+          <svg class="q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+          <input type="text" value="A/B test orchestrator" placeholder="检索文档…" style="border:none;border-bottom:1px solid var(--line);border-radius:0;background:transparent;padding:8px 30px 8px 34px">
+          <button class="q-clear" title="清除"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="results" style="gap:0">
+          <div class="e-block">
+            <div class="e-frow"><span class="e-fname">skill</span><span class="e-fpath">abtest/skill.md</span></div>
+            <div class="e-seg">
+              <div class="e-h">编排流程</div>
+              <div class="e-snip">orchestrator 按 skill.md 定义的流程执行：先读取 scoring-rubric.md 的评分标准，再对 A/B 两组输出并行打分，最后写入 .reports/ 目录。</div>
+            </div>
+            <div class="e-seg">
+              <div class="e-h">输出格式</div>
+              <div class="e-snip">每次 A/B test 结束，orchestrator 在 relay/.reports/ 下生成日期命名的报告，包含两组得分对比与失败原因。</div>
+            </div>
+          </div>
+          <div class="e-block">
+            <div class="e-frow"><span class="e-fname">scoring-rubric</span><span class="e-fpath">abtest/scoring-rubric.md</span></div>
+            <div class="e-seg">
+              <div class="e-h">评分维度</div>
+              <div class="e-snip">rubric 定义 0–5 分档：1 分 = 未回答核心问题，3 分 = 部分覆盖 A/B 差异，5 分 = 给出可复现的对比证据。</div>
+            </div>
+          </div>
+          <div class="e-block">
+            <div class="e-frow"><span class="e-fname">BOARD</span><span class="e-fpath">relay/BOARD.md</span></div>
+            <div class="e-seg">
+              <div class="e-h">任务看板</div>
+              <div class="e-snip">orchestrator 的后台任务列表：每日 23:52 自动触发 A/B 回归，失败时写入 BOARD 的待办列。</div>
+            </div>
+          </div>
+          <div class="e-block">
+            <div class="e-frow"><span class="e-fname">README</span><span class="e-fpath">relay/README.md</span></div>
+            <div class="e-seg">
+              <div class="e-h">架构</div>
+              <div class="e-snip">relay 目录承载后台编排器 orchestrator，通过 cron 调度对 A/B 两组提示词进行对照实验。</div>
+            </div>
+          </div>
+          <div class="e-block">
+            <div class="e-frow"><span class="e-fname">welcome</span><span class="e-fpath">welcome.md</span></div>
+            <div class="e-seg">
+              <div class="e-h">快速上手</div>
+              <div class="e-snip">首次使用建议先阅读 abtest/skill.md，它描述 orchestrator 的执行约定与 A/B 对比流程。</div>
+            </div>
+          </div>
+          <div class="r-more"><button><svg viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"/></svg>展示 1 个文档更多</button></div>
+          <div class="r-end">已展示 5/6 个文档 · strict 档</div>
+        </div>
+      </div>
+
+      <!-- 主区提示 -->
+      <div class="viewport">
+        <div class="topbar">
+          <button class="hamb" aria-label="菜单"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <span class="file"><span class="dim">abtest/</span>skill.md</span>
+          <span class="spacer"></span>
+          <div class="mode-pill"><span class="on">预览</span><span>编辑</span></div>
+          <button class="btn-save">保存</button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">skill.md</div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+            <div style="height:14px"></div>
+            <div class="dline brass"></div>
+            <div style="height:6px"></div>
+            <div class="dline mid"></div>
+            <div class="dline"></div>
+            <div class="dline short"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 注记 -->
+    <aside class="notes">
+      <h3><span class="n">C</span> 档案</h3>
+      <p class="stance">立场：最「有个性」。56px 墨色深色 rail 给暖纸界面一个沉稳锚点（唯一深色变体）；检索结果像翻开档案——无卡片、无高亮、衬线正文，克制阅读；把全局「收起全部」收在面板底部，头部彻底清空。</p>
+
+      <div class="nblock">
+        <h4>token 取用</h4>
+        <p>仍零新增颜色：深色 rail 直接用 <span class="tok">--ink</span> 作底色，图标/文字用 <span class="tok">--paper</span> 的 color-mix 降透明度（55% / 14% / 30%），active 指示点保留 <span class="tok">--brass</span>。墨色是主文字色，不是新色，视觉风险可控；若顾虑对比，rail 可退回 <span class="tok">--surface</span>，其余不变。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>rail 宽度与间距</h4>
+        <ul>
+          <li>宽 <b>56px</b>（介于 A 的 48 与 B 的 64 之间）：按钮 38×38，圆角 9，图标 19px；垂直 padding 12px，图标组 gap 6px</li>
+          <li><b>logo 回 rail 顶部</b>：28px 黄铜「M」mark（深色底上更醒目），不放文字——品牌位与导航位同栏，左侧视觉重心完整。</li>
+          <li>无文字标签（深色窄栏 + 标签会显杂），靠 tooltip + 面板头标题（文档/检索）解释当前页。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>active 态策略（三态）</h4>
+        <div class="states">
+          <div class="s"><div class="chip st-inactive" style="border-color:color-mix(in srgb,#F4EFE6 25%,transparent)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>inactive</b></div>
+          <div class="s"><div class="chip" style="background:color-mix(in srgb,#F4EFE6 10%,transparent)"><svg style="stroke:#F4EFE6" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>hover</b></div>
+          <div class="s"><div class="chip st-c-active"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></div><b>active</b></div>
+        </div>
+        <p class="dim" style="margin-top:6px">active = <b>paper 14% 底 + 右上角 5px 黄铜点</b>（点 = 「你在这里」的书签记号，档案语境）；hover = paper 10%；inactive = paper 55% 透明。深色栏上不用实心黄铜块，避免与保存按钮抢焦点。</p>
+      </div>
+
+      <div class="nblock">
+        <h4>文件页 · 树内搜索 & 收起全部</h4>
+        <ul>
+          <li>树内搜索框：<b>移除</b>。理由：C 把「检索」当作目的地（rail 一级入口），文件页只承担浏览；且深色 rail 已经把注意力引向搜索页。快速跳转的损失由搜索页的即时结果（300ms 防抖 + 预取）弥补。</li>
+          <li><span class="pos">① 收起全部</span> 放在<b>面板底部常驻 footer</b>（mockup 标注 ①）：11px 文字按钮「收起全部文件夹」+ 预留「展开全部」。理由：这是低频操作，头部两个变体都把它放在最显眼的地方是过度暴露；底部 footer 顺手但不抢戏。另在<b>每个目录行 hover 时出现「收起本目录」按钮</b>（mockup 树行右缘可见），两级控制互补。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>搜索卡片字段取舍</h4>
+        <ul>
+          <li><b>档案式开栏，无卡片</b>：透明底 + 块间 1px 分隔线，文件名用衬线 15px（书名感），文件名行下缘一条黄铜细线（呼应 <span class="tok">#preview h1</span> 的标题线）。</li>
+          <li><b>不高亮匹配词</b>：snippet 用衬线 12.5px 原文呈现。理由：档案语境的阅读优先于定位；高亮会让 260px 宽的衬线文本碎片化。定位交给 heading chip + 点击后正文里的 heading-flash 标记（现有能力）。</li>
+          <li>保留：文件名 / 路径（mono 10px，文件名行右侧基线对齐）/ heading（mono 小字，行首）/ content 片段（3 行 clamp）。同文件多段：文件名行只出现一次，段间虚线分隔（skill 演示 2 段）。</li>
+          <li>score：完全不显示（档案不标价）；排序即相关性，「展示更多」按钮保留（沿用现有胶囊规格）。输入框做成<b>下划线式</b>（无圆角无边框底色），与整体编辑气质一致。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>页面切换 & 状态保持</h4>
+        <ul>
+          <li>过渡：<b>160ms 纯 fade</b>，三变体中最短。理由：档案切换应像「换开栏」，快而静；深色 rail 的 active 点已经给出位置反馈，不需要面板再动。</li>
+          <li>两面板常驻（v-show）：搜索词、结果、滚动、树展开全部保留，切走再回来原样。</li>
+          <li>prefers-reduced-motion：直切。</li>
+        </ul>
+      </div>
+
+      <div class="nblock">
+        <h4>移动端（&lt;1024px）</h4>
+        <div class="mphone">
+          <div class="mcell"><span class="mcap">文件页：48px 深色 rail + 全高面板</span><div class="mbox brass"></div><div class="mbox"></div><div class="mbox"></div></div>
+          <div class="mcell"><span class="mcap">搜索页：48px 深色 rail + 面板（同栏切换）</span><div class="mbox"></div><div class="mbox"></div><div class="mbox"></div></div>
+        </div>
+        <ul style="margin-top:8px">
+          <li>保留 <b>48px 深色 rail + 面板</b>，两个页面都在常驻栏内切换（不做抽屉、不做整栏滑出）。理由：深色 rail 在移动端是一条「书架侧板」，视觉成立且成本最低——直接复用桌面布局，零额外状态机。代价：竖屏下主区被 48+260 压缩，需在小屏断点把面板收到 232px。</li>
+        </ul>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ================= 推荐（放最后，供参考） ================= -->
+<div class="recap">
+  <h2>推荐与取舍</h2>
+  <p><span class="r1">推荐：变体 A（索引）。</span>理由：它把本次重构的目标（搜索信息不足）解决得最直接——分组富卡片 + score + 高亮，且改动面最小（48px rail + 两个页面 + 移除树内搜索），移动端沿用现状 drawer，实现风险最低；实心黄铜 active 与现有「保存」按钮、heading-flash 等黄铜语言完全同族，不需要新的视觉词汇。</p>
+  <p>B 的价值在「搜索是第一公民」的宽面板与相关性条，适合你更看重搜索体验而非最小改动时选；代价是移动端多一套 80vh 抽屉状态。C 气质最足（墨色 rail + 档案开栏），但深色栏与现有暖纸体系的冲突、以及「不高亮 + 不显示 score」会削弱本次重构「让信息被看见」的初衷，适合作为长期品牌探索而非首版。</p>
+  <p class="dim" style="font-size:12px">三个变体的共同底线：token 零新增、两面板常驻 v-show 保状态、prefers-reduced-motion 降级、rail 预留位（最近变更 / 通知）一律虚线不可点。</p>
+</div>
+
+<script>
+/* 对比稿交互：点 rail 图标切换 文件页/搜索页（每个变体独立） */
+document.querySelectorAll('.stage').forEach(function (stage) {
+  var rail = stage.querySelector('[data-rail]')
+  if (!rail) return
+  var buttons = Array.prototype.slice.call(rail.querySelectorAll('.rbtn[data-goto]'))
+  var panels = Array.prototype.slice.call(stage.querySelectorAll('.panel[data-panel]'))
+  buttons.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var target = btn.getAttribute('data-goto')
+      buttons.forEach(function (b) { b.classList.toggle('on', b === btn) })
+      panels.forEach(function (p) {
+        var show = p.getAttribute('data-panel') === target
+        if (show) {
+          p.hidden = false
+          p.classList.remove('anim')
+          void p.offsetWidth // 重新触发动画
+          p.classList.add('anim')
+        } else {
+          p.hidden = true
+          p.classList.remove('anim')
+        }
+      })
+    })
+  })
+})
+</script>
+</body>
+</html>

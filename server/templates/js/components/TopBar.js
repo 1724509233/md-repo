@@ -13,6 +13,7 @@ export const TopBar = {
     notifications: { type: Array, default: () => [] }
   },
   emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif'],
+  // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
 
@@ -32,11 +33,11 @@ export const TopBar = {
   },
   template: `
     <div class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0">
-      <!-- 移动端 hamburger -->
-      <button class="lg:hidden topbar-btn topbar-btn--icon"
-        @click="$emit('toggleSidebar')" aria-label="打开侧边栏">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-      </button>
+      <!-- logo（spec §3.1：从 rail 迁入顶栏） -->
+      <div class="topbar-logo flex items-center gap-2">
+        <span class="logo-mark logo-mark--top">M</span>
+        <span class="logo-word">md-vault</span>
+      </div>
 
       <!-- 当前文件路径 -->
       <span id="current-file" class="flex-1 truncate">{{ currentPath || '未选择文档' }}</span>

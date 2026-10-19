@@ -4,11 +4,13 @@ const { reactive, provide, ref, watch, nextTick, onMounted } = Vue
 import { api } from './api.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { FileTree } from './components/FileTree.js'
+import { SearchPanel } from './components/SearchPanel.js'
 import { EditorPane } from './components/EditorPane.js'
 import { TopBar } from './components/TopBar.js'
 import { AIChatPanel } from './components/AIChatPanel.js'
 import { MobileSheet } from './components/MobileSheet.js'
 import { ConflictBanner } from './components/ConflictBanner.js'
+import { ICONS } from './utils/icons.js'
 
 // 初始化 markdown 渲染器
 setupMarkdown()
@@ -22,7 +24,8 @@ const state = reactive({
   files: [],
   dirs: [],
   aiOpen: false,
-  sidebarOpen: false,   // 移动端 sidebar
+  filePanelOpen: false,   // 移动端文件面板 overlay（<1024px，spec §3.5）
+  searchDrawerOpen: false, // 移动端搜索抽屉（<1024px）
   moreMenuOpen: false,  // 移动端更多菜单
   conflict: null,       // { toolName, path } | null
   docContent: '',        // 当前文档内容
@@ -31,8 +34,13 @@ const state = reactive({
   unreadCount: 0
 })
 
+// ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
+const activePanel = ref('file')
+
 // ─── EditorPane ref（用于调用 triggerPageTurn）───
 const editorPaneRef = ref(null)
+// ─── FileTree ref（spec §4.1：expandToPath / revealActive）───
+const fileTreeRef = ref(null)
 
 // ─── 核心操作 ───
 let lastChangeTs = Date.now() / 1000
@@ -66,9 +74,9 @@ async function openDoc(path, heading) {
 
   state.docContent = text
 
-  // 移动端：打开文档后关闭 sidebar
+  // 移动端：选中文件后关闭文件面板 overlay（spec §3.5）
   if (window.innerWidth < 1024) {
-    state.sidebarOpen = false
+    state.filePanelOpen = false
   }
 
   // RAG 搜索跳转：滚动到 heading + 持久标记线
@@ -256,6 +264,116 @@ async function manage(action, payload) {
   }
 }
 
+// ─── 二级边栏：面板注册表（spec §3.4：registry 驱动 rail；face 在模板接线）───
+const panels = [
+  { id: 'file', label: '文件', icon: ICONS.folder, width: 260 },
+  { id: 'search', label: '搜索', icon: ICONS.search, width: 260 }
+]
+// 预留位（最近/通知/设置）：虚线占位、不可点，由模板渲染
+const reservedItems = [
+  { id: 'recent', label: '最近', icon: ICONS.clock },
+  { id: 'notify', label: '通知', icon: ICONS.bell },
+  { id: 'settings', label: '设置', icon: ICONS.gear, bottom: true }
+]
+
+function activePanelCfg() {
+  return panels.find(p => p.id === activePanel.value) || panels[0]
+}
+
+// ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
+function onRailClick(p) {
+  if (window.innerWidth >= 1024) {
+    activePanel.value = p.id
+    return
+  }
+  // 移动端
+  if (p.id === 'search') {
+    state.filePanelOpen = false          // 互斥：关文件 overlay
+    state.searchDrawerOpen = !state.searchDrawerOpen
+  } else {
+    state.searchDrawerOpen = false       // 互斥：关搜索抽屉
+    state.filePanelOpen = !state.filePanelOpen
+  }
+}
+
+// 树内下拉选中：openDoc 后展开 + 滚动（spec §4.1）
+function onTreeSelect(path, heading) {
+  openDoc(path, heading)
+  const t = fileTreeRef.value
+  if (t) {
+    t.expandToPath(path)
+    t.revealActive()
+  }
+}
+
+// 搜索页结果点击：openDoc → 切回文件页 → 树展开 + 高亮滚动（spec §3.3）
+function onSearchPick(path, heading) {
+  openDoc(path, heading)
+  activePanel.value = 'file'
+  state.searchDrawerOpen = false
+  state.filePanelOpen = false // 移动端：关闭文件 overlay（openDoc 内也会关，此处双保险）
+  nextTick().then(() => {
+    const t = fileTreeRef.value
+    if (t) {
+      t.expandToPath(path)
+      t.revealActive()
+    }
+  })
+}
+
+// ─── 移动端搜索抽屉拖拽（移植 MobileSheet.js 逻辑，P2-8）───
+let searchDrawerDragging = false
+let searchDrawerStartY = 0
+let searchDrawerStartH = 0
+let searchDrawerSwipY = -1 // 下滑关闭：touchstart 起点 Y（与 startH 解耦，供 swipe 关闭判断）
+
+function searchDrawerTouchStart(e) {
+  if (window.innerWidth >= 1024) return
+  const drawer = document.getElementById('search-drawer')
+  if (!drawer) return
+  searchDrawerDragging = true
+  searchDrawerStartY = e.touches[0].clientY
+  searchDrawerSwipY = searchDrawerStartY // P2-8 下滑关闭：记录起点
+  searchDrawerStartH = drawer.offsetHeight
+  drawer.style.transition = 'none'
+}
+
+function searchDrawerTouchMove(e) {
+  if (!searchDrawerDragging || window.innerWidth >= 1024) return
+  const drawer = document.getElementById('search-drawer')
+  if (!drawer) return
+  const dy = e.touches[0].clientY - searchDrawerStartY
+  const h = Math.min(window.innerHeight * 0.85, Math.max(0, searchDrawerStartH - dy))
+  drawer.style.height = h + 'px'
+}
+
+function searchDrawerTouchEnd() {
+  // P2-8 下滑关闭：handle 区下滑 >40px → 关闭（与高度调节共用 touchend，先判断后调节）
+  if (state.searchDrawerOpen && searchDrawerSwipY >= 0 && e && e.changedTouches) {
+    const dy = e.changedTouches[0].clientY - searchDrawerSwipY
+    searchDrawerSwipY = -1
+    if (dy > 40) {
+      state.searchDrawerOpen = false
+      const drawer = document.getElementById('search-drawer')
+      if (drawer) drawer.style.height = ''
+      return
+    }
+  }
+  searchDrawerSwipY = -1
+  if (!searchDrawerDragging) return
+  searchDrawerDragging = false
+  const drawer = document.getElementById('search-drawer')
+  if (!drawer) return
+  drawer.style.transition = ''
+  const h = drawer.offsetHeight
+  if (h < window.innerHeight * 0.35) {
+    state.searchDrawerOpen = false
+    drawer.style.height = ''
+  } else {
+    drawer.style.height = h > window.innerHeight * 0.67 ? '85vh' : '50vh'
+  }
+}
+
 // ─── 创建 App ───
 export function createApp() {
   const app = Vue.createApp({
@@ -264,13 +382,25 @@ export function createApp() {
       provide('api', api)
       provide('manage', manage)
 
+      // 桌面→移动 resize：强制 activePanel 回 'file'（防止搜索 face 带进文件 overlay）
+      watch(
+        () => window.innerWidth,
+        (w) => {
+          if (w < 1024) {
+            activePanel.value = 'file'
+            state.searchDrawerOpen = false
+            state.filePanelOpen = false // resize 切入移动端：关闭移动端面板态（spec §3.5）
+          }
+        }
+      )
+
       onMounted(() => {
         loadDocs()
         setInterval(pollChanges, 10000)
         setInterval(pollNotifications, 30000)
         pollNotifications()
 
-        // 移动端 sidebar 点击 overlay 关闭
+        // 移动端 点击 overlay 关闭更多菜单 / 通知下拉
         document.addEventListener('click', (e) => {
           if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
@@ -312,45 +442,117 @@ export function createApp() {
         return Math.floor(diff / 86400) + '天前'
       }
 
+      // 原 Options API methods 块内容（重写时迁回 setup，勿再丢失）
+      function onEditorInput(text) {
+        state.docContent = text
+        state.dirty = true
+      }
+
+      function acceptConflict() {
+        const path = state.conflict.path
+        state.conflict = null
+        api.getDoc(path).then(text => {
+          state.docContent = text
+          state.dirty = false
+        }).catch(() => { })
+      }
+
       return {
-        state, editorPaneRef, isDesktop,
+        state, editorPaneRef, fileTreeRef, isDesktop,
+        activePanel, panels, reservedItems, activePanelCfg,
+        onRailClick, onTreeSelect, onSearchPick,
+        searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
-        toggleNotifDropdown, markAllRead, openNotif, relativeTime
+        toggleNotifDropdown, markAllRead, openNotif, relativeTime,
+        onEditorInput, acceptConflict
       }
     },
     template: `
       <div class="flex h-screen">
-        <!-- Sidebar -->
-        <aside class="fixed lg:static inset-y-0 left-0 z-40 w-[260px] bg-surface border-r border-border flex flex-col transform transition-transform duration-300"
-          :class="state.sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
-          <div class="flex items-center gap-2.5 px-4 h-12 border-b border-border shrink-0">
-            <div class="logo-mark">M</div>
-            <span class="logo-word">md-vault</span>
-            <button class="ml-auto w-11 h-11 flex items-center justify-center text-muted hover:text-text lg:hidden"
-              @click="state.sidebarOpen = false" aria-label="关闭侧边栏">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
+        <aside class="sidebar-shell flex shrink-0">
+          <!-- rail（桌面 64px / 移动 48px） -->
+          <div class="rail">
+            <button v-for="p in panels" :key="p.id" type="button"
+              class="rbtn" :class="{ on: (activePanel === p.id && !state.filePanelOpen && !state.searchDrawerOpen) || (p.id === 'search' && state.searchDrawerOpen) || (p.id === 'file' && state.filePanelOpen) }"
+              :title="p.label" :aria-label="p.label + '页'"
+              @click="onRailClick(p)">
+              <span class="ricon" v-html="p.icon"></span>
+              <span class="rlabel">{{ p.label }}</span>
             </button>
+            <div class="rsep"></div>
+            <button v-for="r in reservedItems.filter(x => !x.bottom)" :key="r.id" type="button"
+              class="rbtn reserved" :title="'预留：' + r.label" tabindex="-1">
+              <span class="ricon" v-html="r.icon"></span>
+              <span class="rlabel">{{ r.label }}</span>
+            </button>
+            <div class="rbottom">
+              <button v-for="r in reservedItems.filter(x => x.bottom)" :key="r.id" type="button"
+                class="rbtn reserved" :title="r.label + '（预留）'" tabindex="-1">
+                <span class="ricon" v-html="r.icon"></span>
+                <span class="rlabel">{{ r.label }}</span>
+              </button>
+            </div>
           </div>
-          <div class="px-3 pt-3 pb-2 flex-1 min-h-0 overflow-hidden">
-            <FileTree :files="state.files" :dirs="state.dirs" :current-path="state.currentPath" @select="openDoc" />
+
+          <!-- 面板容器（桌面：v-show 常驻 200ms fade；移动：260px 左侧滑入 overlay） -->
+          <div class="panel-shell" :class="{ open: state.filePanelOpen }" :style="{ width: activePanelCfg().width + 'px' }">
+            <div v-show="activePanel === 'file'" class="panel-face">
+              <div class="p-head">
+                <span class="ptitle">文档</span>
+                <span class="pcount">{{ state.files.length }}</span>
+                <span class="pacts">
+                  <button class="ibtn" title="收起全部文件夹"
+                    @click="fileTreeRef && fileTreeRef.collapseAll()">
+                    <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+                  </button>
+                </span>
+              </div>
+              <div class="flex-1 min-h-0 overflow-hidden">
+                <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
+                  @select="onTreeSelect" />
+              </div>
+            </div>
+            <div v-show="activePanel === 'search'" class="panel-face">
+              <SearchPanel :on-pick="onSearchPick" />
+            </div>
           </div>
         </aside>
 
-        <!-- Mobile overlay -->
-        <div class="fixed inset-0 bg-black/30 z-30 lg:hidden"
-          :class="{ hidden: !state.sidebarOpen }"
-          @click="state.sidebarOpen = false"></div>
+        <!-- 移动端文件面板 overlay backdrop（<1024px，spec §3.5） -->
+        <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+          :class="{ hidden: !state.filePanelOpen }"
+          @click="state.filePanelOpen = false"></div>
+
+        <!-- 移动端搜索抽屉 backdrop（<1024px，spec §3.5） -->
+        <div id="search-drawer-backdrop" class="search-drawer-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+          :class="{ hidden: !state.searchDrawerOpen }"
+          @click="state.searchDrawerOpen = false"></div>
+
+        <!-- 移动端搜索抽屉（80vh 底部抽屉，复用 #ai-panel 抽屉 CSS，spec §3.5） -->
+        <div id="search-drawer" class="search-drawer fixed left-0 right-0 z-40 flex flex-col"
+          :class="{ open: state.searchDrawerOpen }">
+          <div id="search-sheet-handle" class="flex items-center justify-center"
+            @touchstart.passive="searchDrawerTouchStart"
+            @touchmove.passive="searchDrawerTouchMove"
+            @touchend="searchDrawerTouchEnd"
+            @touchcancel="searchDrawerTouchEnd"
+            @click="state.searchDrawerOpen = false"></div>
+          <div class="flex-1 min-h-0">
+            <SearchPanel :on-pick="onSearchPick" />
+          </div>
+        </div>
 
         <!-- Main area -->
-        <div class="flex-1 flex overflow-hidden relative">
+        <div class="flex-1 flex overflow-hidden relative"
+          :class="{ 'ai-open': state.aiOpen }">
           <main class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
-              @toggle-sidebar="state.sidebarOpen = !state.sidebarOpen"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
@@ -365,8 +567,7 @@ export function createApp() {
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
           <div v-show="state.notifOpen"
-            class="absolute right-0 top-14 mt-1.5 w-[380px] max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown"
-            style="animation: notif-in .18s ease-out both;">
+            class="absolute max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown">
             <div v-if="state.notifications.length > 0" class="flex items-center justify-between px-3.5 py-2.5 border-b border-border shrink-0">
               <span class="font-ui text-xs font-semibold text-text">{{ state.unreadCount }} 条未读</span>
               <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
@@ -441,6 +642,7 @@ export function createApp() {
   })
 
   app.component('FileTree', FileTree)
+  app.component('SearchPanel', SearchPanel)
   app.component('EditorPane', EditorPane)
   app.component('TopBar', TopBar)
   app.component('AIChatPanel', AIChatPanel)
