@@ -1,6 +1,7 @@
 """Vault filesystem operations: file editing and traversal (no DB)."""
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -9,6 +10,21 @@ from pathlib import Path
 # memory, and the entity index is a rebuildable derivative. Only the top
 # level is matched — deeper dirs named the same are user content.
 EXCLUDED_INDEX_DIRS = frozenset({"suggestions", "index"})
+
+
+def safe_rel_path(raw: str) -> Path | None:
+    """Shared vault-path guard. Returns None if the path is unsafe.
+
+    Normalizes backslashes to forward slashes (vault-relative). Rejects
+    empty paths, leading ``/``, and any ``..`` / empty path part.
+    """
+    raw = raw.replace("\\", "/")
+    if not raw or raw.startswith("/"):
+        return None
+    parts = Path(raw).parts
+    if any(p in ("..", "") for p in parts):
+        return None
+    return Path(*parts)
 
 
 def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:
@@ -60,3 +76,19 @@ def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
         if len(rel.parts) > 1 and rel.parts[0] in EXCLUDED_INDEX_DIRS:
             continue
         yield f
+
+
+def atomic_write_bytes(fp: Path, data: bytes) -> None:
+    """Write file content atomically (same-dir tmp + os.replace).
+
+    The tmp name is dot-prefixed and non-.md, so both walkers
+    (client scan_local_files and the vault walk, both rglob("*.md"))
+    never see it; a crash-stray is inert and needs no cleanup.
+    """
+    tmp = fp.with_name("." + fp.name + ".writing-tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, fp)  # atomic: same directory => same volume
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise

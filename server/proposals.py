@@ -34,6 +34,7 @@ from pathlib import Path
 
 import yaml
 
+from .vault.fs.vault_ops import atomic_write_bytes
 from .vault.orchestration.file_ops import apply_change
 
 PROPOSALS_DIR = "suggestions"
@@ -224,7 +225,7 @@ def create_proposal(
     if payload is not None:
         fm["payload"] = payload
     text = _render_frontmatter(fm, f"# {title}\n\n{body.strip()}\n")
-    (Path(vault_dir) / rel).write_bytes(text.encode("utf-8"))
+    atomic_write_bytes(Path(vault_dir) / rel, text.encode("utf-8"))
     return rel
 
 
@@ -269,7 +270,7 @@ def advance(
     if cur == "processing" and new_status == "adopted" and new_data["type"] in AUTO_TYPES:
         new_data["reversible"] = True
 
-    fp.write_bytes(_render_frontmatter(new_data, body).encode("utf-8"))
+    atomic_write_bytes(fp, _render_frontmatter(new_data, body).encode("utf-8"))
 
     # Ledger: every transition is a change event (source = acting role).
     apply_change(conn, Path(vault_dir), relpath, "update", source=actor)

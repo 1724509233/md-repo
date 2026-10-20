@@ -1,16 +1,19 @@
 """Tests for the deterministic executor (memory-runtime v1).
 
 Covers: one happy path per merge handler, correction failure → failed,
-no-handler type → errors, changelog source="executor", merged back-fill.
+no-handler type → errors, changelog source="executor", merged back-fill,
+path-traversal guard, correction ambiguity guard, atomic vault writes.
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 
 from server import proposals
 from server.bgagent.executor import run_executor
 from server.vault.db.changes import get_changes
+from server.vault.fs.vault_ops import atomic_write_bytes, safe_rel_path, _iter_vault_md
 
 
 def _adopted(vault_dir, conn, type, source_refs=None, payload=None, title="T",
@@ -190,3 +193,165 @@ def test_merge_ledgered_with_executor_source(vault_dir, db_conn):
     # Both the target file change and the proposal state transition are ledgered.
     assert any(r["path"] == "index/entities.md" for r in rows)
     assert any(r["path"] == rel and r["op"] == "update" for r in rows)
+
+
+# ── path traversal guard ─────────────────────────────────────────────────
+
+def test_traversal_link_escape_parked_failed(vault_dir, db_conn):
+    # "../escape.md" would land at the vault SIBLING if unguarded.
+    decoy = vault_dir.parent / "escape.md"
+    decoy.write_bytes(b"decoy\n")
+    rel = _adopted(vault_dir, db_conn, "link",
+                   source_refs=["../escape.md"],
+                   payload={"target": "notes/x.md"})
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []  # typed failure: failed state, not error
+
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert p["reject_reason"]
+    assert "illegal vault path" in p["reject_reason"]
+    # Sibling decoy untouched, no new file created there.
+    assert decoy.read_bytes() == b"decoy\n"
+
+
+def test_traversal_correction_escape_parked_failed(vault_dir, db_conn):
+    # "../../escape.md" would land above the vault if unguarded; the decoy
+    # contains the correction target text so an unguarded run would rewrite it.
+    decoy = vault_dir.parent.parent / "escape.md"
+    if decoy.exists():
+        decoy.unlink()
+    decoy.write_bytes(b"# doc\nold text\n")
+    try:
+        rel = _adopted(vault_dir, db_conn, "correction",
+                       payload={"file": "../../escape.md", "old": "old text",
+                                "new": "new text"},
+                       reversible=False)
+        summary = run_executor(vault_dir, db_conn)
+        assert summary["merged"] == 0
+        assert summary["errors"] == []
+
+        p = proposals.parse_proposal(vault_dir / rel)
+        assert p["status"] == "failed"
+        assert p["reject_reason"]
+        assert "illegal vault path" in p["reject_reason"]
+        assert decoy.read_bytes() == b"# doc\nold text\n"
+    finally:
+        decoy.unlink(missing_ok=True)
+
+
+def test_traversal_summary_escape_parked_failed(vault_dir, db_conn):
+    # "../notes/note.md" would land at a vault-sibling notes/ dir; the
+    # derived summary would land there too.
+    decoy_dir = vault_dir.parent / "notes"
+    decoy_dir.mkdir(parents=True, exist_ok=True)
+    decoy = decoy_dir / "note.md"
+    decoy.write_bytes(b"# Note\n")
+    rel = _adopted(vault_dir, db_conn, "summary", title="S",
+                   source_refs=["../notes/note.md"])
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert p["reject_reason"]
+    assert "illegal vault path" in p["reject_reason"]
+    # Sibling decoy dir: no new files, decoy unmodified.
+    assert decoy.read_bytes() == b"# Note\n"
+    assert sorted(f.name for f in decoy_dir.iterdir()) == ["note.md"]
+
+
+def test_traversal_absolute_path_parked_failed(vault_dir, db_conn):
+    rel = _adopted(vault_dir, db_conn, "correction",
+                   payload={"file": "/etc/passwd", "old": "root", "new": "x"},
+                   reversible=False)
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert p["reject_reason"]
+    assert "illegal vault path" in p["reject_reason"]
+
+
+# ── correction ambiguity guard ───────────────────────────────────────────
+
+def test_correction_ambiguous_old_parked_failed(vault_dir, db_conn):
+    content = b"# Doc\n\nline X one\nline X two\n"
+    (vault_dir / "notes" / "fix.md").write_bytes(content)
+    before = hashlib.sha256(content).hexdigest()
+    rel = _adopted(vault_dir, db_conn, "correction",
+                   payload={"file": "notes/fix.md", "old": "X", "new": "Y"},
+                   reversible=False)
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "2 occurrences" in p["reject_reason"]
+    # No silent partial replace: target bytes unchanged.
+    after = hashlib.sha256((vault_dir / "notes" / "fix.md").read_bytes()).hexdigest()
+    assert before == after
+
+
+# ── atomic vault writes ──────────────────────────────────────────────────
+
+def test_atomic_write_bytes_content_lands_tmp_gone(vault_dir):
+    fp = vault_dir / "notes" / "atomic.md"
+    atomic_write_bytes(fp, b"hello")
+    assert fp.read_bytes() == b"hello"
+    assert not (vault_dir / "notes" / ".atomic.md.writing-tmp").exists()
+
+
+def test_atomic_write_bytes_tmp_same_dir_dot_prefixed_non_md(vault_dir, monkeypatch):
+    import os
+
+    from server.vault.fs import vault_ops
+
+    calls = []
+    real_replace = os.replace
+
+    def fake_replace(src, dst):
+        calls.append((Path(src), Path(dst)))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fake_replace)
+    fp = vault_dir / "notes" / "atomic.md"
+    vault_ops.atomic_write_bytes(fp, b"data")
+
+    assert len(calls) == 1
+    src, dst = calls[0]
+    assert src.parent == dst.parent == fp.parent  # same directory => same volume
+    assert src.name.startswith(".")               # dot-prefixed
+    assert not src.name.endswith(".md")           # invisible to *.md walkers
+    assert src == fp.with_name("." + fp.name + ".writing-tmp")
+    assert fp.read_bytes() == b"data"
+
+
+def test_stray_writing_tmp_inert_to_walkers(vault_dir):
+    from client.sync import scan_local_files
+
+    stray = vault_dir / "notes" / ".x.md.writing-tmp"
+    stray.write_bytes(b"partial write")
+
+    walked = [p.name for p in _iter_vault_md(vault_dir)]
+    assert ".x.md.writing-tmp" not in walked
+    assert "test.md" in walked  # normal files still visible
+
+    scanned = scan_local_files(vault_dir)
+    assert not any(k.endswith(".writing-tmp") for k in scanned)
+    assert "notes/test.md" in scanned
+
+
+# ── guard policy (shared vault-path guard) ───────────────────────────────
+
+def test_safe_rel_path_policy():
+    assert safe_rel_path("a/b.md") == Path("a/b.md")
+    assert safe_rel_path("../x") is None
+    assert safe_rel_path("/x") is None
+    assert safe_rel_path("a/../b") is None
+    assert safe_rel_path("") is None

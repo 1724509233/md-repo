@@ -29,7 +29,7 @@ from .vault.service import (
 )
 from .vault.db.changes import log_change
 from .vault.db.schema import _db_lock
-from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS
+from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
 
@@ -51,20 +51,6 @@ def _acquire_lock() -> bool:
 def _release_lock() -> None:
     global _sync_lock
     _sync_lock = None
-
-
-def _safe_rel_path(raw: str) -> Path | None:
-    """Validate a URL-decoded relative path. Returns None if unsafe.
-
-    Paths are normalized to forward slashes (vault-relative).
-    """
-    raw = raw.replace("\\", "/")
-    if not raw or raw.startswith("/"):
-        return None
-    parts = Path(raw).parts
-    if any(p in ("..", "") for p in parts):
-        return None
-    return Path(*parts)
 
 
 def _hash_bytes(content: bytes) -> str:

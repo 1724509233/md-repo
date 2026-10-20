@@ -33,6 +33,7 @@ import sqlite3
 from pathlib import Path
 
 from ..proposals import advance, expire_overdue, scan
+from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 from ..vault.orchestration.file_ops import apply_change
 from ..write_registry import register_write
 
@@ -42,6 +43,19 @@ _ENTITY_RE = re.compile(r"(?m)^## ")
 
 class _MergeFailed(Exception):
     """Typed merge failure: the proposal is advanced to ``failed``."""
+
+
+def _vault_path(vault: Path, rel: str) -> Path:
+    """Resolve a vault-relative path; refuse escapes.
+
+    Raises _MergeFailed (not ValueError): a permanent bad path must park
+    the proposal in ``failed`` with an actionable reject_reason, not stay
+    ``adopted`` and re-error every executor cycle.
+    """
+    safe = safe_rel_path(str(rel or ""))
+    if safe is None:
+        raise _MergeFailed(f"illegal vault path: {str(rel)[:120]!r}")
+    return vault / safe
 
 
 # ── entity_index: upsert a markdown section into index/entities.md ───────
@@ -93,7 +107,7 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(rel, "executor")
-    fp.write_bytes(_render_entities(out).encode("utf-8"))
+    atomic_write_bytes(fp, _render_entities(out).encode("utf-8"))
     apply_change(conn, vault, rel, "update" if existed else "create", source="executor")
 
 
@@ -117,7 +131,7 @@ def _merge_link(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         raise ValueError("link payload requires a 'target'")
 
     rel = str(refs[0])
-    fp = vault / rel
+    fp = _vault_path(vault, refs[0])
     if not fp.is_file():
         raise ValueError(f"link source file not found: {rel}")
 
@@ -135,7 +149,7 @@ def _merge_link(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         text += f"\n<!-- related -->\n{line}\n<!-- /related -->\n"
 
     register_write(rel, "executor")
-    fp.write_bytes(text.encode("utf-8"))
+    atomic_write_bytes(fp, text.encode("utf-8"))
     apply_change(conn, vault, rel, "update", source="executor")
 
 
@@ -146,13 +160,13 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     if not refs:
         raise ValueError("summary proposal has no source_refs")
     src_rel = str(refs[0])
-    src_fp = vault / src_rel
+    src_fp = _vault_path(vault, src_rel)
     if not src_fp.is_file():
         raise ValueError(f"summary source file not found: {src_rel}")
 
     stem = Path(src_rel).stem
     out_rel = (Path(src_rel).parent / f"{stem}-summary.md").as_posix()
-    out_fp = vault / out_rel
+    out_fp = _vault_path(vault, out_rel)
     existed = out_fp.is_file()
     title = p.get("title") or f"{stem} summary"
     body = (p.get("body") or "").strip()
@@ -160,7 +174,7 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     out_fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(out_rel, "executor")
-    out_fp.write_bytes(text.encode("utf-8"))
+    atomic_write_bytes(out_fp, text.encode("utf-8"))
     apply_change(conn, vault, out_rel, "update" if existed else "create", source="executor")
 
 
@@ -176,7 +190,7 @@ def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     if not f or old is None or new is None:
         raise ValueError("correction payload requires {file, old, new}")
 
-    fp = vault / f
+    fp = _vault_path(vault, f)
     if not fp.is_file():
         raise _MergeFailed(f"correction target not found: {f}")
     text = fp.read_bytes().decode("utf-8")
@@ -187,8 +201,17 @@ def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         raise _MergeFailed(
             f"correction old text not found in {f} (stale proposal): {snippet!r}")
 
+    count = text.count(old)
+    if count > 1:
+        # Deterministic executor must not guess WHICH occurrence — park the
+        # proposal as failed so the snippet can be refined (failed → pending).
+        raise _MergeFailed(
+            f"correction old text is ambiguous in {f}: "
+            f"{count} occurrences — refine the snippet"
+        )
+
     register_write(f, "executor")
-    fp.write_bytes(text.replace(old, new, 1).encode("utf-8"))
+    atomic_write_bytes(fp, text.replace(old, new, 1).encode("utf-8"))
     apply_change(conn, vault, f, "update", source="executor")
 
 

@@ -19,6 +19,14 @@ def test_health(client) -> None:
     assert r.json() == {"status": "ok", "file_count": 1}
 
 
+def test_safe_rel_path_alias_is_shared_vault_guard() -> None:
+    # _safe_rel_path moved to server.vault.fs.vault_ops (shared by the
+    # executor and the API); api.py keeps the private alias.
+    from server.vault.fs.vault_ops import safe_rel_path
+
+    assert api_module._safe_rel_path is safe_rel_path
+
+
 def test_index_page(client) -> None:
     r = client.get("/")
     assert r.status_code == 200
