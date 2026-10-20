@@ -42,3 +42,50 @@ background_agents:
       context_window: 16384
       max_tokens: 4096
       temperature: 0.7
+
+  # ── 记忆运行时 v1：固化者（示例，取消注释启用）─────────────────────────
+  # 夜巡消化近期人类通道的碎片，只产出 suggestions/ 提案，不碰主记忆区。
+  # 预算是法律（这里），消耗记账在 .sync/index.db 的 trigger_state 表。
+  # trigger：events ⊆ {create,update,delete,move}；arm_count/min_interval_h
+  # 可缺省（默认 3 / 1.0h）。cron 保留为 deadline floor（无活则空转不烧 LLM）。
+  # - name: "记忆固化"
+  #   alias: consolidator
+  #   enabled: true
+  #   cron: "0 2 * * *"
+  #   target_dir: suggestions
+  #   prompt: server/prompts/consolidator.md
+  #   report_dir: .reports/consolidator
+  #   max_rounds: 30
+  #   timeout_s: 1800
+  #   budget_runs_per_day: 3
+  #   budget_max_proposals: 5
+  #   trigger:
+  #     events: [create]
+  #     arm_count: 3
+  #     min_interval_h: 6
+  #   model:
+  #     provider: openai
+  #     model_id: qwen2.5:14b
+  #     base_url: "http://localhost:11434/v1"
+  #     api_key: ""
+  #     context_window: 16384
+  #     max_tokens: 4096
+  #     temperature: 0.7
+  #
+  # ── 记忆运行时 v1：执行器角色（示例，取消注释启用）────────────────────
+  # is_executor 全配置最多一个；它不起 LLM cron 任务——框架每 30 分钟跑一次
+  # 确定性合并（adopted 提案落地 + 超期 awaiting_review 过期），无活 no-op。
+  # target_dir 不受 LLM scope 限制（允许 vault 根 "."），不参与 scope 重叠校验。
+  # - name: "执行器"
+  #   alias: executor
+  #   enabled: true
+  #   cron: "*/30 * * * *"
+  #   target_dir: .
+  #   prompt: server/prompts/consolidator.md   # 不加载，仅满足格式校验
+  #   report_dir: .reports/executor
+  #   is_executor: true
+  #   model:
+  #     provider: openai
+  #     model_id: qwen2.5:14b
+  #     base_url: "http://localhost:11434/v1"
+  #     api_key: ""

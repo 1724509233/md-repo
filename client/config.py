@@ -31,9 +31,15 @@ def load_client_config(config_path: str) -> ClientConfig:
     if not isinstance(client, dict):
         raise ValueError(f"Config file {config_path} missing 'client' section")
 
+    vault = Path(os.path.expanduser(client["vault_dir"]))
+    if not vault.is_absolute():
+        # Relative vault_dir resolves against the config file's directory,
+        # not the process cwd (mirrors the server-side resolution contract).
+        vault = path.parent / vault
+
     return ClientConfig(
         server_url=client["server_url"].rstrip("/"),
-        vault_dir=Path(os.path.expanduser(client["vault_dir"])).resolve(),
+        vault_dir=vault.resolve(),
         device_name=client["device_name"],
         poll_interval=int(client.get("poll_interval", 300)),
     )

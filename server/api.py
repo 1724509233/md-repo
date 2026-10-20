@@ -28,6 +28,8 @@ from .vault.service import (
     upsert_file,
 )
 from .vault.db.changes import log_change
+from .vault.db.schema import _db_lock
+from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
 
@@ -118,11 +120,22 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
 
     @app.get("/api/docs")
     async def list_docs(request: Request):
-        files = get_all_files(db_conn)
+        # memory-runtime v1: suggestions/index are system dirs — neither the
+        # document tree nor its file list may surface them (top-level match
+        # only; deeper same-named dirs are user content).
+        files = [
+            f for f in get_all_files(db_conn)
+            if len(f["path"].split("/")) <= 1
+            or f["path"].split("/")[0] not in EXCLUDED_INDEX_DIRS
+        ]
         dirs = []
         for root, dirnames, _ in os.walk(vault_dir):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]  # 剪枝：不 descend 隐藏目录
             rel_root = Path(root).relative_to(vault_dir)
+            # memory-runtime v1: suggestions/index are system dirs — the
+            # document tree (and descent) must not surface them.
+            if rel_root == Path("."):
+                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_INDEX_DIRS]
             dirs.extend((rel_root / d).as_posix() for d in dirnames)
         dirs.sort()
         body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
@@ -414,7 +427,32 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid recall tier")
         from .ai import rag_search
         results = rag_search(str(vault_dir), query, top_k=top_k, recall=recall)
+        # Recall telemetry (memory-runtime v1, minimal): one row per hit.
+        # Telemetry must never break the search response.
+        try:
+            now = time.time()
+            rows = [
+                (now, "web", query, r["path"], r.get("score"), recall)
+                for r in results if isinstance(r, dict) and r.get("path")
+            ]
+            if rows:
+                with _db_lock:
+                    db_conn.executemany(
+                        "INSERT INTO recall_log (ts, source, query, path, score, recall) "
+                        "VALUES (?, ?, ?, ?, ?, ?)", rows)
+                    db_conn.commit()
+        except Exception:
+            logger.exception("recall telemetry insert failed")
         return {"results": results, "recall": recall}
+
+    @app.get("/api/recall")
+    async def recall_log(since: float = 0.0) -> list[dict]:
+        rows = db_conn.execute(
+            "SELECT ts, source, query, path, score, recall FROM recall_log "
+            "WHERE ts > ? ORDER BY ts DESC LIMIT 500",
+            (since,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):

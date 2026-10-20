@@ -100,7 +100,7 @@ def main(argv: list[str] | None = None) -> None:
         if bg_agents:
             cleanup_old_notifications(conn)
             start_background_agents(
-                bg_agents, vault_dir, hooks=[InAppHook(conn)])
+                bg_agents, vault_dir, hooks=[InAppHook(conn)], db_conn=conn)
             await asyncio.sleep(0)  # let the bgagent tasks start
 
     config_obj = uvicorn.Config(

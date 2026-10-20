@@ -22,9 +22,31 @@ class ModelConfig:
     temperature: float | None = None
 
 
+# Valid ops for trigger events (change_log op names).
+TRIGGER_OPS = frozenset({"create", "update", "delete", "move"})
+
+# Defaults for trigger dict fields that may be omitted.
+TRIGGER_DEFAULTS = {"arm_count": 3, "min_interval_h": 1.0}
+
+
 @dataclass
 class BackgroundAgentConfig:
-    """One background scheduled agent (config.yaml 'background_agents' item)."""
+    """One background scheduled agent (config.yaml 'background_agents' item).
+
+    Memory-runtime v1 additions (all defaulted → old configs unaffected):
+
+    - ``budget_runs_per_day`` / ``budget_max_proposals``: budget caps (the
+      cap is law — YAML; the spend is ledgered in trigger_state).
+    - ``trigger``: arming config ``{"events": [op, ...], "arm_count": int,
+      "min_interval_h": float}`` (missing fields take defaults). When set,
+      the scheduler additionally runs a 30-minute arming check on top of the
+      cron (which stays as the deadline floor).
+    - ``is_executor``: this registry entry is the deterministic executor
+      role — it does NOT start an LLM cron task; the framework runs the
+      executor loop instead. At most one across the whole config; its
+      target_dir is unrestricted (vault root allowed) and exempt from the
+      target_dir overlap check (nothing writes under LLM scope control).
+    """
 
     name: str
     alias: str
@@ -36,6 +58,45 @@ class BackgroundAgentConfig:
     max_rounds: int
     timeout_s: int
     model: ModelConfig
+    budget_runs_per_day: int = 3
+    budget_max_proposals: int = 5
+    trigger: dict | None = None
+    is_executor: bool = False
+
+
+def _parse_trigger(trig_raw, index: int, alias: str) -> dict | None:
+    """Parse + validate the optional trigger block.
+
+    Shape: ``{events: [op, ...], arm_count: int, min_interval_h: float}`` —
+    events is required and non-empty (subset of TRIGGER_OPS); arm_count and
+    min_interval_h take defaults when absent. None passes through.
+    """
+    if trig_raw is None:
+        return None
+    if not isinstance(trig_raw, dict):
+        raise ValueError(f"background_agents[{index}] ({alias}): trigger must be a mapping")
+
+    events = trig_raw.get("events")
+    if not isinstance(events, list) or not events:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger.events must be a non-empty list")
+    bad = [e for e in events if e not in TRIGGER_OPS]
+    if bad:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger.events contains "
+            f"invalid ops: {bad} (valid: {sorted(TRIGGER_OPS)})")
+
+    arm_count = int(trig_raw.get("arm_count", TRIGGER_DEFAULTS["arm_count"]))
+    if arm_count < 1:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger.arm_count must be >= 1")
+    min_interval_h = float(trig_raw.get("min_interval_h", TRIGGER_DEFAULTS["min_interval_h"]))
+
+    return {
+        "events": [str(e) for e in events],
+        "arm_count": arm_count,
+        "min_interval_h": min_interval_h,
+    }
 
 
 def load_background_agents(config_path: str, vault_dir: Path) -> list[BackgroundAgentConfig]:
@@ -95,6 +156,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         if not isinstance(model_raw, dict) or "model_id" not in model_raw:
             raise ValueError(f"background_agents[{i}] ({alias}): model.model_id is required")
 
+        trigger = _parse_trigger(raw.get("trigger"), i, alias)
+
         agents.append(BackgroundAgentConfig(
             name=str(raw.get("name", alias)),
             alias=alias,
@@ -114,7 +177,16 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
                 max_tokens=int(model_raw["max_tokens"]) if model_raw.get("max_tokens") is not None else None,
                 temperature=float(model_raw["temperature"]) if model_raw.get("temperature") is not None else None,
             ),
+            budget_runs_per_day=int(raw.get("budget_runs_per_day", 3)),
+            budget_max_proposals=int(raw.get("budget_max_proposals", 5)),
+            trigger=trigger,
+            is_executor=bool(raw.get("is_executor", False)),
         ))
+
+    executors = [a.alias for a in agents if a.is_executor]
+    if len(executors) > 1:
+        raise ValueError(
+            f"at most one is_executor background agent, got: {', '.join(executors)}")
 
     aliases = [a.alias for a in agents]
     if len(set(aliases)) != len(aliases):
@@ -123,12 +195,18 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
 
     for i in range(len(agents)):
         for j in range(i + 1, len(agents)):
+            # The executor role has no LLM write scope (its target_dir may be
+            # the vault root and by definition contains every LLM scope), so
+            # it is exempt from the overlap check.
+            if agents[i].is_executor or agents[j].is_executor:
+                continue
             a, b = agents[i].target_dir, agents[j].target_dir
             if a.is_relative_to(b) or b.is_relative_to(a):
                 raise ValueError(
                     f"background agents '{agents[i].alias}' and '{agents[j].alias}' "
                     f"have overlapping target_dir")
             # report_dir 重叠同理 fail-fast：共享目录会互覆盖报告、互挤 30 份剪枝额度
+            # （executor 豁免已在循环顶部 continue）
             ra, rb = agents[i].report_dir, agents[j].report_dir
             if ra.is_relative_to(rb) or rb.is_relative_to(ra):
                 raise ValueError(

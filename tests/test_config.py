@@ -41,7 +41,8 @@ def test_load_client_config(tmp_path: Path) -> None:
     )
     cfg = load_client_config(str(cfg_file))
     assert cfg.server_url == "http://192.168.1.100:9888"
-    assert cfg.vault_dir == Path("./vault")
+    # vault_dir is resolved to an absolute path (same as the server side).
+    assert cfg.vault_dir == (tmp_path / "vault").resolve()
     assert cfg.device_name == "mac"
     assert cfg.poll_interval == 300
 

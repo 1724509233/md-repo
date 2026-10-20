@@ -18,6 +18,7 @@ from ..db.changes import log_change
 from ..db.file_index import delete_file, upsert_file
 from ..db.schema import _db_lock
 from ..file_entry import FileEntry
+from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .move_detect import pair_moves
 from .indexer import (
     delete_segments,
@@ -26,6 +27,16 @@ from .indexer import (
     index_segments,
 )
 from .refs import _remove_dead_links, _update_references
+
+
+def _is_index_excluded(path: str) -> bool:
+    """True for vault top-level dirs excluded from the index (suggestions/index).
+
+    File metadata (files table) and the change_log are still maintained;
+    only segmentation/graph work is skipped.
+    """
+    parts = Path(path).parts
+    return len(parts) > 1 and parts[0] in EXCLUDED_INDEX_DIRS
 
 
 def apply_change(
@@ -63,14 +74,16 @@ def apply_change(
                 mtime = fp.stat().st_mtime
             upsert_file(conn, path, digest, mtime)
             log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
-            index_segments(conn, vault_dir, path)
-            graph_extract_file(conn, vault_dir, path)
+            if not _is_index_excluded(path):
+                index_segments(conn, vault_dir, path)
+                graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
             delete_file(conn, path)
             log_change(conn, path, action, source=source)
-            delete_segments(conn, path)
-            graph_delete_file(conn, path)
-            _remove_dead_links(conn, vault_dir, path)
+            if not _is_index_excluded(path):
+                delete_segments(conn, path)
+                graph_delete_file(conn, path)
+                _remove_dead_links(conn, vault_dir, path)
         elif action in ("moved", "move"):
             src = vault_dir / from_path
             dst = vault_dir / path
@@ -104,11 +117,12 @@ def apply_change(
             # handling (index_segments runs once below for the new path).
             if old_hash and old_hash != digest:
                 log_change(conn, path, "modified", source=source, new_hash=digest)
-            if from_path:
+            if from_path and not _is_index_excluded(from_path):
                 delete_segments(conn, from_path)
                 graph_delete_file(conn, from_path)
-            index_segments(conn, vault_dir, path)
-            graph_extract_file(conn, vault_dir, path)
+            if not _is_index_excluded(path):
+                index_segments(conn, vault_dir, path)
+                graph_extract_file(conn, vault_dir, path)
             # Rewrite references in other docs so links survive the rename.
             if from_path and update_refs:
                 _update_references(conn, vault_dir, from_path, path)

@@ -42,6 +42,7 @@ class LoopRuntime(Runtime):
             vault_dir=spec.vault_dir,
             read_doc_max_chars=spec.read_doc_max_chars,
             last_read_ts=agent.last_read_ts,
+            write_source=spec.write_source,
         )
 
         for _round in range(spec.max_rounds):

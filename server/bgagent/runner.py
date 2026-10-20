@@ -276,6 +276,9 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         auto_approve=True,
         write_scope=cfg.target_dir,
         report_dir=cfg.report_dir,
+        # 写归因精确到角色（memory-runtime v1）：工具层 register_write 读
+        # ctx.write_source，落库 changelog source=<alias> 而非笼统 "agent"。
+        write_source=cfg.alias,
     )
     agent = Agent(spec, runtime=runtime_cls())
 

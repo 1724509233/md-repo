@@ -74,6 +74,38 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_changelog_path ON change_log(path)"
     )
+    # Trigger arming checkpoints (memory-runtime v1): per bgagent row tracking
+    # arming counter, cooldown anchor, and the daily run budget spend.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS trigger_state (
+            agent TEXT PRIMARY KEY,
+            last_run_ts REAL,
+            armed INTEGER,
+            last_armed_scan REAL,
+            runs_date TEXT,
+            runs_count INTEGER
+        )
+        """
+    )
+    # Recall telemetry (memory-runtime v1, minimal): one row per document
+    # hit in /api/ai/search, fed to the v2 sentinel role.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recall_log (
+            id INTEGER PRIMARY KEY,
+            ts REAL,
+            source TEXT,
+            query TEXT,
+            path TEXT,
+            score REAL,
+            recall TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_ts ON recall_log(ts)"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (

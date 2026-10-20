@@ -4,6 +4,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
+# Vault top-level directories excluded from segmentation/graph indexing and
+# the document tree (memory-runtime v1): pending-review material is not
+# memory, and the entity index is a rebuildable derivative. Only the top
+# level is matched — deeper dirs named the same are user content.
+EXCLUDED_INDEX_DIRS = frozenset({"suggestions", "index"})
+
 
 def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:
     """Exact string replacement in a vault file. Returns confirmation or error string.
@@ -37,10 +43,20 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
 
 
 def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
-    """Yield all .md files in vault, skipping .sync/ and .obsidian/."""
+    """Yield all .md files in vault, skipping .sync/ and .obsidian/.
+
+    Also skips the top-level suggestions/ and index/ directories
+    (memory-runtime v1 index exclusion — see EXCLUDED_INDEX_DIRS).
+    """
     for f in vault_dir.rglob("*.md"):
         if ".sync" in f.parts or ".obsidian" in f.parts:
             continue
         if not f.is_file():
+            continue
+        try:
+            rel = f.relative_to(vault_dir)
+        except ValueError:
+            continue
+        if len(rel.parts) > 1 and rel.parts[0] in EXCLUDED_INDEX_DIRS:
             continue
         yield f

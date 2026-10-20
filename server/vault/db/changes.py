@@ -40,7 +40,7 @@ def get_changes(
     """Return change events with ts > since, ordered by seq DESC.
 
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
-    and new keys (``seq``, ``source``, ``new_hash``).
+    and new keys (``seq``, ``source``, ``op``, ``new_hash``).
     """
     sql = "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log WHERE ts > ?"
     params: list = [since]
@@ -58,6 +58,7 @@ def get_changes(
             "seq": row[0],
             "ts": row[1],
             "source": row[2],
+            "op": row[3],
             "action": _OP_TO_ACTION.get(row[3], row[3]),
             "path": row[4],
             "from_path": row[5],
@@ -65,6 +66,66 @@ def get_changes(
         }
         for row in cursor.fetchall()
     ]
+
+
+def get_changes_sources(
+    conn: sqlite3.Connection,
+    since: float = 0.0,
+    ops: tuple[str, ...] = ("create", "update", "delete", "move"),
+    exclude_sources: set[str] | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Change events with ts > since, filtered by op and excluded sources.
+
+    The trigger arming check (memory-runtime v1) needs ``source NOT IN (...)``
+    plus ``op IN (...)`` — the single-source filter of :func:`get_changes`
+    cannot express that. Returns rows shaped like ``get_changes``.
+    """
+    op_ph = ",".join("?" * len(ops))
+    sql = (
+        "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log "
+        f"WHERE ts > ? AND op IN ({op_ph})"
+    )
+    params: list = [since, *ops]
+    if exclude_sources:
+        excl_ph = ",".join("?" * len(exclude_sources))
+        sql += f" AND source NOT IN ({excl_ph})"
+        params.extend(exclude_sources)
+    sql += " ORDER BY seq DESC LIMIT ?"
+    params.append(limit)
+    cursor = conn.execute(sql, params)
+    return [
+        {
+            "seq": row[0],
+            "ts": row[1],
+            "source": row[2],
+            "op": row[3],
+            "action": _OP_TO_ACTION.get(row[3], row[3]),
+            "path": row[4],
+            "from_path": row[5],
+            "new_hash": row[6],
+        }
+        for row in cursor.fetchall()
+    ]
+
+
+def count_changes_sources(
+    conn: sqlite3.Connection,
+    since: float = 0.0,
+    ops: tuple[str, ...] = ("create", "update", "delete", "move"),
+    exclude_sources: set[str] | None = None,
+) -> int:
+    """Count change events matching the same filters as get_changes_sources."""
+    op_ph = ",".join("?" * len(ops))
+    sql = (
+        "SELECT count(*) FROM change_log WHERE ts > ? AND op IN ({})".format(op_ph)
+    )
+    params: list = [since, *ops]
+    if exclude_sources:
+        excl_ph = ",".join("?" * len(exclude_sources))
+        sql += f" AND source NOT IN ({excl_ph})"
+        params.extend(exclude_sources)
+    return conn.execute(sql, params).fetchone()[0]
 
 
 def clear_changes(conn: sqlite3.Connection) -> None:
