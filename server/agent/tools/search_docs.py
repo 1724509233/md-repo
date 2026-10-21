@@ -1,9 +1,13 @@
 """search_docs tool."""
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, Field
 
 from .tool import Tool, ToolContext
+
+logger = logging.getLogger("md-vault.agent")
 
 
 class SearchDocsArgs(BaseModel):
@@ -17,6 +21,25 @@ class SearchDocsArgs(BaseModel):
 # Auto-escalation chain (spec §5.2): strict → near → relaxed.
 # fuzzy is never auto-run — it only executes when explicitly requested.
 ESCALATION_CHAIN = ("strict", "near", "relaxed")
+
+
+def _log_recall(ctx: ToolContext, query: str, tier: str, results: list) -> None:
+    """Ledger this search in recall telemetry (memory-runtime v2).
+
+    Called after the escalation chain settles — including the zero-hit path,
+    which is the failed-recall signal. Never raises: telemetry must not
+    change the tool result.
+    """
+    from ...vault.db import recall as recall_db
+    from ...vault.db.conn import get_conn
+
+    conn = get_conn()
+    if conn is None:
+        return
+    try:
+        recall_db.log_query(conn, ctx.write_source, query, tier, results)
+    except Exception:
+        logger.exception("recall telemetry failed for search_docs")
 
 
 class SearchDocsTool(Tool):
@@ -55,6 +78,7 @@ class SearchDocsTool(Tool):
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
                 return self.fts_syntax_error(args.query)
             raise
+        _log_recall(ctx, args.query, tier, results)
         if not results:
             return self.search_no_match(args.query)
         lines = [f'<results count="{len(results)}" query="{_html.escape(args.query, quote=False)}" tier="{tier}">']

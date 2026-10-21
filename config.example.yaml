@@ -89,3 +89,53 @@ background_agents:
   #     model_id: qwen2.5:14b
   #     base_url: "http://localhost:11434/v1"
   #     api_key: ""
+
+# ── 记忆运行时 v2：哨兵（示例，取消注释启用）─────────────────────────────
+# 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶、产出 archive 提案。
+# 写 scope 只有 suggestions/（主数据区只读；归档由执行器落地）。
+# trigger.source: recall = 从召回账本武装（metric: failed_or_low = 失败查询
+# + 低分命中计数，合成流量不计入）；cron 保留为每周心跳（复盘不靠自觉）。
+# tools 白名单 = 行为维度授权（缺省 = 全部工具）。
+# - name: "记忆哨兵"
+#   alias: sentinel
+#   enabled: true
+#   cron: "0 9 * * 1"                 # 周一 09:00 每周心跳
+#   target_dir: suggestions
+#   prompt: server/prompts/sentinel.md
+#   report_dir: .reports/sentinel
+#   max_rounds: 30
+#   timeout_s: 1800
+#   budget_runs_per_day: 2
+#   budget_max_proposals: 3
+#   trigger:
+#     source: recall
+#     metric: failed_or_low
+#     arm_count: 10
+#     min_interval_h: 24
+#   tools: [read_doc, search_docs, list_files, recent_changes,
+#           get_related_docs, recall_stats, write_doc]
+#   model:
+#     provider: openai
+#     model_id: qwen2.5:14b
+#     base_url: "http://localhost:11434/v1"
+#     api_key: ""
+#
+# ── 记忆运行时 v3：叙事者（示例，取消注释启用）──────────────────────────
+# 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，产出周报到 weekly/。
+# 不产提案（budget_max_proposals: 0）。
+# - name: "叙事者"
+#   alias: narrator
+#   enabled: true
+#   cron: "0 10 * * 0"                # 周日 10:00 周报
+#   target_dir: weekly
+#   prompt: server/prompts/narrator.md
+#   report_dir: .reports/narrator
+#   max_rounds: 30
+#   timeout_s: 1800
+#   budget_runs_per_day: 1
+#   budget_max_proposals: 0
+#   model:
+#     provider: openai
+#     model_id: qwen2.5:14b
+#     base_url: "http://localhost:11434/v1"
+#     api_key: ""

@@ -74,19 +74,26 @@ def get_changes_sources(
     ops: tuple[str, ...] = ("create", "update", "delete", "move"),
     exclude_sources: set[str] | None = None,
     limit: int = 500,
+    since_seq: int = 0,
 ) -> list[dict]:
-    """Change events with ts > since, filtered by op and excluded sources.
+    """Change events, filtered by op and excluded sources.
 
     The trigger arming check (memory-runtime v1) needs ``source NOT IN (...)``
     plus ``op IN (...)`` — the single-source filter of :func:`get_changes`
     cannot express that. Returns rows shaped like ``get_changes``.
+
+    Boundary column: ts-based (``since``) by default. The arming scan passes
+    ``since_seq`` instead, cursoring on the monotonic ``seq`` — immune to a
+    change whose ts equals the last scan ts (same Windows clock tick), which
+    a ``ts > ?`` boundary would silently drop.
     """
     op_ph = ",".join("?" * len(ops))
+    since_sql, since_param = ("seq > ?", since_seq) if since_seq > 0 else ("ts > ?", since)
     sql = (
         "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log "
-        f"WHERE ts > ? AND op IN ({op_ph})"
+        f"WHERE {since_sql} AND op IN ({op_ph})"
     )
-    params: list = [since, *ops]
+    params: list = [since_param, *ops]
     if exclude_sources:
         excl_ph = ",".join("?" * len(exclude_sources))
         sql += f" AND source NOT IN ({excl_ph})"

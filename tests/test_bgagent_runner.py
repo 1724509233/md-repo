@@ -135,7 +135,7 @@ def test_spec_built_with_auto_approve_and_scope(tmp_path: Path):
     assert spec.write_scope == cfg.target_dir
     assert spec.report_dir == cfg.report_dir
     assert spec.max_rounds == 5
-    assert len(spec.tools) == 9
+    assert len(spec.tools) == 10   # full registry (recall_stats added in v2)
     assert spec.system_prompt.startswith("you are a test organizer")
     assert "当前时间：" in spec.system_prompt  # runner 注入运行开始时间（分钟精度）
 

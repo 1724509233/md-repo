@@ -24,6 +24,7 @@ class RunReport:
     ops_total: int
     files_changed: int
     summary: str           # agent's final text, truncated
+    kind: str = "batch"    # "batch" (report-only) | "review" (needs human attention)
 
 
 class NotificationHook:
@@ -50,10 +51,10 @@ class InAppHook(NotificationHook):
         with _db_lock:
             self._conn.execute(
                 "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
-                "ops_total, files_changed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "ops_total, files_changed, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (time.time(), report.alias, report.name, report.status,
                  report.report_path, report.summary,
-                 report.ops_total, report.files_changed),
+                 report.ops_total, report.files_changed, report.kind),
             )
             self._conn.commit()
         logger = logging.getLogger("md-vault.bgagent")

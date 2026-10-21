@@ -90,6 +90,39 @@ def test_armed_counts_until_threshold(db_conn, vault_dir, tmp_path):
     assert st["runs_count"] == 1
 
 
+def test_armed_seq_cursor_survives_ts_collision(db_conn, vault_dir, tmp_path):
+    """A change logged in the same clock tick as the previous arming scan has
+    ``ts == last_armed_scan``; the old ``ts > ?`` boundary dropped it, so the
+    armed counter stalled below the threshold. Cursoring on ``seq`` (strictly
+    monotonic) must advance past it so the run still triggers.
+    """
+    cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=3)
+    ran = []
+    run_fn = _fake_run(ran)
+
+    # Two genuine human events → armed=2, seq cursor advances to their max.
+    log_change(db_conn, "notes/a.md", "create", source="web")
+    log_change(db_conn, "notes/b.md", "create", source="web")
+    _armed(cfg, vault_dir, db_conn, run_fn)
+    assert ran == []                       # 2 < 3 → armed but not released
+    st = _get_trigger_state(db_conn, cfg.alias)
+    assert st["armed"] == 2
+
+    # Force the collision: a 3rd create whose ts equals the stored
+    # last_armed_scan (same Windows clock tick). With the seq cursor it must
+    # still be picked up — its seq is strictly greater than last_armed_seq.
+    last_scan = st["last_armed_scan"]
+    log_change(db_conn, "notes/c.md", "create", source="web", ts=last_scan)
+    c_seq = db_conn.execute(
+        "SELECT seq FROM change_log WHERE path = 'notes/c.md'").fetchone()[0]
+
+    _armed(cfg, vault_dir, db_conn, run_fn)
+    assert ran == ["cons"]                 # 3rd event → run triggered
+    st = _get_trigger_state(db_conn, cfg.alias)
+    assert st["armed"] == 0                # reset after run
+    assert st["last_armed_seq"] == c_seq   # cursor advanced past the collision
+
+
 def test_non_event_ops_do_not_arm(db_conn, vault_dir, tmp_path):
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
     ran = []
@@ -211,3 +244,157 @@ def test_trigger_tick_runs_when_human_event(db_conn, vault_dir, tmp_path):
     assert hook.reports == []  # a real run notifies via run_once, not the tick
     st = _get_trigger_state(db_conn, cfg.alias)
     assert st["runs_count"] == 2  # recorded run + this cron run
+
+
+# ── recall-source arming (two independent id cursors) ─────────────────────
+
+def _seed_recall(conn, query_rows, hit_rows):
+    """Seed recall_queries and recall_log with controlled ids.
+
+    query_rows: (id, ts, source, traffic, query, recall, hits)
+    hit_rows:   (id, ts, source, query, path, score, recall, traffic)
+    """
+    for r in query_rows:
+        conn.execute(
+            "INSERT INTO recall_queries (id, ts, source, traffic, query, recall, hits) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", r)
+    for r in hit_rows:
+        conn.execute(
+            "INSERT INTO recall_log (id, ts, source, query, path, score, recall, traffic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)", r)
+    conn.commit()
+
+
+def _cfg_recall(tmp_path, vault_dir, alias="sentinel", arm_count=10,
+                min_interval_h=0.0, budget=10, low_score=0.2):
+    from server.agent.spec import ModelConfig
+    prompt = tmp_path / f"{alias}.md"
+    prompt.write_text("p", encoding="utf-8")
+    trig = {
+        "source": "recall",
+        "metric": "failed_or_low",
+        "arm_count": arm_count,
+        "min_interval_h": min_interval_h,
+        "low_score": low_score,
+    }
+    return BackgroundAgentConfig(
+        name=alias, alias=alias, enabled=True, cron="0 9 * * 1",
+        target_dir=(vault_dir / "suggestions").resolve(), prompt=prompt.resolve(),
+        report_dir=(vault_dir / ".reports" / alias).resolve(),
+        max_rounds=5, timeout_s=10, model=ModelConfig(model_id="m"),
+        trigger=trig, budget_runs_per_day=budget,
+    )
+
+
+def test_recall_arming_counts_and_cursors(db_conn, vault_dir, tmp_path):
+    """Recall arming: count excludes synthetic + high-score; cursors advance
+    past everything scanned (not just counted rows)."""
+    cfg = _cfg_recall(tmp_path, vault_dir, arm_count=10)  # high threshold → no run
+    now = time.time()
+
+    # Batch 1: 1 zero-hit query + 1 hit query; 1 low non-synthetic hit,
+    # 1 high hit, 1 synthetic hit.
+    _seed_recall(
+        db_conn,
+        query_rows=[
+            (1, now, "web", "human", "miss1", "strict", 0),  # counts (zero hits)
+            (2, now, "web", "human", "hit2", "strict", 3),   # doesn't count (hits>0)
+        ],
+        hit_rows=[
+            (1, now, "web", "q", "notes/a.md", 0.1, "strict", "human"),
+            (2, now, "web", "q", "notes/b.md", 0.9, "strict", "human"),
+            (3, now, "sentinel", "q", "notes/c.md", 0.1, "strict", "synthetic"),
+        ],
+    )
+
+    ran = []
+    _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
+    st = _get_trigger_state(db_conn, cfg.alias)
+    assert st["armed"] == 2          # 1 zero-hit + 1 low non-synthetic
+    assert st["last_recall_query_seq"] == 2  # cursor = max id in batch 1
+    assert st["last_recall_hit_seq"] == 3    # cursor = max id in batch 1
+    assert ran == []                  # 2 < 10 → not released
+
+    # Batch 2 (new rows only): 1 zero-hit query + 1 low non-synthetic hit.
+    _seed_recall(
+        db_conn,
+        query_rows=[
+            (3, now, "web", "human", "miss3", "strict", 0),
+        ],
+        hit_rows=[
+            (4, now, "web", "q", "notes/d.md", 0.1, "strict", "human"),
+        ],
+    )
+
+    _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
+    st = _get_trigger_state(db_conn, cfg.alias)
+    assert st["armed"] == 4          # 2 + 2
+    assert st["last_recall_query_seq"] == 3
+    assert st["last_recall_hit_seq"] == 4
+    assert ran == []                  # 4 < 10 → still not released
+
+
+def test_recall_arming_threshold_release(db_conn, vault_dir, tmp_path):
+    """When armed >= arm_count the run triggers; armed resets to 0."""
+    cfg = _cfg_recall(tmp_path, vault_dir, arm_count=2)
+    now = time.time()
+    _seed_recall(
+        db_conn,
+        query_rows=[
+            (1, now, "web", "human", "miss1", "strict", 0),
+            (2, now, "web", "human", "miss2", "strict", 0),
+        ],
+        hit_rows=[],
+    )
+    ran = []
+    _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
+    assert ran == ["sentinel"]
+    st = _get_trigger_state(db_conn, cfg.alias)
+    assert st["armed"] == 0  # reset after run
+
+
+def test_recall_tick_runs_unconditionally(db_conn, vault_dir, tmp_path):
+    """A recall-source agent's cron tick runs the LLM even with zero
+    change-log activity since the last run (weekly retrospective heartbeat)."""
+    cfg = _cfg_recall(tmp_path, vault_dir, arm_count=10)
+    _ensure_trigger_row(db_conn, cfg.alias)
+    _record_run(db_conn, cfg.alias)  # anchor = now
+
+    # Only self-excluded events → no human work in change_log.
+    log_change(db_conn, "x.md", "create", source="sentinel")
+
+    ran = []
+    run_fn = _fake_run(ran)
+    hook = RecordingHook()
+
+    async def go():
+        await _handle_tick(cfg, vault_dir, asyncio.Lock(), [hook], run_fn,
+                           db_conn, {"sentinel"})
+    _run(go())
+
+    assert ran == ["sentinel"]  # LLM invoked (no idle gate for recall source)
+    assert hook.reports == []   # a real run notifies via run_fn, not the tick
+
+
+def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path):
+    """A change-source agent with no human events since the last run still
+    records an idle tick (existing behavior unchanged)."""
+    cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
+    _ensure_trigger_row(db_conn, cfg.alias)
+    _record_run(db_conn, cfg.alias)
+
+    # Only self-excluded events since the last run.
+    log_change(db_conn, "x.md", "create", source="cons")
+
+    ran = []
+    run_fn = _fake_run(ran)
+    hook = RecordingHook()
+
+    async def go():
+        await _handle_tick(cfg, vault_dir, asyncio.Lock(), [hook], run_fn,
+                           db_conn, {"cons"})
+    _run(go())
+
+    assert ran == []               # no LLM call
+    assert len(hook.reports) == 1
+    assert hook.reports[0].status == "idle"

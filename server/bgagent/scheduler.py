@@ -33,6 +33,7 @@ from croniter import croniter
 
 from ..config import BackgroundAgentConfig
 from ..proposals import EXPIRE_AFTER_S, _created_ts, scan as scan_proposals
+from ..vault.db import recall as recall_db
 from ..vault.db.changes import count_changes_sources, get_changes_sources
 from ..vault.db.schema import _db_lock
 from .executor import run_executor
@@ -57,8 +58,9 @@ def _ensure_trigger_row(conn, alias: str) -> None:
     with _db_lock:
         conn.execute(
             "INSERT OR IGNORE INTO trigger_state "
-            "(agent, last_run_ts, armed, last_armed_scan, runs_date, runs_count) "
-            "VALUES (?, 0.0, 0, 0.0, '', 0)",
+            "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+            "last_recall_query_seq, last_recall_hit_seq, runs_date, runs_count) "
+            "VALUES (?, 0.0, 0, 0.0, 0, 0, 0, '', 0)",
             (alias,),
         )
         conn.commit()
@@ -66,15 +68,19 @@ def _ensure_trigger_row(conn, alias: str) -> None:
 
 def _get_trigger_state(conn, alias: str) -> dict:
     row = conn.execute(
-        "SELECT last_run_ts, armed, last_armed_scan, runs_date, runs_count "
+        "SELECT last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "last_recall_query_seq, last_recall_hit_seq, "
+        "runs_date, runs_count "
         "FROM trigger_state WHERE agent = ?", (alias,)
     ).fetchone()
     if row is None:
         return {"last_run_ts": 0.0, "armed": 0, "last_armed_scan": 0.0,
-                "runs_date": "", "runs_count": 0}
+                "last_armed_seq": 0, "last_recall_query_seq": 0,
+                "last_recall_hit_seq": 0, "runs_date": "", "runs_count": 0}
     return {"last_run_ts": row[0] or 0.0, "armed": row[1] or 0,
-            "last_armed_scan": row[2] or 0.0, "runs_date": row[3] or "",
-            "runs_count": row[4] or 0}
+            "last_armed_scan": row[2] or 0.0, "last_armed_seq": row[3] or 0,
+            "last_recall_query_seq": row[4] or 0, "last_recall_hit_seq": row[5] or 0,
+            "runs_date": row[6] or "", "runs_count": row[7] or 0}
 
 
 def _budget_left(conn, alias: str, budget: int) -> bool:
@@ -153,7 +159,11 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
         return
     if cfg.trigger is not None and conn is not None:
         _ensure_trigger_row(conn, cfg.alias)
-        if not _has_human_activity_since(conn, cfg, all_aliases or set()):
+        source = cfg.trigger.get("source", "change")
+        # change-source: deadline floor (idle check — no human work → no LLM).
+        # recall-source: the cron tick is the weekly retrospective heartbeat
+        # and must run unconditionally (复盘不靠自觉).
+        if source != "recall" and not _has_human_activity_since(conn, cfg, all_aliases or set()):
             logger.info("[bg:%s] idle tick: no non-self-excluded create events "
                         "since last run — LLM not invoked", cfg.alias)
             for hook in hooks:
@@ -191,28 +201,58 @@ async def _agent_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
 async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
                        lock: asyncio.Lock, hooks: list[NotificationHook],
                        run_fn: Callable, conn, all_aliases: set[str]) -> None:
-    """One arming check: count matching non-self-excluded events, bump the
-    armed counter, and trigger a run when all three gates pass (arm_count,
-    min_interval cooldown, daily budget)."""
+    """One arming check: count matching signals, bump the armed counter, and
+    trigger a run when all three gates pass (arm_count, min_interval cooldown,
+    daily budget).
+
+    source=change: counts non-self-excluded change_log events (seq cursor).
+    source=recall: scans the recall ledger for failed/low-score rows using two
+    independent id cursors (query cursor on recall_queries, hit cursor on
+    recall_log).
+    """
     _ensure_trigger_row(conn, cfg.alias)
-    exclude = _self_exclusion(cfg, all_aliases)
     state = _get_trigger_state(conn, cfg.alias)
     now = time.time()
+    source = cfg.trigger.get("source", "change")
 
-    with _db_lock:
-        events = get_changes_sources(
-            conn, since=state["last_armed_scan"],
-            ops=tuple(cfg.trigger["events"]), exclude_sources=exclude)
-        conn.execute(
-            "UPDATE trigger_state SET armed = ?, last_armed_scan = ? WHERE agent = ?",
-            (state["armed"] + len(events), now, cfg.alias),
-        )
-        conn.commit()
-
-    armed = state["armed"] + len(events)
-    if events:
-        logger.info("[bg:%s] armed check: %d events, armed=%d/%d",
-                    cfg.alias, len(events), armed, cfg.trigger["arm_count"])
+    if source == "recall":
+        count, new_qs, new_hs = recall_db.scan_recall_arming(
+            conn, state["last_recall_query_seq"], state["last_recall_hit_seq"],
+            cfg.trigger.get("low_score", 0.2))
+        with _db_lock:
+            conn.execute(
+                "UPDATE trigger_state SET armed = ?, last_armed_scan = ?, "
+                "last_recall_query_seq = ?, last_recall_hit_seq = ? WHERE agent = ?",
+                (state["armed"] + count, now, new_qs, new_hs, cfg.alias),
+            )
+            conn.commit()
+        armed = state["armed"] + count
+        if count:
+            logger.info("[bg:%s] recall armed check: %d signals, armed=%d/%d",
+                        cfg.alias, count, armed, cfg.trigger["arm_count"])
+    else:
+        exclude = _self_exclusion(cfg, all_aliases)
+        with _db_lock:
+            # Cursor on the monotonic seq column, not the ts float: a change
+            # logged in the same clock tick as the previous scan has
+            # ts == last_armed_scan and is silently dropped by `ts > ?`, but
+            # its seq is always greater.
+            events = get_changes_sources(
+                conn, since_seq=state["last_armed_seq"],
+                ops=tuple(cfg.trigger["events"]), exclude_sources=exclude)
+            max_seq = state["last_armed_seq"]
+            if events:
+                max_seq = max(e["seq"] for e in events)
+            conn.execute(
+                "UPDATE trigger_state SET armed = ?, last_armed_scan = ?, "
+                "last_armed_seq = ? WHERE agent = ?",
+                (state["armed"] + len(events), now, max_seq, cfg.alias),
+            )
+            conn.commit()
+        armed = state["armed"] + len(events)
+        if events:
+            logger.info("[bg:%s] armed check: %d events, armed=%d/%d",
+                        cfg.alias, len(events), armed, cfg.trigger["arm_count"])
 
     # arm ≠ run: arming is qualification only — release must also pass the
     # min_interval cooldown and the daily budget. The gates run against the

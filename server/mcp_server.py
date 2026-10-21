@@ -1,6 +1,7 @@
 """MCP stdio server exposing md-vault as agent memory."""
 from __future__ import annotations
 
+import hashlib
 import logging
 import sys
 import threading
@@ -20,6 +21,7 @@ from server.agent.tools.read_doc import ReadDocTool
 from server.agent.tools.edit_doc import EditDocTool
 from server.agent.tools.search_docs import SearchDocsTool
 from server.agent.tools.get_related_docs import GetRelatedDocsTool
+from server.vault.db.changes import log_change
 
 _read_doc_tool = ReadDocTool()
 _edit_doc_tool = EditDocTool()
@@ -27,6 +29,43 @@ search_no_match = SearchDocsTool.search_no_match
 fts_syntax_error = SearchDocsTool.fts_syntax_error
 related_no_file = GetRelatedDocsTool.related_no_file
 related_no_links = GetRelatedDocsTool.related_no_links
+
+
+def _gate_external_write(path: str) -> str | None:
+    """Immune-pipeline gate for external (MCP) writes (memory-runtime v2).
+
+    Returns None when the vault-relative path is under the top-level
+    suggestions/ buffer (checked after validate_tool_call), else an error
+    string: the write was not performed. Unconditional by constitution —
+    no config flag. Reads (read_doc/search_docs/get_related_docs) are not
+    gated.
+    """
+    if path.split("/", 1)[0] == "suggestions":
+        return None
+    return (
+        "Error: the main memory area is read-only for external agents — "
+        "this write was NOT performed. Write the content as a proposal into "
+        "suggestions/ (frontmatter: type: correction to fix an existing doc, "
+        "status: awaiting_review; see server/proposals.py)."
+    )
+
+
+def _ledger_mcp_write(db_conn, path: str, existed: bool, content: str) -> None:
+    """Append a change_log row (source="mcp") for an external MCP write.
+
+    Never raises — telemetry must not break the tool response (same pattern
+    as the recall telemetry in server/api.py::ai_search). The server's
+    snapshot watcher may also record this change (source="watchdog") —
+    accepted double attribution for the external process, no dedupe here.
+    """
+    try:
+        new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        log_change(db_conn, path, "create" if not existed else "update",
+                   source="mcp", new_hash=new_hash)
+    except Exception:
+        logging.getLogger("mcp_server").warning(
+            "change_log entry for MCP write %s failed", path, exc_info=True)
+
 
 def main():
     from server.config import load_server_config
@@ -115,10 +154,14 @@ def main():
         error = validate_tool_call("write_doc", {"path": path, "content": content}, vault_dir)
         if error:
             return error
+        gated = _gate_external_write(path)
+        if gated:
+            return gated
         fp = vault_dir / path
         fp.parent.mkdir(parents=True, exist_ok=True)
         existed = fp.is_file()
         fp.write_bytes(content.encode("utf-8"))
+        _ledger_mcp_write(db_conn, path, existed, content)
         if existed:
             return f"Saved: {path} ({len(content)} chars, overwritten)"
         return f"Saved: {path} ({len(content)} chars)"
@@ -129,10 +172,17 @@ def main():
         error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, vault_dir)
         if error:
             return error
+        gated = _gate_external_write(path)
+        if gated:
+            return gated
         fp = vault_dir / path
         if not fp.is_file():
             return _edit_doc_tool._file_not_found_hint(path)
         result = edit_file(vault_dir, path, old_string, new_string)
+        if result.startswith("Edited"):
+            # Hash the post-edit content from disk (edit_file already wrote it).
+            new_content = fp.read_bytes().decode("utf-8", errors="replace")
+            _ledger_mcp_write(db_conn, path, True, new_content)
         return result
     
     mcp.run(transport="stdio")

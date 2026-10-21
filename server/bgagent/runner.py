@@ -28,6 +28,16 @@ WRITE_TOOLS = {"write_doc", "edit_doc", "move_docs", "delete_doc"}
 RETENTION = 30          # keep the N newest reports per alias
 
 
+def filter_tools(names: tuple[str, ...] | list[str]) -> list:
+    """Apply a tool whitelist: registry tools whose name is in ``names``.
+
+    Returns an empty list when nothing matches — the caller treats that as a
+    config error (a valid, non-empty whitelist can always match).
+    """
+    wanted = set(names)
+    return [t for t in TOOL_REGISTRY.values() if t.name in wanted]
+
+
 class _RunStats:
     """Accumulates one run's accounting from the event stream."""
 
@@ -133,6 +143,33 @@ def _changed_paths(args: dict) -> set[str]:
 
 def _status_icon(op: dict) -> str:
     return {"ok": "✓", "error": "✗"}.get(op.get("status"), "⏳")
+
+
+def _derive_kind(vault: Path, files_changed: set[str]) -> str:
+    """Derive the notification kind from written proposal files.
+
+    If any file written under ``suggestions/`` has frontmatter with
+    ``status: awaiting_review`` or ``reversible: false`` → "review".
+    Unreadable frontmatter (file missing, I/O error) → "review"
+    (safe default: over-notify). No proposal files written → "batch".
+    """
+    from ..proposals import PROPOSALS_DIR, parse_proposal
+
+    proposal_paths = [
+        p for p in files_changed
+        if p.startswith(PROPOSALS_DIR + "/")
+    ]
+    if not proposal_paths:
+        return "batch"
+
+    for rel_path in proposal_paths:
+        try:
+            p = parse_proposal(vault / rel_path)
+        except Exception:
+            return "review"
+        if p["status"] == "awaiting_review" or not p["reversible"]:
+            return "review"
+    return "batch"
 
 
 def _cell(op: dict) -> str:
@@ -264,13 +301,24 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     logger.info("[bg:%s] starting target=%s rounds=%d timeout=%ds",
                 cfg.alias, target_rel, cfg.max_rounds, cfg.timeout_s)
 
+    if cfg.tools is not None:
+        tools = filter_tools(cfg.tools)
+        if not tools:
+            # A valid, non-empty whitelist always matches; reaching this is a
+            # config error (registry drift) — fail the run, don't run bare.
+            raise ValueError(
+                f"[bg:{cfg.alias}] tool whitelist matched no registered tools: "
+                f"{sorted(cfg.tools)}")
+    else:
+        tools = list(TOOL_REGISTRY.values())
+
     spec = AgentSpec(
         # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
         # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。
         system_prompt=cfg.prompt.read_text(encoding="utf-8")
         + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
         model=cfg.model,
-        tools=list(TOOL_REGISTRY.values()),
+        tools=tools,
         max_rounds=cfg.max_rounds,
         vault_dir=vault,
         auto_approve=True,
@@ -311,11 +359,13 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
 
     report_path = (cfg.report_dir / _report_name(started_at, cfg.alias)).relative_to(vault).as_posix()
+    kind = _derive_kind(vault, stats.files_changed)
     report = RunReport(
         alias=cfg.alias, name=cfg.name, status=status,
         started_at=started_at, finished_at=finished_at,
         report_path=report_path, ops_total=len(stats.ops),
         files_changed=len(stats.files_changed), summary=stats.summary[:200],
+        kind=kind,
     )
     for hook in hooks or []:
         hook.notify(report)

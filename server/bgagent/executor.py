@@ -25,6 +25,10 @@ Failure taxonomy:
   proposal stays ``adopted`` (never silently swallowed).
 - Other exceptions → recorded in ``errors``, proposal stays ``adopted``
   (retry on the next cycle).
+
+Handler coverage: v1 shipped entity_index, link, summary, correction
+(reminder intentionally absent — recorded as error). ``archive`` was added
+in v2 (sentinel archival channel; reversible cold storage).
 """
 from __future__ import annotations
 
@@ -215,11 +219,63 @@ def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     apply_change(conn, vault, f, "update", source="executor")
 
 
+# ── archive: move a doc to archive/<path> (v2 cold storage) ───────────────
+# Top-level system dirs that must never be archived: proposals, entity
+# index, sync internals, and archive itself (no double-archive).
+_ARCHIVE_SYSTEM_DIRS = frozenset({"suggestions", "index", ".sync", "archive"})
+
+
+def _merge_archive(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+    """Move a doc to ``archive/<path>`` preserving the subpath (v2 cold storage).
+
+    Payload: ``{"path": "<vault-relative doc>", "reason": "<optional>"}``.
+
+    Crash-window semantics: if the source is missing but the dest exists,
+    the move already completed in a crashed prior cycle — idempotent no-op;
+    the subsequent ``advance(..., "merged")`` then books the state.
+    """
+    payload = p.get("payload") or {}
+    rel = str(payload.get("path") or "").strip()
+    if not rel:
+        raise ValueError("archive payload requires a non-empty 'path'")
+
+    # Path guard: escape / bad path → _MergeFailed (park in failed, actionable).
+    src_fp = _vault_path(vault, rel)
+
+    # System-dir guard: proposals, entity index, internals, double-archive.
+    parts = Path(rel).parts
+    if parts and parts[0] in _ARCHIVE_SYSTEM_DIRS:
+        raise _MergeFailed(f"archive target is a system path, cannot archive: {rel}")
+
+    dest_rel = f"archive/{rel}"
+    dest_fp = vault / dest_rel
+
+    src_exists = src_fp.is_file()
+    dest_exists = dest_fp.is_file()
+
+    if dest_exists and src_exists:
+        raise _MergeFailed(
+            f"archive destination already exists: {dest_rel} — resolve manually; no silent overwrite"
+        )
+    if not src_exists and dest_exists:
+        return  # crash window: move already completed, idempotent no-op
+    if not src_exists and not dest_exists:
+        raise _MergeFailed(f"archive target not found: {rel}")
+
+    # src exists, dest missing: perform the move.
+    dest_fp.parent.mkdir(parents=True, exist_ok=True)
+    register_write(dest_rel, "executor")
+    register_write(rel, "executor")  # source deletion attribution (prune pattern)
+    src_fp.rename(dest_fp)
+    apply_change(conn, vault, dest_rel, "move", from_path=rel, source="executor")
+
+
 _HANDLERS = {
     "entity_index": _merge_entity_index,
     "link": _merge_link,
     "summary": _merge_summary,
     "correction": _merge_correction,
+    "archive": _merge_archive,
 }
 
 

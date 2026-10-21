@@ -15,6 +15,7 @@ from .get_related_docs import GetRelatedDocsArgs, GetRelatedDocsTool
 from .list_files import ListFilesArgs, ListFilesTool
 from .move_docs import MoveDocItem, MoveDocsArgs, MoveDocsTool
 from .read_doc import ReadDocArgs, ReadDocTool
+from .recall_stats import RecallStatsArgs, RecallStatsTool
 from .recent_changes import RecentChangesArgs, RecentChangesTool
 from .search_docs import SearchDocsArgs, SearchDocsTool
 from .write_doc import WriteDocArgs, WriteDocTool
@@ -30,6 +31,7 @@ _ALL_TOOLS: list[Tool] = [
     EditDocTool(),
     GetRelatedDocsTool(),
     RecentChangesTool(),
+    RecallStatsTool(),
 ]
 
 TOOL_REGISTRY: dict[str, Tool] = {t.name: t for t in _ALL_TOOLS}
@@ -52,6 +54,7 @@ __all__ = [
     "EditDocArgs",
     "GetRelatedDocsArgs",
     "RecentChangesArgs",
+    "RecallStatsArgs",
     "_check_md_path",
     "_check_optional_path",
     "_tool",

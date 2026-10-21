@@ -1,12 +1,15 @@
 """Server configuration loading."""
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 from croniter import croniter
+
+logger = logging.getLogger("md-vault.config")
 
 
 @dataclass
@@ -28,24 +31,38 @@ TRIGGER_OPS = frozenset({"create", "update", "delete", "move"})
 # Defaults for trigger dict fields that may be omitted.
 TRIGGER_DEFAULTS = {"arm_count": 3, "min_interval_h": 1.0}
 
+# Valid escalation condition keys and actions.
+_ESCALATION_KEYS = frozenset({"zero_recall_candidate", "query_gap_detected"})
+_ESCALATION_ACTIONS = frozenset({"notify", "report"})
+
 
 @dataclass
 class BackgroundAgentConfig:
     """One background scheduled agent (config.yaml 'background_agents' item).
 
-    Memory-runtime v1 additions (all defaulted → old configs unaffected):
+    Memory-runtime v1/v2 additions (all defaulted → old configs unaffected):
 
     - ``budget_runs_per_day`` / ``budget_max_proposals``: budget caps (the
       cap is law — YAML; the spend is ledgered in trigger_state).
-    - ``trigger``: arming config ``{"events": [op, ...], "arm_count": int,
-      "min_interval_h": float}`` (missing fields take defaults). When set,
-      the scheduler additionally runs a 30-minute arming check on top of the
-      cron (which stays as the deadline floor).
+    - ``trigger``: arming config. ``source: change`` (default) — ``{events:
+      [op, ...], arm_count: int, min_interval_h: float, low_score?: float}``.
+      ``source: recall`` — ``{metric: "failed_or_low", arm_count: int,
+      min_interval_h: float, low_score?: float}`` (arms from the recall
+      ledger). When set, the scheduler additionally runs a 30-minute arming
+      check on top of the cron (which stays as the deadline floor).
     - ``is_executor``: this registry entry is the deterministic executor
       role — it does NOT start an LLM cron task; the framework runs the
       executor loop instead. At most one across the whole config; its
       target_dir is unrestricted (vault root allowed) and exempt from the
       target_dir overlap check (nothing writes under LLM scope control).
+    - ``tools``: optional tool whitelist — a non-empty tuple of tool names
+      that must exist in the agent tool registry. None (absent) = all tools.
+    - ``escalation``: optional law-layer metadata mapping condition keys
+      (``zero_recall_candidate``, ``query_gap_detected``) to actions
+      (``notify``, ``report``). In v2 the framework enforces escalation
+      through the notification kind tiers (mechanical, derived from written
+      proposals); in v3 it will be exposed in the console. The map carries
+      no prompt-matching logic.
     """
 
     name: str
@@ -62,41 +79,141 @@ class BackgroundAgentConfig:
     budget_max_proposals: int = 5
     trigger: dict | None = None
     is_executor: bool = False
+    tools: tuple[str, ...] | None = None   # None = all tools (backward compatible)
+    escalation: dict | None = None
 
 
 def _parse_trigger(trig_raw, index: int, alias: str) -> dict | None:
     """Parse + validate the optional trigger block.
 
-    Shape: ``{events: [op, ...], arm_count: int, min_interval_h: float}`` —
-    events is required and non-empty (subset of TRIGGER_OPS); arm_count and
-    min_interval_h take defaults when absent. None passes through.
+    Shapes:
+
+    - ``source: change`` (default) — ``{events: [op, ...], arm_count: int,
+      min_interval_h: float, low_score?: float}``. ``events`` is required
+      and non-empty (subset of TRIGGER_OPS).
+    - ``source: recall`` — ``{metric: "failed_or_low", arm_count: int,
+      min_interval_h: float, low_score?: float}``. ``metric`` is required.
+      ``events`` is ignored (a warning is logged).
+
+    ``arm_count`` and ``min_interval_h`` take defaults when absent.
+    ``low_score`` defaults to 0.2; must satisfy 0 < x < 1.
+    None passes through.
     """
     if trig_raw is None:
         return None
     if not isinstance(trig_raw, dict):
-        raise ValueError(f"background_agents[{index}] ({alias}): trigger must be a mapping")
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger must be a mapping")
 
-    events = trig_raw.get("events")
-    if not isinstance(events, list) or not events:
+    source = str(trig_raw.get("source", "change"))
+    if source not in ("change", "recall"):
         raise ValueError(
-            f"background_agents[{index}] ({alias}): trigger.events must be a non-empty list")
-    bad = [e for e in events if e not in TRIGGER_OPS]
-    if bad:
-        raise ValueError(
-            f"background_agents[{index}] ({alias}): trigger.events contains "
-            f"invalid ops: {bad} (valid: {sorted(TRIGGER_OPS)})")
+            f"background_agents[{index}] ({alias}): trigger.source must be "
+            f"'change' or 'recall', got {source!r}")
 
     arm_count = int(trig_raw.get("arm_count", TRIGGER_DEFAULTS["arm_count"]))
     if arm_count < 1:
         raise ValueError(
             f"background_agents[{index}] ({alias}): trigger.arm_count must be >= 1")
-    min_interval_h = float(trig_raw.get("min_interval_h", TRIGGER_DEFAULTS["min_interval_h"]))
+    min_interval_h = float(
+        trig_raw.get("min_interval_h", TRIGGER_DEFAULTS["min_interval_h"]))
 
+    low_score = float(trig_raw.get("low_score", 0.2))
+    if not (0 < low_score < 1):
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger.low_score must be "
+            f"in (0, 1), got {low_score}")
+
+    if source == "change":
+        events = trig_raw.get("events")
+        if not isinstance(events, list) or not events:
+            raise ValueError(
+                f"background_agents[{index}] ({alias}): trigger.events must be "
+                f"a non-empty list when source=change")
+        bad = [e for e in events if e not in TRIGGER_OPS]
+        if bad:
+            raise ValueError(
+                f"background_agents[{index}] ({alias}): trigger.events contains "
+                f"invalid ops: {bad} (valid: {sorted(TRIGGER_OPS)})")
+        return {
+            "source": "change",
+            "events": [str(e) for e in events],
+            "arm_count": arm_count,
+            "min_interval_h": min_interval_h,
+            "low_score": low_score,
+        }
+
+    # source == "recall"
+    if "events" in trig_raw:
+        logger.warning(
+            "background_agents[%d] (%s): trigger.events ignored when source=recall",
+            index, alias)
+    metric = trig_raw.get("metric")
+    if metric != "failed_or_low":
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): trigger.metric must be "
+            f"'failed_or_low' when source=recall, got {metric!r}")
     return {
-        "events": [str(e) for e in events],
+        "source": "recall",
+        "metric": metric,
         "arm_count": arm_count,
         "min_interval_h": min_interval_h,
+        "low_score": low_score,
     }
+
+
+def _parse_escalation(esc_raw, index: int, alias: str) -> dict | None:
+    """Parse + validate the optional escalation mapping.
+
+    Shape: ``{zero_recall_candidate: notify, query_gap_detected: report}``.
+    All keys must be in the known condition-key set; all values must be in
+    the known action set. Unknown keys or actions raise ValueError.
+    Absent/None → None.
+    """
+    if esc_raw is None:
+        return None
+    if not isinstance(esc_raw, dict) or not esc_raw:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): escalation must be a "
+            f"non-empty mapping")
+    bad_keys = [k for k in esc_raw if k not in _ESCALATION_KEYS]
+    if bad_keys:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): escalation contains unknown "
+            f"condition key(s): {bad_keys} (valid: {sorted(_ESCALATION_KEYS)})")
+    bad_actions = [v for v in esc_raw.values() if v not in _ESCALATION_ACTIONS]
+    if bad_actions:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): escalation contains invalid "
+            f"action(s): {bad_actions} (valid: {sorted(_ESCALATION_ACTIONS)})")
+    return {str(k): str(v) for k, v in esc_raw.items()}
+
+
+def _parse_tools(tools_raw, index: int, alias: str) -> tuple[str, ...] | None:
+    """Parse + validate the optional tool whitelist.
+
+    Shape: a non-empty list of tool names, each of which must exist in the
+    agent tool registry. Absent/None → None (all tools, backward compatible).
+    The registry import is deferred to avoid an import cycle (runner pulls in
+    both ``config`` and ``agent.tools``).
+    """
+    if tools_raw is None:
+        return None
+    if not isinstance(tools_raw, list) or not tools_raw:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools must be a non-empty "
+            f"list of tool names")
+    if not all(isinstance(t, str) and t for t in tools_raw):
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools must be a list of "
+            f"non-empty strings")
+    from .agent.tools import TOOL_REGISTRY
+    bad = [t for t in tools_raw if t not in TOOL_REGISTRY]
+    if bad:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools contains unknown "
+            f"tool name(s): {bad} (valid: {sorted(TOOL_REGISTRY)})")
+    return tuple(tools_raw)
 
 
 def load_background_agents(config_path: str, vault_dir: Path) -> list[BackgroundAgentConfig]:
@@ -157,6 +274,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
             raise ValueError(f"background_agents[{i}] ({alias}): model.model_id is required")
 
         trigger = _parse_trigger(raw.get("trigger"), i, alias)
+        tools = _parse_tools(raw.get("tools"), i, alias)
+        escalation = _parse_escalation(raw.get("escalation"), i, alias)
 
         agents.append(BackgroundAgentConfig(
             name=str(raw.get("name", alias)),
@@ -181,6 +300,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
             budget_max_proposals=int(raw.get("budget_max_proposals", 5)),
             trigger=trigger,
             is_executor=bool(raw.get("is_executor", False)),
+            tools=tools,
+            escalation=escalation,
         ))
 
     executors = [a.alias for a in agents if a.is_executor]

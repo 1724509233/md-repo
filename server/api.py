@@ -9,6 +9,7 @@ import os
 import re
 import time
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
@@ -28,7 +29,6 @@ from .vault.service import (
     upsert_file,
 )
 from .vault.db.changes import log_change
-from .vault.db.schema import _db_lock
 from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
@@ -55,6 +55,68 @@ def _release_lock() -> None:
 
 def _hash_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+# ── memory console helpers (proposals list / adopt / reject / pulse) ──────
+
+# Console sort priority: actionable states first, terminal + parse failures
+# last. awaiting_review is the human's review queue, so it always comes first.
+_PROPOSAL_STATUS_ORDER = {
+    "awaiting_review": 0,
+    "pending": 1,
+    "adopted": 2,
+    "processing": 3,
+    "failed": 4,
+    "rejected": 5,
+    "expired": 6,
+    "merged": 7,
+    "malformed": 8,
+}
+_PROPOSAL_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?=[_\- ])")
+
+
+def _proposal_date_info(relpath: str) -> tuple:
+    """(created_iso, created_ts) parsed from the ``YYYY-MM-DD`` filename
+    prefix, or ``(None, None)`` when the prefix is absent/unparseable.
+
+    Proposals carry no created_at frontmatter; the filename date is the
+    creation date (mirrors proposals._created_ts).
+    """
+    m = _PROPOSAL_DATE_RE.match(Path(relpath).stem)
+    if not m:
+        return None, None
+    try:
+        y, mo, d = (int(x) for x in m.groups())
+        dt = datetime(y, mo, d)
+    except ValueError:
+        return None, None
+    return dt.strftime("%Y-%m-%d"), dt.timestamp()
+
+
+def _proposal_sort_key(item: dict) -> tuple:
+    """(status rank, -age_days): review queue first, then newest within rank."""
+    return (_PROPOSAL_STATUS_ORDER.get(item["status"], 100), -item["age_days"])
+
+
+def _guard_proposal_relpath(relpath: str) -> str:
+    """Validate a proposal relpath is a top-level file under suggestions/.
+
+    Returns the normalized posix relpath; raises HTTPException otherwise
+    (unsafe path or not a top-level proposal file → 400).
+    """
+    from . import proposals
+
+    safe = _safe_rel_path(relpath)
+    if safe is None:
+        raise HTTPException(status_code=400, detail="invalid path")
+    parts = safe.parts
+    if (
+        len(parts) != 2
+        or parts[0] != proposals.PROPOSALS_DIR
+        or not parts[1].endswith(".md")
+    ):
+        raise HTTPException(status_code=400, detail="not a top-level proposal file")
+    return safe.as_posix()
 
 
 def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
@@ -413,20 +475,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=400, detail="invalid recall tier")
         from .ai import rag_search
         results = rag_search(str(vault_dir), query, top_k=top_k, recall=recall)
-        # Recall telemetry (memory-runtime v1, minimal): one row per hit.
-        # Telemetry must never break the search response.
+        # Recall telemetry (memory-runtime v2): one recall_queries row per
+        # search + one recall_log row per hit. Must never break the response.
+        from .vault.db import recall as recall_db
         try:
-            now = time.time()
-            rows = [
-                (now, "web", query, r["path"], r.get("score"), recall)
-                for r in results if isinstance(r, dict) and r.get("path")
-            ]
-            if rows:
-                with _db_lock:
-                    db_conn.executemany(
-                        "INSERT INTO recall_log (ts, source, query, path, score, recall) "
-                        "VALUES (?, ?, ?, ?, ?, ?)", rows)
-                    db_conn.commit()
+            recall_db.log_query(db_conn, "web", query, recall, results)
         except Exception:
             logger.exception("recall telemetry insert failed")
         return {"results": results, "recall": recall}
@@ -439,6 +492,211 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             (since,),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    @app.get("/api/recall/stats")
+    async def recall_stats(days: float = 30, half_life: float = 30.0) -> dict:
+        """Recall dimensioning over a window: per-doc traffic + decayed
+        weights, and the zero-hit (failed-recall) ledger."""
+        from .vault.db import recall as recall_db
+
+        since = time.time() - days * 86400
+        failed = recall_db.failed_queries(db_conn, since)
+        return {
+            "window_days": days,
+            "half_life_days": half_life,
+            "docs": recall_db.doc_traffic(db_conn, since,
+                                          half_life_days=half_life)[:200],
+            "failed_queries": failed[:200],
+            "failed_count": len(failed),
+        }
+
+    # ── memory console (read-only list + one-click review + pulse) ────────
+    # Constitution: the console only moves proposal state via the state
+    # machine (ledgered with actor "human"); the executor — not the API —
+    # applies adopted proposals on its next cycle.
+
+    @app.get("/api/memory/proposals")
+    async def memory_proposals() -> dict:
+        """List every proposal in suggestions/ (top level) with frontmatter
+        fields. A parse failure yields a ``malformed`` item, never a 500."""
+        from . import proposals
+
+        d = Path(vault_dir) / proposals.PROPOSALS_DIR
+        if not d.is_dir():
+            return {"proposals": []}
+
+        now = time.time()
+        items: list[dict] = []
+        for fp in sorted(d.glob("*.md")):
+            if not fp.is_file():
+                continue
+            rel = fp.relative_to(Path(vault_dir)).as_posix()
+            stem = fp.stem
+            created_iso, created_ts = _proposal_date_info(rel)
+            age_days = int((now - created_ts) // 86400) if created_ts is not None else 0
+            try:
+                p = proposals.parse_proposal(fp)
+            except Exception as e:
+                items.append({
+                    "relpath": rel, "type": "", "actor": "", "run_id": "",
+                    "status": "malformed", "reversible": False, "source_refs": [],
+                    "reject_reason": "", "merged_at": "", "title": stem,
+                    "created": created_iso, "age_days": age_days, "error": str(e),
+                })
+                continue
+            items.append({
+                "relpath": rel, "type": p["type"], "actor": p["actor"],
+                "run_id": p["run_id"], "status": p["status"],
+                "reversible": p["reversible"], "source_refs": p["source_refs"],
+                "reject_reason": p["reject_reason"], "merged_at": p["merged_at"],
+                "title": p["title"] or stem,
+                "created": created_iso, "age_days": age_days,
+            })
+
+        items.sort(key=_proposal_sort_key)
+        return {"proposals": items}
+
+    @app.post("/api/memory/proposals/{relpath:path}/adopt")
+    async def memory_proposal_adopt(relpath: str) -> dict:
+        """Move an awaiting_review proposal to adopted (actor "human").
+
+        The API never applies the change; the executor merges adopted
+        proposals on its next cycle.
+        """
+        from . import proposals
+
+        rel = _guard_proposal_relpath(relpath)
+        fp = Path(vault_dir) / rel
+        if not fp.is_file():
+            raise HTTPException(status_code=404, detail="proposal not found")
+        try:
+            cur = proposals.parse_proposal(fp)["status"]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"malformed proposal: {e}")
+        if cur != "awaiting_review":
+            raise HTTPException(
+                status_code=400, detail=f"status is {cur!r}, must be awaiting_review")
+        try:
+            proposals.advance(vault_dir, db_conn, rel, "adopted", actor="human")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        return {"relpath": rel, "status": "adopted"}
+
+    @app.post("/api/memory/proposals/{relpath:path}/reject")
+    async def memory_proposal_reject(relpath: str, request: Request) -> dict:
+        """Move an awaiting_review proposal to rejected, threading the reason
+        into reject_reason (the trust-upgrade data source)."""
+        from . import proposals
+
+        rel = _guard_proposal_relpath(relpath)
+        fp = Path(vault_dir) / rel
+        if not fp.is_file():
+            raise HTTPException(status_code=404, detail="proposal not found")
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        reason = body.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise HTTPException(status_code=400, detail="reason is required")
+        reason = reason.strip()
+        try:
+            cur = proposals.parse_proposal(fp)["status"]
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"malformed proposal: {e}")
+        if cur != "awaiting_review":
+            raise HTTPException(
+                status_code=400, detail=f"status is {cur!r}, must be awaiting_review")
+        try:
+            proposals.advance(vault_dir, db_conn, rel, "rejected",
+                              actor="human", reject_reason=reason)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        return {"relpath": rel, "status": "rejected", "reject_reason": reason}
+
+    @app.get("/api/memory/status")
+    async def memory_status() -> dict:
+        """The 30-second scan target: proposal counts + review queue, the
+        background-agent trigger state, and recall demand over 7/30 days."""
+        from . import proposals
+        from .vault.db import recall as recall_db
+
+        # proposals: by_status counts + the awaiting_review review queue.
+        items = []
+        d = Path(vault_dir) / proposals.PROPOSALS_DIR
+        if d.is_dir():
+            now = time.time()
+            for fp in sorted(d.glob("*.md")):
+                if not fp.is_file():
+                    continue
+                rel = fp.relative_to(Path(vault_dir)).as_posix()
+                stem = fp.stem
+                created_iso, created_ts = _proposal_date_info(rel)
+                age_days = int((now - created_ts) // 86400) if created_ts is not None else 0
+                try:
+                    p = proposals.parse_proposal(fp)
+                except Exception:
+                    p = {"status": "malformed", "type": "", "actor": "", "title": stem}
+                items.append({
+                    "relpath": rel, "type": p.get("type", ""), "actor": p.get("actor", ""),
+                    "age_days": age_days, "title": p.get("title") or stem, "status": p["status"],
+                })
+        # by_status always carries the full status set (stable shape for the
+        # poller); awaiting holds the review queue (oldest first).
+        by_status = {
+            s: 0 for s in ("pending", "processing", "awaiting_review", "adopted",
+                           "rejected", "expired", "merged", "failed", "malformed")}
+        awaiting = []
+        for it in items:
+            by_status[it["status"]] = by_status.get(it["status"], 0) + 1
+            if it["status"] == "awaiting_review":
+                awaiting.append({
+                    "relpath": it["relpath"], "type": it["type"], "actor": it["actor"],
+                    "age_days": it["age_days"], "title": it["title"],
+                })
+        # by_status keys are stable regardless of seed order; awaiting first.
+        awaiting.sort(key=lambda x: -x["age_days"])
+
+        # agents: read trigger_state directly. The background-agent configs
+        # (arm_count, budget_runs_per_day) are loaded in main.py and NOT passed
+        # to create_app, so the config-derived caps are unavailable here → null.
+        today = datetime.now().strftime("%Y-%m-%d")
+        agents = []
+        rows = db_conn.execute(
+            "SELECT agent, last_run_ts, armed, runs_date, runs_count "
+            "FROM trigger_state ORDER BY agent"
+        ).fetchall()
+        for r in rows:
+            runs_today = r["runs_count"] or 0 if r["runs_date"] == today else 0
+            agents.append({
+                "alias": r["agent"], "armed": r["armed"] or 0,
+                "armed_target": None,  # config-derived (arm_count), unavailable here
+                "last_run": r["last_run_ts"] or 0, "runs_today": runs_today,
+                "runs_cap": None,  # config-derived (budget_runs_per_day), unavailable
+            })
+
+        # recall: demand over 7d (failed) + 30d (top docs). Old DBs may lack
+        # the recall tables → zeros + recall_error, never a 500.
+        recall_out: dict = {}
+        try:
+            all_traffic = recall_db.doc_traffic(db_conn, time.time() - 30 * 86400)
+            recall_out = {
+                "failed_7d": len(recall_db.failed_queries(db_conn, time.time() - 7 * 86400)),
+                "docs_tracked": len(all_traffic),
+                "top": [{"path": t["path"], "weighted": sum(t["weights"].values()),
+                         "last_hit": t["last_hit"]} for t in all_traffic[:5]],
+            }
+        except Exception as e:
+            recall_out = {
+                "failed_7d": 0, "docs_tracked": 0, "top": [], "recall_error": str(e),
+            }
+
+        return {"proposals": {"by_status": by_status, "awaiting_review": awaiting},
+                "agents": agents, "recall": recall_out}
 
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):

@@ -16,8 +16,13 @@ State machine (illegal transitions raise ``ValueError``):
 
 Authorization tier (constitution §5, "授权初分表"):
 
-- ``entity_index`` / ``link``   → auto channel (adopted after processing,
-  reversible forced to true — derivatives, cheap to rebuild/undo)
+The §5 initial split covered the v1 five types (entity_index, link, summary,
+correction, reminder). ``archive`` was added in v2 as the sentinel's archival
+channel (reversible cold storage → auto, recoverable per memory-recall.md 模块 5).
+
+- ``entity_index`` / ``link`` / ``archive`` → auto channel (adopted after
+  processing, reversible forced to true — derivatives / cold storage, cheap
+  to rebuild or restore)
 - ``summary`` / ``correction`` / ``reminder`` → review channel
   (awaiting_review after processing; reversible is content-dependent, set by
   the producer at creation)
@@ -39,9 +44,9 @@ from .vault.orchestration.file_ops import apply_change
 
 PROPOSALS_DIR = "suggestions"
 
-VALID_TYPES = frozenset({"entity_index", "link", "summary", "correction", "reminder"})
+VALID_TYPES = frozenset({"entity_index", "link", "summary", "correction", "reminder", "archive"})
 
-AUTO_TYPES = frozenset({"entity_index", "link"})
+AUTO_TYPES = frozenset({"entity_index", "link", "archive"})
 REVIEW_TYPES = frozenset({"summary", "correction", "reminder"})
 
 TRANSITIONS: dict[str, frozenset[str]] = {
@@ -267,6 +272,8 @@ def advance(
         new_data["reject_reason"] = reject_reason
     if new_status == "merged":
         new_data["merged_at"] = datetime.now().isoformat(timespec="seconds")
+    # Auto types (entity_index, link, archive) always force reversible=True:
+    # derivatives are cheap to rebuild; archive is recoverable cold storage.
     if cur == "processing" and new_status == "adopted" and new_data["type"] in AUTO_TYPES:
         new_data["reversible"] = True
 

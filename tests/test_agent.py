@@ -73,15 +73,15 @@ def test_validate_error_replays_input_and_type_hint(tmp_path: Path):
     assert result == err
 
 
-def test_tools_schema_has_nine_tools():
+def test_tools_schema_has_ten_tools():
     from server.agent import TOOLS
 
     names = {t["function"]["name"] for t in TOOLS}
-    assert len(names) == 9
+    assert len(names) == 10
     assert names == {
         "read_doc", "search_docs", "list_files",
         "write_doc", "edit_doc", "delete_doc", "move_docs",
-        "get_related_docs", "recent_changes",
+        "get_related_docs", "recent_changes", "recall_stats",
     }
 
 
@@ -91,7 +91,8 @@ def test_tool_permission_declarations():
     ask = {name for name, t in TOOL_REGISTRY.items() if t.permission == "ask"}
     allow = {name for name, t in TOOL_REGISTRY.items() if t.permission == "allow"}
     assert ask == {"write_doc", "edit_doc", "delete_doc", "move_docs"}
-    assert allow == {"read_doc", "search_docs", "list_files", "get_related_docs", "recent_changes"}
+    assert allow == {"read_doc", "search_docs", "list_files", "get_related_docs",
+                     "recent_changes", "recall_stats"}
     assert ask.isdisjoint(allow)
 
 
