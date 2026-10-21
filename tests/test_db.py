@@ -124,6 +124,18 @@ def test_log_change_new_hash(db_conn):
     assert changes[0]["new_hash"] == "abc123"
 
 
+def test_log_change_batch_id(db_conn):
+    # Default '' (producer without a batch) and explicit run_id.
+    log_change(db_conn, "a.md", "created")
+    log_change(db_conn, "b.md", "created", batch_id="batch-20261021-1930")
+    default = db_conn.execute(
+        "SELECT batch_id FROM change_log WHERE path = 'a.md'").fetchone()[0]
+    explicit = db_conn.execute(
+        "SELECT batch_id FROM change_log WHERE path = 'b.md'").fetchone()[0]
+    assert default == ""
+    assert explicit == "batch-20261021-1930"
+
+
 def test_change_log_seq_monotonic(db_conn):
     log_change(db_conn, "a.md", "created", ts=100.0)
     log_change(db_conn, "b.md", "modified", ts=200.0)
@@ -160,6 +172,56 @@ def test_migration_from_old_schema(tmp_path):
         assert changes[0]["path"] == "old.md"
         assert changes[0]["action"] == "created"
         assert changes[0]["source"] == "unknown"
+    finally:
+        conn.close()
+
+
+def test_change_log_batch_id_migration(tmp_path):
+    """Old change_log DB (no batch_id column) gets it on init_db.
+
+    The pre-existing row keeps the default '' (nothing may require a
+    batch_id to be non-empty), and re-running init_db is a no-op.
+    """
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE change_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            source TEXT NOT NULL DEFAULT 'unknown',
+            op TEXT NOT NULL CHECK(op IN ('create','update','delete','move')),
+            path TEXT NOT NULL,
+            old_path TEXT DEFAULT '',
+            new_hash TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO change_log (ts, source, op, path) "
+        "VALUES (100.0, 'web', 'create', 'old.md')"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(change_log)")}
+        assert "batch_id" in cols
+        row = conn.execute(
+            "SELECT batch_id FROM change_log WHERE path = 'old.md'"
+        ).fetchone()
+        assert row[0] == ""
+    finally:
+        conn.close()
+
+    # Idempotency: a second init_db on the migrated DB is a no-op.
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT batch_id FROM change_log WHERE path = 'old.md'"
+        ).fetchone()
+        assert row[0] == ""
     finally:
         conn.close()
 

@@ -48,6 +48,7 @@ def apply_change(
     from_path: str = "",
     new_hash: str = "",
     update_refs: bool = True,
+    batch_id: str = "",
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
@@ -58,6 +59,9 @@ def apply_change(
     ``update_refs`` controls whether ``_update_references`` is called for
     moved actions. Set to False when the caller will handle reference
     updates in batch (e.g. directory rename with many files).
+
+    ``batch_id`` is the run_id that produced the change (passed through to
+    the change_log row); '' when the caller has no batch.
     """
     with _db_lock:
         if action in ("created", "modified", "create", "update"):
@@ -73,13 +77,14 @@ def apply_change(
                 digest = hashlib.sha256(content).hexdigest()
                 mtime = fp.stat().st_mtime
             upsert_file(conn, path, digest, mtime)
-            log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
+            log_change(conn, path, action, from_path=from_path, source=source,
+                       new_hash=digest, batch_id=batch_id)
             if not _is_index_excluded(path):
                 index_segments(conn, vault_dir, path)
                 graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
             delete_file(conn, path)
-            log_change(conn, path, action, source=source)
+            log_change(conn, path, action, source=source, batch_id=batch_id)
             if not _is_index_excluded(path):
                 delete_segments(conn, path)
                 graph_delete_file(conn, path)
@@ -110,13 +115,15 @@ def apply_change(
                     old_hash = row[0]
             if from_path:
                 delete_file(conn, from_path)
-            log_change(conn, path, action, from_path=from_path, source=source, new_hash=digest)
+            log_change(conn, path, action, from_path=from_path, source=source,
+                       new_hash=digest, batch_id=batch_id)
             # A move-after-edit produces two records (move + update): the move
             # captures the path change, the update captures the content change.
             # Semantically complete; a single call performs no duplicate index
             # handling (index_segments runs once below for the new path).
             if old_hash and old_hash != digest:
-                log_change(conn, path, "modified", source=source, new_hash=digest)
+                log_change(conn, path, "modified", source=source, new_hash=digest,
+                           batch_id=batch_id)
             if from_path and not _is_index_excluded(from_path):
                 delete_segments(conn, from_path)
                 graph_delete_file(conn, from_path)

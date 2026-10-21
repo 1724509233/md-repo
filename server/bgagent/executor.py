@@ -112,7 +112,8 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(rel, "executor")
     atomic_write_bytes(fp, _render_entities(out).encode("utf-8"))
-    apply_change(conn, vault, rel, "update" if existed else "create", source="executor")
+    apply_change(conn, vault, rel, "update" if existed else "create",
+                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 # ── link: append a wikilink line inside the <!-- related --> block ───────
@@ -154,7 +155,8 @@ def _merge_link(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     register_write(rel, "executor")
     atomic_write_bytes(fp, text.encode("utf-8"))
-    apply_change(conn, vault, rel, "update", source="executor")
+    apply_change(conn, vault, rel, "update", source="executor",
+                 batch_id=str(p.get("run_id") or ""))
 
 
 # ── summary: body lands next to the source doc as <stem>-summary.md ──────
@@ -179,7 +181,8 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     out_fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(out_rel, "executor")
     atomic_write_bytes(out_fp, text.encode("utf-8"))
-    apply_change(conn, vault, out_rel, "update" if existed else "create", source="executor")
+    apply_change(conn, vault, out_rel, "update" if existed else "create",
+                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 # ── correction: exact replacement in the original doc ────────────────────
@@ -216,7 +219,8 @@ def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     register_write(f, "executor")
     atomic_write_bytes(fp, text.replace(old, new, 1).encode("utf-8"))
-    apply_change(conn, vault, f, "update", source="executor")
+    apply_change(conn, vault, f, "update", source="executor",
+                 batch_id=str(p.get("run_id") or ""))
 
 
 # ── archive: move a doc to archive/<path> (v2 cold storage) ───────────────
@@ -267,7 +271,8 @@ def _merge_archive(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     register_write(dest_rel, "executor")
     register_write(rel, "executor")  # source deletion attribution (prune pattern)
     src_fp.rename(dest_fp)
-    apply_change(conn, vault, dest_rel, "move", from_path=rel, source="executor")
+    apply_change(conn, vault, dest_rel, "move", from_path=rel, source="executor",
+                 batch_id=str(p.get("run_id") or ""))
 
 
 _HANDLERS = {

@@ -195,6 +195,22 @@ def test_merge_ledgered_with_executor_source(vault_dir, db_conn):
     assert any(r["path"] == rel and r["op"] == "update" for r in rows)
 
 
+def test_merge_artifact_rows_carry_batch_id(vault_dir, db_conn):
+    # _adopted creates both proposals with run_id="batch-test"; after the
+    # merge, the artifact file rows and the proposal state rows all carry it.
+    rel_e = _adopted(vault_dir, db_conn, "entity_index",
+                     payload={"entity": "batch-e", "value": "v1"})
+    rel_s = _adopted(vault_dir, db_conn, "summary", title="Batch S",
+                     body="body text")
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 2
+    for path in ("index/entities.md", "notes/test-summary.md", rel_e, rel_s):
+        rows = [r[0] for r in db_conn.execute(
+            "SELECT batch_id FROM change_log WHERE path = ?", (path,))]
+        assert rows
+        assert all(b == "batch-test" for b in rows)
+
+
 # ── path traversal guard ─────────────────────────────────────────────────
 
 def test_traversal_link_escape_parked_failed(vault_dir, db_conn):

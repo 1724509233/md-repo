@@ -15,17 +15,20 @@ def log_change(
     ts: float | None = None,
     source: str = "unknown",
     new_hash: str = "",
+    batch_id: str = "",
 ) -> None:
     """Append a change event to the change_log.
 
     ``action`` accepts legacy names (created/modified/deleted/moved) or new
     op names (create/update/delete/move); it is normalized to the new op name.
+    ``batch_id`` is the run_id that produced the change ('' when the producer
+    did not record one).
     """
     op = _ACTION_TO_OP.get(action, action)
     conn.execute(
-        "INSERT INTO change_log (ts, source, op, path, old_path, new_hash) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (ts if ts is not None else time.time(), source, op, path, from_path, new_hash),
+        "INSERT INTO change_log (ts, source, op, path, old_path, new_hash, batch_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (ts if ts is not None else time.time(), source, op, path, from_path, new_hash, batch_id),
     )
     conn.commit()
 

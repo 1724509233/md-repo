@@ -74,6 +74,20 @@ def _ensure_recall_traffic_col(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_change_log_batch_id(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add the batch_id column to change_log.
+
+    The batch id is the run_id that produced the change (proposal
+    frontmatter ``run_id``); old rows keep the default '' — nothing may
+    require a batch_id to be non-empty. Same idiom as
+    :func:`_ensure_notification_cols`: PRAGMA table_info check, ALTER only
+    when the column is missing, safe to call on every startup.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(change_log)")}
+    if "batch_id" not in cols:
+        conn.execute("ALTER TABLE change_log ADD COLUMN batch_id TEXT DEFAULT ''")
+
+
 def init_db(db_path: Path) -> sqlite3.Connection:
     """Create (or open) the index database and ensure the schema exists.
 
@@ -102,7 +116,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             op TEXT NOT NULL CHECK(op IN ('create','update','delete','move')),
             path TEXT NOT NULL,
             old_path TEXT DEFAULT '',
-            new_hash TEXT DEFAULT ''
+            new_hash TEXT DEFAULT '',
+            batch_id TEXT DEFAULT ''
         )
         """
     )
@@ -112,6 +127,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_changelog_path ON change_log(path)"
     )
+    _ensure_change_log_batch_id(conn)
     # Trigger arming checkpoints (memory-runtime v1/v2): per bgagent row
     # tracking arming counter, cooldown anchor, the daily run budget spend,
     # and the two recall-ledger cursors (v2, independent id sequences).

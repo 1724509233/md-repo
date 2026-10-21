@@ -223,3 +223,16 @@ def test_transitions_ledgered_with_actor_source(vault_dir, db_conn):
     by_actor = {r["source"] for r in rows}
     assert "role-a" in by_actor and "role-b" in by_actor
     assert all(r["op"] == "update" for r in rows)
+
+
+def test_transitions_ledgered_with_batch_id(vault_dir, db_conn):
+    # run_id "batch-test" (set by _create) must reach every transition row,
+    # whether the transition comes from process_proposal or a direct advance.
+    rel = _create(vault_dir, db_conn, type="summary")
+    proposals.process_proposal(vault_dir, db_conn, rel, actor="consolidator")
+    proposals.advance(vault_dir, db_conn, rel, "rejected", actor="human",
+                      reject_reason="no")
+    rows = [r[0] for r in db_conn.execute(
+        "SELECT batch_id FROM change_log WHERE path = ?", (rel,))]
+    assert len(rows) == 3  # processing, awaiting_review, rejected
+    assert rows == ["batch-test"] * 3

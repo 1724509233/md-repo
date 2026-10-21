@@ -279,8 +279,10 @@ def advance(
 
     atomic_write_bytes(fp, _render_frontmatter(new_data, body).encode("utf-8"))
 
-    # Ledger: every transition is a change event (source = acting role).
-    apply_change(conn, Path(vault_dir), relpath, "update", source=actor)
+    # Ledger: every transition is a change event (source = acting role);
+    # batch_id = the proposal's run_id (the batch that produced it).
+    apply_change(conn, Path(vault_dir), relpath, "update", source=actor,
+                 batch_id=str(data.get("run_id") or ""))
 
     out = parse_proposal(fp)
     out["relpath"] = relpath
