@@ -226,6 +226,8 @@ return {cfg.alias, "executor", "agent", *all_aliases}
 | `synthetic` | 其余所有 source | 后台 agent 合成流量（**不参与价值判断**） |
 
 > 【vault 复盘 模块 1】"每文档挂 `doc.traffic = {human, on_demand, synthetic}`；synthetic 单独存，不参与价值判断"。
+>
+> **四类→三类收敛**【vault 复盘 模块 3】：memory-recall 曾提出第四类 `governance`（"任务注册时强制声明流量身份……含治理任务自身产生的流量"）；实现收敛为三类，治理流量（sentinel/watchdog 等）归入 `synthetic`——synthetic 不参与价值判断，功能等价；`recall_log.source` 列保留原始身份，可区分。此为"watchdog 搜索被分类 synthetic"的分类依据（已核对 vault 原文确认）。
 
 ### 5.2 表结构与写口【代码】
 
@@ -414,6 +416,8 @@ api.py:513-516 注释："Constitution: the console only moves proposal state via
 | L3 | **存量未审 adopted review 提案无处置策略** | 若库中已存在 REVIEW_TYPES 型且 `status: adopted` 的提案（授权策略启用前创建），执行器将直接合并 | 无回滚/隔离机制 |
 | L4 | **`relates_to` 外键未实现** | 提案 frontmatter 无 `relates_to` 字段；proposal 间关联仅靠 `source_refs`（指向源文档，非其他提案） | 无法表达提案间的依赖/关联关系 |
 | L5 | **v1 审查遗留 P2/P3 nit 八条未动** | 见 `docs/review/2026-10-21-e577156-review-checklist.md` H4 | 低优先级代码质量项 |
+| L6 | **`change_log` 无 `batch_id` 列** | `schema.py:98-106` 列 = `seq/ts/source/op/path/old_path/new_hash`，无 batch_id；提案 frontmatter 的 `run_id` 批次语义未传播到 change_log 行 | 宪法铁律 2 / mcp-scope 要求状态迁移"带 actor / batch_id"：actor ✓（`source`）、事件引用 ✓（`old_path`/`new_hash`）、batch_id ✗ |
+| L7 | **通知行无结构化终审材料字段** | `notifications` 表（notify.py）仅 `summary`（agent 末段文本）+ `report_path`；`query_gap_detected→同步主 agent` 通道未实现（config 仅 notify/report 两种 action） | 宪法 §8 / mcp-scope 设计点 3 要求通知打包终审材料（内容+来源+处理结论+相似记忆比对），现以 summary 文本+报告指针软满足 |
 
 ---
 
