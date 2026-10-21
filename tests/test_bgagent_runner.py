@@ -471,6 +471,65 @@ def test_hooks_receive_run_report(tmp_path: Path):
     assert seen[0].summary == "合并了 2 篇碎片。"
 
 
+def test_run_report_collects_proposal_paths(tmp_path: Path):
+    """Run that wrote proposal files → RunReport carries their paths (sorted);
+    non-proposal writes are excluded."""
+    seen = []
+
+    class Hook(NotificationHook):
+        def notify(self, r: RunReport) -> None:
+            seen.append(r)
+
+    events = [
+        Event("round", {"n": 1}),
+        Event("tool_call", {"id": "c1", "name": "write_doc",
+                            "args": {"path": "suggestions/2026-10-21_summary_b.md",
+                                     "content": "x"}}),
+        Event("tool_result", {"id": "c1",
+                              "result": "Saved: suggestions/2026-10-21_summary_b.md (1 chars)"}),
+        Event("tool_call", {"id": "c2", "name": "write_doc",
+                            "args": {"path": "suggestions/2026-10-21_link_a.md",
+                                     "content": "y"}}),
+        Event("tool_result", {"id": "c2",
+                              "result": "Saved: suggestions/2026-10-21_link_a.md (1 chars)"}),
+        Event("tool_call", {"id": "c3", "name": "write_doc",
+                            "args": {"path": "notes/b.md", "content": "z"}}),
+        Event("tool_result", {"id": "c3", "result": "Saved: notes/b.md (1 chars)"}),
+        Event("token", {"text": "完成。"}),
+        Event("done", {"reason": "final"}),
+    ]
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(events)
+
+    async def go():
+        return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
+
+    report = asyncio.run(go())
+    assert report.files_changed == 3
+    assert seen[0].proposal_paths == [
+        "suggestions/2026-10-21_link_a.md", "suggestions/2026-10-21_summary_b.md"]
+
+
+def test_run_report_no_proposal_writes_empty(tmp_path: Path):
+    """Run with only non-proposal writes → proposal_paths stays at the default."""
+    seen = []
+
+    class Hook(NotificationHook):
+        def notify(self, r: RunReport) -> None:
+            seen.append(r)
+
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    assert not seen[0].proposal_paths  # 无非提案写 → 空（落库为 ''）
+
+
 def test_retention_prunes_old_reports(tmp_path: Path):
     """写后剪枝到 30 份（删最旧）。"""
     cfg = _cfg(tmp_path)

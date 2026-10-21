@@ -172,6 +172,21 @@ def _derive_kind(vault: Path, files_changed: set[str]) -> str:
     return "batch"
 
 
+def _proposal_paths(files_changed: set[str]) -> list[str]:
+    """Vault-relative proposal paths (.md under suggestions/) the run touched.
+
+    Mechanically derived from the run's own file-op tracking — no vault
+    re-scan, no content reads. Feeds the notifications row so the console
+    UI can list/deep-link the run's proposals without trusting the summary.
+    """
+    from ..proposals import PROPOSALS_DIR
+
+    return sorted(
+        p for p in files_changed
+        if p.startswith(PROPOSALS_DIR + "/") and p.endswith(".md")
+    )
+
+
 def _cell(op: dict) -> str:
     """结果摘要单元格：interrupted 固定 —；否则取首行截断 80 字；| 转义兜底。"""
     if op.get("status") == "interrupted":
@@ -366,6 +381,7 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         report_path=report_path, ops_total=len(stats.ops),
         files_changed=len(stats.files_changed), summary=stats.summary[:200],
         kind=kind,
+        proposal_paths=_proposal_paths(stats.files_changed),
     )
     for hook in hooks or []:
         hook.notify(report)

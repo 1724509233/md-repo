@@ -7,6 +7,7 @@ delivery lives in the API layer (/api/sync reads the same table).
 from __future__ import annotations
 
 import logging
+import json
 import time
 from dataclasses import dataclass
 
@@ -25,6 +26,7 @@ class RunReport:
     files_changed: int
     summary: str           # agent's final text, truncated
     kind: str = "batch"    # "batch" (report-only) | "review" (needs human attention)
+    proposal_paths: list[str] = ()  # vault-relative proposal paths this run produced
 
 
 class NotificationHook:
@@ -51,10 +53,12 @@ class InAppHook(NotificationHook):
         with _db_lock:
             self._conn.execute(
                 "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
-                "ops_total, files_changed, kind) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ops_total, files_changed, kind, proposal_paths) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (time.time(), report.alias, report.name, report.status,
                  report.report_path, report.summary,
-                 report.ops_total, report.files_changed, report.kind),
+                 report.ops_total, report.files_changed, report.kind,
+                 json.dumps(report.proposal_paths) if report.proposal_paths else ""),
             )
             self._conn.commit()
         logger = logging.getLogger("md-vault.bgagent")

@@ -1,6 +1,7 @@
 """Tests for notification hooks and API endpoints."""
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -39,6 +40,24 @@ def test_inapp_hook_writes_ops_stats(db_conn):
     assert row["files_changed"] == 3
 
 
+def test_inapp_hook_writes_proposal_paths(db_conn):
+    """proposal_paths 列表 → JSON 数组字符串；缺省（无提案）→ ''。"""
+    InAppHook(db_conn).notify(
+        _report(proposal_paths=["suggestions/2026-10-21_link_a.md",
+                                "suggestions/2026-10-21_summary_b.md"]))
+    row = db_conn.execute(
+        "SELECT proposal_paths FROM notifications").fetchone()
+    assert json.loads(row["proposal_paths"]) == [
+        "suggestions/2026-10-21_link_a.md",
+        "suggestions/2026-10-21_summary_b.md"]
+
+    InAppHook(db_conn).notify(_report(alias="no-proposals"))
+    row = db_conn.execute(
+        "SELECT proposal_paths FROM notifications WHERE alias = 'no-proposals'"
+    ).fetchone()
+    assert row["proposal_paths"] == ""
+
+
 def test_notifications_migration_is_idempotent(tmp_path: Path, db_conn):
     """连调两次 schema 迁移不报错（PRAGMA 检查缺列才 ALTER）。"""
     from server.vault.db import schema
@@ -56,6 +75,63 @@ def test_notifications_migration_is_idempotent(tmp_path: Path, db_conn):
     assert row["files_changed"] == 0
 
 
+def test_notifications_proposal_paths_migration(tmp_path: Path):
+    """旧 notifications 库（无 proposal_paths 列）经 init_db 补列。
+
+    存量行保持 ''（不得要求非空），第二次 init_db 幂等。
+    """
+    import sqlite3
+
+    from server.vault import init_db
+
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            alias TEXT NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_path TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            read INTEGER NOT NULL DEFAULT 0,
+            ops_total INTEGER NOT NULL DEFAULT 0,
+            files_changed INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'batch'
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path) "
+        "VALUES (100.0, 'old', 'old', 'ok', 'x.md')"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(notifications)")}
+        assert "proposal_paths" in cols
+        row = conn.execute(
+            "SELECT proposal_paths FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row[0] == ""
+    finally:
+        conn.close()
+
+    # 幂等：迁移后的库再 init_db 一次是 no-op。
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT proposal_paths FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row[0] == ""
+    finally:
+        conn.close()
+
+
 def test_inapp_hook_holds_db_lock(db_conn):
     """INSERT 必须持 _db_lock（代码库写路径约定）。"""
     from server.vault.db.schema import _db_lock
@@ -70,7 +146,8 @@ def test_notifications_api_roundtrip(app, db_conn):
     """GET 未读 → POST read 标记已读。"""
     from fastapi.testclient import TestClient
 
-    InAppHook(db_conn).notify(_report())
+    InAppHook(db_conn).notify(
+        _report(proposal_paths=["suggestions/2026-10-21_link_a.md"]))
     client = TestClient(app)
 
     r = client.get("/api/notifications", params={"unread": 1})
@@ -82,6 +159,8 @@ def test_notifications_api_roundtrip(app, db_conn):
     # /api/notifications 返回含 ops 统计两列
     assert items[0]["ops_total"] == 5
     assert items[0]["files_changed"] == 2
+    # L7: proposal_paths 以 JSON 数组字符串暴露
+    assert json.loads(items[0]["proposal_paths"]) == ["suggestions/2026-10-21_link_a.md"]
 
     r = client.post("/api/notifications/read", json={"all": True})
     assert r.status_code == 200
@@ -124,7 +203,8 @@ def test_sync_response_includes_notifications(app, db_conn):
     """/api/sync 响应含 ts > last_sync 的未读通知，上限 50。"""
     from fastapi.testclient import TestClient
 
-    InAppHook(db_conn).notify(_report())
+    InAppHook(db_conn).notify(
+        _report(proposal_paths=["suggestions/2026-10-21_link_a.md"]))
     client = TestClient(app)
 
     r = client.post("/api/sync", json={
@@ -135,6 +215,8 @@ def test_sync_response_includes_notifications(app, db_conn):
     notifs = body.get("notifications", [])
     assert len(notifs) == 1
     assert notifs[0]["alias"] == "notes-organizer"
+    # L7: sync 通道同样暴露 proposal_paths
+    assert json.loads(notifs[0]["proposal_paths"]) == ["suggestions/2026-10-21_link_a.md"]
 
     # last_sync 设为未来 → 无通知
     r = client.post("/api/sync", json={

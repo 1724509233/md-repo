@@ -33,6 +33,9 @@ def _ensure_notification_cols(conn: sqlite3.Connection) -> None:
         ("ops_total", "ALTER TABLE notifications ADD COLUMN ops_total INTEGER NOT NULL DEFAULT 0"),
         ("files_changed", "ALTER TABLE notifications ADD COLUMN files_changed INTEGER NOT NULL DEFAULT 0"),
         ("kind", "ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT 'batch'"),
+        # JSON array string of vault-relative proposal paths the run produced
+        # ('' when none) — lets the console UI deep-link without parsing summary.
+        ("proposal_paths", "ALTER TABLE notifications ADD COLUMN proposal_paths TEXT DEFAULT ''"),
     ):
         if col not in cols:
             conn.execute(ddl)
@@ -209,7 +212,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             read INTEGER NOT NULL DEFAULT 0,
             ops_total INTEGER NOT NULL DEFAULT 0,
             files_changed INTEGER NOT NULL DEFAULT 0,
-            kind TEXT NOT NULL DEFAULT 'batch'
+            kind TEXT NOT NULL DEFAULT 'batch',
+            proposal_paths TEXT DEFAULT ''
         )
         """
     )
