@@ -504,10 +504,11 @@ class TestFlush:
         watcher._flush({"dirA/notes.md", "dirB/notes.md"})
         # Different hashes → no move
         assert events["moved"] == []
-        # normcase lowercases on Windows: dirA → dira
-        assert "dira/notes.md" in events["deleted"]
+        # normcase lowercases on Windows, is identity on macOS/Linux —
+        # match case-insensitively so the test passes on both platforms.
+        assert any(k.lower() == "dira/notes.md" for k in events["deleted"])
         # dirB/notes.md was modified (hash changed), not created
-        assert "dirb/notes.md" in events["modified"]
+        assert any(k.lower() == "dirb/notes.md" for k in events["modified"])
 
     def test_directory_rename(self, tmp_path):
         """Rename a directory → all files inside emit moved."""
