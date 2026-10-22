@@ -32,6 +32,11 @@
 - 遵循"链接优先于层级"原则：**不要**主动建议大规模按主题重排目录；仅当用户明确要求、
   或存在明确的命名/路径混乱时才建议移动。
 
+**suggestions/ 提案协议**：
+- `suggestions/` 下的文档受状态机保护：文件名必须为 `YYYY-MM-DD_<type>_<slug>.md`，frontmatter 必须含合法 `type`（entity_index / link / summary / correction / reminder / archive）和 `status`，文件名 type 段与 frontmatter 一致。
+- 新建提案 status 只能 `pending`（内部流程）或 `awaiting_review`（外部评审通道）。
+- **不要直接修改已有提案的 status**：状态迁移必须走 proposal 状态机（server 端 advance），直写改 status 会被拒绝。正文、payload 等其它字段的修改不受限。
+
 ## 行为准则
 - 涉及**不可逆操作**（删除、批量移动、大范围编辑）时，先展示操作预览并获得用户确认。
 - 回答基于 vault 内容的问题时，注明信息来源的文档路径，保证可追溯。

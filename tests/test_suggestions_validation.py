@@ -1,0 +1,214 @@
+"""Write-path validation for direct suggestions/ writes.
+
+Raw file writes (write_doc/edit_doc via the agent tools and MCP) must never
+forge proposal state: validate_suggestions_write enforces the filename /
+frontmatter / status invariants, and status changes are rejected so that
+transitions still go through the state machine (proposals.advance).
+"""
+from __future__ import annotations
+
+import pytest
+
+from server import proposals
+from server.agent import ToolContext, execute_tool
+
+PATH = "suggestions/2026-10-22_summary_x.md"
+
+
+def _fm(status="pending", type_="summary", extra="", body="body text"):
+    return f"---\ntype: {type_}\nstatus: {status}{extra}\n---\n# T\n\n{body}\n"
+
+
+# ── new file (old_text=None) ──────────────────────────────────────────────
+
+def test_new_file_pending_allowed():
+    assert proposals.validate_suggestions_write(PATH, _fm("pending")) is None
+
+
+def test_new_file_awaiting_review_allowed():
+    assert proposals.validate_suggestions_write(PATH, _fm("awaiting_review")) is None
+
+
+@pytest.mark.parametrize("status", ["processing", "merged", ""])
+def test_new_file_illegal_status_rejected(status):
+    err = proposals.validate_suggestions_write(PATH, _fm(status))
+    assert err is not None
+    assert err.startswith("Error: new proposals start with status: pending")
+    assert f"got '{status}'" in err
+
+
+def test_new_file_missing_status_key_rejected():
+    err = proposals.validate_suggestions_write(
+        PATH, "---\ntype: summary\n---\nbody\n")
+    assert err is not None
+    assert "new proposals start with status: pending" in err
+
+
+# ── frontmatter block required ────────────────────────────────────────────
+
+def test_new_file_no_frontmatter_rejected():
+    err = proposals.validate_suggestions_write(PATH, "# T\n\nbody\n")
+    assert err is not None
+    assert "YAML frontmatter block" in err
+
+
+def test_new_file_frontmatter_not_dict_rejected():
+    err = proposals.validate_suggestions_write(PATH, "---\njust a string\n---\nbody\n")
+    assert err is not None
+    assert "YAML frontmatter block" in err
+
+
+def test_new_file_empty_frontmatter_block_rejected():
+    err = proposals.validate_suggestions_write(PATH, "---\n\n---\nbody\n")
+    assert err is not None
+    assert "YAML frontmatter block" in err
+
+
+# ── type: whitelist + filename consistency ────────────────────────────────
+
+def test_type_not_in_whitelist_rejected():
+    err = proposals.validate_suggestions_write(
+        "suggestions/2026-10-22_bogus_x.md", _fm("pending", type_="bogus"))
+    assert err is not None
+    assert "frontmatter type must be one of" in err
+    # Sorted whitelist is spelled out for the LLM.
+    for t in ("archive", "correction", "entity_index", "link", "reminder", "summary"):
+        assert t in err
+
+
+def test_type_mismatch_filename_rejected():
+    err = proposals.validate_suggestions_write(PATH, _fm("pending", type_="link"))
+    assert err is not None
+    assert "must match the filename type segment" in err
+
+
+# ── path shape: top level only ────────────────────────────────────────────
+
+def test_subdirectory_path_rejected():
+    err = proposals.validate_suggestions_write(
+        "suggestions/sub/x.md", _fm("pending"))
+    assert err is not None
+    assert "top-level files" in err
+    assert "suggestions/sub/x.md" in err
+
+
+# ── filename shape ────────────────────────────────────────────────────────
+
+def test_invalid_calendar_date_rejected():
+    err = proposals.validate_suggestions_write(
+        "suggestions/2026-13-40_summary_x.md", _fm("pending"))
+    assert err is not None
+    assert "YYYY-MM-DD_<type>_<slug>.md" in err
+    assert "2026-13-40_summary_x.md" in err
+
+
+@pytest.mark.parametrize("name", [
+    "summary_x.md",                       # missing date
+    "2026-10-22_x.md",                    # missing type segment
+    "2026-10-22_summary_.md",             # empty slug
+    "2026-13-40_summary_x.txt",           # wrong extension
+])
+def test_bad_filename_rejected(name):
+    err = proposals.validate_suggestions_write(f"suggestions/{name}", _fm("pending"))
+    assert err is not None
+    assert f"got '{name}'" in err
+
+
+# ── existing file: status invariant ───────────────────────────────────────
+
+def _existing_proposal(vault_dir, status="pending"):
+    """Write a top-level proposal file directly and return its relpath."""
+    (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
+    rel = "suggestions/2026-10-22_summary_x.md"
+    (vault_dir / rel).write_bytes(_fm(status).encode("utf-8"))
+    return rel
+
+
+def test_existing_body_edit_same_status_allowed(vault_dir):
+    rel = _existing_proposal(vault_dir, "pending")
+    assert proposals.validate_suggestions_write(
+        rel, _fm("pending", body="changed body"),
+        _fm("pending", body="original body")) is None
+
+
+@pytest.mark.parametrize("new_status", ["processing", "rejected", "merged"])
+def test_existing_status_change_rejected(vault_dir, new_status):
+    rel = _existing_proposal(vault_dir, "pending")
+    err = proposals.validate_suggestions_write(
+        rel, _fm(new_status), _fm("pending"))
+    assert err is not None
+    assert "cannot be changed by a direct write" in err
+    assert "'pending' →" in err
+    assert "proposals.advance" in err
+
+
+def test_existing_without_frontmatter_new_valid_pending_allowed(vault_dir):
+    rel = "suggestions/2026-10-22_summary_x.md"
+    (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
+    (vault_dir / rel).write_bytes(b"# no frontmatter\n")
+    assert proposals.validate_suggestions_write(
+        rel, _fm("pending"), "# no frontmatter\n") is None
+
+
+def test_existing_without_frontmatter_forged_status_rejected(vault_dir):
+    rel = "suggestions/2026-10-22_summary_x.md"
+    (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
+    (vault_dir / rel).write_bytes(b"# no frontmatter\n")
+    err = proposals.validate_suggestions_write(
+        rel, _fm("merged"), "# no frontmatter\n")
+    assert err is not None
+    assert "new proposals start with status: pending" in err
+
+
+# ── integration: agent tool entry points ─────────────────────────────────
+
+def test_write_doc_tool_rejects_status_change(vault_dir):
+    _existing_proposal(vault_dir, "pending")
+    result = execute_tool(
+        "write_doc", {"path": PATH, "content": _fm("rejected")},
+        ToolContext(vault_dir=vault_dir))
+    assert result.startswith("Error:")
+    assert "cannot be changed by a direct write" in result
+    # The write must NOT have happened.
+    assert (vault_dir / PATH).read_bytes() == _fm("pending").encode("utf-8")
+
+
+def test_write_doc_tool_allows_valid_new_proposal(vault_dir):
+    result = execute_tool(
+        "write_doc", {"path": PATH, "content": _fm("pending")},
+        ToolContext(vault_dir=vault_dir))
+    assert "Saved" in result
+    assert (vault_dir / PATH).is_file()
+
+
+def test_edit_doc_tool_rejects_status_change(vault_dir):
+    _existing_proposal(vault_dir, "pending")
+    result = execute_tool(
+        "edit_doc", {"path": PATH, "old_string": "status: pending",
+                     "new_string": "status: rejected"},
+        ToolContext(vault_dir=vault_dir))
+    assert result.startswith("Error:")
+    assert "cannot be changed by a direct write" in result
+    assert (vault_dir / PATH).read_bytes() == _fm("pending").encode("utf-8")
+
+
+def test_edit_doc_tool_allows_body_edit(vault_dir):
+    _existing_proposal(vault_dir, "pending")
+    result = execute_tool(
+        "edit_doc", {"path": PATH, "old_string": "body text", "new_string": "new body"},
+        ToolContext(vault_dir=vault_dir))
+    assert "Edited" in result
+    assert "new body" in (vault_dir / PATH).read_bytes().decode("utf-8")
+
+
+def test_edit_doc_tool_nonunique_match_defers_to_edit_file(vault_dir):
+    """Count != 1 precheck is skipped; edit_file's canonical error is returned."""
+    rel = "suggestions/2026-10-22_summary_x.md"
+    (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
+    (vault_dir / rel).write_bytes(
+        _fm("pending", body="dup dup").encode("utf-8"))
+    result = execute_tool(
+        "edit_doc", {"path": rel, "old_string": "dup", "new_string": "x"},
+        ToolContext(vault_dir=vault_dir))
+    assert "Error" in result
+    assert "2 times" in result

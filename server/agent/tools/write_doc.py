@@ -26,6 +26,12 @@ class WriteDocTool(Tool):
 
         fp = ctx.vault_dir / args.path
         existed = fp.is_file()
+        if args.path.split("/", 1)[0] == "suggestions":
+            from ... import proposals
+            old = fp.read_bytes().decode("utf-8", errors="replace") if existed else None
+            err = proposals.validate_suggestions_write(args.path, args.content, old)
+            if err:
+                return err
         fp.parent.mkdir(parents=True, exist_ok=True)
 
         register_write(args.path, ctx.write_source)

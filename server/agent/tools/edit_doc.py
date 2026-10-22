@@ -38,6 +38,14 @@ class EditDocTool(DocTool):
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
             return self._file_not_found_hint(args.path)
+        if args.path.split("/", 1)[0] == "suggestions":
+            from ... import proposals
+            old = fp.read_bytes().decode("utf-8", errors="replace")
+            if old.count(args.old_string) == 1:
+                err = proposals.validate_suggestions_write(
+                    args.path, old.replace(args.old_string, args.new_string, 1), old)
+                if err:
+                    return err
 
         register_write(args.path, ctx.write_source)
         result = edit_file(ctx.vault_dir, args.path, args.old_string, args.new_string)

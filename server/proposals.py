@@ -344,3 +344,79 @@ def expire_overdue(vault_dir, conn, now_ts: float | None = None) -> int:
         advance(vault_dir, conn, p["relpath"], "expired", actor="system")
         count += 1
     return count
+
+
+# ── Write-path validation ─────────────────────────────────────────────────
+
+_PROPOSAL_FILENAME_RE = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})_([a-z]+)_[A-Za-z0-9][A-Za-z0-9-]*\.md$")
+
+
+def validate_suggestions_write(relpath: str, new_text: str,
+                               old_text: str | None = None) -> str | None:
+    """Validate a direct file write to a top-level suggestions/ proposal file.
+
+    Returns an "Error: ..." string to reject the write, or None to allow.
+    ``old_text``: None = creating a new file; str = overwriting/editing an
+    existing file (its current content, for the status invariant check).
+
+    Invariants enforced (raw writes may never forge state; status
+    transitions belong to advance()):
+    - path is exactly ``suggestions/<name>.md`` (top level only — scan()
+      indexes top-level files, deeper paths would be invisible bypasses)
+    - filename: ``YYYY-MM-DD_<type>_<slug>.md``; real calendar date; type
+      segment in VALID_TYPES; slug non-empty (collision suffix ``-N`` is
+      just part of the slug char class)
+    - new content has a YAML frontmatter block parsing to a dict
+    - frontmatter ``type`` is in VALID_TYPES AND equals the filename type
+      segment
+    - frontmatter ``status``:
+        * new file (old_text None, or old content has no frontmatter):
+          must be "pending" or "awaiting_review"
+        * existing file: must equal the old file's status (same status =
+          body/other-field edit, allowed; any change rejected)
+    """
+    # Backslashes are directory separators on Windows: normalize so a
+    # backslashed path cannot dodge the two-segment check (safe_rel_path
+    # precedent).
+    relpath = relpath.replace("\\", "/")
+    parts = relpath.split("/")
+    if len(parts) != 2 or parts[0] != "suggestions":
+        return (f"Error: suggestions/ writes must be top-level files "
+                f"(suggestions/<name>.md), got '{relpath}'")
+    name = parts[1]
+    m = _PROPOSAL_FILENAME_RE.match(name)
+    if m is None:
+        return f"Error: proposal filename must be YYYY-MM-DD_<type>_<slug>.md (got '{name}')"
+    try:
+        datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return f"Error: proposal filename must be YYYY-MM-DD_<type>_<slug>.md (got '{name}')"
+    file_type = m.group(4)
+
+    data, _ = _split_frontmatter(new_text)
+    if not data:
+        return ("Error: suggestions/ files require a YAML frontmatter block "
+                "with type and status")
+    ftype = data.get("type")
+    if ftype not in VALID_TYPES or ftype != file_type:
+        return (f"Error: frontmatter type must be one of "
+                f"{', '.join(sorted(VALID_TYPES))} and must match the "
+                f"filename type segment")
+
+    status = str(data.get("status") or "")
+    old_status = None
+    if old_text is not None:
+        old_data, _ = _split_frontmatter(old_text)
+        if old_data:
+            old_status = str(old_data.get("status") or "")
+    if old_status is None:
+        if status not in ("pending", "awaiting_review"):
+            return (f"Error: new proposals start with status: pending (or "
+                    f"awaiting_review for external review-channel "
+                    f"proposals), got '{status}'")
+    elif status != old_status:
+        return (f"Error: status cannot be changed by a direct write "
+                f"('{old_status}' → '{status}'); status transitions go "
+                f"through the proposal state machine (proposals.advance)")
+    return None
