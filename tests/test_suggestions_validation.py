@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from server import proposals
-from server.agent import ToolContext, execute_tool
+from server.agent import ChannelPolicy, ToolContext, execute_tool, validate_tool_call
 
 PATH = "suggestions/2026-10-22_summary_x.md"
 
@@ -160,53 +160,57 @@ def test_existing_without_frontmatter_forged_status_rejected(vault_dir):
     assert "new proposals start with status: pending" in err
 
 
-# ── integration: agent tool entry points ─────────────────────────────────
+# ── integration: channel validation entry (validate_tool_call) ────────────
+# The gate is the channel's real path: the suggestions/ invariant is
+# enforced at the validate stage (before confirm), not inside _execute.
 
 def test_write_doc_tool_rejects_status_change(vault_dir):
     _existing_proposal(vault_dir, "pending")
-    result = execute_tool(
+    result = validate_tool_call(
         "write_doc", {"path": PATH, "content": _fm("rejected")},
-        ToolContext(vault_dir=vault_dir))
-    assert result.startswith("Error:")
+        ChannelPolicy(vault_dir))
+    assert result is not None
     assert "cannot be changed by a direct write" in result
     # The write must NOT have happened.
     assert (vault_dir / PATH).read_bytes() == _fm("pending").encode("utf-8")
 
 
 def test_write_doc_tool_allows_valid_new_proposal(vault_dir):
-    result = execute_tool(
+    result = validate_tool_call(
         "write_doc", {"path": PATH, "content": _fm("pending")},
-        ToolContext(vault_dir=vault_dir))
-    assert "Saved" in result
-    assert (vault_dir / PATH).is_file()
+        ChannelPolicy(vault_dir))
+    assert result is None
 
 
 def test_edit_doc_tool_rejects_status_change(vault_dir):
     _existing_proposal(vault_dir, "pending")
-    result = execute_tool(
+    result = validate_tool_call(
         "edit_doc", {"path": PATH, "old_string": "status: pending",
                      "new_string": "status: rejected"},
-        ToolContext(vault_dir=vault_dir))
-    assert result.startswith("Error:")
+        ChannelPolicy(vault_dir))
+    assert result is not None
     assert "cannot be changed by a direct write" in result
     assert (vault_dir / PATH).read_bytes() == _fm("pending").encode("utf-8")
 
 
 def test_edit_doc_tool_allows_body_edit(vault_dir):
     _existing_proposal(vault_dir, "pending")
-    result = execute_tool(
+    result = validate_tool_call(
         "edit_doc", {"path": PATH, "old_string": "body text", "new_string": "new body"},
-        ToolContext(vault_dir=vault_dir))
-    assert "Edited" in result
-    assert "new body" in (vault_dir / PATH).read_bytes().decode("utf-8")
+        ChannelPolicy(vault_dir))
+    assert result is None
 
 
 def test_edit_doc_tool_nonunique_match_defers_to_edit_file(vault_dir):
-    """Count != 1 precheck is skipped; edit_file's canonical error is returned."""
+    """Count != 1: the gate defers (returns None); edit_file's canonical
+    error is returned at the execution layer."""
     rel = "suggestions/2026-10-22_summary_x.md"
     (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
     (vault_dir / rel).write_bytes(
         _fm("pending", body="dup dup").encode("utf-8"))
+    assert validate_tool_call(
+        "edit_doc", {"path": rel, "old_string": "dup", "new_string": "x"},
+        ChannelPolicy(vault_dir)) is None
     result = execute_tool(
         "edit_doc", {"path": rel, "old_string": "dup", "new_string": "x"},
         ToolContext(vault_dir=vault_dir))

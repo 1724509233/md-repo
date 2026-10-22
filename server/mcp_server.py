@@ -17,7 +17,6 @@ def _find_config() -> Path:
         return project_root
     raise FileNotFoundError("config.yaml not found in CWD or project root")
 
-from server import proposals
 from server.agent.tools.read_doc import ReadDocTool
 from server.agent.tools.edit_doc import EditDocTool
 from server.agent.tools.search_docs import SearchDocsTool
@@ -164,11 +163,6 @@ def main():
         if gated:
             return gated
         fp = vault_dir / path
-        if path.split("/", 1)[0] == "suggestions":
-            old = fp.read_bytes().decode("utf-8", errors="replace") if fp.is_file() else None
-            err = proposals.validate_suggestions_write(path, content, old)
-            if err:
-                return err
         fp.parent.mkdir(parents=True, exist_ok=True)
         existed = fp.is_file()
         fp.write_bytes(content.encode("utf-8"))
@@ -189,13 +183,6 @@ def main():
         fp = vault_dir / path
         if not fp.is_file():
             return _edit_doc_tool._file_not_found_hint(path)
-        if path.split("/", 1)[0] == "suggestions":
-            old = fp.read_bytes().decode("utf-8", errors="replace")
-            if old.count(old_string) == 1:
-                err = proposals.validate_suggestions_write(
-                    path, old.replace(old_string, new_string, 1), old)
-                if err:
-                    return err
         result = edit_file(vault_dir, path, old_string, new_string)
         if result.startswith("Edited"):
             # Hash the post-edit content from disk (edit_file already wrote it).

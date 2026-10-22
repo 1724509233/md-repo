@@ -35,7 +35,7 @@ from .tools import (
     _check_optional_path,
     _tool,
 )
-from .policy import ChannelPolicy, VAULT_GATES, WriteGate, validate_tool_call
+from .policy import ChannelPolicy, SuggestionsGate, VAULT_GATES, WriteGate, validate_tool_call
 from .validate import parse_since
 
 __all__ = [
@@ -76,6 +76,7 @@ __all__ = [
     # policy
     "ChannelPolicy",
     "WriteGate",
+    "SuggestionsGate",
     "VAULT_GATES",
     "validate_tool_call",
     # validate

@@ -87,17 +87,50 @@ class SuggestionsGate(WriteGate):
     """suggestions/ 不变量的单接线（vault 不变量，任何通道绕不过）。
 
     Direct writes must never forge the proposal state machine: write/edit
-    into suggestions/ go through ``proposals.validate_suggestions_write``;
-    move/delete into the suggestions subtree is state-machine territory
-    (cleanup goes through the Web UI human channel).
+    into suggestions/ go through ``proposals.validate_suggestions_write``
+    (reads the old content; ``count == 1`` assumed for edit_doc; when the
+    file is missing the gate defers to the tool's canonical error); the
+    suggestions subtree is otherwise state-machine territory (move/delete
+    gap closure; cleanup goes through the Web UI human channel).
+
+    "Is this a write tool" is determined structurally via
+    ``TOOL_REGISTRY[tool_name].permission == "ask"``; ``tool_name`` is only
+    used for the content-semantic branches (write/edit validate content).
     """
 
     name = "suggestions"
 
     def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
-        # Phase 1 stub: the gate loop is live; the branches are wired in the
-        # single-wiring stage (the hand-written wirings inside the tools and
-        # the MCP handlers are removed there).
+        tool = TOOL_REGISTRY.get(tool_name)
+        # read 工具一律 no-op；只有已注册的 ask 工具进入内容规则
+        if tool is None or tool.permission != "ask":
+            return None
+
+        if tool_name == "write_doc":
+            path = args.get("path")
+            if not isinstance(path, str) or _first_segment(path) != "suggestions":
+                return None
+            from .. import proposals
+            fp = vault_dir / path
+            old = fp.read_bytes().decode("utf-8", errors="replace") if fp.is_file() else None
+            return proposals.validate_suggestions_write(path, args["content"], old)
+
+        if tool_name == "edit_doc":
+            path = args.get("path")
+            if not isinstance(path, str) or _first_segment(path) != "suggestions":
+                return None
+            fp = vault_dir / path
+            if not fp.is_file():
+                return None  # 文件不存在时让位工具规范错误（not-found hint）
+            old = fp.read_bytes().decode("utf-8", errors="replace")
+            if old.count(args["old_string"]) != 1:
+                return None  # count != 1 让位 edit_file 规范错误
+            from .. import proposals
+            return proposals.validate_suggestions_write(
+                path, old.replace(args["old_string"], args["new_string"], 1), old)
+
+        # move_docs / delete_doc 与其他 ask 工具：子树拒绝（缺口闭合）在
+        # gap-closure 阶段落地；此前无内容规则。
         return None
 
 
