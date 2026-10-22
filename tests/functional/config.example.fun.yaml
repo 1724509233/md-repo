@@ -1,0 +1,122 @@
+# ── memory-runtime 功能测试配置模板（Tier-1 + Tier-2 回归资产）────────────
+# spec: docs/superpowers/specs/2026-10-21-memory-runtime-design.md
+#
+# 生成真实配置（不入库）：在**仓库根目录**执行（prompt 路径相对配置文件所在
+# 目录解析，所以必须落在仓库根）：
+#   sed "s#{{VAULT_DIR}}#<scratch-vault 绝对路径>#g" \
+#     tests/functional/config.example.fun.yaml > config.fun.yaml
+# 例如：
+#   sed "s#{{VAULT_DIR}}#/private/var/folders/.../md-funtest-s0/vault#g" \
+#     tests/functional/config.example.fun.yaml > config.fun.yaml
+#
+# 解析约束（已对照 server/config.py 的 fail-fast 校验，见下方注释）：
+#   - arm_count >= 1；min_interval_h 为 float，**解析器无下限**（0.0 合法；
+#     这里取 0.001h = 3.6s，功能测试要能连续重复 run）
+#   - budget_* 无上限校验（int 即可）；"拉高" = 100 / 50
+#   - tools 名称必须存在于 TOOL_REGISTRY（server/agent/tools/__init__.py，
+#     当前 10 个：read_doc/search_docs/list_files/write_doc/delete_doc/
+#     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats）
+#   - prompt 文件必须存在（相对 config 文件目录）
+#   - **target_dir 互斥**：任意两个非 executor agent 的 target_dir 不得互为
+#     祖先/相等（Path.is_relative_to 对相等路径返回 True）。⇒ consolidator
+#     与 sentinel 不能同用 suggestions/，详见 consolidator 段注释。
+#   - alias 全局唯一；report_dir 不得互叠（executor 豁免两项检查）
+#
+# 端口纪律：9889（避开生产 9888）；mock LLM 127.0.0.1:11435（tests/functional/mock_llm.py）。
+#
+server:
+  host: 127.0.0.1
+  port: 9889
+  vault_dir: "{{VAULT_DIR}}"   # ← 占位符：填 scratch vault 绝对路径（sed 替换）
+  log_level: DEBUG
+
+background_agents:
+  # ── sentinel（记忆哨兵）─────────────────────────────────────────────────
+  # Tier-2 冒烟的主角：mock 剧本按 sentinel.md 产出 archive 提案（status:
+  # adopted），执行器随后落地移动到 archive/。写 scope = suggestions/
+  # （唯一写动作 write_doc 在 suggestions/ 内）。trigger.source: recall 从
+  # 召回账本武装（arm_count: 1 = 一条失败/低分信号即武装）。
+  - name: "记忆哨兵（功能测试）"
+    alias: sentinel
+    enabled: true
+    cron: "0 9 * * 1"                 # 每周心跳（deadline floor；功能测试用 run_once 直跑，不依赖 cron）
+    target_dir: suggestions
+    prompt: server/prompts/sentinel.md
+    report_dir: .reports/sentinel
+    max_rounds: 30
+    timeout_s: 1800
+    budget_runs_per_day: 100          # 拉高：功能测试反复 run 不触发预算闸门
+    budget_max_proposals: 50
+    trigger:
+      source: recall
+      metric: failed_or_low
+      arm_count: 1
+      min_interval_h: 0.001           # 解析器无下限；3.6s 冷却足够连续重复
+    tools: [read_doc, search_docs, list_files, recent_changes,
+            get_related_docs, recall_stats, write_doc]   # 白名单 = config.example.yaml sentinel 段
+    model:
+      provider: openai
+      model_id: mock
+      base_url: "http://127.0.0.1:11435/v1"   # tests/functional/mock_llm.py
+      api_key: "test"
+      max_tokens: 4096
+      temperature: 0.0
+
+  # ── consolidator（记忆固化者）───────────────────────────────────────────
+  # ⚠ target_dir 互斥约束：config.py 对任意两个非 executor agent 做
+  # is_relative_to 检查（相等即互叠），consolidator 与 sentinel 不能同用
+  # suggestions/。本模板把 consolidator 放到 weekly/（narrator 未配置，
+  # 目录空闲）。影响：
+  #   - mock consolidator 剧本的 write_doc 仍写 suggestions/（提案的合法
+  #     位置，执行器/控制台只认那里）。当前树 write_doc permission="allow"
+  #     ⇒ validate 不做 scope 检查，写入不受 target_dir 限制。
+  #   - 若 write_doc 权限回退为 "ask"，scope 检查生效，consolidator 写
+  #     suggestions/ 会被拒：此时改用**不含 sentinel** 的单角色配置（
+  #     consolidator + executor，target_dir: suggestions），或把剧本路径
+  #     改到 weekly/。
+  #   - 只想验证「suggestions/ 内跑 consolidator」时：从本模板删掉
+  #     sentinel 段、把 target_dir 改回 suggestions/ 即可通过解析。
+  - name: "记忆固化（功能测试）"
+    alias: consolidator
+    enabled: true
+    cron: "0 2 * * *"
+    target_dir: weekly                # 见上方互斥约束注释
+    prompt: server/prompts/consolidator.md
+    report_dir: .reports/consolidator
+    max_rounds: 30
+    timeout_s: 1800
+    budget_runs_per_day: 100
+    budget_max_proposals: 50
+    trigger:
+      events: [create]
+      arm_count: 1
+      min_interval_h: 0.001
+    # tools 缺省 = 全部工具（consolidator 角色规格）；recent_changes 参数
+    # 全可选（path/since/source/limit），mock 剧本第 1 轮调它。
+    model:
+      provider: openai
+      model_id: mock
+      base_url: "http://127.0.0.1:11435/v1"
+      api_key: "test"
+      max_tokens: 4096
+      temperature: 0.0
+
+  # ── executor（唯一执行器，框架角色）─────────────────────────────────────
+  # 非 LLM：is_executor 框架据此不启动 cron 任务，改由 30 分钟循环调
+  # run_executor（功能测试用 tests/functional/run_executor_once.py 单步跑）。
+  # target_dir: "." 不受 LLM scope 限制且豁免互叠检查；prompt 仅为格式校验。
+  - name: "执行器（功能测试）"
+    alias: executor
+    enabled: true
+    cron: "*/30 * * * *"              # 不生效（框架自管），croniter 合法即可
+    target_dir: .
+    prompt: server/prompts/executor.md
+    report_dir: .reports/executor
+    is_executor: true
+    model:
+      provider: openai
+      model_id: mock
+      base_url: "http://127.0.0.1:11435/v1"
+      api_key: "test"
+
+# narrator 不配置（功能测试范围外；weekly/ 暂借给 consolidator，见上）。
