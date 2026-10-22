@@ -26,11 +26,12 @@ SessionManager (DB 持久化 + TTL 淘汰)
 | `agent.py` | `Agent` 类 — 对话状态机，持有 messages、pending_confirms、last_read_ts |
 | `session.py` | `SessionManager` — 按 session_id 管理消息，DB 持久化，30 分钟 TTL 淘汰 |
 | `runtime.py` | `LoopRuntime` — 流式 LLM 循环，最多 `max_rounds` 轮，yield Event |
-| `spec.py` | `AgentSpec` + `ModelConfig` — 声明式 agent 配置数据类 |
+| `spec.py` | `AgentSpec` + `ModelConfig` — 声明式 agent 配置数据类；`policy()` 派生 `ChannelPolicy` |
 | `prompts.py` | `SYSTEM_PROMPT` (从 `prompts/system.md` 加载)、时间块渲染、SSE 格式化 |
 | `events.py` | `Event(type, data)` — 运行时事件数据类 |
 | `execute.py` | `execute_tool(name, args, ctx)` — 工具执行门面 |
-| `validate.py` | `validate_tool_call()` (Pydantic + 路径边界检查)、`parse_since()` |
+| `policy.py` | `ChannelPolicy` (通道能力声明)、`validate_tool_call()` 检查单入口 (L1 schema / L2 语义边界 / L3 gates)、`VAULT_GATES` (vault 不变量：`SuggestionsGate`) |
+| `validate.py` | `parse_since()`（旧 `validate_tool_call` 已移入 `policy.py`） |
 | `reminders.py` | `SystemReminder` (初始化注入)、`UserReminder` (每次 chat 注入) |
 | `tools/__init__.py` | 工具注册表: `TOOL_REGISTRY`, `TOOL_ARGS`, `TOOLS` (OpenAI 格式) |
 | `tools/tool.py` | `Tool` 基类 (模板方法: validate → execute)、`DocTool` (文件不存在提示) |
@@ -53,7 +54,7 @@ SessionManager (DB 持久化 + TTL 淘汰)
 
 - **模板方法**: `Tool.call()` = validate → precheck → (ask confirmation) → execute → on_success
 - **权限模型**: `"allow"` (读) 自动执行；`"ask"` (写) 需要用户通过 `asyncio.Event` 确认
-- **路径安全**: `_check_md_path` + `validate_tool_call` 双重校验 vault 边界、写作用域、报告目录保护
+- **路径安全**: 单入口 `policy.validate_tool_call(name, args, policy)` — L1 pydantic schema → L2 语义边界 (vault / `.sync` / write_scope / report_dir) → L3 gates (`VAULT_GATES` vault 不变量 + 通道专属规则，首个非 None 拒绝)；语法层 `_check_md_path` 仅做早期失败，不再是唯一防线
 - **变更感知提醒**: `DocPathUserReminder` 追踪上次读取时间，查询 change_log 检测文件变更
 - **写操作归因**: `write_registry.register_write()` 确保 SnapshotWatcher 将变更归因到 "agent" 而非 "watchdog"
 
