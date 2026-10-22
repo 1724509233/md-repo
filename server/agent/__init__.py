@@ -35,7 +35,8 @@ from .tools import (
     _check_optional_path,
     _tool,
 )
-from .validate import parse_since, validate_tool_call
+from .policy import ChannelPolicy, VAULT_GATES, WriteGate, validate_tool_call
+from .validate import parse_since
 
 __all__ = [
     # agent
@@ -72,8 +73,12 @@ __all__ = [
     "_check_md_path",
     "_check_optional_path",
     "ToolContext",
-    # validate
+    # policy
+    "ChannelPolicy",
+    "WriteGate",
+    "VAULT_GATES",
     "validate_tool_call",
+    # validate
     "parse_since",
     # execute
     "execute_tool",

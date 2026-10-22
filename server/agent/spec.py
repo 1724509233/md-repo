@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .policy import ChannelPolicy
 from .reminders import SystemReminder, UserReminder
 from .tools.tool import Tool
 
@@ -50,3 +51,15 @@ class AgentSpec:
     # "agent" = desktop agent channel; bgagent runs set this to their alias so
     # the ledger distinguishes roles (memory-runtime v1).
     write_source: str = "agent"
+
+    def policy(self) -> ChannelPolicy:
+        """Channel permission policy derived from this spec (check inputs).
+
+        ``auto_approve`` is intentionally not part of the policy — it is a
+        runtime flow input (skips the confirm prompt), not a check.
+        """
+        return ChannelPolicy(
+            vault_dir=self.vault_dir,
+            write_scope=self.write_scope,
+            report_dir=self.report_dir,
+        )

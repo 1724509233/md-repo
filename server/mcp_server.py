@@ -73,7 +73,7 @@ def main():
     from server.config import load_server_config
     from server.vault.service import init_db, ensure_indexed, edit_file
     from server.ai import rag_search
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
     
     config = load_server_config(str(_find_config()))
     vault_dir = config.vault_dir
@@ -97,6 +97,10 @@ def main():
     mcp = MCPServer("md-vault")
     
     # --- Tools ---
+
+    # Channel policy for the external MCP channel (check inputs; the channel
+    # rule gate lands in the McpExternalGate stage).
+    MCP_POLICY = ChannelPolicy(vault_dir)
     
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
@@ -141,7 +145,7 @@ def main():
     @mcp.tool()
     async def read_doc(path: str) -> str:
         """Read the full content of a markdown document in the vault."""
-        error = validate_tool_call("read_doc", {"path": path}, vault_dir)
+        error = validate_tool_call("read_doc", {"path": path}, MCP_POLICY)
         if error:
             return error
         fp = vault_dir / path
@@ -153,7 +157,7 @@ def main():
     @mcp.tool()
     async def write_doc(path: str, content: str) -> str:
         """Create or overwrite a markdown document in the vault."""
-        error = validate_tool_call("write_doc", {"path": path, "content": content}, vault_dir)
+        error = validate_tool_call("write_doc", {"path": path, "content": content}, MCP_POLICY)
         if error:
             return error
         gated = _gate_external_write(path)
@@ -176,7 +180,7 @@ def main():
     @mcp.tool()
     async def edit_doc(path: str, old_string: str, new_string: str) -> str:
         """Replace exact text in a document. The old_string must match exactly once in the file."""
-        error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, vault_dir)
+        error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, MCP_POLICY)
         if error:
             return error
         gated = _gate_external_write(path)

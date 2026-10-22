@@ -10,51 +10,66 @@ from server.vault.db.conn import init as register_db_conn
 
 
 def test_validate_rejects_path_traversal(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("read_doc", {"path": "../etc/passwd"}, vault)
+    result = validate_tool_call("read_doc", {"path": "../etc/passwd"}, ChannelPolicy(vault))
     assert result is not None
     assert "outside vault" in result
 
 
 def test_validate_rejects_absolute_path(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("read_doc", {"path": "/etc/passwd"}, vault)
+    result = validate_tool_call("read_doc", {"path": "/etc/passwd"}, ChannelPolicy(vault))
     assert result is not None
     assert "outside vault" in result
 
 
 def test_validate_rejects_non_md(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("read_doc", {"path": "notes/file.txt"}, vault)
+    result = validate_tool_call("read_doc", {"path": "notes/file.txt"}, ChannelPolicy(vault))
     assert result is not None
     assert ".md" in result
 
 
 def test_validate_rejects_sync_dir(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("write_doc", {"path": ".sync/index.db"}, vault)
+    result = validate_tool_call("write_doc", {"path": ".sync/index.db"}, ChannelPolicy(vault))
+    assert result is not None
+    assert ".sync" in result
+
+
+def test_validate_rejects_sync_semantic_layer(tmp_path: Path):
+    """spec §3.4: the syntax layer passes (recent_changes.path is an optional
+    filter without the .md/.sync checks) — the semantic layer must reject a
+    first-segment .sync path on its own, proving the authoritative boundary
+    does not depend on the syntax layer."""
+    from server.agent import ChannelPolicy, validate_tool_call
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    result = validate_tool_call(
+        "recent_changes", {"path": ".sync/index.db"}, ChannelPolicy(vault))
     assert result is not None
     assert ".sync" in result
 
 
 def test_validate_accepts_valid_path(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("read_doc", {"path": "notes/test.md"}, vault)
+    result = validate_tool_call("read_doc", {"path": "notes/test.md"}, ChannelPolicy(vault))
     assert result is None
 
 
@@ -369,7 +384,7 @@ def test_execute_move_docs_dest_conflict(tmp_path: Path):
 
 
 def test_validate_move_docs_rejects_duplicate_from(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -379,14 +394,14 @@ def test_validate_move_docs_rejects_duplicate_from(tmp_path: Path):
             {"from_path": "a.md", "to_path": "x.md"},
             {"from_path": "a.md", "to_path": "y.md"},
         ]},
-        vault,
+        ChannelPolicy(vault),
     )
     assert result is not None
     assert "duplicate" in result
 
 
 def test_validate_move_docs_rejects_conflict(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -397,7 +412,7 @@ def test_validate_move_docs_rejects_conflict(tmp_path: Path):
             {"from_path": "a.md", "to_path": "b.md"},
             {"from_path": "b.md", "to_path": "c.md"},
         ]},
-        vault,
+        ChannelPolicy(vault),
     )
     assert result is not None
     assert "conflicts" in result
@@ -988,30 +1003,30 @@ def test_agent_loop_auto_approve_skips_confirm(tmp_path: Path):
 
 
 def test_write_scope_allows_in_scope(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     scope = vault / "notes"
     assert validate_tool_call(
-        "write_doc", {"path": "notes/a.md", "content": "x"}, vault,
-        write_scope=scope) is None
+        "write_doc", {"path": "notes/a.md", "content": "x"},
+        ChannelPolicy(vault, write_scope=scope)) is None
 
 
 def test_write_scope_rejects_out_of_scope(tmp_path: Path):
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     scope = vault / "notes"
     result = validate_tool_call(
-        "write_doc", {"path": "other/a.md", "content": "x"}, vault,
-        write_scope=scope)
+        "write_doc", {"path": "other/a.md", "content": "x"},
+        ChannelPolicy(vault, write_scope=scope))
     assert result is not None
     assert "write scope" in result
 
 
 def test_write_scope_rejects_move_docs_nested_cross_scope(tmp_path: Path):
     """move_docs 的 moves[] 嵌套路径必须逐个检查；任一项越界整批拒绝。"""
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     scope = vault / "notes"
@@ -1021,53 +1036,54 @@ def test_write_scope_rejects_move_docs_nested_cross_scope(tmp_path: Path):
             {"from_path": "notes/a.md", "to_path": "notes/sub/a.md"},
             {"from_path": "notes/b.md", "to_path": "topics/b.md"},
         ]},
-        vault, write_scope=scope)
+        ChannelPolicy(vault, write_scope=scope))
     assert result is not None
     assert "topics/b.md" in result
 
 
 def test_write_scope_ignores_allow_tools(tmp_path: Path):
     """read 类工具（permission=allow）不受 write_scope 限制。"""
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     scope = vault / "notes"
     assert validate_tool_call(
-        "read_doc", {"path": "other/a.md"}, vault, write_scope=scope) is None
+        "read_doc", {"path": "other/a.md"},
+        ChannelPolicy(vault, write_scope=scope)) is None
 
 
 def test_report_dir_guard_rejects_ask_tools(tmp_path: Path):
     """ask 工具路径落在 report_dir 下 → 拒绝（防 agent 摧毁自己的报告）。"""
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     scope = vault / "notes"
     report_dir = vault / "notes" / ".reports" / "notes-organizer"
     result = validate_tool_call(
         "delete_doc", {"path": "notes/.reports/notes-organizer/2026-10-11_0300.md"},
-        vault, write_scope=scope, report_dir=report_dir)
+        ChannelPolicy(vault, write_scope=scope, report_dir=report_dir))
     assert result is not None
     assert "report" in result
 
 
 def test_report_dir_guard_allows_reads(tmp_path: Path):
     """agent 需要读最近报告（开工前了解上次状态）——read 不受守卫限制。"""
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     report_dir = vault / "notes" / ".reports" / "notes-organizer"
     assert validate_tool_call(
         "read_doc", {"path": "notes/.reports/notes-organizer/2026-10-11_0300.md"},
-        vault, report_dir=report_dir) is None
+        ChannelPolicy(vault, report_dir=report_dir)) is None
 
 
 def test_vault_boundary_uses_is_relative_to(tmp_path: Path):
     """既有 startswith 前缀误判修复：/vault2 不得匹配 /vault。"""
-    from server.agent import validate_tool_call
+    from server.agent import ChannelPolicy, validate_tool_call
 
     vault = tmp_path / "vault"
     vault.mkdir()
-    result = validate_tool_call("read_doc", {"path": "../vault2/a.md"}, vault)
+    result = validate_tool_call("read_doc", {"path": "../vault2/a.md"}, ChannelPolicy(vault))
     assert result is not None
     assert "outside vault" in result
 
