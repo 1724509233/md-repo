@@ -125,5 +125,61 @@ export const api = {
       body: JSON.stringify(body),
     })
     return res.json()
+  },
+
+  // ── 记忆控制台（spec 2026-10-21 §7：console 只移状态，执行器落文件）──
+
+  /** GET /api/memory/status — 脉搏：by_status 九态 + awaiting 队列 + 触发态 + 召回需求 */
+  async getMemoryStatus() {
+    const res = await fetch('/api/memory/status')
+    if (!res.ok) throw new Error(`memory/status → ${res.status}`)
+    return res.json()
+  },
+
+  /** GET /api/memory/proposals — 全部提案（frontmatter 字段；解析失败为 malformed 项，不 500） */
+  async getMemoryProposals() {
+    const res = await fetch('/api/memory/proposals')
+    if (!res.ok) throw new Error(`memory/proposals → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/memory/proposals/{relpath}/adopt — 采纳（awaiting_review → adopted，actor human） */
+  async adoptProposal(relpath) {
+    const res = await fetch(_proposalUrl(relpath, 'adopt'), { method: 'POST' })
+    return _jsonOrDetail(res)
+  },
+
+  /** POST /api/memory/proposals/{relpath}/reject — 驳回（reason 必填；服务端空 reason 亦 400） */
+  async rejectProposal(relpath, reason) {
+    const res = await fetch(_proposalUrl(relpath, 'reject'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
+    })
+    return _jsonOrDetail(res)
+  },
+
+  /** GET /api/memory/proposals/{relpath}/trail — change_log 轨迹（seq/ts/source/op/path，最新在前） */
+  async getProposalTrail(relpath) {
+    const res = await fetch(_proposalUrl(relpath, 'trail'))
+    return _jsonOrDetail(res)
   }
+}
+
+/** 提案 URL：relpath 形如 suggestions/2026-10-21_x.md，逐段编码 */
+function _proposalUrl(relpath, suffix) {
+  return '/api/memory/proposals/' + relpath.split('/').map(encodeURIComponent).join('/') + '/' + suffix
+}
+
+/** 非 2xx 时抛出带服务端 detail 的 Error（FastAPI 的 400/404 文案直接进 UI） */
+async function _jsonOrDetail(res) {
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      if (data && data.detail) detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+    } catch (e) { /* 非 JSON 响应体 → 保留状态码文案 */ }
+    throw new Error(detail)
+  }
+  return res.json()
 }

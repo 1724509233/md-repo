@@ -1,5 +1,5 @@
 /* Vue 3 App 入口：全局状态 + 组件注册 + 轮询 */
-const { reactive, provide, ref, watch, nextTick, onMounted } = Vue
+const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
@@ -10,6 +10,7 @@ import { TopBar } from './components/TopBar.js'
 import { AIChatPanel } from './components/AIChatPanel.js'
 import { MobileSheet } from './components/MobileSheet.js'
 import { ConflictBanner } from './components/ConflictBanner.js'
+import { MemoryConsole } from './components/MemoryConsole.js'
 import { ICONS } from './utils/icons.js'
 
 // 初始化 markdown 渲染器
@@ -31,7 +32,11 @@ const state = reactive({
   docContent: '',        // 当前文档内容
   notifOpen: false,
   notifications: [],
-  unreadCount: 0
+  unreadCount: 0,
+  memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
+  memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
+  memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回）
+  memoryProposals: null   // GET /api/memory/proposals（null = 尚未轮询）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -201,6 +206,17 @@ async function pollChanges() {
   } catch (e) { }
 }
 
+// ─── 记忆控制台轮询（spec 2026-10-21 §7：status + proposals 每 30s）───
+async function pollMemory() {
+  try {
+    state.memoryStatus = await api.getMemoryStatus()
+  } catch (e) { /* silent：保留旧脉搏 */ }
+  try {
+    const data = await api.getMemoryProposals()
+    state.memoryProposals = (data && data.proposals) || []
+  } catch (e) { /* silent */ }
+}
+
 // ─── AI 工具调用结果 → 文档状态同步 ───
 function handleToolResult(evt) {
   const { name, args, result } = evt
@@ -269,15 +285,31 @@ const panels = [
   { id: 'file', label: '文件', icon: ICONS.folder, width: 260 },
   { id: 'search', label: '搜索', icon: ICONS.search, width: 260 }
 ]
-// 预留位（最近/通知/设置）：虚线占位、不可点，由模板渲染
+// 预留位（最近/设置）：虚线占位、不可点，由模板渲染；「通知」已激活为记忆控制台槽位
 const reservedItems = [
   { id: 'recent', label: '最近', icon: ICONS.clock },
-  { id: 'notify', label: '通知', icon: ICONS.bell },
   { id: 'settings', label: '设置', icon: ICONS.gear, bottom: true }
 ]
 
 function activePanelCfg() {
   return panels.find(p => p.id === activePanel.value) || panels[0]
+}
+
+// ─── 记忆控制台 rail 槽位（原预留「通知」；徽标 = 待审队列长度，0 时不渲染）───
+const awaitingCount = computed(() => {
+  const st = state.memoryStatus
+  return (st && st.proposals && st.proposals.by_status && st.proposals.by_status.awaiting_review) || 0
+})
+
+function onMemoryRailClick() {
+  state.memoryDetail = null   // 重新进入总是回队列面
+  state.memoryOpen = !state.memoryOpen
+}
+
+// 详情面「来源」跳转：打开原文（移动端先收起 console overlay，否则 editor 被盖住）
+function onMemoryOpenDoc(path) {
+  if (window.innerWidth <= 860) state.memoryOpen = false
+  openDoc(path)
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
@@ -390,6 +422,8 @@ export function createApp() {
             activePanel.value = 'file'
             state.searchDrawerOpen = false
             state.filePanelOpen = false // resize 切入移动端：关闭移动端面板态（spec §3.5）
+            state.memoryOpen = false    // resize 切入移动端：关闭控制台（不携 in-flow 态进 overlay 态）
+            state.memoryDetail = null
           }
         }
       )
@@ -398,7 +432,9 @@ export function createApp() {
         loadDocs()
         setInterval(pollChanges, 10000)
         setInterval(pollNotifications, 30000)
+        setInterval(pollMemory, 30000)
         pollNotifications()
+        pollMemory()
 
         // 移动端 点击 overlay 关闭更多菜单 / 通知下拉
         document.addEventListener('click', (e) => {
@@ -430,8 +466,18 @@ export function createApp() {
         await api.markNotificationsRead({ ids: [n.id] })
         state.notifications = state.notifications.filter(x => x.id !== n.id)
         state.unreadCount = Math.max(0, state.unreadCount - 1)
-        openDoc(n.report_path)
         state.notifOpen = false
+        // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 控制台开在首个提案的详情面
+        let paths = []
+        try {
+          paths = n.proposal_paths ? JSON.parse(n.proposal_paths) : []
+        } catch (e) { /* 非 JSON → 退回报告路径 */ }
+        if (Array.isArray(paths) && paths.length) {
+          state.memoryOpen = true
+          state.memoryDetail = paths[0]
+          return
+        }
+        if (n.report_path) openDoc(n.report_path)
       }
 
       function relativeTime(ts) {
@@ -458,9 +504,10 @@ export function createApp() {
       }
 
       return {
-        state, editorPaneRef, fileTreeRef, isDesktop,
+        state, editorPaneRef, fileTreeRef, isDesktop, ICONS,
         activePanel, panels, reservedItems, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
+        onMemoryRailClick, onMemoryOpenDoc, awaitingCount, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
@@ -486,6 +533,15 @@ export function createApp() {
               class="rbtn reserved" :title="'预留：' + r.label" tabindex="-1">
               <span class="ricon" v-html="r.icon"></span>
               <span class="rlabel">{{ r.label }}</span>
+            </button>
+            <!-- 记忆控制台槽位（原预留「通知」）：徽标 = 待审队列长度 -->
+            <button type="button"
+              class="rbtn" :class="{ on: state.memoryOpen }"
+              :title="'记忆控制台' + (awaitingCount > 0 ? '（' + awaitingCount + ' 待审）' : '')"
+              aria-label="记忆控制台页" @click="onMemoryRailClick">
+              <span class="ricon" v-html="ICONS.bell"></span>
+              <span class="rlabel">通知</span>
+              <span v-if="awaitingCount > 0" class="badge">{{ awaitingCount > 99 ? '99+' : awaitingCount }}</span>
             </button>
             <div class="rbottom">
               <button v-for="r in reservedItems.filter(x => x.bottom)" :key="r.id" type="button"
@@ -519,6 +575,23 @@ export function createApp() {
             </div>
           </div>
         </aside>
+
+        <!-- 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html；
+             关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css） -->
+        <div id="memory-console-shell" class="console-shell" :class="{ open: state.memoryOpen }">
+          <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail"
+            @pick="state.memoryDetail = $event"
+            @back="state.memoryDetail = null"
+            @close="state.memoryOpen = false; state.memoryDetail = null"
+            @actioned="pollMemory()"
+            @open-doc="onMemoryOpenDoc($event)" />
+        </div>
+
+        <!-- 移动端（≤860px）记忆控制台 overlay backdrop（≥861px 由 style.css ID 规则隐藏） -->
+        <div id="memory-console-backdrop"
+          class="fixed inset-0 bg-black/30 z-40"
+          :class="{ hidden: !state.memoryOpen }"
+          @click="state.memoryOpen = false"></div>
 
         <!-- 移动端文件面板 overlay backdrop（<1024px，spec §3.5） -->
         <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
@@ -648,6 +721,7 @@ export function createApp() {
   app.component('AIChatPanel', AIChatPanel)
   app.component('MobileSheet', MobileSheet)
   app.component('ConflictBanner', ConflictBanner)
+  app.component('MemoryConsole', MemoryConsole)
 
   return app
 }

@@ -618,6 +618,31 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             raise HTTPException(status_code=404, detail="proposal not found")
         return {"relpath": rel, "status": "rejected", "reject_reason": reason}
 
+    @app.get("/api/memory/proposals/{relpath:path}/trail")
+    async def memory_proposal_trail(relpath: str) -> dict:
+        """Read-only change_log tail for one proposal: its state-machine
+        transitions (path = the proposal file) plus executor merges that
+        carry its run_id as batch_id (the API only moves state; the
+        executor lands the change). Newest first."""
+        from . import proposals
+
+        rel = _guard_proposal_relpath(relpath)
+        batch = ""
+        fp = Path(vault_dir) / rel
+        if fp.is_file():
+            try:
+                batch = proposals.parse_proposal(fp).get("run_id") or ""
+            except Exception:
+                batch = ""  # malformed frontmatter → path rows only
+        sql = "SELECT seq, ts, source, op, path FROM change_log WHERE path = ?"
+        params: list = [rel]
+        if batch:
+            sql += " OR batch_id = ?"
+            params.append(batch)
+        sql += " ORDER BY seq DESC LIMIT 12"
+        rows = db_conn.execute(sql, params).fetchall()
+        return {"relpath": rel, "trail": [dict(r) for r in rows]}
+
     @app.get("/api/memory/status")
     async def memory_status() -> dict:
         """The 30-second scan target: proposal counts + review queue, the
