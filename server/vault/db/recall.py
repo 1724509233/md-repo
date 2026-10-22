@@ -66,8 +66,12 @@ def doc_traffic(conn: sqlite3.Connection, since_ts: float,
 
     Aggregates raw hit counts per traffic class and decayed weights
     (``w += 0.5 ** (age_days / half_life_days)`` per row, in Python).
-    Returns one entry per path — ``{"path", "counts", "weights",
-    "last_hit"}`` — sorted by total weight descending.
+    Each entry also carries ``weighted`` — the decayed-weight sum over
+    every class EXCEPT ``synthetic`` (sentinel: synthetic traffic never
+    counts toward value judgment; it is kept in ``counts``/``weights``
+    for visibility only). Returns one entry per path — ``{"path",
+    "counts", "weights", "weighted", "last_hit"}`` — sorted by
+    ``weighted`` descending (synthetic-only docs land last).
     """
     now = time.time()
     rows = conn.execute(
@@ -83,6 +87,7 @@ def doc_traffic(conn: sqlite3.Connection, since_ts: float,
                 "counts": {t: 0 for t in TRAFFIC_CLASSES},
                 "weights": {t: 0.0 for t in TRAFFIC_CLASSES},
                 "last_hit": 0.0,
+                "weighted": 0.0,
             }
         # '': pre-backfill rows that never hit the migration (defensive).
         traffic = r["traffic"] or "synthetic"
@@ -91,11 +96,13 @@ def doc_traffic(conn: sqlite3.Connection, since_ts: float,
             entry["weights"][traffic] = 0.0
         entry["counts"][traffic] += 1
         age_days = (now - r["ts"]) / 86400
-        entry["weights"][traffic] += 0.5 ** (age_days / half_life_days)
+        decay = 0.5 ** (age_days / half_life_days)
+        entry["weights"][traffic] += decay
+        if traffic != "synthetic":
+            entry["weighted"] += decay
         if r["ts"] > entry["last_hit"]:
             entry["last_hit"] = r["ts"]
-    return sorted(by_path.values(),
-                  key=lambda e: sum(e["weights"].values()), reverse=True)
+    return sorted(by_path.values(), key=lambda e: e["weighted"], reverse=True)
 
 
 def failed_queries(conn: sqlite3.Connection, since_ts: float) -> list[dict]:

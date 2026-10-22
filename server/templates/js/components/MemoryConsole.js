@@ -113,6 +113,9 @@ export const MemoryConsole = {
     const recallTopWeight = computed(() =>
       (recall.value.top || []).reduce((s, t) => s + (t.weighted || 0), 0))
     const recall_error = computed(() => !!recall.value.recall_error)
+    // 「高召回」标签旁的指标定义 tip：点击展开/收起（非 hover）；展开行插在标签行下方，
+    // 0fr→1fr 过渡，收起态零高度不影响列表对齐
+    const tipOpen = ref(false)
 
     function relRun(ts) {
       if (!ts) return '尚未运行'
@@ -359,7 +362,7 @@ export const MemoryConsole = {
     )
 
     return {
-      queue, queueCount, freshRel, byStatus, agents, recall, recallTopWeight, recall_error,
+      queue, queueCount, freshRel, byStatus, agents, recall, recallTopWeight, recall_error, tipOpen,
       relRun, triggerPct, pillText, pillCls, formatAge, reviewedTotal, STATUS_TILES,
       detailItem, queueIndex, proposalsLoaded, bodyText, bodyParas, bodyTotal, bodyClamped, bodyError, similar,
       canAct, acting, actionError, rsnOpen, rejectReason, doneView, trailRows,
@@ -424,10 +427,11 @@ export const MemoryConsole = {
               <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">{{ recallTopWeight.toFixed(1) }}</div></div>
             </div>
             <div v-if="recall.top && recall.top.length" class="rcl-top">
-              <div class="k">高价值文档 · 30d 加权</div>
+              <div class="k">高召回 · 30d 加权<button type="button" class="rcl-tip" :class="{ open: tipOpen }" :aria-expanded="tipOpen" title="指标定义" @click="tipOpen = !tipOpen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v4h1"/></svg></button></div>
+              <div class="rcl-tipbox" :class="{ open: tipOpen }"><div class="rcl-tipbox-in"><p>近 30 天 human（人）+ on_demand（agent）召回命中，按 30 天半衰期指数衰减加权；不含后台 agent 合成流量。</p></div></div>
               <div v-for="t in recall.top" :key="t.path" class="rcl-path" :title="t.path">{{ t.path }}<span class="w">w.{{ (t.weighted || 0).toFixed(2) }}</span></div>
             </div>
-            <div v-else class="rcl-top"><div class="k">高价值文档 · 30d 加权</div><div class="rcl-path" style="color: var(--ink-soft)">召回表暂无数据</div></div>
+            <div v-else class="rcl-top"><div class="k">高召回 · 30d 加权</div><div class="rcl-path" style="color: var(--ink-soft)">召回表暂无数据</div></div>
           </div>
         </div>
       </div>

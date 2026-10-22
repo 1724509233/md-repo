@@ -129,7 +129,29 @@ def test_doc_traffic_decay_weights_and_sorting(db_conn):
     assert b["counts"]["on_demand"] == 1
     assert b["weights"]["on_demand"] == pytest.approx(1.0, abs=0.01)
     assert c["weights"]["synthetic"] == pytest.approx(0.25, abs=0.01)
+    # weighted excludes synthetic: a=1.5, b=1.0, c=0.0 (synthetic-only)
+    assert a["weighted"] == pytest.approx(1.5, abs=0.01)
+    assert b["weighted"] == pytest.approx(1.0, abs=0.01)
+    assert c["weighted"] == 0.0
     assert a["last_hit"] == pytest.approx(now, abs=2)
+
+
+def test_doc_traffic_synthetic_only_ranks_last(db_conn):
+    # Core regression of the weighted-excludes-synthetic fix: a fresh
+    # synthetic hit (weighted 0.0) must rank BELOW an older human hit
+    # (weighted > 0) — under the old all-class sum it would rank first.
+    now = time.time()
+    day, hl = 86400, 30.0
+    _hit(db_conn, "notes/syn.md", now, "synthetic")            # fresh, w_syn≈1.0 → weighted 0.0
+    _hit(db_conn, "notes/old.md", now - 25 * day, "human")    # 25d old → w≈0.54 > 0
+    db_conn.commit()
+
+    docs = recall_db.doc_traffic(db_conn, since_ts=0.0, half_life_days=hl)
+    assert [d["path"] for d in docs] == ["notes/old.md", "notes/syn.md"]
+    old, syn = docs
+    assert old["weighted"] == pytest.approx(0.5 ** (25 / 30), abs=0.01)
+    assert syn["weighted"] == 0.0
+    assert syn["counts"]["synthetic"] == 1  # kept for sentinel visibility
 
 
 def test_doc_traffic_since_filter(db_conn):
@@ -203,7 +225,7 @@ def test_recall_stats_endpoint_shape_and_caps(app, db_conn, client):
     assert body["half_life_days"] == 30
     assert len(body["docs"]) == 200  # capped
     d0 = body["docs"][0]
-    assert set(d0) == {"path", "counts", "weights", "last_hit"}
+    assert set(d0) == {"path", "counts", "weights", "weighted", "last_hit"}
     assert d0["counts"]["human"] == 1
     assert body["failed_count"] == 205  # pre-cap total
     assert len(body["failed_queries"]) == 200  # capped
@@ -310,7 +332,7 @@ def test_recall_stats_tool_output(db_conn, vault_dir):
     out = tool.call({}, ToolContext(vault_dir=vault_dir))
 
     assert "Recall traffic (window: 30d, half-life: 30d)" in out
-    assert "path | human | on_demand | synthetic | weighted | last hit" in out
+    assert "path | human | on_demand | synthetic | value-weighted (excl. synthetic) | last hit" in out
     a_line = [l for l in out.splitlines() if l.startswith("notes/a.md")][0]
     assert " | 1 | 1 | 0 |" in a_line  # human=1, on_demand=1, synthetic=0
     assert "Failed queries (zero hits):" in out

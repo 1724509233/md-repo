@@ -712,7 +712,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             recall_out = {
                 "failed_7d": len(recall_db.failed_queries(db_conn, time.time() - 7 * 86400)),
                 "docs_tracked": len(all_traffic),
-                "top": [{"path": t["path"], "weighted": sum(t["weights"].values()),
+                "top": [{"path": t["path"], "weighted": t["weighted"],
                          "last_hit": t["last_hit"]} for t in all_traffic[:5]],
             }
         except Exception as e:

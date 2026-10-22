@@ -43,10 +43,10 @@ class RecallStatsTool(Tool):
 
         lines = [
             f"Recall traffic (window: {args.days}d, half-life: {args.half_life_days:g}d)",
-            "path | human | on_demand | synthetic | weighted | last hit",
+            "path | human | on_demand | synthetic | value-weighted (excl. synthetic) | last hit",
         ]
         for d in docs:
-            weighted = sum(d["weights"].values())
+            weighted = d["weighted"]
             lines.append(
                 f"{d['path']} | {d['counts'].get('human', 0)} "
                 f"| {d['counts'].get('on_demand', 0)} "

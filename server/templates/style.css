@@ -774,6 +774,14 @@ pre code.hljs { background: transparent; padding: 0; }
 .rcl-top .k { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 4px; }
 .rcl-path { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10.5px; color: var(--ink); padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; gap: 7px; }
 .rcl-path .w { color: var(--brass); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* 「高召回」标签旁的指标定义 tip：点击展开（0fr→1fr，收起态零高度，不推移列表对齐） */
+.rcl-tip { display: inline-flex; align-items: center; justify-content: center; width: 12px; height: 12px; margin-left: 4px; padding: 0; border: 0; background: transparent; color: var(--ink-soft); cursor: pointer; vertical-align: -1px; transition: color .15s ease; }
+.rcl-tip:hover, .rcl-tip.open { color: var(--ink); }
+.rcl-tip svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rcl-tipbox { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
+.rcl-tipbox.open { grid-template-rows: 1fr; }
+.rcl-tipbox-in { overflow: hidden; min-height: 0; }
+.rcl-tipbox-in p { margin: 0; padding: 1px 0 5px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9.5px; line-height: 1.5; color: var(--ink-soft); }
 
 /* 详情面：五段材料按判断顺序（类型+状态+标题+年龄 / 内容 / 来源 / 批次·可逆 / 相似记忆） */
 .d-head { padding: 14px 12px 10px; }
