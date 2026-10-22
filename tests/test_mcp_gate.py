@@ -5,6 +5,12 @@ suggestions/ buffer (physical isolation); the main memory area is
 read-only for external agents. Each successful external write is
 ledgered with source="mcp"; telemetry must never break the tool
 response (same pattern as test_recall_telemetry).
+
+The channel rule now lives in :class:`McpExternalGate` (mcp_server.py),
+injected via ``ChannelPolicy(gates=...)`` and invoked by
+``validate_tool_call`` — the gate is exercised directly below exactly as
+validate_tool_call invokes it (write_doc surface; the protocol-guidance
+wording assertions are unchanged).
 """
 from __future__ import annotations
 
@@ -13,7 +19,8 @@ import sqlite3
 
 import pytest
 
-from server.mcp_server import _gate_external_write, _ledger_mcp_write
+from server.agent.policy import ChannelPolicy, validate_tool_call
+from server.mcp_server import McpExternalGate, _ledger_mcp_write
 
 
 # --- Gate ---------------------------------------------------------------
@@ -27,8 +34,8 @@ from server.mcp_server import _gate_external_write, _ledger_mcp_write
         "suggestions",
     ],
 )
-def test_gate_allows_suggestions_buffer(path):
-    assert _gate_external_write(path) is None
+def test_gate_allows_suggestions_buffer(path, tmp_path):
+    assert McpExternalGate().check("write_doc", {"path": path}, tmp_path) is None
 
 
 @pytest.mark.parametrize(
@@ -45,8 +52,8 @@ def test_gate_allows_suggestions_buffer(path):
         "suggestions2/x.md",
     ],
 )
-def test_gate_refuses_main_memory_area(path):
-    err = _gate_external_write(path)
+def test_gate_refuses_main_memory_area(path, tmp_path):
+    err = McpExternalGate().check("write_doc", {"path": path}, tmp_path)
     assert err is not None
     assert err.startswith("Error:")
     # Explains the write was NOT performed and points to the pipeline.
@@ -54,6 +61,33 @@ def test_gate_refuses_main_memory_area(path):
     assert "suggestions/" in err
     assert "type: correction" in err
     assert "status: awaiting_review" in err
+
+
+def test_gate_fires_through_validate_tool_call(tmp_path):
+    """Channel path pin: the MCP policy must carry the gate — a main-area
+    write is rejected with the protocol-guidance error inside
+    validate_tool_call (not just in the isolated gate)."""
+    policy = ChannelPolicy(tmp_path, gates=(McpExternalGate(),))
+    err = validate_tool_call(
+        "write_doc", {"path": "notes/x.md", "content": "x"}, policy)
+    assert err is not None
+    assert "NOT performed" in err
+    assert "type: correction" in err
+    assert "status: awaiting_review" in err
+    # suggestions/ buffer stays writable through the channel path
+    # (valid proposal content: filename + frontmatter invariants pass).
+    assert validate_tool_call(
+        "write_doc",
+        {"path": "suggestions/2026-10-22_summary_x.md",
+         "content": "---\ntype: summary\nstatus: pending\n---\n# T\n\nbody\n"},
+        policy) is None
+
+
+def test_gate_noop_for_read_tools(tmp_path):
+    """validate_tool_call invokes gates for every tool; reads must pass."""
+    gate = McpExternalGate()
+    assert gate.check("read_doc", {"path": "notes/x.md"}, tmp_path) is None
+    assert gate.check("search_docs", {"query": "x"}, tmp_path) is None
 
 
 # --- Ledger --------------------------------------------------------------

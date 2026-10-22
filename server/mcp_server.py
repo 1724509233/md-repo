@@ -17,6 +17,8 @@ def _find_config() -> Path:
         return project_root
     raise FileNotFoundError("config.yaml not found in CWD or project root")
 
+from server.agent.policy import WriteGate, _extract_paths
+from server.agent.tools import TOOL_REGISTRY
 from server.agent.tools.read_doc import ReadDocTool
 from server.agent.tools.edit_doc import EditDocTool
 from server.agent.tools.search_docs import SearchDocsTool
@@ -31,24 +33,34 @@ related_no_file = GetRelatedDocsTool.related_no_file
 related_no_links = GetRelatedDocsTool.related_no_links
 
 
-def _gate_external_write(path: str) -> str | None:
-    """Immune-pipeline gate for external (MCP) writes (memory-runtime v2).
+class McpExternalGate(WriteGate):
+    """Channel rule (MCP only): external writes land only in the suggestions/
+    buffer (memory-runtime v2 immune pipeline, physical isolation).
 
-    Returns None when the vault-relative path is under the top-level
-    suggestions/ buffer (checked after validate_tool_call), else an error
-    string: the write was not performed. Unconditional by constitution —
-    no config flag. Reads (read_doc/search_docs/get_related_docs) are not
-    gated.
+    Replaces ``_gate_external_write``; injected via
+    ``ChannelPolicy(gates=...)``. The protocol-guidance error wording is the
+    contract with external LLMs — preserved verbatim (main area read-only +
+    how to write a proposal). Read tools are no-ops (validate_tool_call
+    invokes gates for every tool). Unconditional by constitution — no
+    config flag.
     """
-    if path.split("/", 1)[0] == "suggestions":
+
+    name = "mcp_external"
+
+    def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
+        tool = TOOL_REGISTRY.get(tool_name)
+        if tool is None or tool.permission != "ask":
+            return None  # reads are not gated
+        for _label, p in _extract_paths(args):
+            if p.split("/", 1)[0] != "suggestions":
+                return (
+                    "Error: the main memory area is read-only for external agents — "
+                    "this write was NOT performed. Write the content as a proposal into "
+                    "suggestions/ (frontmatter: type: correction to fix an existing doc, "
+                    "status: awaiting_review; filename YYYY-MM-DD_<type>_<slug>.md; "
+                    "see server/proposals.py)."
+                )
         return None
-    return (
-        "Error: the main memory area is read-only for external agents — "
-        "this write was NOT performed. Write the content as a proposal into "
-        "suggestions/ (frontmatter: type: correction to fix an existing doc, "
-        "status: awaiting_review; filename YYYY-MM-DD_<type>_<slug>.md; "
-        "see server/proposals.py)."
-    )
 
 
 def _ledger_mcp_write(db_conn, path: str, existed: bool, content: str) -> None:
@@ -97,9 +109,10 @@ def main():
     
     # --- Tools ---
 
-    # Channel policy for the external MCP channel (check inputs; the channel
-    # rule gate lands in the McpExternalGate stage).
-    MCP_POLICY = ChannelPolicy(vault_dir)
+    # Channel policy for the external MCP channel: the channel rule gate
+    # (main area read-only) is injected here; VAULT_GATES (suggestions
+    # invariant) is applied unconditionally by validate_tool_call.
+    MCP_POLICY = ChannelPolicy(vault_dir, gates=(McpExternalGate(),))
     
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
@@ -159,9 +172,6 @@ def main():
         error = validate_tool_call("write_doc", {"path": path, "content": content}, MCP_POLICY)
         if error:
             return error
-        gated = _gate_external_write(path)
-        if gated:
-            return gated
         fp = vault_dir / path
         fp.parent.mkdir(parents=True, exist_ok=True)
         existed = fp.is_file()
@@ -177,9 +187,6 @@ def main():
         error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, MCP_POLICY)
         if error:
             return error
-        gated = _gate_external_write(path)
-        if gated:
-            return gated
         fp = vault_dir / path
         if not fp.is_file():
             return _edit_doc_tool._file_not_found_hint(path)
