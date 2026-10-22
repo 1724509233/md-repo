@@ -89,16 +89,31 @@ class SuggestionsGate(WriteGate):
     Direct writes must never forge the proposal state machine: write/edit
     into suggestions/ go through ``proposals.validate_suggestions_write``
     (reads the old content; ``count == 1`` assumed for edit_doc; when the
-    file is missing the gate defers to the tool's canonical error); the
-    suggestions subtree is otherwise state-machine territory (move/delete
-    gap closure; cleanup goes through the Web UI human channel).
+    file is missing the gate defers to the tool's canonical error).
+
+    The suggestions subtree (any depth) is state-machine territory for
+    move/delete and any other ask tool — a move could rename a proposal
+    (breaking the filename convention) or hide it under a subdirectory
+    (out of scan()'s sight); a delete would kill a proposal while the
+    ledger keeps an orphan row. Cleanup goes through the Web UI human
+    channel (``/api/docs/manage``), not agent tool writes.
 
     "Is this a write tool" is determined structurally via
     ``TOOL_REGISTRY[tool_name].permission == "ask"``; ``tool_name`` is only
     used for the content-semantic branches (write/edit validate content).
+
+    Fail-closed: a registered ask tool + a path hitting the suggestions
+    subtree + no known branch → rejected. A future ask tool (e.g.
+    rename_doc) must be covered explicitly here — otherwise the default
+    branch rejects it loudly instead of silently letting it through.
     """
 
     name = "suggestions"
+
+    _TERRITORY_ERROR = (
+        "Error: suggestions/ is state-machine territory — proposals cannot be "
+        "moved/deleted by direct tool writes (use the memory console)"
+    )
 
     def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
         tool = TOOL_REGISTRY.get(tool_name)
@@ -129,8 +144,12 @@ class SuggestionsGate(WriteGate):
             return proposals.validate_suggestions_write(
                 path, old.replace(args["old_string"], args["new_string"], 1), old)
 
-        # move_docs / delete_doc 与其他 ask 工具：子树拒绝（缺口闭合）在
-        # gap-closure 阶段落地；此前无内容规则。
+        # move_docs / delete_doc 与其他 ask 工具：suggestions 子树（任意深度）
+        # 一律拒绝（缺口闭合，spec §4 #6/#7）。fail-closed 默认分支：新 ask
+        # 工具触碰子树但未命中已知分支 → 同样拒绝（CI 由 meta-test 钉住）。
+        for _label, p in _extract_paths(args):
+            if _first_segment(p) == "suggestions":
+                return self._TERRITORY_ERROR
         return None
 
 

@@ -216,3 +216,117 @@ def test_edit_doc_tool_nonunique_match_defers_to_edit_file(vault_dir):
         ToolContext(vault_dir=vault_dir))
     assert "Error" in result
     assert "2 times" in result
+
+
+# ── move/delete: suggestions subtree is state-machine territory ──────────
+# Gap closure (spec §4 #6/#7): a move could rename a proposal (breaking the
+# filename convention) or hide it under a subdirectory (out of scan()'s
+# sight); a delete kills a proposal while the ledger keeps an orphan row.
+# Subtree = any depth (a top-segment check would leave a subdirectory
+# bypass). Cleanup goes through the Web UI human channel.
+
+TERRITORY = "suggestions/ is state-machine territory"
+
+
+def test_move_docs_rejects_suggestions_out(vault_dir):
+    """Move a proposal OUT of the buffer (any direction touches the subtree)."""
+    _existing_proposal(vault_dir, "pending")
+    result = validate_tool_call(
+        "move_docs", {"moves": [{"from_path": PATH, "to_path": "notes/moved.md"}]},
+        ChannelPolicy(vault_dir))
+    assert result is not None
+    assert TERRITORY in result
+
+
+def test_move_docs_rejects_suggestions_in_subdirectory(vault_dir):
+    """Move INTO a suggestions subdirectory — out of scan()'s top-level sight."""
+    _existing_proposal(vault_dir, "pending")
+    result = validate_tool_call(
+        "move_docs", {"moves": [{"from_path": "notes/in.md",
+                                 "to_path": "suggestions/sub/deep.md"}]},
+        ChannelPolicy(vault_dir))
+    assert result is not None
+    assert TERRITORY in result
+
+
+def test_move_docs_rejects_subdirectory_to_subdirectory(vault_dir):
+    """Subtree at any depth: even a move that stays inside suggestions/."""
+    (vault_dir / "suggestions" / "sub").mkdir(parents=True)
+    (vault_dir / "suggestions" / "sub" / "2026-10-22_summary_x.md").write_bytes(
+        _fm("pending").encode("utf-8"))
+    result = validate_tool_call(
+        "move_docs", {"moves": [{"from_path": "suggestions/sub/2026-10-22_summary_x.md",
+                                 "to_path": "suggestions/sub2/deeper.md"}]},
+        ChannelPolicy(vault_dir))
+    assert result is not None
+    assert TERRITORY in result
+
+
+def test_delete_doc_rejects_suggestions(vault_dir):
+    _existing_proposal(vault_dir, "pending")
+    result = validate_tool_call(
+        "delete_doc", {"path": PATH}, ChannelPolicy(vault_dir))
+    assert result is not None
+    assert TERRITORY in result
+    # The file must NOT have been deleted.
+    assert (vault_dir / PATH).is_file()
+
+
+def test_delete_doc_rejects_suggestions_subdirectory(vault_dir):
+    (vault_dir / "suggestions" / "sub").mkdir(parents=True)
+    (vault_dir / "suggestions" / "sub" / "2026-10-22_summary_x.md").write_bytes(
+        _fm("pending").encode("utf-8"))
+    result = validate_tool_call(
+        "delete_doc", {"path": "suggestions/sub/2026-10-22_summary_x.md"},
+        ChannelPolicy(vault_dir))
+    assert result is not None
+    assert TERRITORY in result
+
+
+def test_move_docs_and_delete_doc_allow_main_area(vault_dir):
+    """Sanity: the rejection is suggestions-subtree-only — main-area
+    move/delete decisions are unchanged."""
+    (vault_dir / "suggestions").mkdir(parents=True, exist_ok=True)
+    assert validate_tool_call(
+        "move_docs", {"moves": [{"from_path": "notes/a.md",
+                                 "to_path": "notes/b.md"}]},
+        ChannelPolicy(vault_dir)) is None
+    assert validate_tool_call(
+        "delete_doc", {"path": "notes/a.md"}, ChannelPolicy(vault_dir)) is None
+
+
+# ── meta-test: every registered ask tool is gate-covered ─────────────────
+
+def _ask_tools() -> list[str]:
+    from server.agent.tools import TOOL_REGISTRY
+    return [n for n, t in TOOL_REGISTRY.items() if t.permission == "ask"]
+
+
+def _meta_probe(tool_name: str) -> dict:
+    """Probe call pointing into suggestions/ for the meta-test.
+
+    Known tools get a probe that must be rejected for the reason the gate
+    covers them (write/edit: content invariant; move/delete: territory).
+    A future ask tool falls back to the standard ``path`` probe: standard
+    arg names + uncovered branch → fail-closed rejection (green = enforced);
+    non-standard arg names → no path reaches the gate → red (wire it).
+    """
+    return {
+        "write_doc": {"path": PATH, "content": "no frontmatter"},
+        "edit_doc": {"path": PATH, "old_string": "status: pending",
+                     "new_string": "status: merged"},
+        "move_docs": {"moves": [{"from_path": PATH, "to_path": "notes/moved.md"}]},
+        "delete_doc": {"path": PATH},
+    }.get(tool_name, {"path": PATH})
+
+
+@pytest.mark.parametrize("tool_name", _ask_tools())
+def test_meta_ask_tool_suggestions_probe_rejected(tool_name, vault_dir):
+    """spec §5 meta-test: iterate every permission=='ask' tool, probe into
+    suggestions/, assert validate_tool_call rejects — when a new ask tool
+    lands, an uncovered gate branch fails CI here instead of silently
+    allowing writes through."""
+    _existing_proposal(vault_dir, "pending")
+    result = validate_tool_call(
+        tool_name, _meta_probe(tool_name), ChannelPolicy(vault_dir))
+    assert result is not None, f"gate does not cover ask tool {tool_name!r}"
