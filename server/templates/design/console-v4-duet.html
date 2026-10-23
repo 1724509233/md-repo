@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆控制台 v4 · 稿 B 双列（审 / 脉）</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   稿 B「双列」自包含样式。token 全部取自 md-repo/server/templates/style.css
+   （纸墨「书房」）：--paper/--ink/--ink-soft/--brass/--line/--surface。
+   状态点色抄自产品 .status-dot 区块（ok/err/empty，仅圆点与失败强调用）。
+   字体：Source Serif 4（正文）、Inter（UI）、JetBrains Mono（路径/数字）。
+   ================================================================ */
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A;
+  --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --st-ok:#059669; --st-error:#ef4444; --st-empty:#94a3b8;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper);color:var(--ink)}
+body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 72px}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--ink-soft) 35%,transparent) transparent}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--ink-soft) 35%,transparent);border-radius:9999px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--brass);border-radius:6px}
+
+/* ============ 页面头部 ============ */
+.page-head{max-width:1460px;margin:0 auto 26px;padding-bottom:22px;border-bottom:1px solid var(--line)}
+.page-head h1{font-size:26px;font-weight:700;letter-spacing:.01em}
+.page-head .sub{font-family:var(--sans);font-size:13px;color:var(--ink-soft);margin-top:8px;max-width:900px;line-height:1.8}
+.page-head .sub b{color:var(--ink);font-weight:600}
+.page-head .meta{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:8px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{font-family:var(--sans);font-size:11px;font-weight:500;color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px;display:inline-flex;align-items:center;gap:7px}
+.chip b{color:var(--ink);font-weight:600}
+.chip::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--brass);flex-shrink:0}
+
+/* ============ 场景区块 ============ */
+.scene{max-width:1460px;margin:0 auto 52px}
+.s-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.s-head .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--paper);background:var(--ink);padding:3px 10px;border-radius:999px}
+.s-head .tag.brass{background:var(--brass)}
+.s-head h2{font-size:21px;font-weight:700}
+.s-head .diff{font-family:var(--sans);font-size:13px;color:var(--ink-soft)}
+.s-body{display:flex;gap:24px;align-items:flex-start;margin-top:16px}
+.s-notes{flex:1;min-width:290px;position:sticky;top:20px}
+.notes-card{background:var(--surface);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:10px;padding:18px 20px 20px}
+.notes-title{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);margin:0 0 10px}
+.notes-card ul{margin:0;padding:0;list-style:none}
+.notes-card li{font-family:var(--sans);font-size:12.5px;line-height:1.65;color:var(--ink);padding:7px 0;border-bottom:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.notes-card li:last-child{border-bottom:none}
+.notes-card li b{font-weight:600;color:var(--ink)}
+.notes-card li i{font-style:normal;font-family:var(--mono);font-size:11.5px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+@media (max-width:1200px){.s-body{flex-direction:column}.s-notes{position:static;width:100%}}
+
+/* ============ 舞台（模拟应用窗口） ============ */
+.stage{position:relative;display:flex;height:580px;background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(33,29,24,.06),0 1px 0 rgba(33,29,24,.03);flex-shrink:0}
+.stage .viewport{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+.topbar{height:48px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px;font-family:var(--sans)}
+.topbar .tlogo{display:flex;align-items:center;gap:8px}
+.topbar .tlogo .mk{width:22px;height:22px;border:1px solid var(--brass);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:11px;color:var(--brass)}
+.topbar .tlogo .wm{font-family:var(--serif);font-size:14px;font-weight:600}
+.topbar .tfile{font-family:var(--serif);font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .tfile .dim{color:var(--ink-soft)}
+.topbar .spacer{flex:1}
+.topbar .mode-pill{display:flex;align-items:center;gap:2px;height:30px;padding:0 2px;border-radius:8px;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.topbar .mode-pill span{font-size:12px;padding:3px 12px;border-radius:6px;color:var(--ink-soft);display:inline-flex;align-items:center}
+.topbar .mode-pill span.on{background:var(--brass);color:var(--paper);font-weight:500}
+.topbar .bell-ic{width:28px;height:28px;border-radius:8px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative}
+.topbar .bell-ic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.topbar .bell-ic .nbadge{position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 2px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:var(--brass);color:#fff;font-size:9px;font-weight:700;box-shadow:0 0 0 2px var(--surface)}
+.doc-hint{flex:1;overflow:hidden;padding:26px 34px;display:flex;flex-direction:column;gap:10px}
+.doc-hint .dw{width:min(560px,86%)}
+.doc-hint .dh{font-size:22px;font-weight:700;padding-bottom:8px;border-bottom:1px solid color-mix(in srgb,var(--brass) 45%,transparent)}
+.doc-hint .dline{height:9px;border-radius:99px;background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.doc-hint .dline.mid{width:88%}
+.doc-hint .dline.short{width:55%}
+.doc-hint .dline.brass{background:color-mix(in srgb,var(--brass) 22%,transparent);width:70%}
+
+/* ============ rail ============ */
+.rail{width:56px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:10px 0;background:var(--surface);border-right:1px solid var(--line)}
+.rail .rnav{display:flex;flex-direction:column;align-items:center;gap:6px}
+.rail .rsep{width:20px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:8px 0}
+.rail .rbottom{margin-top:auto;display:flex;flex-direction:column;align-items:center;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.rbtn{border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--ink-soft);position:relative;transition:background-color .15s ease,color .15s ease}
+.rbtn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1}
+.rbtn .rn{width:52px;height:44px;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+.rbtn:hover .rn{background:color-mix(in srgb,var(--brass) 8%,transparent)}
+.rbtn.on .rn{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.rbtn.on::before{content:'';position:absolute;left:-4px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+.rbtn.reserved .rn{width:48px;height:40px;color:color-mix(in srgb,var(--ink-soft) 55%,transparent);border:1.5px dashed color-mix(in srgb,var(--ink-soft) 30%,transparent);pointer-events:none}
+.rbtn .badge{position:absolute;top:3px;right:6px;min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--brass);color:#fff;font-family:var(--sans);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--surface)}
+
+/* ============ 控制台面板（300px） ============ */
+.console{width:300px;flex-shrink:0;background:var(--paper);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden;position:relative}
+.c-face{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--paper)}
+.c-face.out{opacity:0;pointer-events:none}
+@keyframes faceIn{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+.c-face.anim{animation:faceIn .2s var(--ease) both}
+.p-head{height:48px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface);font-family:var(--sans);position:relative;z-index:2}
+.p-head .ptitle{font-size:13px;font-weight:600;letter-spacing:.02em}
+.p-head .pcount{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.p-head .picon{width:15px;height:15px;color:var(--brass);display:flex}
+.p-head .picon svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.p-head .sp{margin-left:auto;display:flex;align-items:center;gap:8px}
+.p-head .ibtn{width:24px;height:24px;border:none;background:transparent;color:var(--ink-soft);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px}
+.p-head .ibtn:hover{background:color-mix(in srgb,var(--ink) 6%,transparent);color:var(--ink)}
+.p-head .ibtn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.c-scroll{flex:1;overflow-y:auto;min-height:0;position:relative;z-index:1}
+
+/* 分段切换（审 / 脉）：头栏右端，两列共用一个控件 */
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg-b{font-family:var(--sans);font-size:11px;font-weight:500;padding:4px 10px;border:none;background:transparent;color:var(--ink-soft);cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:background-color .15s ease,color .15s ease}
+.seg-b .n{font-family:var(--mono);font-size:9.5px;font-variant-numeric:tabular-nums;background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass);border-radius:999px;padding:0 5px;min-width:1.1em;text-align:center}
+.seg-b:not(.on):hover{color:var(--ink)}
+.seg-b.on{background:var(--ink);color:var(--paper)}
+.seg-b.on .n{background:color-mix(in srgb,var(--paper) 22%,transparent);color:var(--paper)}
+
+/* 分区头（比 v3 更轻：小写间隔字 + 细线，不用色块） */
+.p-sec{padding:12px 12px 4px}
+.p-sec-h{display:flex;align-items:center;gap:8px;font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--ink-soft);padding:0 4px 8px;text-transform:uppercase}
+.p-sec-h .cnt{font-family:var(--mono);font-size:10px;font-weight:500;min-width:1.25rem;height:1.125rem;padding:0 .375rem;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);color:var(--ink-soft)}
+.p-sec-h .cnt.hot{background:color-mix(in srgb,var(--brass) 12%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.p-sec-h .poll{margin-left:auto;font-family:var(--mono);font-size:9.5px;letter-spacing:.04em;font-weight:400;color:color-mix(in srgb,var(--ink-soft) 60%,transparent);text-transform:none;display:inline-flex;align-items:center;gap:5px}
+.p-sec-h .poll::before{content:'';width:5px;height:5px;border-radius:999px;background:var(--brass);opacity:.7}
+
+/* 类型 chip / 状态 pill */
+.tchip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);padding:1px 7px;border-radius:999px;flex-shrink:0;white-space:nowrap}
+.tchip svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.spill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 4%,transparent);color:var(--ink-soft);white-space:nowrap}
+.spill::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--st-empty);flex-shrink:0}
+.spill.awaiting{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.awaiting::before{background:var(--brass);animation:softPulse 2.2s ease-in-out infinite}
+.spill.adopted{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.adopted::before{background:var(--brass)}
+.spill.merged::before{background:var(--st-ok)}
+.spill.rejected::before{background:var(--st-error)}
+.spill.expired::before{background:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.spill.failed::before{background:var(--st-error)}
+@keyframes softPulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* 审列队列卡（与 v3 同规格：衬线标题 + 左侧铜缘，行动路径保持已批准语言） */
+.q-list{display:flex;flex-direction:column;gap:8px;padding:0 2px}
+.q-card{background:var(--surface);border:1px solid var(--line);border-left:3px solid color-mix(in srgb,var(--brass) 55%,var(--line));border-radius:8px;padding:9px 11px;cursor:pointer;transition:border-color .15s,background-color .15s;text-align:left;font-family:var(--sans);display:block;width:100%;position:relative}
+.q-card:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line));border-left-color:var(--brass);background:color-mix(in srgb,var(--brass) 5%,var(--surface))}
+.q-card.sel{border-color:color-mix(in srgb,var(--brass) 55%,var(--line));border-left-color:var(--brass);background:color-mix(in srgb,var(--brass) 8%,var(--surface))}
+.q-card.fresh{animation:qFreshPulse 2.2s ease-in-out infinite}
+@keyframes qFreshPulse{0%,100%{border-left-color:var(--brass)}50%{border-left-color:color-mix(in srgb,var(--brass) 30%,var(--line))}}
+.q-row1{display:flex;align-items:center;gap:7px;min-width:0}
+.q-title{font-family:var(--serif);font-size:13.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.45}
+.q-age{font-family:var(--mono);font-size:10px;color:var(--ink-soft);flex-shrink:0}
+.q-row2{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.q-row2 .sep{color:color-mix(in srgb,var(--ink-soft) 50%,transparent);margin:0 2px}
+
+/* 九态一行式（审列尾：一行 wrap，替代 3×3） */
+.statusline{display:flex;flex-wrap:wrap;gap:4px 12px;padding:8px 16px 4px;border-top:1px solid var(--line);margin-top:10px;font-family:var(--mono);font-size:9.5px;letter-spacing:.02em}
+.statusline .sl{display:inline-flex;align-items:baseline;gap:5px;white-space:nowrap}
+.statusline .sl .k{font-family:var(--sans);font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:color-mix(in srgb,var(--ink-soft) 70%,transparent)}
+.statusline .sl .v{font-variant-numeric:tabular-nums;color:var(--ink)}
+.statusline .sl .v.zero{color:color-mix(in srgb,var(--ink-soft) 45%,transparent)}
+.statusline .sl.hot .v{color:var(--brass);font-weight:500}
+.statusline .sl.err .v{color:var(--st-error)}
+
+/* 召回一行（审列尾：只给数，钻取入口 → 脉列） */
+.rvl-mini{display:flex;align-items:center;gap:6px;padding:8px 14px 12px;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.rvl-mini .lab{font-family:var(--sans);font-size:9px;letter-spacing:.06em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);flex-shrink:0}
+.rvl-mini .nums{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.rvl-mini .nums b{color:var(--ink);font-weight:500}
+.rvl-mini .go{flex-shrink:0;border:1px solid var(--line);background:var(--surface);border-radius:999px;font-family:var(--sans);font-size:10px;color:var(--ink-soft);cursor:pointer;padding:2px 9px;transition:color .15s,border-color .15s}
+.rvl-mini .go:hover{color:var(--brass);border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+
+/* ============ 脉列（操控台气质：mono 主导、更密、细分区） ============ */
+.pulse-scroll .p-sec-h{font-size:10px}
+.pulse-scroll .pulse-sec{padding:10px 12px 2px}
+.tr-rows{display:flex;flex-direction:column;gap:6px}
+.tr-row{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+.tr-top{display:flex;align-items:center;gap:8px;min-width:0}
+.tr-name{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--ink)}
+.tr-target{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.tr-bar{height:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border-radius:999px;overflow:hidden}
+.tr-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 55%,var(--line)));border-radius:999px}
+.tr-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.tr-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.tr-sub .sp{flex:1}
+.ex-row{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px dashed color-mix(in srgb,var(--line) 90%,transparent);border-radius:7px;padding:8px 10px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:6px}
+.ex-row .nm{color:var(--ink);font-weight:500}
+.ex-row .dot{width:6px;height:6px;border-radius:999px;background:var(--brass);animation:softPulse 2.2s ease-in-out infinite;flex-shrink:0}
+.rcl-stats{display:flex;gap:6px}
+.rcl-stat{flex:1;background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:6px;padding:6px 8px;min-width:0}
+.rcl-stat .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rcl-stat .v{font-family:var(--mono);font-size:14px;font-weight:500;margin-top:1px;font-variant-numeric:tabular-nums}
+.rcl-top{margin-top:8px;padding-top:7px;border-top:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.rcl-top .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:4px;display:flex;align-items:center;gap:5px}
+.rcl-tip{display:inline-flex;align-items:center;justify-content:center;width:12px;height:12px;padding:0;border:0;background:transparent;color:var(--ink-soft);cursor:pointer}
+.rcl-tip svg{width:10px;height:10px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rcl-tipbox{display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease}
+.rcl-tipbox.open{grid-template-rows:1fr}
+.rcl-tipbox-in{overflow:hidden;min-height:0}
+.rcl-tipbox-in p{margin:0;padding:1px 0 5px;font-family:var(--sans);font-size:9.5px;line-height:1.5;color:var(--ink-soft)}
+.rcl-path{font-family:var(--mono);font-size:10.5px;color:var(--ink);padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;gap:7px}
+.rcl-path .w{color:var(--brass);font-variant-numeric:tabular-nums;flex-shrink:0}
+/* 最近终审（脉列：历史状态的可读渲染） */
+.rev-rows{display:flex;flex-direction:column;gap:6px}
+.rev-row{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:7px 10px;min-width:0}
+.rev-top{display:flex;align-items:center;gap:6px;min-width:0}
+.rev-top .tt{font-family:var(--serif);font-size:11.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rev-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);flex-shrink:0}
+.rev-sub{font-family:var(--sans);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* ============ 稿页场景 tab（演示导航，非产品 UI） ============ */
+.tabs{display:flex;gap:8px;max-width:1460px;margin:0 auto 40px;flex-wrap:wrap}
+.tab{font-family:var(--sans);font-size:12px;font-weight:500;padding:7px 16px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.tab .tno{font-family:var(--mono);font-size:10px;letter-spacing:.06em}
+.tab:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line));color:var(--ink)}
+.tab.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.tab.on .tno{color:color-mix(in srgb,var(--paper) 65%,transparent)}
+.stage-badge{font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);padding:2px 9px;border-radius:999px;align-self:center;flex-shrink:0}
+.stage.dimmed .topbar,.stage.dimmed .doc-hint{opacity:.35}
+.demo-bar{max-width:1460px;margin:12px auto 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-family:var(--sans);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.demo-bar .dk{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);font-weight:600}
+
+/* ============ 详情面（终审） ============ */
+.d-head{padding:14px 12px 10px}
+.d-chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.d-chips .sp{margin-left:auto}
+.d-title{font-family:var(--serif);font-size:15.5px;font-weight:700;line-height:1.5;margin-top:8px}
+.d-path{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-sec{padding:12px 12px 14px;border-top:1px dashed color-mix(in srgb,var(--line) 85%,transparent);margin-top:-12px}
+.d-label{display:flex;align-items:center;gap:7px;font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:8px}
+.d-label .ln{margin-left:auto;font-family:var(--mono);font-size:9.5px;font-weight:400;letter-spacing:.04em;text-transform:none;color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.d-md{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:var(--serif);font-size:12px;line-height:1.75;color:var(--ink)}
+.d-md p{margin:4px 0}
+.d-md .ellip{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 60%,transparent);text-align:center;padding-top:4px}
+.src-list{display:flex;flex-direction:column;gap:5px}
+.src-link{font-family:var(--mono);font-size:11px;color:var(--ink);text-decoration:none;border-bottom:1px dashed color-mix(in srgb,var(--brass) 40%,var(--line));display:inline-flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .15s ease,border-color .15s ease}
+.src-link svg{width:10px;height:10px;flex-shrink:0;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;color:var(--brass)}
+.src-link:hover{color:var(--brass);border-color:var(--brass)}
+.run-box{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:6px}
+.run-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);min-width:0}
+.run-line .rk{font-family:var(--sans);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);width:52px;flex-shrink:0}
+.run-line .rv{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.sim-rows{display:flex;flex-direction:column;gap:5px}
+.sim-row{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-width:0}
+.sim-row .sp1{display:flex;align-items:center;gap:7px;min-width:0}
+.sim-row .sp1 .pp{font-family:var(--mono);font-size:10.5px;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sim-row .sp1 .sc{font-family:var(--mono);font-size:10px;color:var(--brass);flex-shrink:0;font-variant-numeric:tabular-nums}
+.sim-row .sp2{font-family:var(--sans);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-row{display:flex;gap:8px;padding:12px 12px 10px;border-top:1px solid var(--line);position:sticky;bottom:0;background:var(--paper);z-index:3}
+.btn{font-family:var(--sans);font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer;transition:background-color .15s ease,color .15s ease,opacity .15s ease,border-color .15s ease;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:1}
+.btn svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.btn:disabled{cursor:not-allowed;opacity:.45}
+.btn-adopt{background:var(--brass);color:var(--paper);border:1px solid var(--brass)}
+.btn-adopt:hover:not(:disabled){background:color-mix(in srgb,var(--brass) 85%,var(--ink))}
+.btn-rej{background:transparent;color:var(--ink-soft);border:1px solid var(--line)}
+.btn-rej:hover:not(:disabled){color:var(--st-error);border-color:color-mix(in srgb,var(--st-error) 45%,var(--line))}
+.rsn{padding:0 12px 10px;border-top:1px dashed color-mix(in srgb,var(--line) 90%,transparent)}
+.rsn-hint{font-family:var(--sans);font-size:10.5px;color:var(--ink-soft);display:flex;align-items:center;gap:6px;margin:8px 0 7px}
+.rsn-hint .req{font-family:var(--mono);font-size:9px;color:#fff;background:var(--st-error);border-radius:4px;padding:0 4px}
+.rsn-ta{width:100%;min-height:64px;resize:vertical;font-family:var(--sans);font-size:12px;line-height:1.65;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.rsn-ta:focus{outline:none;border-color:color-mix(in srgb,var(--brass) 55%,var(--line));box-shadow:0 0 0 2px color-mix(in srgb,var(--brass) 12%,transparent)}
+.rsn-sub{font-family:var(--sans);font-size:12px;font-weight:600;margin-top:8px;width:100%;border-radius:8px;padding:8px 0;background:var(--st-error);color:#fff;border:none;cursor:pointer;opacity:.45}
+.rsn-sub.ok{opacity:1}
+.done{padding:0 12px 12px;border-top:1px dashed color-mix(in srgb,var(--line) 90%,transparent);animation:faceIn .25s var(--ease) both}
+.done-k{font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--st-ok);display:flex;align-items:center;gap:6px;margin:10px 0 8px}
+.done-k svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.done-file{font-family:var(--mono);font-size:11px;color:var(--ink);background:color-mix(in srgb,var(--st-ok) 7%,transparent);border:1px solid color-mix(in srgb,var(--st-ok) 30%,var(--line));border-radius:7px;padding:7px 9px;word-break:break-all;margin-bottom:8px}
+.done-meta{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-bottom:8px}
+.log-trail{display:flex;flex-direction:column;gap:5px}
+.log-line{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.log-line .seq{color:var(--brass);flex-shrink:0;font-variant-numeric:tabular-nums}
+.log-line .act{color:var(--ink);flex-shrink:0}
+.log-line .msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--sans);font-size:10.5px}
+.log-line.future{opacity:.55;border-style:dashed}
+
+/* ============ 移动端示意（390px 手机框） ============ */
+.phone{width:390px;height:640px;flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:26px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(33,29,24,.08)}
+.phone .ph-top{height:40px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:0 14px;font-family:var(--sans);font-size:12px}
+.phone .ph-top .t{font-family:var(--serif);font-size:13px;font-weight:600}
+.phone .ph-scroll{flex:1;overflow-y:auto;min-height:0}
+@media (max-width:860px){.stage{height:520px}.console{position:absolute;inset:0;width:100%;z-index:5;border-right:none}.rail{display:none}}
+
+/* ============ 动效降级 ============ */
+@media (prefers-reduced-motion: reduce){
+  .c-face.anim,.done{animation:none}
+  .q-card.fresh,.spill.awaiting::before,.ex-row .dot{animation:none}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ 页面头部 ============ -->
+<div class="page-head">
+  <h1>记忆控制台 v4 · 稿 B「双列」（审 / 脉）</h1>
+  <div class="sub">把「行动」和「监控」拆成<b>两个面</b>：头栏分段控件切 <b>审</b>（队列 + 九态一行 + 召回一行，只剩要动手的东西）与 <b>脉</b>（触发 / 预算 / 执行器 / 召回榜 / 最近终审，操控台气质的只读监控面）。v3 的平铺痛点 = 审查路径里混着三类监控内容；本稿让<b>扫描路径 = 队列本身</b>，脉列想看不看、看完回审。</div>
+  <div class="meta">branch: feat/memory-runtime · 依据 docs/superpowers/specs/2026-10-21-memory-runtime-design.md §7–8 · 字段形态取自 /api/memory/proposals 与 /api/memory/status 真实返回（armed_target / runs_cap 端点恒 null → 目标值引自 config：consolidator arm 3 / 日 3，sentinel arm 10 / 日 2）</div>
+  <div class="chips">
+    <span class="chip">头栏<b>分段控件</b>：审 3 / 脉（默认审，rail 徽标进入 = 审列）</span>
+    <span class="chip">审列 = <b>纯队列</b> + 九态一行 + 召回一行（钻取入口 → 脉）</span>
+    <span class="chip">脉列 = <b>操控台</b>：mono 主导、密排、细分区，只读</span>
+    <span class="chip">审列卡片沿用 v3 规格，<b>逐条审</b>路径零改动</span>
+  </div>
+</div>
+
+<!-- 场景切换（稿页导航，非产品 UI） -->
+<nav class="tabs" id="tabs">
+  <button class="tab on" data-scene="s1"><span class="tno">01</span>审列 · 主态</button>
+  <button class="tab" data-scene="s2"><span class="tno">02</span>脉列 · 操控台</button>
+  <button class="tab" data-scene="s3"><span class="tno">03</span>终审详情 · 交互</button>
+  <button class="tab" data-scene="s4"><span class="tno">04</span>移动端 · 全宽</button>
+</nav>
+
+<!-- ============ 场景 01：审列 · 主态 ============ -->
+<section class="scene" id="s1">
+  <div class="s-head">
+    <span class="tag">SCENE 01</span>
+    <h2>审列 · 主态（3 条待审）</h2>
+    <span class="diff">默认面 = 审：队列独占版面，九态与召回各压成一行，「详情 →」切脉列（可点）</span>
+    <span class="stage-badge">mock · 数据为真实字段形态</span>
+  </div>
+  <div class="s-body">
+    <div class="stage dimmed">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">notes / </span>obsidian-同步架构.md</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span class="on">阅读</span><span>编辑</span></div>
+          <button class="bell-ic" aria-label="通知">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">3</span>
+          </button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">Obsidian 同步架构</div>
+            <div class="dline mid"></div><div class="dline"></div><div class="dline short"></div>
+            <div class="dline brass"></div><div class="dline"></div><div class="dline mid"></div><div class="dline short"></div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn on" aria-label="通知"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">3</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+
+      <div class="console">
+        <!-- 审列 -->
+        <div class="c-face anim" id="face-review">
+          <div class="p-head">
+            <span class="picon"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg></span>
+            <span class="ptitle">记忆控制台</span>
+            <span class="sp">
+              <span class="seg" role="tablist" aria-label="控制台面">
+                <button class="seg-b on" data-face="review" type="button">审<span class="n">3</span></button>
+                <button class="seg-b" data-face="pulse" type="button">脉</button>
+              </span>
+              <button class="ibtn" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </span>
+          </div>
+          <div class="c-scroll">
+            <div class="p-sec">
+              <div class="p-sec-h"><span>审查队列</span><span class="cnt hot">3</span><span class="poll">轮询 30s</span></div>
+              <div class="q-list">
+                <button class="q-card fresh" type="button" title="suggestions/2026-10-21T081500-link-deploy.md">
+                  <div class="q-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>link</span><span class="q-title">补全断链 [[部署清单]]</span><span class="q-age">今天</span></div>
+                  <div class="q-row2">notes/obsidian-同步架构.md<span class="sep">·</span>20261021T081500</div>
+                </button>
+                <button class="q-card" type="button" title="suggestions/2026-10-20T180500-summary-migration.md">
+                  <div class="q-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>summary</span><span class="q-title">合并《迁移备忘》为《迁移清单》</span><span class="q-age">2d</span></div>
+                  <div class="q-row2">notes/迁移备忘.md<span class="sep">·</span>20261020T180500</div>
+                </button>
+                <button class="q-card" type="button" title="suggestions/2026-10-18T093000-archive-stale.md">
+                  <div class="q-row1"><span class="tchip"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1"/><path d="M6 10v9h12v-9M10 14h4"/></svg>archive</span><span class="q-title">归档过期笔记 3 篇</span><span class="q-age">4d</span></div>
+                  <div class="q-row2">notes/旧版-项目排期.md<span class="sep">·</span>20261018T093000</div>
+                </button>
+              </div>
+            </div>
+            <div class="statusline" aria-label="提案九态">
+              <span class="sl"><span class="k">Pending</span><span class="v zero">0</span></span>
+              <span class="sl"><span class="k">Process</span><span class="v">1</span></span>
+              <span class="sl hot"><span class="k">Awaiting</span><span class="v">3</span></span>
+              <span class="sl"><span class="k">Adopted</span><span class="v">1</span></span>
+              <span class="sl"><span class="k">Rejected</span><span class="v">2</span></span>
+              <span class="sl"><span class="k">Expired</span><span class="v zero">0</span></span>
+              <span class="sl"><span class="k">Merged</span><span class="v">5</span></span>
+              <span class="sl err"><span class="k">Failed</span><span class="v">1</span></span>
+              <span class="sl"><span class="k">Malform</span><span class="v zero">0</span></span>
+            </div>
+            <div class="rvl-mini">
+              <span class="lab">召回</span>
+              <span class="nums"><b>3</b> 无命中 7d · <b>42</b> 在轨 · top <b>217.3</b></span>
+              <button class="go" type="button">详情 → 脉</button>
+            </div>
+          </div>
+        </div>
+        <!-- 脉列（场景 01 内由「详情 → 脉」切入） -->
+        <div class="c-face out" id="face-pulse-s1">
+          <div class="p-head">
+            <span class="picon"><svg viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg></span>
+            <span class="ptitle">记忆控制台 · 脉</span>
+            <span class="sp">
+              <span class="seg" role="tablist" aria-label="控制台面">
+                <button class="seg-b" data-face="review" type="button">审<span class="n">3</span></button>
+                <button class="seg-b on" data-face="pulse" type="button">脉</button>
+              </span>
+              <button class="ibtn" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </span>
+          </div>
+          <div class="c-scroll pulse-scroll" id="pulse-body-s1"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">信息架构 · 为什么拆两列</div>
+        <ul>
+          <li><b>痛点定位</b>——v3 队列面 = 队列 + 九格 + 触发条 + 召回块平铺；「30 秒扫描 + 逐条审」的用户其实只用队列，其余是<b>监控</b>。本稿按使用目的拆面：<b>审</b>给行动、<b>脉</b>给监控，分段控件切换，默认审。</li>
+          <li><b>审列的减法</b>——九格 3×3 压成<b>一行式计数</b>（九态不丢，垂直占用减半）；召回块压成<b>一行数字</b>，留「详情 →」入口切脉列（本场景可点，切面动画 = 现有 <i>opacity + 8px 位移</i> 口径）。队列独占版面，3 张卡不必滚动，扫描与审查同屏。</li>
+          <li><b>rail 徽标 / 深链</b>——徽标 = <i>awaiting_review</i> 长度，点入 = 审列（行动面）；通知深链指向具体提案时直接进终审详情（场景 03），不经过审列列表。</li>
+          <li><b>空队列稳态</b>——审列空态 = 结论句 + 九态一行 + 召回一行仍在（系统活着的证据不离开行动面）；要细看监控就切脉列。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 场景 02：脉列 · 操控台 ============ -->
+<section class="scene" id="s2" style="display:none">
+  <div class="s-head">
+    <span class="tag brass">SCENE 02</span>
+    <h2>脉列 · 操控台（只读监控）</h2>
+    <span class="diff">触发 / 预算 / 执行器 / 召回榜 / 最近终审——想看不看，看完切回审列</span>
+    <span class="stage-badge">mock · 数据为真实字段形态</span>
+  </div>
+  <div class="s-body">
+    <div class="stage dimmed">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">notes / </span>obsidian-同步架构.md</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span class="on">阅读</span><span>编辑</span></div>
+          <button class="bell-ic" aria-label="通知">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">3</span>
+          </button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">Obsidian 同步架构</div>
+            <div class="dline mid"></div><div class="dline"></div><div class="dline short"></div>
+            <div class="dline brass"></div><div class="dline"></div><div class="dline mid"></div><div class="dline short"></div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn on" aria-label="通知"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">3</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+
+      <div class="console">
+        <div class="c-face anim">
+          <div class="p-head">
+            <span class="picon"><svg viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg></span>
+            <span class="ptitle">记忆控制台 · 脉</span>
+            <span class="sp">
+              <span class="seg" role="tablist" aria-label="控制台面">
+                <button class="seg-b" data-face="review" type="button">审<span class="n">3</span></button>
+                <button class="seg-b on" data-face="pulse" type="button">脉</button>
+              </span>
+              <button class="ibtn" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </span>
+          </div>
+          <div class="c-scroll pulse-scroll" id="pulse-body-s2">
+            <div class="statusline" style="margin-top:12px;border-top:none" aria-label="提案九态">
+              <span class="sl"><span class="k">Pending</span><span class="v zero">0</span></span>
+              <span class="sl"><span class="k">Process</span><span class="v">1</span></span>
+              <span class="sl hot"><span class="k">Awaiting</span><span class="v">3</span></span>
+              <span class="sl"><span class="k">Adopted</span><span class="v">1</span></span>
+              <span class="sl"><span class="k">Rejected</span><span class="v">2</span></span>
+              <span class="sl"><span class="k">Expired</span><span class="v zero">0</span></span>
+              <span class="sl"><span class="k">Merged</span><span class="v">5</span></span>
+              <span class="sl err"><span class="k">Failed</span><span class="v">1</span></span>
+              <span class="sl"><span class="k">Malform</span><span class="v zero">0</span></span>
+            </div>
+            <div class="pulse-sec">
+              <div class="p-sec-h"><span>后台任务</span><span class="poll">trigger_state</span></div>
+              <div class="tr-rows">
+                <div class="tr-row">
+                  <div class="tr-top"><span class="tr-name">consolidator</span><span class="tr-target">触发 2/3</span></div>
+                  <div class="tr-bar"><i style="width:66%"></i></div>
+                  <div class="tr-sub">上次 26m 前<span class="dim">·</span><span class="sp"></span>今天 1/3 次</div>
+                </div>
+                <div class="tr-row">
+                  <div class="tr-top"><span class="tr-name">sentinel</span><span class="tr-target">触发 0/10</span></div>
+                  <div class="tr-bar"><i style="width:0%"></i></div>
+                  <div class="tr-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                </div>
+              </div>
+              <div class="ex-row"><span class="dot"></span><span><span class="nm">executor</span> · 30min 循环 · armed（1 条 adopted 待落地）</span></div>
+            </div>
+            <div class="pulse-sec">
+              <div class="p-sec-h"><span>召回</span><span class="poll">30d 半衰期</span></div>
+              <div class="rcl" style="padding:9px 11px">
+                <div class="rcl-stats">
+                  <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">3</div></div>
+                  <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">42</div></div>
+                  <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">217.3</div></div>
+                </div>
+                <div class="rcl-top">
+                  <div class="k">高召回 · 30d 加权<button type="button" class="rcl-tip" aria-expanded="false" title="指标定义"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v4h1"/></svg></button></div>
+                  <div class="rcl-tipbox"><div class="rcl-tipbox-in"><p>近 30 天 human（人）+ on_demand（agent）召回命中，按 30 天半衰期指数衰减加权；不含后台 agent 合成流量。</p></div></div>
+                  <div class="rcl-path">weekly/obsidian-同步.md<span class="w">w.86.0</span></div>
+                  <div class="rcl-path">notes/同步架构-部署.md<span class="w">w.61.0</span></div>
+                  <div class="rcl-path">notes/obsidian-同步架构.md<span class="w">w.42.0</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="pulse-sec" style="padding-bottom:14px">
+              <div class="p-sec-h"><span>最近终审</span><span class="poll">proposals 终态</span></div>
+              <div class="rev-rows">
+                <div class="rev-row">
+                  <div class="rev-top"><span class="tchip">summary</span><span class="tt">合并《部署清单》与《运维手册》</span><span class="dt">10-20</span></div>
+                  <div class="rev-sub"><span class="spill merged" style="font-size:9.5px;padding:1px 7px">merged</span>&nbsp;落地 notes/运维手册.md · merged_at 10-20 09:41</div>
+                </div>
+                <div class="rev-row">
+                  <div class="rev-top"><span class="tchip">correction</span><span class="tt">修正《迁移备忘》版本号</span><span class="dt">10-20</span></div>
+                  <div class="rev-sub"><span class="spill rejected" style="font-size:9.5px;padding:1px 7px">rejected</span>&nbsp;理由：snippet 已被人工改过，提案过期</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">脉列 · 监控面放什么、怎么写</div>
+        <ul>
+          <li><b>九态一行垫底</b>——两个面共享同一行式九态（审列在底部、脉列在顶部），扫描时无论在哪一面都看得到全生命周期计数；awaiting 铜、failed 红、零态淡显。</li>
+          <li><b>后台任务</b>——<i>trigger_state</i> 两行：满足条数 / <i>arm_count</i>（端点 <i>armed_target</i> 恒 null，目标值取 config：consolidator 3、sentinel 10）+ 3px 铜进度条 + <i>last_run</i> + 今日 <i>runs_today</i> / 日预算（config：3 / 2）。执行器是确定性 30min 循环（无 trigger 武装），单列虚线行： armed 口径 = 存在 adopted 未落地或 14d 超期提案。</li>
+          <li><b>召回</b>——三统计（<i>failed_7d</i> / <i>docs_tracked</i> / top 加权和）+ <i>recall.top</i> top3 路径（path + weighted，last_hit 可作 tooltip）；「高召回」定义 tip 沿用 0fr→1fr 点击展开。</li>
+          <li><b>最近终审</b>——历史状态的可读渲染：取 <i>/proposals</i> 中非 awaiting 的最近终态（merged / rejected 各一例），给出状态 pill + 落地路径或 <i>reject_reason</i>。单条完整轨迹仍在详情（trail），此处只回答「系统最近做过什么判断」。</li>
+          <li><b>样式取向</b>——脉列 mono 主导、密排（分区 padding 10px vs 审列 12px）、无衬线标签：与审列的衬线卡片语言区分「机械看 / 人来审」。整面只读，无动作行。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 场景 03：终审详情 · 交互 ============ -->
+<section class="scene" id="s3" style="display:none">
+  <div class="s-head">
+    <span class="tag">SCENE 03</span>
+    <h2>终审详情 · 一秒判断（可交互）</h2>
+    <span class="diff">审列的钻取：五段材料按判断顺序 + sticky 动作行；分段控件停在「审」侧</span>
+    <span class="stage-badge">交互演示 · 按钮可点</span>
+  </div>
+  <div class="s-body">
+    <div class="stage dimmed">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">suggestions / </span>2026-10-21T081500-link-deploy.md</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span>阅读</span><span class="on">编辑</span></div>
+          <button class="bell-ic" aria-label="通知">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">3</span>
+          </button>
+        </div>
+        <div class="doc-hint">
+          <div class="dw">
+            <div class="dh">部署清单</div>
+            <div class="dline mid"></div><div class="dline"></div><div class="dline brass"></div><div class="dline short"></div><div class="dline"></div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn on" aria-label="通知"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">3</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+
+      <div class="console">
+        <div class="c-face anim">
+          <div class="p-head">
+            <button class="ibtn" title="返回队列"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+            <span class="ptitle">终审</span>
+            <span class="pcount">1/3</span>
+            <span class="sp">
+              <span class="seg" role="tablist" aria-label="控制台面">
+                <button class="seg-b on" type="button">审<span class="n">3</span></button>
+                <button class="seg-b" type="button">脉</button>
+              </span>
+              <button class="ibtn" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+            </span>
+          </div>
+          <div class="c-scroll">
+            <div class="d-head">
+              <div class="d-chips">
+                <span class="tchip"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>link</span>
+                <span class="spill awaiting" id="d-pill">awaiting</span>
+                <span class="sp"><span class="q-age">今天 08:15</span></span>
+              </div>
+              <div class="d-title">补全断链 [[部署清单]]</div>
+              <div class="d-path">suggestions/2026-10-21T081500-link-deploy.md</div>
+            </div>
+            <div class="d-sec">
+              <div class="d-label"><span>内容</span><span class="ln">body 摘录 · 全文见来源</span></div>
+              <div class="d-md">
+                <p>在《Obsidian 同步架构》「部署」一节插入 <b>[[部署清单]]</b> 双向链接，并回指部署清单的 §同步部分。</p>
+                <p>&gt; 依据：本周 2 次召回均同时命中两篇，属高价值关联。</p>
+                <div class="ellip">… 共 128 字</div>
+              </div>
+            </div>
+            <div class="d-sec">
+              <div class="d-label"><span>来源</span><span class="ln">source_refs · 可跳转</span></div>
+              <div class="src-list">
+                <a class="src-link" href="javascript:void(0)"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>notes/obsidian-同步架构.md</a>
+                <a class="src-link" href="javascript:void(0)"><svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>notes/部署清单.md</a>
+              </div>
+            </div>
+            <div class="d-sec">
+              <div class="d-label"><span>批次 · 可逆性</span></div>
+              <div class="run-box">
+                <div class="run-line"><span class="rk">批次</span><span class="rv">20261021T081500</span></div>
+                <div class="run-line"><span class="rk">产出者</span><span class="rv">consolidator（cron 10:00 循环）</span></div>
+                <div class="run-line"><span class="rk">可逆性</span><span class="rv"><span class="spill adopted">可回滚</span> 执行器保留旧版</span></div>
+                <div class="run-line"><span class="rk">创建</span><span class="rv">2026-10-21 08:15</span></div>
+              </div>
+            </div>
+            <div class="d-sec">
+              <div class="d-label"><span>相似记忆</span><span class="ln">source_refs ∩ 召回榜 · 查重复</span></div>
+              <div class="sim-rows">
+                <div class="sim-row">
+                  <div class="sp1"><span class="pp">weekly/obsidian-同步.md</span><span class="sc">0.82</span></div>
+                  <div class="sp2">与提案共享来源 · 30d 召回榜在列</div>
+                </div>
+                <div class="sim-row">
+                  <div class="sp1"><span class="pp">notes/同步架构-部署.md</span><span class="sc">0.67</span></div>
+                  <div class="sp2">与提案共享来源 · 30d 召回榜在列</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="done" id="d-done" style="display:none">
+              <div class="done-k" id="d-done-k"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg><span id="d-done-label">执行器已落地</span></div>
+              <div class="done-file" id="d-done-file">notes/obsidian-同步架构.md · 新增 1 处双向链接</div>
+              <div class="done-meta" id="d-done-meta">merged_at 2026-10-21 09:02 · 状态 awaiting → adopted → merged</div>
+              <div class="log-trail">
+                <div class="log-line"><span class="seq">#141</span><span class="act">human</span><span class="msg" id="d-log-human">采纳提案 · 状态机 ledger 记账</span></div>
+                <div class="log-line future" id="d-log-exec"><span class="seq">#142</span><span class="act">executor</span><span class="msg">应用链接变更 · notes/obsidian-同步架构.md</span></div>
+              </div>
+            </div>
+
+            <div class="rsn" id="d-rsn" style="display:none">
+              <div class="rsn-hint"><span class="req">必填</span>拒绝理由将写入 reject_reason，是信任升级的数据源</div>
+              <textarea class="rsn-ta" id="d-rsn-ta" placeholder="例：两篇文档近期已人工合并过，此提案过期"></textarea>
+              <button class="rsn-sub" id="d-rsn-sub" disabled>确认驳回</button>
+            </div>
+
+            <div class="act-row" id="d-act">
+              <button class="btn btn-adopt" id="d-adopt"><svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>审查通过 · 采纳</button>
+              <button class="btn btn-rej" id="d-rej">驳回</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">详情面 · 稿 B 的处理</div>
+        <ul>
+          <li><b>五段材料照单保留</b>——类型+状态+标题+年龄 / 内容摘录 / 来源（可跳转）/ 批次·可逆 / 相似记忆比对，顺序 = 判断顺序。稿 B 与现版完全同构，差异只在<b>头栏多了分段控件</b>：审完这条可以不动位置直接切脉列扫一眼再回来，动作行与切面互不打断（sticky 底不变）。</li>
+          <li><b>位次「1/3」</b>——当前提案在 <i>awaiting_review</i>（oldest first）中的位次，与审列卡片序一致。</li>
+          <li><b>动作行 sticky</b>——采纳铜实心主操作；驳回展开<b>必填理由</b>（非空可提交，服务端 400 同口径）。成功后出现<b>确认之后</b>：状态翻转 + <i>merged_at</i> + 落地文件 + <i>trail</i>（seq · source · op · path；executor 行未落地前虚线「下一循环」——API 只移状态，执行器才落文件，spec 铁律）。</li>
+          <li><b>深链口径</b>——通知 / 铃铛深链指向非 awaiting 提案时同样落在本面「确认之后」子视图（与现组件一致），分段控件停在审侧。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 场景 04：移动端 · 全宽 ============ -->
+<section class="scene" id="s4" style="display:none">
+  <div class="s-head">
+    <span class="tag">SCENE 04</span>
+    <h2>移动端 · 全宽 overlay</h2>
+    <span class="diff">≤860px：面板全宽滑入覆盖，分段控件同位；审列队列全宽成立</span>
+    <span class="stage-badge">mock · 390px</span>
+  </div>
+  <div class="s-body">
+    <div class="phone">
+      <div class="ph-top">
+        <span class="t">记忆控制台</span>
+        <span class="seg" style="margin-left:10px">
+          <button class="seg-b on" type="button">审<span class="n">3</span></button>
+          <button class="seg-b" type="button">脉</button>
+        </span>
+        <span style="margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft)">30s</span>
+      </div>
+      <div class="ph-scroll">
+        <div class="p-sec" style="padding:10px 12px 2px">
+          <div class="p-sec-h"><span>审查队列</span><span class="cnt hot">3</span><span class="poll">轮询 30s</span></div>
+          <div class="q-list" style="padding:0">
+            <button class="q-card fresh" type="button">
+              <div class="q-row1"><span class="tchip">link</span><span class="q-title">补全断链 [[部署清单]]</span><span class="q-age">今天</span></div>
+              <div class="q-row2">notes/obsidian-同步架构.md<span class="sep">·</span>20261021T081500</div>
+            </button>
+            <button class="q-card" type="button">
+              <div class="q-row1"><span class="tchip">summary</span><span class="q-title">合并《迁移备忘》为《迁移清单》</span><span class="q-age">2d</span></div>
+              <div class="q-row2">notes/迁移备忘.md<span class="sep">·</span>20261020T180500</div>
+            </button>
+            <button class="q-card" type="button">
+              <div class="q-row1"><span class="tchip">archive</span><span class="q-title">归档过期笔记 3 篇</span><span class="q-age">4d</span></div>
+              <div class="q-row2">notes/旧版-项目排期.md<span class="sep">·</span>20261018T093000</div>
+            </button>
+          </div>
+        </div>
+        <div class="statusline" style="margin-top:10px">
+          <span class="sl"><span class="k">Process</span><span class="v">1</span></span>
+          <span class="sl hot"><span class="k">Awaiting</span><span class="v">3</span></span>
+          <span class="sl"><span class="k">Adopted</span><span class="v">1</span></span>
+          <span class="sl"><span class="k">Merged</span><span class="v">5</span></span>
+          <span class="sl err"><span class="k">Failed</span><span class="v">1</span></span>
+        </div>
+        <div class="rvl-mini" style="padding:8px 14px 14px">
+          <span class="lab">召回</span>
+          <span class="nums"><b>3</b> 无命中 7d · <b>42</b> 在轨 · top <b>217.3</b></span>
+          <button class="go" type="button">详情 → 脉</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">移动适配</div>
+        <ul>
+          <li><b>全宽 overlay</b>——沿用产品既有口径：≤860px 时面板 <i>position:fixed</i> 全宽、<i>transform: translateX</i> 滑入 + backdrop，rail 隐藏；分段控件移入面板头栏右端（拇指热区），两列切换同桌面。</li>
+          <li><b>九态一行 + 召回一行</b>在 390px 下同样一行 wrap，不占额外滚动。</li>
+          <li><b>降级</b>——<i>prefers-reduced-motion</i>：滑入 / 切面 / 脉冲全部静止（稿内 CSS 已带 media 查询演示）。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="demo-bar" id="demo-bar"><span class="dk">演示</span>场景 01：召回一行「详情 →」切脉列、分段控件双向切换。场景 03：采纳 → 状态翻转 + 落地视图；驳回 → 必填理由</div>
+
+<script>
+(function () {
+  var tabs = document.getElementById('tabs');
+  var demoBar = document.getElementById('demo-bar');
+  tabs.addEventListener('click', function (e) {
+    var b = e.target.closest('.tab');
+    if (!b) return;
+    tabs.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('on', t === b); });
+    document.querySelectorAll('.scene').forEach(function (s) {
+      s.style.display = s.id === b.dataset.scene ? '' : 'none';
+    });
+    if (demoBar) demoBar.style.display = (b.dataset.scene === 's1' || b.dataset.scene === 's3') ? '' : 'none';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  // ── 场景 01：审/脉 切面演示（脉列内容从场景 02 克隆，只操作 class/DOM） ──
+  var s1 = document.getElementById('face-review');
+  var s1p = document.getElementById('face-pulse-s1');
+  var s1body = document.getElementById('pulse-body-s1');
+  var s2body = document.getElementById('pulse-body-s2');
+  var filled = false;
+  function showFace(which) {
+    if (which === 'pulse') {
+      if (!filled && s2body) { s1body.innerHTML = s2body.innerHTML; filled = true; }
+      s1.classList.add('out'); s1p.classList.remove('out'); s1p.classList.add('anim');
+    } else {
+      s1p.classList.add('out'); s1.classList.remove('out'); s1.classList.add('anim');
+    }
+  }
+  document.querySelectorAll('#face-review .seg-b').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('#face-review .seg-b, #face-pulse-s1 .seg-b').forEach(function (x) {
+        x.classList.toggle('on', x.dataset.face === b.dataset.face);
+      });
+      showFace(b.dataset.face);
+    });
+  });
+  document.querySelectorAll('#face-pulse-s1 .seg-b').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('#face-review .seg-b, #face-pulse-s1 .seg-b').forEach(function (x) {
+        x.classList.toggle('on', x.dataset.face === b.dataset.face);
+      });
+      showFace(b.dataset.face);
+    });
+  });
+  var goBtn = document.querySelector('#face-review .rvl-mini .go');
+  if (goBtn) goBtn.addEventListener('click', function () {
+    document.querySelectorAll('#face-review .seg-b, #face-pulse-s1 .seg-b').forEach(function (x) {
+      x.classList.toggle('on', x.dataset.face === 'pulse');
+    });
+    showFace('pulse');
+  });
+  // 召回定义 tip（场景 02）
+  document.querySelectorAll('.rcl-tip').forEach(function (tip) {
+    tip.addEventListener('click', function () {
+      var box = tip.closest('.k').nextElementSibling;
+      box.classList.toggle('open');
+      tip.setAttribute('aria-expanded', box.classList.contains('open'));
+    });
+  });
+
+  // ── 场景 03：终审交互演示（mock，不调 API） ──
+  var pill = document.getElementById('d-pill');
+  var act = document.getElementById('d-act');
+  var rsn = document.getElementById('d-rsn');
+  var ta = document.getElementById('d-rsn-ta');
+  var sub = document.getElementById('d-rsn-sub');
+  var adopt = document.getElementById('d-adopt');
+  var rej = document.getElementById('d-rej');
+  var done = document.getElementById('d-done');
+  var doneLabel = document.getElementById('d-done-label');
+  var meta = document.getElementById('d-done-meta');
+  var file = document.getElementById('d-done-file');
+  var logExec = document.getElementById('d-log-exec');
+  var logHuman = document.getElementById('d-log-human');
+  var settled = false;
+  function stamp() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+           String(d.getDate()).padStart(2, '0') + ' ' +
+           String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function settle() {
+    settled = true;
+    [adopt, rej].forEach(function (b) { b.disabled = true; });
+    act.style.display = 'none';
+    done.style.display = '';
+  }
+  adopt.addEventListener('click', function () {
+    if (settled) return;
+    settle();
+    pill.className = 'spill adopted'; pill.textContent = 'adopted';
+    doneLabel.textContent = '执行器已落地（演示：视为下一循环已合并）';
+    meta.textContent = 'merged_at ' + stamp() + ' · 状态 awaiting → adopted → merged';
+    if (logHuman) logHuman.textContent = '采纳提案 · 状态机 ledger 记账';
+    logExec.classList.remove('future');
+  });
+  rej.addEventListener('click', function () {
+    if (settled) return;
+    var open = rsn.style.display !== 'none';
+    rsn.style.display = open ? 'none' : '';
+    if (!open) ta.focus();
+  });
+  ta.addEventListener('input', function () {
+    var ok = ta.value.trim().length > 0;
+    sub.disabled = !ok; sub.classList.toggle('ok', ok);
+  });
+  sub.addEventListener('click', function () {
+    if (sub.disabled || settled) return;
+    settle();
+    pill.className = 'spill rejected'; pill.textContent = 'rejected';
+    doneLabel.textContent = '已驳回 · ledger 记账';
+    meta.textContent = 'reject_reason 已写入：' + ta.value.trim();
+    file.textContent = '—（驳回不落文件，提案留 suggestions/ 供复盘）';
+    if (logHuman) logHuman.textContent = '驳回提案 · reject_reason 记账';
+    logExec.style.display = 'none';
+  });
+})();
+</script>
+</body>
+</html>
