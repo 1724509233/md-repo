@@ -13,6 +13,10 @@
    状态点色抄自产品 .status-dot 区块（ok/err/empty，仅圆点与失败强调用）。
    字体：Source Serif 4（正文）、Inter（UI）、JetBrains Mono（时间轴/路径/数字）。
    地基 = 稿 C 流水（面板/时间轴/卡）+ 稿 A 账本（行 02–04 素材）+ 稿 B 脉列（素材）。
+   场景清单：01 面板 · 流水（L0 主态）· 02 后台监控页 = 非对称网格 1200px
+   （row-major ①∣② / ③∣④ / ⑤ / ⑥，列比 1:1.6，≥1024px 网格 · ≤1023px 单列零重排，
+   D 图形内芯；2026-10-23 用户选定，来源 layouts 稿 02E，组件命名/取值与 02D/02E 完全一致）·
+   03 终审详情 · 交互（三稿同构）· 04 移动端 · 全宽（后台全宽页 = 02E 网格的窄屏回退）。
    ================================================================ */
 :root{
   --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A;
@@ -254,7 +258,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 .log-line .msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--sans);font-size:10.5px}
 .log-line.future{opacity:.55;border-style:dashed}
 
-/* ============ 后台监控页（L1）：窄单列 680px 居中 · 设置页气质 · 非面板面 ============ */
+/* ============ 后台监控页（L1）：非对称网格 1200px · 设置页气质 · 非面板面（2026-10-23 定稿 = 02E；≤1023px 回单列 680px 居中） ============ */
 .mwrap{flex:1;min-height:0;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
 .m-scroll{flex:1;overflow-y:auto;min-height:0;padding:24px 28px 44px}
 .mpage{max-width:680px;margin:0 auto}
@@ -322,10 +326,11 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 .rcl-path{font-family:var(--mono);font-size:10.5px;color:var(--ink);padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:baseline;gap:8px}
 .rcl-path .w{color:var(--brass);font-variant-numeric:tabular-nums;flex-shrink:0}
 .rcl-path .lh{color:color-mix(in srgb,var(--ink-soft) 65%,transparent);font-size:9.5px;margin-left:auto;flex-shrink:0}
-/* L2 深钻：0fr→1fr 展开（overflow 裁剪，不用 opacity → 不产生 a11y 隐面） */
-.l2{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease)}
-.mcard.open .l2{grid-template-rows:1fr}
-.l2>div{overflow:hidden;min-height:0}
+/* L2 深钻：0fr→1fr 展开（overflow 裁剪，不用 opacity → 不产生 a11y 隐面；.fold 命名沿用 layouts 稿 02E，
+   入口 = 召回卡内独立 .rcl-l2btn 按钮（aria-controls 通用接线）） */
+.fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease)}
+.fold.open{grid-template-rows:1fr}
+.fold>div{overflow:hidden;min-height:0}
 .l2-pad{padding-top:12px}
 .l2-sub{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin:14px 0 6px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
 .l2-sub:first-child{margin-top:0}
@@ -352,6 +357,86 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 .rev-top .tt{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rev-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);flex-shrink:0}
 .rev-sub{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ============ 图形内芯（2026-10-23 定稿，迁自 layouts 稿 02D/02E，命名/取值完全一致，不新造口径） ============
+   卡片骨架保留（纸底大圆角卡堆叠），内芯换数据图形——后台任务 = 分段刻度条（arm 2/3 = 3 段中 2 实心，
+   sentinel arm 0/10 = 10 段全空）；执行器 = 大数字 + armed 状态灯（实心圆点脉冲 = 在跑）；
+   召回 = top5 横条比例图（w 值按最大值 86.0 取比例宽，mono 标注 path + 值）；异常清单 = 红边卡；
+   最近终态 = 保持文字行（终态 = 事件非比例，不图形化）。
+   口径注：30s 轮询 = 快照无时序数据，只画静态比例条 / 刻度条，不画动画填充 / 趋势曲线
+   （轮询间隔 30s 的「增长」是假象，趋势图会误导「在改善/在恶化」）。
+   原始内芯 CSS（.tr-rows / .ex-line / .rcl-top）保留为素材注释，本稿不再实例化。 */
+/* 分段刻度条（arm 2/3 = 3 段中 2 实心；sentinel arm 0/10 = 10 段全空） */
+.seg-row{margin-top:10px}
+.seg-row:first-of-type{margin-top:0}
+.seg-top{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.seg-top .nm{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.seg-top .tg{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.segs{display:flex;gap:4px}
+.seg{height:10px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent)}
+.seg.f{background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 70%,var(--line)));border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.seg.e{background:transparent;border-style:dashed;border-color:color-mix(in srgb,var(--line) 90%,transparent)}
+.seg-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px}
+.seg-sub .sp{flex:1}
+.seg-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+/* 执行器 = 大数字 + 状态灯 */
+.exec-vis{display:flex;align-items:center;gap:14px;padding:4px 2px 2px}
+.lamp{width:11px;height:11px;border-radius:999px;background:var(--st-ok);flex-shrink:0}
+.lamp.on{animation:softPulse 2.2s ease-in-out infinite;box-shadow:0 0 0 4px color-mix(in srgb,var(--st-ok) 15%,transparent)}
+.exec-vis .big{font-family:var(--mono);font-size:34px;font-weight:500;line-height:1;color:var(--brass);font-variant-numeric:tabular-nums}
+.exec-vis .cap-line{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);line-height:1.7}
+.exec-vis .cap-line b{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+/* 召回 top5 横条比例图（w 值按最大值取比例宽） */
+.wbar{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.wline{display:grid;grid-template-columns:200px 1fr 44px;gap:10px;align-items:center;min-width:0}
+.wbar-h{font-family:var(--mono);font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-bottom:2px}
+.wline .p{font-family:var(--mono);font-size:10px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+/* last_hit 降为 path 下副注（图形列放不下三个字段：path / 条 / 值 占满三列） */
+.wline .p .lh{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);white-space:normal;margin-top:1px}
+.wline .bar{height:12px;background:color-mix(in srgb,var(--ink) 5%,transparent);border-radius:3px;overflow:hidden}
+.wline .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 60%,var(--line)));border-radius:3px}
+.wline .v{font-family:var(--mono);font-size:10.5px;color:var(--brass);text-align:right;font-variant-numeric:tabular-nums}
+/* 异常清单 = 红边卡 */
+.mcard.alert{border-color:color-mix(in srgb,var(--st-error) 50%,var(--line));background:color-mix(in srgb,var(--st-error) 3%,var(--surface))}
+.alert-pill{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--st-error);border:1px solid color-mix(in srgb,var(--st-error) 40%,var(--line));background:color-mix(in srgb,var(--st-error) 7%,transparent);border-radius:999px;padding:1px 8px}
+/* 召回 L2 入口 = 卡片内独立按钮（卡片头留给区块名） */
+.rcl-l2btn{margin-top:10px;border:1px solid var(--line);background:transparent;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--ink-soft);border-radius:999px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px;transition:border-color .15s ease,color .15s ease}
+.rcl-l2btn:hover{color:var(--brass);border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.rcl-l2btn .car{display:inline-flex;transition:transform .2s var(--ease);color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.rcl-l2btn .car svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rcl-l2btn[aria-expanded="true"] .car{transform:rotate(90deg)}
+
+/* ============ 非对称网格（空间维度 · 2026-10-23 用户选定，迁自 layouts 稿 02E）：
+   六区块 row-major = 锁定区块顺序零重排：组 1 通栏组标题 → 行 1 ①九格(窄)∣②异常(宽·红边卡)、
+   组 2 通栏组标题 → 行 2 ③后台任务(窄)∣④执行器(宽)、行 3 ⑤召回(通栏)、行 4 ⑥最近终态(通栏)。
+   列比 1:1.6：②trail 长路径与④大数字需宽，①③放窄列。行内等高（grid 默认 align-items:stretch），
+   ④卡内容少 → exec-vis margin:auto 垂直居中；①九格内容顶部对齐（自然流）。
+   六网格单元永远在场：网格模板不因数据增删变形、不 reflow；计数 = 0 → 卡内容 = 淡显占位
+   （.zline：无异常 / 无终态 / 无召回流量），卡骨架常驻（演示数据全非零，稿中不实例化）。
+   响应式：≥1024px 完整网格；≤1023px 行 1/2 降单列（六区块通栏堆叠、顺序不变）——
+   生产窄屏回单列 = 区块顺序零重排；场景 04 移动端稿 = 本回退形态的手机全宽页。 */
+.mpage.grid{max-width:1200px;display:grid;grid-template-columns:1fr 1.6fr;column-gap:12px;row-gap:12px;align-items:stretch}
+.mpage.grid .mp-head,.mpage.grid .mgroup{grid-column:1/-1}
+.mpage.grid .mgroup{margin:6px 2px 0}
+.mpage.grid .mgroup:first-of-type{margin-top:4px}
+/* 行 3/4：⑤召回 ⑥最近终态 通栏（DOM 顺序 = ①②③④⑤⑥，row-major 自然落位，零重排） */
+.mpage.grid .mcard.full{grid-column:1/-1}
+/* 网格内卡：卡间距 12px 由 gap 承担；flex 纵排让 mc-note 贴底，行内等高由 stretch 撑满 */
+.mpage.grid .mcard{margin-bottom:0;display:flex;flex-direction:column;min-width:0}
+/* flex 纵排下 inline 子件会被 stretch 拉满：L2 按钮回到 02D 的内容宽 pill（左对齐） */
+.mpage.grid .rcl-l2btn{align-self:flex-start}
+/* ④ 执行器卡内容少 → 大数字 + 状态灯组垂直居中（①九格保持顶部对齐） */
+.mpage.grid .exec-vis{margin:auto 0}
+@media (max-width:1023px){
+  /* ≤1023px（含 <768px）：单列，六区块通栏堆叠，顺序不变（无需第三套断点） */
+  .mpage.grid{grid-template-columns:1fr;max-width:680px}
+}
+@media (max-width:359px){
+  /* 生产窄屏视口（<360px）：wline 固定部（path 200 + 值 44 + gap 20 = 264px）在 320px 屏
+     内宽 ~252px 下放不下 → path 改 auto、条取 flex。media query 按视口计——场景 04 的
+     390px 手机框内宽 364px > 264px，200px 列放得下（条 ~100px），此断点不作用于帧。 */
+  .wline{grid-template-columns:auto 1fr 44px}
+}
 
 /* ============ 移动端示意（390px 手机框 ×2：面板全宽 / 后台全宽页） ============ */
 .phone{width:390px;height:640px;flex-shrink:0;background:var(--paper);border:1px solid var(--line);border-radius:26px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 10px 30px rgba(33,29,24,.08)}
@@ -395,11 +480,12 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 .fn-card li b{font-weight:600}
 .fn-card li i{font-style:normal;font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
 
-/* ============ 动效降级 ============ */
+/* ============ 动效降级（图形内芯新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标，
+   与 layouts 稿 02E 的 prefers-reduced-motion 覆盖件一致） ============ */
 @media (prefers-reduced-motion: reduce){
   .c-face.anim,.done{animation:none}
-  .f-item.hot .f-dot,.spill.awaiting::before,.ex-line .dot{animation:none}
-  .l2,.mc-h .car{transition:none}
+  .f-item.hot .f-dot,.spill.awaiting::before,.ex-line .dot,.lamp.on{animation:none}
+  .fold,.mc-h .car,.rcl-l2btn .car{transition:none}
 }
 
 </style>
@@ -408,12 +494,13 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 <!-- ============ 页面头部 ============ -->
 <div class="page-head">
   <h1>记忆控制台 v4 · 稿 D「终审/监控分离」（流水面板 + 后台页）</h1>
-  <div class="sub">通知槽位契约 = <b>系统需不需要我</b>：面板只放行动 + 最新（L0 = 头栏纯状态行「行动数 + 轮询 30s」，行尾常驻「后台 →」入口，九态全集在面板内彻底消失）。<b>系统健康吗</b>：三稿原来混在面板里的监控内容（九态 / 触发预算 / 召回 / 异常）全部迁到独立<b>后台监控页</b>——两组「状态 / 系统」（页面问的两个问题），主区域渲染窄单列设置页，面板与监控页互斥。徽标 = <b>需人参与态总和</b>（当前集 = 待审 + failed = 4，hover 分解）。详情面板 300px、终审五段材料、移动端全宽 overlay 三稿同构不改。</div>
+  <div class="sub">通知槽位契约 = <b>系统需不需要我</b>：面板只放行动 + 最新（L0 = 头栏纯状态行「行动数 + 轮询 30s」，行尾常驻「后台 →」入口，九态全集在面板内彻底消失）。<b>系统健康吗</b>：三稿原来混在面板里的监控内容（九态 / 触发预算 / 召回 / 异常）全部迁到独立<b>后台监控页</b>——两组「状态 / 系统」（页面问的两个问题），主区域渲染<b>非对称网格</b>设置页（1200px · 列比 1:1.6 · 2026-10-23 用户选定，D 图形内芯；窄屏回单列零重排），面板与监控页互斥。徽标 = <b>需人参与态总和</b>（当前集 = 待审 + failed = 4，hover 分解）。详情面板 300px、终审五段材料、移动端全宽 overlay 三稿同构不改。</div>
   <div class="meta">branch: feat/memory-runtime · 依据 docs/superpowers/specs/2026-10-21-memory-runtime-design.md §7–8 · L0/L1 数据全部取 30s 轮询缓存（/api/memory/status + /api/memory/proposals，后端成本为零）· armed_target / runs_cap 端点恒 null → 目标值标「取自 config」（consolidator arm 3 / 日 3 · sentinel arm 10 / 日 2）· L2 深钻唯一按需 GET：/api/recall/stats（docs / failed_queries 各 cap 200 行）</div>
   <div class="chips">
     <span class="chip">L0 面板头栏<b>纯状态行</b>：3 待审 · 1 待落地 · 1 失败 · 轮询 30s（failed 告警红；行尾「后台 →」唯一入口，failed&gt;0 红点）</span>
     <span class="chip">L1 <b>后台监控页</b>：两组 状态（九态 9 格 · 异常清单）/ 系统（后台任务 · 执行器 · 召回 · 最近终态）· 零态常驻淡显（入口 = L0 行尾「后台 →」）</span>
-    <span class="chip">L2 <b>按需深钻</b>：召回区块 0fr→1fr 展开 docs / failed_queries 两张表（唯一一次 GET）</span>
+    <span class="chip">L1 空间 <b>非对称网格 1200px</b>：row-major ①∣② / ③∣④ / ⑤ / ⑥ · 列比 1:1.6 · ≥1024px 网格 · ≤1023px 单列零重排（2026-10-23 用户选定，来源 layouts 稿 02E）</span>
+    <span class="chip">L2 <b>按需深钻</b>：召回卡 L2 按钮 0fr→1fr 展开 docs / failed_queries 两张表（唯一一次 GET）</span>
     <span class="chip">面板内<b>九态消失</b>：agent run 细行只留 alias + 时间 + 状态，无进度条/预算</span>
   </div>
 </div>
@@ -547,12 +634,12 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
   </div>
 </section>
 
-<!-- ============ 场景 02：后台监控页 · L1（本稿新增 · 核心） ============ -->
+<!-- ============ 场景 02：后台监控页 · L1（本稿新增 · 核心）= 非对称网格（2026-10-23 定稿，来源 layouts 稿 02E） ============ -->
 <section class="scene" id="s2" style="display:none">
   <div class="s-head">
     <span class="tag brass">SCENE 02</span>
-    <h2>后台监控页 · L1（独立页面 · 窄单列 680px）</h2>
-    <span class="diff">两组「状态（九态 / 异常）· 系统（任务 / 执行器 / 召回 / 终态）」= 页面问的两个问题；零态常驻淡显；单出口「← 返回文档」；rail = 真实应用 rail（无激活槽，通知徽标 4 hover 分解）；召回区块 = L2 深钻入口（可点）</span>
+    <h2>后台监控页 · L1（独立页面 · 非对称网格 1200px）</h2>
+    <span class="diff">独立页面 · 非对称网格 1200px（≤1023px 单列）· row-major ①∣② / ③∣④ / ⑤ / ⑥ · 列比 1:1.6；两组「状态 / 系统」= 页面问的两个问题；零态常驻淡显；单出口「← 返回文档」；rail = 真实应用 rail（无激活槽，通知徽标 4 hover 分解）；召回区块 = L2 深钻入口（可点）</span>
     <span class="stage-badge">交互演示 · 召回区块可点</span>
   </div>
   <div class="s-body">
@@ -573,7 +660,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
         <!-- 后台页 = 主区域页面，不走 300px 控制台槽（与通知面板互斥） -->
         <div class="mwrap">
           <div class="m-scroll">
-            <div class="mpage">
+            <div class="mpage grid">
               <div class="mp-head">
                 <!-- 单出口：演示切场景 01；生产 = 回文档视图，面板不自动重开（面板重入走 rail【通知】） -->
                 <button class="mp-back" type="button" data-demo="s1" title="返回文档视图（演示：切场景 01；生产：回文档，面板不自动重开）"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
@@ -584,9 +671,9 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
               <!-- 组 1「状态」= 页面第一问「健康吗」——事件驱动访问（看到徽标/红点进来）的主模式，状态组保证落在首屏内 -->
               <div class="mgroup">状态<span class="q">健康吗</span></div>
 
-              <!-- ① 九态：产品现有顺序；本面板迁出后，这里是九态全集唯一的家 -->
+              <!-- ① 九态：02D 卡片骨架 + 3×3 九格（正交变量锁定，不图形化——计数已是最小图形）；窄列，内容顶部对齐 -->
               <div class="mcard">
-                <div class="mc-h"><span class="mc-t">九态</span><span class="mc-poll">by_status · 8 状态 + malformed</span></div>
+                <div class="mc-h"><span class="mc-t">九态</span><span class="mc-poll">by_status · 8 状态 + malformed · 30s 轮询</span></div>
                 <div class="s9">
                   <div class="s9c"><div class="k">Processing</div><div class="v">1</div></div>
                   <div class="s9c hot"><div class="k">Awaiting</div><div class="v">3</div></div>
@@ -598,75 +685,82 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
                   <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
                   <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
                 </div>
-                <div class="mc-note">顺序 = 产品现有 by_status 口径。零态淡显 / awaiting 铜 / failed 红——与三稿行式九态同一套语义，换成 9 格是因为页面宽度允许。</div>
+                <div class="mc-note">顺序 = 产品现有 by_status 口径 · 零态格淡显 / awaiting 铜 / failed 红 · 区块计数 = 0 → 内容行淡显占位（<i>.zline</i>），卡片常驻</div>
               </div>
 
-              <!-- ② 异常清单（原 ⑤，迁入状态组）：status=failed|malformed；trail 按需取。
-                   零态 = 常驻淡显一行「无异常」(zline)——健康页必须可见地回答「没问题」 -->
-              <div class="mcard">
-                <div class="mc-h"><span class="mc-t">异常清单</span><span class="mc-poll">status = failed | malformed</span></div>
-                <div class="ano-row">
+              <!-- ② 异常清单 = 红边卡（D 对「需要被看见」的区块的图形处理；trail 内容与 B/C 相同）；宽列：trail 长路径需宽 -->
+              <div class="mcard alert">
+                <div class="mc-h"><span class="mc-t">异常清单</span><span class="mc-poll">failed | malformed · trail 按需取</span><span class="alert-pill">1 failed</span></div>
+                <div class="ano-row" style="border-color:color-mix(in srgb,var(--st-error) 35%,var(--line))">
                   <div class="ano-top"><span class="tchip">entity_index</span><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18 11:07</span></div>
                   <div class="trail-mini">
                     <div class="tline"><span class="op">#129 · executor</span><span class="tp">apply rebuild · suggestions/2026-10-18T093000-entity-sync.md → 失败</span></div>
                     <div class="tline"><span class="op">#130 · system</span><span class="tp">source_refs 缺失 · 提案保留待修（不自动重试）</span></div>
                   </div>
                 </div>
-                <div class="mc-note">各附 2 行 <i>trail</i>（<i>/proposals/{relpath}/trail</i>：op / path，<b>按需取</b>，不随轮询）；malformed 当前 0，出现时同规格入列（parse 失败条目，不 500，spec §7.1）。全零时只渲染淡显一行「无异常」，区块常驻。</div>
+                <div class="mc-note">红边 = 区块级强调（卡片保留下唯一可用的「跳出」手段）· trail 按需取 <i>/proposals/{relpath}/trail</i>（不随轮询）· malformed 当前 0，出现时同规格入列 · 全零 → 内容行淡显占位「无异常」</div>
               </div>
 
               <!-- 组 2「系统」= 页面第二问「在干什么」 -->
               <div class="mgroup">系统<span class="q">在干什么</span></div>
 
-              <!-- ③ 后台任务：素材 = 稿 B 脉列 / 稿 A 账本行 02（trigger_state） -->
+              <!-- ③ 后台任务 = 分段刻度条：实心段数 = 当前 arm，总段数 = 目标（arm 2/3 = 3 段中 2 实心；
+                    sentinel arm 0/10 = 10 段全空——demo 数据自带的零态样本）。
+                    刻度条是静态快照：30s 轮询无时序数据，不画动画填充 / 趋势（避免误导「在增长」）。 -->
               <div class="mcard">
-                <div class="mc-h"><span class="mc-t">后台任务</span><span class="mc-poll">trigger_state · arm_count</span></div>
-                <div class="tr-rows">
-                  <div class="tr-row">
-                    <div class="tr-top"><span class="tr-name">consolidator</span><span class="tr-target">arm 2/3</span></div>
-                    <div class="tr-bar"><i style="width:66%"></i></div>
-                    <div class="tr-sub">上次 26m 前<span class="dim">·</span><span class="sp"></span>今天 1/3 次</div>
-                  </div>
-                  <div class="tr-row">
-                    <div class="tr-top"><span class="tr-name">sentinel</span><span class="tr-target">arm 0/10</span></div>
-                    <div class="tr-bar"><i style="width:0%"></i></div>
-                    <div class="tr-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
-                  </div>
+                <div class="mc-h"><span class="mc-t">后台任务</span><span class="mc-poll">trigger_state · 目标取自 config</span></div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">consolidator</span><span class="tg">arm 2/3</span></div>
+                  <div class="segs"><i class="seg f"></i><i class="seg f"></i><i class="seg"></i></div>
+                  <div class="seg-sub">上次 26m 前<span class="sp"></span>今天 1/3 次</div>
                 </div>
-                <div class="mc-note"><i>armed_target</i> / <i>runs_cap</i> 端点恒 null——进度条目标值与今日次数上限<b>取自 config</b>（consolidator arm 3 / 日 3 · sentinel arm 10 / 日 2）。素材直接复用稿 B 脉列两行，原字段 <i>trigger_state.armed / arm_count / last_run / runs_today</i> 不改编。</div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">sentinel</span><span class="tg">arm 0/10</span></div>
+                  <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+                  <div class="seg-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                </div>
+                <div class="mc-note">实心段 = 当前 arm · 总段数 = 目标（armed_target 端点恒 null → 取自 config）· 静态快照：30s 轮询无时序数据，不画动画填充 / 趋势 · 细信息（上次 / 今天次数）图形放不下，仍走 mono 注脚行 · <i>trigger_state.armed / arm_count / last_run / runs_today</i> 原字段</div>
               </div>
 
-              <!-- ④ 执行器：30min 确定性循环，adoption 待落地 N -->
+              <!-- ④ 执行器 = 大数字（待落地计数）+ armed 状态灯（实心圆点脉冲 = 在跑）；
+                    网格行内等高拉伸，exec-vis 垂直居中（.mpage.grid .exec-vis） -->
               <div class="mcard">
                 <div class="mc-h"><span class="mc-t">执行器</span><span class="mc-poll">30min 循环 · 非 LLM</span></div>
-                <div class="ex-line"><span class="dot"></span><span><b>executor</b> · 30min 循环 · armed —— <span class="n">1 条 adopted 待落地</span></span></div>
-                <div class="mc-note">确定性 30 分钟周期：扫描「adopted 待落地」或「14d 超期提案」落地，保留旧版（可回滚）。与 trigger 武装无关——此处计数 = <i>by_status.adopted</i>，不是触发条。</div>
+                <div class="exec-vis">
+                  <span class="lamp on" title="armed · 运行中"></span>
+                  <span class="big">1</span>
+                  <span class="cap-line"><b>executor</b> · 30min 循环 · armed<br>1 条 adopted 待落地 · 计数 = <i>by_status.adopted</i></span>
+                </div>
+                <div class="mc-note">大数字 = 待落地计数（by_status.adopted，与触发武装无关）· 状态灯 = armed 开/关（demo = 开，脉冲 = 在跑）· 确定性 30 分钟周期：扫描「adopted 待落地」或「14d 超期提案」落地，保留旧版（可回滚）</div>
               </div>
 
-              <!-- ⑤ 召回：L2 深钻入口（点击 0fr→1fr 展开两张表；按需 GET /api/recall/stats）。
-                   零态（无召回流量）= 常驻淡显一行 (zline) -->
-              <div class="mcard" id="rcl-card">
-                <div class="mc-h clickable" id="rcl-toggle" role="button" tabindex="0" aria-expanded="false" aria-controls="l2-body" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
-                  <span class="mc-t">召回</span><span class="mc-poll">30d 半衰期 · 点击展开 L2 深钻 ↓</span>
-                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
-                </div>
+              <!-- ⑤ 召回 = top5 横条比例图：宽度 ∝ w 值（按最大值 86.0 归一：100 / 70.9 / 48.8 / 33.1 / 21.2 %），
+                    mono 标注 path + 值，替代纯列表。口径注：① 静态比例条，非时序（30s 轮询 = 快照）；
+                    ② 值域窄时归一化压缩差异（86 vs 18 看得清，61 vs 42 就模糊）——值标在条尾兜底；
+                    ③ last_hit 降为 path 下副注（图形列放不下三个字段）。L2 仍是独立按钮（唯一按需层）。
+                    通栏后 L2 表格横向滚动需求下降。 -->
+              <div class="mcard full">
+                <div class="mc-h"><span class="mc-t">召回</span><span class="mc-poll">30d 半衰期 · L2 = 全页唯一按需层</span></div>
                 <div class="rcl-stats">
                   <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">3</div></div>
                   <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">42</div></div>
                   <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">217.3</div></div>
                 </div>
-                <div class="rcl-top">
-                  <div class="k">高召回 · 30d 加权<span class="cap">path + weighted + last_hit</span></div>
-                  <div class="rcl-path">weekly/obsidian-同步.md<span class="w">w.86.0</span><span class="lh">last_hit 10-21 08:02</span></div>
-                  <div class="rcl-path">notes/同步架构-部署.md<span class="w">w.61.0</span><span class="lh">last_hit 10-20 22:41</span></div>
-                  <div class="rcl-path">notes/obsidian-同步架构.md<span class="w">w.42.0</span><span class="lh">last_hit 10-21 08:15</span></div>
-                  <div class="rcl-path">notes/部署清单.md<span class="w">w.28.5</span><span class="lh">last_hit 10-19 15:12</span></div>
-                  <div class="rcl-path">weekly/2026-10-18.md<span class="w">w.18.2</span><span class="lh">last_hit 10-18 09:30</span></div>
+                <div class="wbar">
+                  <div class="wbar-h">top5 · 宽度 ∝ weighted（最大 86.0 = 100%）· 静态比例条，无时序</div>
+                  <div class="wline"><span class="p">weekly/obsidian-同步.md<span class="lh">last_hit 10-21 08:02</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">86.0</span></div>
+                  <div class="wline"><span class="p">notes/同步架构-部署.md<span class="lh">last_hit 10-20 22:41</span></span><span class="bar"><i style="width:70.9%"></i></span><span class="v">61.0</span></div>
+                  <div class="wline"><span class="p">notes/obsidian-同步架构.md<span class="lh">last_hit 10-21 08:15</span></span><span class="bar"><i style="width:48.8%"></i></span><span class="v">42.0</span></div>
+                  <div class="wline"><span class="p">notes/部署清单.md<span class="lh">last_hit 10-19 15:12</span></span><span class="bar"><i style="width:33.1%"></i></span><span class="v">28.5</span></div>
+                  <div class="wline"><span class="p">weekly/2026-10-18.md<span class="lh">last_hit 10-18 09:30</span></span><span class="bar"><i style="width:21.2%"></i></span><span class="v">18.2</span></div>
                 </div>
-                <div class="l2" id="l2-body">
+                <button class="rcl-l2btn" type="button" id="rcl-toggle-s2" aria-expanded="false" aria-controls="fold-l2-s2" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>L2 深钻 · docs / failed_queries 各 ≤200 行
+                </button>
+                <div class="fold" id="fold-l2-s2">
                   <div>
                     <div class="l2-pad">
-                      <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · mono 表格窄列横向滚动</span></div>
+                      <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · mono 表格通栏后横向滚动需求下降</span></div>
                       <div class="mtable">
                         <table>
                           <thead><tr><th>文档</th><th>加权</th><th>last_hit</th></tr></thead>
@@ -692,15 +786,15 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
                           </tbody>
                         </table>
                       </div>
-                      <div class="mc-note">L2 = 全页唯一按需层：点本区块触发一次 <i>GET /api/recall/stats</i>（docs / failed_queries 各 cap 200 行）；演示各放 7 / 3 行，生产表格窄列横向滚动。失败查询 7d 合计 3 = 上方「7d 无命中 3」口径一致。</div>
+                      <div class="mc-note">比例条 = 静态（30s 轮询 = 快照，无时序，不画趋势曲线）· L2 = 全页唯一按需层：点本按钮触发一次 <i>GET /api/recall/stats</i> · 演示各放 7 / 3 行 · 失败查询 7d 合计 3 = 统计「7d 无命中 3」口径一致 · 全零 → 统计行淡显占位「无召回流量」</div>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- ⑥ 最近终态：merged / rejected / failed 各 1–2 条（素材 = 稿 B 脉列「最近终审」扩展）。
-                   零态 = 常驻淡显一行「无终态」(zline)：系统尚未做过判断时，区块仍在、答案可见 -->
-              <div class="mcard">
+              <!-- ⑥ 最近终态 = 保持文字行（判断：终态 = 事件非比例，不图形化——事件没有「刻度」可画，
+                    强行图形化只会产出无信息的装饰；沿用 02D 判断） -->
+              <div class="mcard full">
                 <div class="mc-h"><span class="mc-t">最近终态</span><span class="mc-poll">proposals 终态 · 倒序</span></div>
                 <div class="rev-rows">
                   <div class="rev-row">
@@ -716,7 +810,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
                     <div class="rev-sub"><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span>&nbsp;执行器校验失败：source_refs 缺失 · 提案保留待修</div>
                   </div>
                 </div>
-                <div class="mc-note">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条（merged_at / reject_reason / 失败原因）；单条完整 12 行轨迹仍在<b>终审详情</b>（trail tail），此处只回答「系统最近做过什么判断」。</div>
+                <div class="mc-note">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条 · 单条完整 12 行轨迹仍在终审详情（trail tail）· 全零 → 内容行淡显占位「无终态」</div>
               </div>
 
             </div>
@@ -740,14 +834,15 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
 
     <div class="s-notes">
       <div class="notes-card">
-        <div class="notes-title">后台页 · 两组结构、入口与出口、零态规则</div>
+        <div class="notes-title">后台页 · 非对称网格 · 入口/出口与零态规则</div>
         <ul>
-          <li><b>独立页面而非面板子面</b>——通知槽位契约拆两问：「系统需不需要我」（面板）/「系统健康吗」（本页）。面板 300px 是行动面，监控是阅读面，两者要不同宽度与节奏：窄单列 <b>680px 居中</b>、设置页气质（大卡区块 + 小写标注 + mono 口径注脚）。<b>与通知面板互斥</b>：入口 = L0 行尾「后台 →」（点击 = 面板收起、本页接管主区域）；出口唯一 =「← 返回文档」（生产：回文档视图，面板不自动重开，重入走 rail【通知】）。</li>
-          <li><b>两组 = 页面问的两个问题</b>——<b>状态</b>（健康吗）：九态 9 格 + 异常清单；<b>系统</b>（在干什么）：后台任务 / 执行器 / 召回 / 最近终态。组标题 = 小写 caps 行（设置页气质，与卡片区分）。顺序理由 = <b>事件驱动访问是主模式</b>（看到徽标 / 红点进来）→ 先答「健康吗」，状态组保证落在首屏内。九态 9 格 = 这套九态在全产品的唯一归属地（面板已彻底移除）。</li>
+          <li><b>独立页面而非面板子面</b>——通知槽位契约拆两问：「系统需不需要我」（面板）/「系统健康吗」（本页）。面板 300px 是行动面，监控是 <b>1200px 非对称网格阅读面</b>（两组两问；≥1024px 网格、≤1023px 回单列），两者要不同宽度与节奏。<b>与通知面板互斥</b>：入口 = L0 行尾「后台 →」（点击 = 面板收起、本页接管主区域）；出口唯一 =「← 返回文档」（生产：回文档视图，面板不自动重开，重入走 rail【通知】）。</li>
+          <li><b>非对称网格（用户 2026-10-23 选定，来源 layouts 稿 02E）</b>——<b>row-major ①∣② / ③∣④ / ⑤ / ⑥ = 区块锁定顺序，零重排</b>（DOM = ①②③④⑤⑥ 自然落位）；组标题行通栏（两问叙事不丢）；⑤ 召回、⑥ 最近终态通栏；列比 <b>1:1.6</b>（② trail 长路径与④大数字需宽，①③放窄列）；行内等高（stretch），④ 内容少 → exec-vis 垂直居中，① 顶部对齐。<b>≤1023px 回单列 = 同样零重排</b>（= 场景 04 的窄屏回退形态）。六网格单元<b>永远在场</b>：网格模板不因数据增删变形、不 reflow；计数 = 0 → 卡内容 = 淡显占位（<i>.zline</i>）。⑤⑥ 通栏 → L2 表格横向滚动需求下降（<i>overflow-x</i> 仅留 200 行生产数据兜底）。</li>
+          <li><b>内芯 = D 图形内芯（与 02D/02E 同源，命名/取值完全一致）</b>——后台任务 = 分段刻度条（实心段 = 当前 arm，总段数 = 目标）、执行器 = 大数字 + armed 状态灯（脉冲 = 在跑）、召回 = top5 比例条（宽度 ∝ w 值，最大 86.0 归一，值标条尾兜底）、异常清单 = 红边卡、最近终态 = 文字行（终态 = 事件非比例，不图形化）。<b>30s 轮询 = 快照，无时序数据：刻度条 / 比例条静态，不画动画填充、不画趋势曲线</b>（轮询间隔 30s 的「增长」是假象，趋势图会误导「在改善/在恶化」）。</li>
           <li><b>零态 = 常驻淡显一行</b>——六区块全部常驻；计数为 0 时只渲染一行淡显占位（无异常 / 无终态 / 无召回流量），不隐藏区块——健康页的访问目的 = 来确认「没问题」，空态必须可见地给出答案。演示数据六区块均非零，故稿中不实例化 <i>.zline</i>；生产按此渲染（CSS 注释已写明）。</li>
-          <li><b>数据口径 = 轮询缓存</b>——六个区块全部来自 30s 轮询的 <i>/api/memory/status + /api/memory/proposals</i>，<b>后端成本为零</b>；<i>armed_target / runs_cap</i> 端点恒 null，目标值标「取自 config」。唯一按需层 = L2（召回区块点击触发一次 <i>GET /api/recall/stats</i>，docs / failed_queries 各 cap 200 行）。</li>
+          <li><b>数据口径 = 轮询缓存</b>——六个区块全部来自 30s 轮询的 <i>/api/memory/status + /api/memory/proposals</i>，<b>后端成本为零</b>；<i>armed_target / runs_cap</i> 端点恒 null，目标值标「取自 config」。唯一按需层 = L2（点召回卡按钮触发一次 <i>GET /api/recall/stats</i>，docs / failed_queries 各 cap 200 行）。</li>
           <li><b>素材复用</b>——后台任务 = 稿 B 脉列 / 稿 A 账本行 02（<i>trigger_state</i> 两行原字段）；执行器 = 两稿的 30min 虚线行展开成区块；召回 = 稿 A 行 04 / 稿 B 召回榜（top5 + last_hit）；最近终态 = 稿 B「最近终审」扩到 failed；异常清单新增（trail 按需取，<i>/proposals/{relpath}/trail</i>，本轮从系统组移入状态组）。</li>
-          <li><b>L2 展开不产生 a11y 隐面</b>——0fr→1fr 靠 <i>grid-template-rows</i> + overflow 裁剪（复用稿 A 模式），不用 opacity；表格窄列在 680px 内横向滚动，稿中放 7 / 3 行示意。</li>
+          <li><b>L2 = 全页唯一按需层，卡片内独立按钮</b>——0fr→1fr 靠 <i>grid-template-rows</i> + overflow 裁剪（复用稿 A 模式），不用 opacity → 不产生 a11y 隐面；<i>.rcl-l2btn</i> 走通用 <i>button[aria-controls]</i> 接线（rcl-toggle-s2 → fold-l2-s2），aria-expanded 与折叠同步；<i>prefers-reduced-motion</i> 下展开 / 脉冲 / 车标全静止；mtable 表自身横滚（通栏后需求下降）。演示各放 7 / 3 行。</li>
         </ul>
       </div>
     </div>
@@ -898,7 +993,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
   <div class="s-head">
     <span class="tag">SCENE 04</span>
     <h2>移动端 · 全宽（面板 overlay + 后台全宽页）</h2>
-    <span class="diff">≤860px：面板全宽滑入覆盖（L0 纯状态行 + 行尾「后台 →」）；后台页 = 全宽页面（两组结构 + 零态淡显，样例 zline），行尾入口点进，不走 overlay 面板</span>
+    <span class="diff">≤860px：面板全宽滑入覆盖（L0 纯状态行 + 行尾「后台 →」）；后台页 = 全宽页面 = 02E 网格窄屏回退（单列零重排 ①–⑥ · D 图形内芯 · 零态淡显样例 zline），行尾入口点进，不走 overlay 面板</span>
     <span class="stage-badge">mock · 390px ×2</span>
   </div>
   <div class="s-body">
@@ -947,10 +1042,13 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
         <div class="phone-cap">面板 · 全宽 overlay（L0 纯状态行 + 行尾「后台 →」，failed 红点）</div>
       </div>
       <div class="phone-wrap">
-        <!-- 后台页在移动端 = 全宽页面（行尾「后台 →」点进，不走 overlay 面板）；与桌面同两组结构 + 零态常驻淡显。
+        <!-- 后台页在移动端 = 02E 非对称网格的窄屏回退（≤1023px 单列，区块 ①–⑥ 零重排）；D 图形内芯与场景 02 同源
+             （seg 刻度条 / exec-vis / wbar / 红边卡）。390px 成立：wline 固定部（path 200 + 值 44 + gap = 264px）
+             < 内宽 364px，条 ~100px；生产视口 <360px → path 改 auto（见 CSS 断点）。
+             mtable 保留自身横滚（生产 ≤200 行），页面主体不整页横滚。
              移动端多态计数规则（还 duet/ledger 跨稿债）：若任何移动端状态行显示多态计数，
              必须「非零态全显，>6 时折叠为 6 + 其他 N」，不得丢非零态
-             （duet 旧版 5 态行漏掉非零 Rejected 2 —— 本稿移动端 L0 行只放 3 个行动态；右框九态 3×3 九格全显，无折叠）。 -->
+             （duet 旧版 5 态行漏掉非零 Rejected 2 —— 本框九态 3×3 九格全显，无折叠）。 -->
         <div class="phone">
           <div class="ph-top">
             <span class="t">记忆运行时 · 后台</span>
@@ -958,7 +1056,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
           </div>
           <div class="ph-scroll">
             <div class="ph-page">
-              <!-- 两组结构在 390px 下验证：caps 组标题 + 3×3 九态成立（格内计数缩到 13px） -->
+              <!-- 02E 网格窄屏回退 = 单列堆叠，区块顺序 ①–⑥ 与桌面一致（零重排）；组标题 + 图形内芯同场景 02 -->
               <div class="mgroup">状态<span class="q">健康吗</span></div>
               <div class="ph-sec">
                 <div class="ph-sec-h"><span>九态</span><span class="poll">by_status</span></div>
@@ -975,42 +1073,114 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
                 </div>
               </div>
               <div class="ph-sec">
-                <div class="ph-sec-h"><span>异常</span><span class="poll">failed | malformed</span></div>
-                <div class="ano-row">
-                  <div class="ano-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                <div class="ph-sec-h"><span>异常</span><span class="poll">failed | malformed · trail 按需取</span></div>
+                <div class="mcard alert">
+                  <div class="ano-row" style="border-color:color-mix(in srgb,var(--st-error) 35%,var(--line))">
+                    <div class="ano-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                  </div>
                 </div>
               </div>
               <div class="mgroup">系统<span class="q">在干什么</span></div>
               <div class="ph-sec">
-                <div class="ph-sec-h"><span>后台任务</span><span class="poll">trigger_state</span></div>
-                <div class="tr-rows">
-                  <div class="tr-row">
-                    <div class="tr-top"><span class="tr-name">consolidator</span><span class="tr-target">arm 2/3</span></div>
-                    <div class="tr-bar"><i style="width:66%"></i></div>
-                    <div class="tr-sub">上次 26m 前<span class="sp"></span>今天 1/3 次</div>
-                  </div>
-                  <div class="tr-row">
-                    <div class="tr-top"><span class="tr-name">sentinel</span><span class="tr-target">arm 0/10</span></div>
-                    <div class="tr-bar"><i style="width:0%"></i></div>
-                    <div class="tr-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
-                  </div>
+                <div class="ph-sec-h"><span>后台任务</span><span class="poll">trigger_state · 目标取自 config</span></div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">consolidator</span><span class="tg">arm 2/3</span></div>
+                  <div class="segs"><i class="seg f"></i><i class="seg f"></i><i class="seg"></i></div>
+                  <div class="seg-sub">上次 26m 前<span class="sp"></span>今天 1/3 次</div>
                 </div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">sentinel</span><span class="tg">arm 0/10</span></div>
+                  <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+                  <div class="seg-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                </div>
+                <div class="mc-note">实心段 = 当前 arm · 总段数 = 目标（恒取自 config）· 静态快照：30s 轮询无时序，不画趋势</div>
               </div>
               <div class="ph-sec">
-                <div class="ph-sec-h"><span>召回</span><span class="poll">30d 半衰期</span></div>
+                <div class="ph-sec-h"><span>执行器</span><span class="poll">30min 循环 · 非 LLM</span></div>
+                <div class="exec-vis">
+                  <span class="lamp on" title="armed · 运行中"></span>
+                  <span class="big">1</span>
+                  <span class="cap-line"><b>executor</b> · 30min 循环 · armed<br>1 条 adopted 待落地</span>
+                </div>
+                <div class="mc-note">大数字 = 待落地计数（by_status.adopted）· 状态灯 = armed（脉冲 = 在跑）</div>
+              </div>
+              <div class="ph-sec">
+                <div class="ph-sec-h"><span>召回</span><span class="poll">30d 半衰期 · L2 = 全页唯一按需层</span></div>
                 <div class="rcl-stats">
                   <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">3</div></div>
                   <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">42</div></div>
                   <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">217.3</div></div>
                 </div>
-                <div class="ph-hint" style="text-align:left;padding:8px 0 0">L2 深钻两张表在移动端横向滚动（生产 ≤200 行）</div>
+                <div class="wbar">
+                  <div class="wbar-h">top5 · 宽度 ∝ weighted（最大 86.0 = 100%）· 静态比例条，无时序</div>
+                  <div class="wline"><span class="p">weekly/obsidian-同步.md<span class="lh">last_hit 10-21 08:02</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">86.0</span></div>
+                  <div class="wline"><span class="p">notes/同步架构-部署.md<span class="lh">last_hit 10-20 22:41</span></span><span class="bar"><i style="width:70.9%"></i></span><span class="v">61.0</span></div>
+                  <div class="wline"><span class="p">notes/obsidian-同步架构.md<span class="lh">last_hit 10-21 08:15</span></span><span class="bar"><i style="width:48.8%"></i></span><span class="v">42.0</span></div>
+                  <div class="wline"><span class="p">notes/部署清单.md<span class="lh">last_hit 10-19 15:12</span></span><span class="bar"><i style="width:33.1%"></i></span><span class="v">28.5</span></div>
+                  <div class="wline"><span class="p">weekly/2026-10-18.md<span class="lh">last_hit 10-18 09:30</span></span><span class="bar"><i style="width:21.2%"></i></span><span class="v">18.2</span></div>
+                </div>
+                <button class="rcl-l2btn" type="button" id="rcl-toggle-s4" aria-expanded="false" aria-controls="fold-l2-s4" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>L2 深钻 · docs / failed_queries 各 ≤200 行
+                </button>
+                <div class="fold" id="fold-l2-s4">
+                  <div>
+                    <div class="l2-pad">
+                      <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · 表在自身容器横滚</span></div>
+                      <div class="mtable">
+                        <table>
+                          <thead><tr><th>文档</th><th>加权</th><th>last_hit</th></tr></thead>
+                          <tbody>
+                            <tr><td>weekly/obsidian-同步.md</td><td><span class="w">86.0</span></td><td>10-21 08:02</td></tr>
+                            <tr><td>notes/同步架构-部署.md</td><td><span class="w">61.0</span></td><td>10-20 22:41</td></tr>
+                            <tr><td>notes/obsidian-同步架构.md</td><td><span class="w">42.0</span></td><td>10-21 08:15</td></tr>
+                            <tr><td>notes/部署清单.md</td><td><span class="w">28.5</span></td><td>10-19 15:12</td></tr>
+                            <tr><td>weekly/2026-10-18.md</td><td><span class="w">18.2</span></td><td>10-18 09:30</td></tr>
+                            <tr><td>notes/迁移备忘.md</td><td><span class="w">9.4</span></td><td>10-19 20:05</td></tr>
+                            <tr><td>notes/旧版-项目排期.md</td><td><span class="w">4.1</span></td><td>10-16 14:33</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="l2-sub">失败查询<span class="cap">failed_queries · 生产 ≤200 行（窗口 7d）</span></div>
+                      <div class="mtable">
+                        <table>
+                          <thead><tr><th>query</th><th>最近</th><th>7d 次数</th></tr></thead>
+                          <tbody>
+                            <tr><td>cdp 端口 9222 残留进程</td><td>10-21 07:58</td><td>1</td></tr>
+                            <tr><td>Windows 换行 write_bytes 哈希</td><td>10-20 21:14</td><td>1</td></tr>
+                            <tr><td>sync lock in-memory 重启丢失</td><td>10-20 09:02</td><td>1</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="mc-note">L2 = 全页唯一按需层：点本按钮触发一次 <i>GET /api/recall/stats</i> · 演示各放 7 / 3 行 · 表在 .mtable 自身容器横滚，页面不整页横滚</div>
+                    </div>
+                  </div>
+                </div>
               </div>
-              <!-- 零态常驻淡显：此处实例化 .zline 一次作样例（生产按区块渲染「无异常 / 无终态 / 无召回流量」） -->
+              <div class="ph-sec">
+                <div class="ph-sec-h"><span>最近终态</span><span class="poll">proposals 终态 · 倒序</span></div>
+                <div class="rev-rows">
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">summary</span><span class="tt">合并《部署清单》与《运维手册》</span><span class="dt">10-20</span></div>
+                    <div class="rev-sub"><span class="spill merged" style="font-size:9.5px;padding:1px 7px">merged</span>&nbsp;落地 notes/运维手册.md · merged_at 10-20 09:41</div>
+                  </div>
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">correction</span><span class="tt">修正《迁移备忘》版本号</span><span class="dt">10-20</span></div>
+                    <div class="rev-sub"><span class="spill rejected" style="font-size:9.5px;padding:1px 7px">rejected</span>&nbsp;理由：snippet 已被人工改过，提案过期</div>
+                  </div>
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                    <div class="rev-sub"><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span>&nbsp;执行器校验失败：source_refs 缺失 · 提案保留待修</div>
+                  </div>
+                </div>
+                <div class="mc-note">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条 · 全零 → 内容行淡显占位「无终态」</div>
+              </div>
+              <!-- 零态常驻淡显：此处实例化 .zline 一次作样例（位置 = ⑥ 之后 = ⑥ 零态时的渲染形；
+                   生产按区块渲染「无异常 / 无终态 / 无召回流量」，演示数据全非零，真实区块不实例化） -->
               <div class="zline">无终态</div>
             </div>
           </div>
         </div>
-        <div class="phone-cap">后台页 · 全宽页面（两组结构 + 零态淡显，非 overlay）</div>
+        <div class="phone-cap">后台页 · 全宽页面（02E 网格窄屏回退 · 单列零重排 · 图形内芯，非 overlay）</div>
       </div>
     </div>
 
@@ -1019,7 +1189,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
         <div class="notes-title">移动适配</div>
         <ul>
           <li><b>面板 = 全宽 overlay</b>——沿用产品既有口径（stream s4）：≤860px 面板 <i>position:fixed</i> 全宽、<i>transform: translateX</i> 滑入 + backdrop，rail 隐藏。<b>L0 纯状态行 + 行尾「后台 →」</b>（mono 10px 一行，failed 告警红 + 红点）：390px 下实测一行成立，放不下同桌面折行（入口到下一行右侧）——没有账目条回行的问题，因为它本来只有一行。</li>
-          <li><b>后台页 = 全宽页面</b>——行尾「后台 →」点进（生产 = 全宽页面，不走 overlay 面板）：<b>与桌面同两组结构</b>（状态 / 系统 caps 组标题 + 3×3 九态在 390px 下成立，格内计数缩到 13px），异常 / 召回统计照常，L2 表格横向滚动。零态常驻淡显一行（<i>.zline</i>）在此框实例化一次作样例。页面滚动 = 整页滚动，无面板内嵌滚动。</li>
+          <li><b>后台页 = 02E 网格的窄屏回退（≤1023px 单列零重排，内芯与场景 02 同源）</b>——行尾「后台 →」点进（生产 = 全宽页面，不走 overlay 面板）：区块顺序 ①–⑥ 与桌面一致（零重排），内芯 = <b>D 图形内芯</b>（seg 刻度条 / exec-vis 大数字 + 状态灯 / wbar 比例条 / 红边异常卡 / 终态文字行，与场景 02 同源同数据），3×3 九态在 390px 下成立（格内计数缩到 13px）；<b>390px 无整页横滚</b>：wbar 的 path 列 200px 固定宽 → &lt;360px 改 auto，mtable 保留自身横滚（生产 ≤200 行）。零态常驻淡显一行（<i>.zline</i>）在此框实例化一次作样例（位置 = ⑥ 零态时的渲染形）。页面滚动 = 整页滚动，无面板内嵌滚动。</li>
           <li><b>跨稿 bug 修复口径</b>——duet / ledger 移动端九态行缩成 5 态时<b>漏掉了非零的 Rejected 2</b>。本稿移动端不存在九态行（L0 只放 3 个行动态）；若未来任何移动端状态行需要多态计数，规则 = <b>非零态全显，&gt;6 时折叠为 6 + 「其他 N」</b>，不得丢非零态（稿内 CSS 注释已写明）。</li>
           <li><b>交互与降级</b>——卡高 &gt; 44px 触摸目标达标；awaiting 卡钻详情（全宽 = 场景 03 版式，动作行 sticky 底）；<i>prefers-reduced-motion</i> 下滑入 / 脉冲 / 面切换 / L2 展开全部静止。</li>
         </ul>
@@ -1028,7 +1198,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
   </div>
 </section>
 
-<div class="demo-bar" id="demo-bar" style="display:none"><span class="dk">演示</span>场景 01：L0 行尾「后台 →」→ 场景 02（L0→L1 唯一入口；生产 = 面板收起、监控页接管主区域）· 场景 02：召回区块点按 → L2 深钻表展开/收起；「← 返回文档」→ 场景 01（单出口）· 场景 03：采纳 → 状态翻转；驳回 → 必填理由（演示，不调 API）</div>
+<div class="demo-bar" id="demo-bar" style="display:none"><span class="dk">演示</span>场景 01：L0 行尾「后台 →」→ 场景 02（L0→L1 唯一入口；生产 = 面板收起、监控页接管主区域）· 场景 02：召回卡 L2 按钮点按 → L2 深钻表展开/收起；「← 返回文档」→ 场景 01（单出口）· 场景 03：采纳 → 状态翻转；驳回 → 必填理由（演示，不调 API）</div>
 <!-- ============ 页尾：设计注释（本稿与三稿的关系） ============ -->
 <div class="footnotes">
   <div class="fn-title">设计注释 · 稿 D 与三稿的关系</div>
@@ -1037,8 +1207,8 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
       <div class="fn-k">L0 / L1 / L2 三层注意力</div>
       <ul>
         <li><b>L0 = 系统需不需要我</b>——面板头栏<b>纯状态行</b>「3 待审 · 1 待落地 · 1 失败 · 轮询 30s」（整行不可点；failed &gt; 0 告警红），行尾常驻「后台 →」= L1 唯一入口（failed &gt; 0 红点）。九态全集在面板内彻底消失，agent 细行不留进度条/预算。</li>
-        <li><b>L1 = 系统健康吗</b>——独立后台页，两组「<b>状态</b>（九态 9 格 · 异常清单）/ <b>系统</b>（后台任务 · 执行器 · 召回 · 最近终态）」，零态常驻淡显行；与面板互斥，单出口「← 返回文档」。全部消费 30s 轮询缓存，<b>后端成本为零</b>。</li>
-        <li><b>L2 = 深钻</b>——L1 内点召回区块 0fr→1fr 展开 docs / failed_queries 两张表，<b>全系统唯一一次按需 GET</b>（/api/recall/stats，各 cap 200 行）。</li>
+        <li><b>L1 = 系统健康吗</b>——独立后台页 = <b>非对称网格 1200px</b>（row-major ①∣② / ③∣④ / ⑤ / ⑥ · 列比 1:1.6 · ≥1024px 网格、≤1023px 单列零重排；2026-10-23 用户选定，来源 layouts 稿 02E），两组「<b>状态</b>（九态 9 格 · 异常清单）/ <b>系统</b>（后台任务 · 执行器 · 召回 · 最近终态）」，零态常驻淡显行；与面板互斥，单出口「← 返回文档」。全部消费 30s 轮询缓存，<b>后端成本为零</b>。</li>
+        <li><b>L2 = 深钻</b>——L1 内点召回卡 L2 按钮 0fr→1fr 展开 docs / failed_queries 两张表，<b>全系统唯一一次按需 GET</b>（/api/recall/stats，各 cap 200 行）。</li>
       </ul>
     </div>
     <div class="fn-card">
@@ -1047,7 +1217,7 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
         <li><b>稿 C 流水</b> → 本稿场景 01 基底（时间轴 / 待审卡 / 终态卡 / agent 细行 / 移动端全宽全部照抄）；C 的 sticky 两行账目条 → 迁出，仅 L0 单行进面板头栏。</li>
         <li><b>稿 B 脉列</b>（触发进度条 / 执行器行 / 召回榜 / 最近终审）→ 整体成为 L1「系统」组区块 ③④⑤⑥ 的素材，原字段不改口径；异常清单 ②（本轮新增，移入「状态」组）。</li>
         <li><b>稿 A 账本行 02–04</b>（后台任务 / 历史状态 / 召回统计）→ 同一组端点数据（trigger_state / by_status / recall）在 L1 以「设置页区块」重排；行 01 队列素材仍是场景 01 的流；0fr→1fr 折叠模式复用到 L2。</li>
-        <li><b>终审详情（场景 03）与移动端（场景 04）</b>三稿同构，不改；新增内容只有 L0 行与后台页。</li>
+        <li><b>终审详情（场景 03）三稿同构不改</b>；移动端（场景 04）后台全宽页 = 02E 网格窄屏回退（单列零重排、D 图形内芯同源、390px 无整页横滚）；新增内容 = L0 行 + 后台页；图形内芯 / 网格 CSS 迁自 layouts 稿 02D/02E（命名/取值完全一致）。</li>
       </ul>
     </div>
     <div class="fn-card">
@@ -1109,20 +1279,18 @@ body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 
     b.addEventListener('click', function () { show(b.dataset.demo); });
   });
 
-  // 场景 02：召回区块 = L2 深钻入口（0fr→1fr；生产 = 触发一次 GET /api/recall/stats，
-  // docs / failed_queries 各 cap 200 行——全系统唯一的按需成本）
-  var rclCard = document.getElementById('rcl-card');
-  var rclToggle = document.getElementById('rcl-toggle');
-  if (rclCard && rclToggle) {
-    function toggleL2() {
-      var open = rclCard.classList.toggle('open');
-      rclToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    rclToggle.addEventListener('click', toggleL2);
-    rclToggle.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleL2(); }
+  // 场景 02/04：L2 深钻 = 召回卡内独立按钮（0fr→1fr；生产 = 触发一次 GET /api/recall/stats，
+  // docs / failed_queries 各 cap 200 行——全系统唯一的按需成本）。
+  // 通用 button[aria-controls] 接线（原生 button，键盘自带激活，无需补 keydown）：
+  // rcl-toggle-s2 → fold-l2-s2（场景 02）/ rcl-toggle-s4 → fold-l2-s4（场景 04）；
+  // 翻转目标 .fold.open 并同步 aria-expanded。0fr + overflow 裁剪，不用 opacity → 不产生 a11y 隐面。
+  Array.prototype.forEach.call(document.querySelectorAll('button[aria-controls]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var fold = document.getElementById(btn.getAttribute('aria-controls'));
+      if (!fold) return;
+      btn.setAttribute('aria-expanded', fold.classList.toggle('open') ? 'true' : 'false');
     });
-  }
+  });
 
   // ── 场景 03：终审交互演示（mock，不调 API；与三稿同口径） ──
   var pill = document.getElementById('d-pill');

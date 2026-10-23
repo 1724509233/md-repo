@@ -106,4 +106,5 @@ After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
 ## Todo
 
 - [ ] 拆分 server / client 为独立发布的包（当前 `pip install md-sync` 一并安装两者，client 用户被迫带上 fastapi/openai 等 server 依赖）
+- [x] 记忆控制台 v4 监控页 UI 定稿（2026-10-23）：非对称网格 02E（1200px · 列比 1:1.6 · ≥1024px 网格 / ≤1023px 单列零重排 · D 形态终局：刻度条/状态灯/比例条/红边卡）；已并入稿 D 场景 02/04 + layouts 稿 #e（console-v4-watch.html / console-v4-watch-layouts.html，同日提交）
 - [x] 分层召回「展示更多」UI 样式优化（2026-10-15 首版已提交；预取式交互 + 按钮/空状态样式打磨完成，commit 9840857）
