@@ -1,0 +1,1146 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>记忆控制台 v4 · 稿 D 监控页 · 布局变体 B/C/D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   稿 D 监控页 · 三个布局/形式变体对比（B 账本行 / C 摘要行 / D 仪表卡）。
+   token 取自 md-repo/server/templates/style.css（纸墨「书房」），与
+   console-v4-watch.html（稿 D）同源；本文件自包含，无构建步骤。
+   交互 / 层级 / 内容全部锁定（稿 D 基准），本稿只分叉「布局与形式」：
+     B = 密度维度（账本行）· C = 交互维度（摘要行）· D = 图形维度（仪表化卡片）。
+   字体：Source Serif 4（正文）、Inter（UI）、JetBrains Mono（时间/路径/数字）。
+   ================================================================ */
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A;
+  --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --st-ok:#059669; --st-error:#ef4444; --st-empty:#94a3b8;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper);color:var(--ink)}
+body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 72px}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--ink-soft) 35%,transparent) transparent}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--ink-soft) 35%,transparent);border-radius:9999px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--brass);border-radius:6px}
+
+/* ============ 页面头部 ============ */
+.page-head{max-width:1460px;margin:0 auto 26px;padding-bottom:22px;border-bottom:1px solid var(--line)}
+.page-head h1{font-size:26px;font-weight:700;letter-spacing:.01em}
+.page-head .sub{font-family:var(--sans);font-size:13px;color:var(--ink-soft);margin-top:8px;max-width:960px;line-height:1.8}
+.page-head .sub b{color:var(--ink);font-weight:600}
+.page-head .meta{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:8px;line-height:1.7}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.chip{font-family:var(--sans);font-size:11px;font-weight:500;color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 12px;display:inline-flex;align-items:center;gap:7px}
+.chip b{color:var(--ink);font-weight:600}
+.chip::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--brass);flex-shrink:0}
+
+/* ============ 场景区块 ============ */
+.scene{max-width:1460px;margin:0 auto 52px}
+.s-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px}
+.s-head .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;color:var(--paper);background:var(--ink);padding:3px 10px;border-radius:999px}
+.s-head .tag.brass{background:var(--brass)}
+.s-head h2{font-size:21px;font-weight:700}
+.s-head .diff{font-family:var(--sans);font-size:13px;color:var(--ink-soft)}
+.s-body{display:flex;gap:24px;align-items:flex-start;margin-top:16px}
+.s-notes{flex:1;min-width:290px;position:sticky;top:20px}
+.notes-card{background:var(--surface);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:10px;padding:18px 20px 20px}
+.notes-title{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);margin:0 0 10px}
+.notes-card ul{margin:0;padding:0;list-style:none}
+.notes-card li{font-family:var(--sans);font-size:12.5px;line-height:1.65;color:var(--ink);padding:7px 0;border-bottom:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.notes-card li:last-child{border-bottom:none}
+.notes-card li b{font-weight:600;color:var(--ink)}
+.notes-card li i{font-style:normal;font-family:var(--mono);font-size:11.5px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+@media (max-width:1200px){.s-body{flex-direction:column}.s-notes{position:static;width:100%}}
+
+/* ============ 舞台（模拟应用窗口） ============ */
+.stage{position:relative;display:flex;height:580px;background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(33,29,24,.06),0 1px 0 rgba(33,29,24,.03);flex-shrink:0}
+.stage .viewport{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+.topbar{height:48px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px;font-family:var(--sans)}
+.topbar .tlogo{display:flex;align-items:center;gap:8px}
+.topbar .tlogo .mk{width:22px;height:22px;border:1px solid var(--brass);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:11px;color:var(--brass)}
+.topbar .tlogo .wm{font-family:var(--serif);font-size:14px;font-weight:600}
+.topbar .tfile{font-family:var(--serif);font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar .tfile .dim{color:var(--ink-soft)}
+.topbar .spacer{flex:1}
+.topbar .mode-pill{display:flex;align-items:center;gap:2px;height:30px;padding:0 2px;border-radius:8px;background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.topbar .mode-pill span{font-size:12px;padding:3px 12px;border-radius:6px;color:var(--ink-soft);display:inline-flex;align-items:center}
+.topbar .mode-pill span.on{background:var(--brass);color:var(--paper);font-weight:500}
+.topbar .bell-ic{width:28px;height:28px;border-radius:8px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;cursor:pointer;position:relative}
+.topbar .bell-ic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.topbar .bell-ic .nbadge{position:absolute;top:-5px;right:-5px;min-width:15px;height:15px;padding:0 2px;display:flex;align-items:center;justify-content:center;border-radius:999px;background:var(--brass);color:#fff;font-size:9px;font-weight:700;box-shadow:0 0 0 2px var(--surface)}
+/* 徽标口径 = 需人参与态总和（当前集 = 待审 3 + failed 1 = 4；0 → 不渲染徽标）。
+   深色小 tooltip（同稿 D ttip 模式）：hover/focus 时分解构成；opacity 与 visibility 一起显隐。 */
+.ttip{position:absolute;top:calc(100% + 7px);left:50%;transform:translate(-50%,-2px);background:var(--ink);color:var(--paper);font-family:var(--sans);font-size:10px;font-weight:500;white-space:nowrap;padding:4px 9px;border-radius:6px;opacity:0;visibility:hidden;transition:opacity .15s ease,transform .15s ease,visibility 0s linear .15s;pointer-events:none;z-index:30;box-shadow:0 4px 14px rgba(33,29,24,.18)}
+.ttip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:var(--ink)}
+.ttip-anchor:hover .ttip,.ttip-anchor:focus-visible .ttip{opacity:1;visibility:visible;transform:translate(-50%,0);transition-delay:0s}
+
+/* ============ rail（56px）= 真实应用 rail：无激活槽（监控页是页面不是面板，无【后台】槽）；
+   通知槽 badge 4 + hover 深色 tooltip（同稿 D） ============ */
+.rail{width:56px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:10px 0;background:var(--surface);border-right:1px solid var(--line)}
+.rail .rnav{display:flex;flex-direction:column;align-items:center;gap:6px}
+.rail .rsep{width:20px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:8px 0}
+.rail .rbottom{margin-top:auto;display:flex;flex-direction:column;align-items:center;padding-top:12px;border-top:1px solid color-mix(in srgb,var(--line) 70%,transparent)}
+.rbtn{border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--ink-soft);position:relative;transition:background-color .15s ease,color .15s ease}
+.rbtn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1}
+.rbtn .rn{width:52px;height:44px;border-radius:9px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px}
+.rbtn:hover .rn{background:color-mix(in srgb,var(--brass) 8%,transparent)}
+.rbtn.reserved .rn{width:48px;height:40px;color:color-mix(in srgb,var(--ink-soft) 55%,transparent);border:1.5px dashed color-mix(in srgb,var(--ink-soft) 30%,transparent);pointer-events:none}
+.rbtn .badge{position:absolute;top:3px;right:6px;min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--brass);color:#fff;font-family:var(--sans);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--surface)}
+
+/* ============ 稿页场景 tab（演示导航，非产品 UI） ============ */
+.tabs{display:flex;gap:8px;max-width:1460px;margin:0 auto 40px;flex-wrap:wrap}
+.tab{font-family:var(--sans);font-size:12px;font-weight:500;padding:7px 16px;border-radius:999px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.tab .tno{font-family:var(--mono);font-size:10px;letter-spacing:.06em}
+.tab:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line));color:var(--ink)}
+.tab.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.tab.on .tno{color:color-mix(in srgb,var(--paper) 65%,transparent)}
+.stage-badge{font-family:var(--mono);font-size:10px;letter-spacing:.05em;color:var(--ink-soft);background:var(--surface);border:1px solid var(--line);padding:2px 9px;border-radius:999px;align-self:center;flex-shrink:0}
+.demo-bar{max-width:1460px;margin:12px auto 0;display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-family:var(--sans);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.demo-bar .dk{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);font-weight:600}
+
+/* ============ 折叠 0fr→1fr（复用稿 A 模式：overflow 裁剪，不用 opacity → 不产生 a11y 隐面） ============ */
+.fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease)}
+.fold.open{grid-template-rows:1fr}
+.fold>div{overflow:hidden;min-height:0}
+
+/* ============ 监控页基底：窄单列 680px 居中 · 设置页气质 · 非面板面（锁定契约，三方案共用） ============ */
+.mwrap{flex:1;min-height:0;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+.m-scroll{flex:1;overflow-y:auto;min-height:0;padding:24px 28px 44px}
+.mpage{max-width:680px;margin:0 auto}
+.mp-head{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.mp-back{border:1px solid var(--line);background:transparent;color:var(--ink-soft);font-family:var(--sans);font-size:11px;font-weight:500;border-radius:999px;padding:4px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:border-color .15s ease,color .15s ease}
+.mp-back:hover{color:var(--brass);border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.mp-back svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mp-title{font-size:19px;font-weight:700;margin-top:10px;letter-spacing:.01em}
+.mp-meta{font-family:var(--mono);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-top:6px;line-height:1.8}
+/* 两组 = 页面问的两个问题：状态（健康吗）/ 系统（在干什么）。小写 caps 组标题行 + 问题副标（锁定契约）。 */
+.mgroup{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin:18px 2px 9px;display:flex;align-items:center;gap:8px}
+.mgroup:first-of-type{margin-top:4px}
+.mgroup::after{content:'';flex:1;height:1px;background:color-mix(in srgb,var(--line) 75%,transparent)}
+.mgroup .q{font-family:var(--mono);font-size:9px;font-weight:400;letter-spacing:.03em;text-transform:none;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+/* 零态显示规则：六区块全部常驻；计数 = 0 → 只渲染一行淡显占位（无异常 / 无终态 / 无召回流量），不隐藏区块。
+   演示数据六区块均非零，稿中不实例化；生产按此渲染。方案 C 特例：零态淡显落在摘要行上
+   （如「无异常 ▾」整行淡显 + cursor 降级，见 .brow.z，方案 C 注释）。 */
+.zline{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 55%,transparent);text-align:center;padding:10px 2px;border:1px dashed color-mix(in srgb,var(--line) 70%,transparent);border-radius:7px}
+
+/* ============ 类型 chip / 状态 pill（与产品同规格） ============ */
+.tchip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);padding:1px 7px;border-radius:999px;flex-shrink:0;white-space:nowrap}
+.spill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 4%,transparent);color:var(--ink-soft);white-space:nowrap}
+.spill::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--st-empty);flex-shrink:0}
+.spill.awaiting{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.awaiting::before{background:var(--brass);animation:softPulse 2.2s ease-in-out infinite}
+.spill.adopted{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.adopted::before{background:var(--brass)}
+.spill.merged::before{background:var(--st-ok)}
+.spill.rejected::before{background:var(--st-error)}
+.spill.expired::before{background:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.spill.failed::before{background:var(--st-error)}
+@keyframes softPulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ============ 九态 3×3 九格（正交变量已锁定，三方案统一；零态格淡显 / awaiting 铜 / failed 红） ============ */
+.s9{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.s9c{background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:7px;padding:8px 10px;min-width:0}
+.s9c .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s9c .v{font-family:var(--mono);font-size:16px;font-weight:500;margin-top:1px;font-variant-numeric:tabular-nums}
+.s9c.hot .v{color:var(--brass)}
+.s9c.err .v{color:var(--st-error)}
+.s9c.dim .v{color:color-mix(in srgb,var(--ink-soft) 50%,transparent)}
+
+/* ============ 后台任务（素材 = 稿 B 脉列 / 稿 A 行 02：trigger_state + config 目标值） ============ */
+.tr-rows{display:flex;flex-direction:column;gap:7px}
+.tr-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:7px;padding:8px 10px;display:flex;flex-direction:column;gap:5px}
+.tr-top{display:flex;align-items:center;gap:8px;min-width:0}
+.tr-name{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.tr-target{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.tr-bar{height:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border-radius:999px;overflow:hidden}
+.tr-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 55%,var(--line)));border-radius:999px}
+.tr-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.tr-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.tr-sub .sp{flex:1}
+
+/* ============ 执行器（30min 确定性循环） ============ */
+.ex-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--ink)}
+.ex-line .dot{width:7px;height:7px;border-radius:999px;background:var(--brass);animation:softPulse 2.2s ease-in-out infinite;flex-shrink:0}
+.ex-line b{font-family:var(--sans);font-size:12px;font-weight:600}
+.ex-line .n{color:var(--brass);font-weight:500}
+
+/* ============ 召回（内容口径三方案一致；L2 = 唯一按需层） ============ */
+.rcl-stats{display:flex;gap:6px}
+.rcl-stat{flex:1;background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:6px;padding:6px 8px;min-width:0}
+.rcl-stat .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rcl-stat .v{font-family:var(--mono);font-size:14px;font-weight:500;margin-top:1px;font-variant-numeric:tabular-nums}
+.rcl-top{margin-top:9px;padding-top:8px;border-top:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.rcl-top .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:5px;display:flex;align-items:center;gap:6px}
+.rcl-top .k .cap{font-family:var(--mono);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0;color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.rcl-path{font-family:var(--mono);font-size:10.5px;color:var(--ink);padding:3px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:baseline;gap:8px}
+.rcl-path .w{color:var(--brass);font-variant-numeric:tabular-nums;flex-shrink:0}
+.rcl-path .lh{color:color-mix(in srgb,var(--ink-soft) 65%,transparent);font-size:9.5px;margin-left:auto;flex-shrink:0}
+.l2-pad{padding-top:12px}
+.l2-sub{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin:14px 0 6px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.l2-sub:first-child{margin-top:0}
+.l2-sub .cap{font-family:var(--mono);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+.mtable{border:1px solid var(--line);border-radius:7px;overflow-x:auto}
+.mtable table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:10px}
+.mtable th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;background:color-mix(in srgb,var(--ink) 3%,transparent)}
+.mtable td{padding:5px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent);white-space:nowrap;color:var(--ink)}
+.mtable tr:last-child td{border-bottom:none}
+.mtable td .w{color:var(--brass);font-variant-numeric:tabular-nums}
+
+/* ============ 异常清单（status=failed|malformed；trail 按需取） ============ */
+.ano-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:7px}
+.ano-top{display:flex;align-items:center;gap:8px;min-width:0}
+.ano-top .tt{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ano-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);flex-shrink:0}
+.trail-mini{display:flex;flex-direction:column;gap:3px}
+.trail-mini .tline{display:flex;gap:8px;font-family:var(--mono);font-size:9.5px;color:var(--ink-soft);align-items:baseline}
+.trail-mini .tline .op{color:var(--brass);flex-shrink:0;min-width:56px}
+.trail-mini .tline .tp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ============ 最近终态（merged / rejected / failed 各 1–2 条） ============ */
+.rev-rows{display:flex;flex-direction:column;gap:7px}
+.rev-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.rev-top{display:flex;align-items:center;gap:8px;min-width:0}
+.rev-top .tt{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rev-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);flex-shrink:0}
+.rev-sub{font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ============ 页尾设计注释 ============ */
+.footnotes{max-width:1460px;margin:64px auto 0;padding-top:26px;border-top:1px solid var(--line)}
+.fn-title{font-family:var(--mono);font-size:11px;letter-spacing:.12em;color:var(--brass);margin-bottom:16px}
+.fn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.fn-card{background:var(--surface);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:10px;padding:16px 18px}
+.fn-k{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);margin-bottom:10px}
+.fn-card ul{margin:0;padding:0;list-style:none}
+.fn-card li{font-family:var(--sans);font-size:12.5px;line-height:1.7;color:var(--ink);padding:6px 0;border-bottom:1px dashed color-mix(in srgb,var(--line) 80%,transparent)}
+.fn-card li:last-child{border-bottom:none}
+.fn-card li b{font-weight:600}
+.fn-card li i{font-style:normal;font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+.fn-card table.ftable{width:100%;border-collapse:collapse;font-family:var(--sans);font-size:12px;line-height:1.6}
+.fn-card table.ftable th{font-family:var(--mono);font-size:10px;font-weight:500;letter-spacing:.04em;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);text-align:left;padding:5px 8px;border-bottom:1px solid var(--line)}
+.fn-card table.ftable td{padding:7px 8px;border-bottom:1px dashed color-mix(in srgb,var(--line) 80%,transparent);vertical-align:top}
+.fn-card table.ftable tr:last-child td{border-bottom:none}
+.fn-card table.ftable td b{font-weight:600}
+
+/* ================================================================
+   方案 B · 账本行式（密度维度）：去掉卡片容器，「行」为最小单元——
+   每区块 = 一行 mono 行头（区块名 + 右对齐计数/状态词）+ 内容行；行距 ~4px；
+   无圆角无阴影无内边距大卡；mono 占比拉高。视觉 = 从「设置页」到「对账单」。
+   零态规则：区块计数 = 0 → 行头状态词淡显（.bh-r.z）+ 内容行 = 淡显占位（.zline），
+   不省略区块（演示数据全非零，稿中不实例化；生产按此渲染）。
+   ================================================================ */
+.led .bld{margin-bottom:4px}
+.led .bld-h{display:flex;align-items:baseline;gap:10px;padding:6px 2px;border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent);font-family:var(--mono);font-size:10.5px;color:var(--ink);white-space:nowrap;overflow:hidden}
+.led .bld-h .bh-t{font-weight:500;letter-spacing:.02em;flex-shrink:0}
+.led .bld-h .bh-d{font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);overflow:hidden;text-overflow:ellipsis}
+.led .bld-h .bh-r{margin-left:auto;color:var(--ink-soft);font-variant-numeric:tabular-nums;flex-shrink:0}
+.led .bld-h .bh-r .err{color:var(--st-error);font-weight:500}
+.led .bld-h .bh-r.z{color:color-mix(in srgb,var(--ink-soft) 55%,transparent)}
+.led .bld-c{padding:9px 2px 5px}
+/* 账本味：内部行盒去圆角 / 去底 / 降边（内容组件本身不变） */
+.led .s9c{border-radius:0}
+.led .tr-row,.led .ano-row,.led .rev-row{background:none;border:none;border-bottom:1px dashed color-mix(in srgb,var(--line) 70%,transparent);border-radius:0;padding:6px 0}
+.led .tr-rows{gap:0}
+.led .rev-rows{gap:0}
+/* mono 口径注脚行（替代稿 D 的 mc-note 卡内注脚） */
+.lnote{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:6px;line-height:1.7}
+.lnote i{font-style:normal;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:3px;padding:0 4px}
+/* L2 入口 = 行尾 mono 文字按钮（B 无卡片头可挂） */
+.bld-l2{margin-top:7px;border:none;background:transparent;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--ink-soft);padding:4px 2px;letter-spacing:.02em;transition:color .15s ease;display:inline-flex;align-items:center;gap:6px}
+.bld-l2:hover{color:var(--brass)}
+.bld-l2 .car{display:inline-flex;transition:transform .2s var(--ease);color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.bld-l2 .car svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.bld-l2[aria-expanded="true"] .car{transform:rotate(90deg)}
+
+/* ================================================================
+   方案 C · 摘要行式（交互维度）：六区块默认各收成一行摘要
+   （区块名 + 关键数字 + 状态词 + ▾），点击展开内容区（0fr→1fr，同 L2 模式）。
+   failed>0 的异常行默认展开 + 红字（demo failed=1 → 异常区块默认开着）。
+   零态摘要行：整行淡显（.brow.z）+ cursor 降级（如「无异常 ▾」）——
+   C 稿的零态淡显专门落在摘要行上（其余两方案落在内容占位 .zline）。
+   L2 两张表放召回摘要行的内容区内（块展开即见，不再套二级子按钮）：
+   基准（稿 D）点一次到表，C 保持同一次点击深度（块展开 = 内容呈现），
+   套二级按钮 = 多一层交互而不省空间（表只在块展开后才渲染得了）。
+   ================================================================ */
+.blk{border-bottom:1px solid color-mix(in srgb,var(--line) 55%,transparent)}
+.blk:last-child{border-bottom:none}
+.brow{width:100%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 2px;text-align:left;font-family:var(--mono);font-size:11px;color:var(--ink);min-height:38px;transition:background-color .15s ease}
+.brow:hover{background:color-mix(in srgb,var(--brass) 5%,transparent)}
+.brow .bn{font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--ink);flex-shrink:0}
+.brow .bv{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.brow .bw{color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.brow .car{margin-left:auto;display:inline-flex;color:color-mix(in srgb,var(--ink-soft) 60%,transparent);transition:transform .2s var(--ease);flex-shrink:0}
+.brow .car svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block}
+.brow[aria-expanded="true"] .car{transform:rotate(90deg)}
+/* failed>0：行红字（行头 + 状态词） */
+.brow.err .bn,.brow.err .bv,.brow.err .bw{color:var(--st-error)}
+/* 零态摘要行：淡显 + 不可点（生产渲染：如「无异常 ▾」/「无终态 ▾」/「无召回流量 ▾」） */
+.brow.z{color:color-mix(in srgb,var(--ink-soft) 55%,transparent);cursor:default}
+.brow.z:hover{background:transparent}
+.brow.z .bn{color:color-mix(in srgb,var(--ink-soft) 70%,transparent)}
+.blk .body{padding:0 2px 13px}
+/* 展开体内的口径注脚（替代卡内 mc-note） */
+.c-note{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:9px;line-height:1.7}
+.c-note i{font-style:normal;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:3px;padding:0 4px}
+
+/* ================================================================
+   方案 D · 仪表化卡片（图形维度）：卡片骨架保留（纸底大圆角卡堆叠，同现稿），
+   内芯换数据图形——后台任务 = 横条刻度条（arm 2/3 分段条，非纯文字）；
+   执行器 = 大数字 + armed 状态灯（实心圆点脉冲）；召回 = top5 横条比例图
+   （w 值按最大值 86.0 取比例宽，mono 标注 path + 值，替代纯列表）；
+   异常清单 = 红边卡（trail 不变）；最近终态 = 保持文字行（终态是事件
+   非比例，不图形化）。注释口径：30s 轮询 = 快照无时序数据，只画静态
+   比例条，不画趋势曲线（避免误导「在改善/在恶化」）。
+   ================================================================ */
+.mcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.mcard:last-child{margin-bottom:0}
+.mc-h{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.mc-t{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink)}
+.mc-poll{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent)}
+.mc-note{font-family:var(--sans);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin-top:10px;line-height:1.65}
+.mc-note b{color:var(--ink)}
+.mc-note i{font-style:normal;font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+/* 分段刻度条（arm 2/3 = 3 段中 2 段实心；sentinel arm 0/10 = 10 段全空） */
+.seg-row{margin-top:10px}
+.seg-row:first-of-type{margin-top:0}
+.seg-top{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.seg-top .nm{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.seg-top .tg{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.segs{display:flex;gap:4px}
+.seg{height:10px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent)}
+.seg.f{background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 70%,var(--line)));border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.seg.e{background:transparent;border-style:dashed;border-color:color-mix(in srgb,var(--line) 90%,transparent)}
+.seg-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px}
+.seg-sub .sp{flex:1}
+.seg-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+/* 执行器 = 大数字 + 状态灯 */
+.exec-vis{display:flex;align-items:center;gap:14px;padding:4px 2px 2px}
+.lamp{width:11px;height:11px;border-radius:999px;background:var(--st-ok);flex-shrink:0}
+.lamp.on{animation:softPulse 2.2s ease-in-out infinite;box-shadow:0 0 0 4px color-mix(in srgb,var(--st-ok) 15%,transparent)}
+.exec-vis .big{font-family:var(--mono);font-size:34px;font-weight:500;line-height:1;color:var(--brass);font-variant-numeric:tabular-nums}
+.exec-vis .cap-line{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);line-height:1.7}
+.exec-vis .cap-line b{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+/* 召回 top5 横条比例图（w 值按最大值取比例宽） */
+.wbar{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.wline{display:grid;grid-template-columns:200px 1fr 44px;gap:10px;align-items:center;min-width:0}
+.wbar-h{font-family:var(--mono);font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-bottom:2px}
+.wline .p{font-family:var(--mono);font-size:10px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+/* last_hit 降为 path 下副注（图形列放不下三个字段：path / 条 / 值 占满三列） */
+.wline .p .lh{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);white-space:normal;margin-top:1px}
+.wline .bar{height:12px;background:color-mix(in srgb,var(--ink) 5%,transparent);border-radius:3px;overflow:hidden}
+.wline .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 60%,var(--line)));border-radius:3px}
+.wline .v{font-family:var(--mono);font-size:10.5px;color:var(--brass);text-align:right;font-variant-numeric:tabular-nums}
+/* 异常清单 = 红边卡 */
+.mcard.alert{border-color:color-mix(in srgb,var(--st-error) 50%,var(--line));background:color-mix(in srgb,var(--st-error) 3%,var(--surface))}
+.alert-pill{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--st-error);border:1px solid color-mix(in srgb,var(--st-error) 40%,var(--line));background:color-mix(in srgb,var(--st-error) 7%,transparent);border-radius:999px;padding:1px 8px}
+/* 召回 L2 入口 = 卡片内独立按钮（卡片头留给区块名） */
+.rcl-l2btn{margin-top:10px;border:1px solid var(--line);background:transparent;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--ink-soft);border-radius:999px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px;transition:border-color .15s ease,color .15s ease}
+.rcl-l2btn:hover{color:var(--brass);border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.rcl-l2btn .car{display:inline-flex;transition:transform .2s var(--ease);color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.rcl-l2btn .car svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rcl-l2btn[aria-expanded="true"] .car{transform:rotate(90deg)}
+
+/* ============ 动效降级 ============ */
+@media (prefers-reduced-motion: reduce){
+  .fold,.brow .car,.bld-l2 .car,.rcl-l2btn .car{transition:none}
+  .ex-line .dot,.lamp.on,.spill.awaiting::before{animation:none}
+}
+
+</style>
+</head>
+<body>
+<!-- ============ 页面头部 ============ -->
+<div class="page-head">
+  <h1>记忆控制台 v4 · 稿 D 监控页 · 布局变体 B/C/D</h1>
+  <div class="sub">稿 D 的后台监控页（场景 02）在「布局与形式」维度上的<b>三个变体并排对比</b>：交互、层级、内容、数据口径全部锁定（三方案共用同一套锁定契约——680px 窄单列 · 两组「状态 / 系统」· 3×3 九格 · 零态常驻淡显 · L2 深钻 0fr→1fr · 单出口「← 返回文档」），分叉的只有形式：<b>方案 B = 密度维度</b>（去掉卡片、账本行、同屏信息量最大）、<b>方案 C = 交互维度</b>（六区块收成六行摘要、一屏读完、点开下钻）、<b>方案 D = 图形维度</b>（卡片骨架保留、内芯换数据图形）。选择哪个 = 这个页面主要服务「扫读」还是「确认」。</div>
+  <div class="meta">branch: feat/memory-runtime · 依据 docs/superpowers/specs/2026-10-21-memory-runtime-design.md §7–8 · 演示数据与稿 D 完全一致（awaiting 3 / failed 1 / adopted 1 待落地 / merged 5 / rejected 2 / processing 1 · consolidator arm 2/3 · sentinel arm 0/10 · 召回 7d 无命中 3 / 在轨 42 / top5 加权 217.3）· L0/L1 全部取 30s 轮询缓存（后端成本为零）· L2 唯一按需 GET /api/recall/stats（各 cap 200 行）</div>
+  <div class="chips">
+    <span class="chip">02B <b>账本行式</b>：无卡片容器，行 = 最小单元（mono 行头 + 右对齐计数），行距 4px——「对账单」</span>
+    <span class="chip">02C <b>摘要行式</b>：六区块 = 六行摘要（数字 + 状态词 + ▾），failed&gt;0 异常行默认展开红字，一屏读完</span>
+    <span class="chip">02D <b>仪表化卡片</b>：卡片骨架保留，内芯 = 刻度条 / 大数字 + 状态灯 / top5 比例条 / 红边异常卡</span>
+  </div>
+</div>
+
+<!-- 变体切换（稿页导航，非产品 UI；role=tab + hash 深链 #b/#c/#d） -->
+<nav class="tabs" id="tabs" role="tablist" aria-label="布局变体切换">
+  <button class="tab on" role="tab" aria-selected="true" data-scene="s-b"><span class="tno">02B</span>账本行式 · 密度</button>
+  <button class="tab" role="tab" aria-selected="false" data-scene="s-c"><span class="tno">02C</span>摘要行式 · 交互</button>
+  <button class="tab" role="tab" aria-selected="false" data-scene="s-d"><span class="tno">02D</span>仪表卡片 · 图形</button>
+</nav>
+<!-- ============ 场景 02B：账本行式（密度维度） ============ -->
+<section class="scene" id="s-b">
+  <div class="s-head">
+    <span class="tag brass">SCENE 02B</span>
+    <h2>账本行式（密度维度）</h2>
+    <span class="diff">卡片容器去掉，「行」= 最小单元：mono 行头（区块名 + 右对齐计数/状态词）+ 内容行，行距 4px，无圆角无阴影——三方案里同屏信息量最大</span>
+    <span class="stage-badge">mock · 数据为真实字段形态</span>
+  </div>
+  <div class="s-body">
+    <div class="stage">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">monitoring / </span>memory-runtime</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span class="on">阅读</span><span>编辑</span></div>
+          <!-- 徽标 = 需人参与态总和 = 待审 3 + failed 1 = 4（0 → 不渲染）；hover 深色 tooltip 分解 -->
+          <button class="bell-ic ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">4</span>
+            <span class="ttip" role="tooltip">待审 3 · 失败 1</span>
+          </button>
+        </div>
+        <div class="mwrap">
+          <div class="m-scroll">
+            <div class="mpage led">
+              <div class="mp-head">
+                <!-- 单出口（锁定契约）。演示对比稿中仅作展示：三 scene 各是一个完整 app 帧，
+                     返回目标（场景 01 面板）不在本稿内；生产 = 回文档视图，面板不自动重开（重入走 rail【通知】） -->
+                <button class="mp-back" type="button" title="返回文档视图（生产：回文档，面板不自动重开；演示对比稿中不切帧）"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+                <div class="mp-title">记忆运行时 · 后台监控</div>
+                <div class="mp-meta">30s 轮询缓存 · /api/memory/status + /api/memory/proposals · 后端成本为零<br>armed_target / runs_cap 端点恒 null → 目标值标「取自 config」：consolidator arm 3 / 日 3 · sentinel arm 10 / 日 2</div>
+              </div>
+
+              <!-- 组 1「状态」= 页面第一问「健康吗」 -->
+              <div class="mgroup">状态<span class="q">健康吗</span></div>
+
+              <!-- ① 九态 3×3 九格（正交变量已锁定，三方案统一） -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">九态</span><span class="bh-d">by_status · 8 状态 + malformed</span><span class="bh-r">3 awaiting · <span class="err">1 failed</span></span></div>
+                <div class="bld-c">
+                  <div class="s9">
+                    <div class="s9c"><div class="k">Processing</div><div class="v">1</div></div>
+                    <div class="s9c hot"><div class="k">Awaiting</div><div class="v">3</div></div>
+                    <div class="s9c"><div class="k">Adopted</div><div class="v">1</div></div>
+                    <div class="s9c"><div class="k">Rejected</div><div class="v">2</div></div>
+                    <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+                    <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+                    <div class="s9c err"><div class="k">Failed</div><div class="v">1</div></div>
+                    <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+                    <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+                  </div>
+                  <div class="lnote">顺序 = 产品现有 by_status 口径 · 零态格淡显 / awaiting 铜 / failed 红 · 区块计数 = 0 时行头状态词淡显（.bh-r.z）+ 内容行淡显占位（.zline）</div>
+                </div>
+              </div>
+
+              <!-- ② 异常清单：status=failed|malformed；trail 按需取。零态 = 行头 + 内容行淡显（不省略区块） -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">异常清单</span><span class="bh-d">failed | malformed · trail 按需取</span><span class="bh-r"><span class="err">1 failed</span></span></div>
+                <div class="bld-c">
+                  <div class="ano-row">
+                    <div class="ano-top"><span class="tchip">entity_index</span><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18 11:07</span></div>
+                    <div class="trail-mini">
+                      <div class="tline"><span class="op">#129 · executor</span><span class="tp">apply rebuild · suggestions/2026-10-18T093000-entity-sync.md → 失败</span></div>
+                      <div class="tline"><span class="op">#130 · system</span><span class="tp">source_refs 缺失 · 提案保留待修（不自动重试）</span></div>
+                    </div>
+                  </div>
+                  <div class="lnote">trail 按需取 <i>/proposals/{relpath}/trail</i>（不随轮询）· malformed 当前 0，出现时同规格入列 · 全零时行头淡显「无异常」+ 内容行淡显占位</div>
+                </div>
+              </div>
+
+              <!-- 组 2「系统」= 页面第二问「在干什么」 -->
+              <div class="mgroup">系统<span class="q">在干什么</span></div>
+
+              <!-- ③ 后台任务：素材 = 稿 B 脉列 / 稿 A 账本行 02（trigger_state 两行原字段）。
+                   B 保留细进度条（tr-bar）——它属于「内容」不属于「卡片形式」；
+                   分段刻度条（.seg）是方案 D 的图形维度处理，B 不用 -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">后台任务</span><span class="bh-d">trigger_state · 目标取自 config</span><span class="bh-r">arm 2/3 · 0/10 · 今天 1 次</span></div>
+                <div class="bld-c">
+                  <div class="tr-rows">
+                    <div class="tr-row">
+                      <div class="tr-top"><span class="tr-name">consolidator</span><span class="tr-target">arm 2/3</span></div>
+                      <div class="tr-bar"><i style="width:66%"></i></div>
+                      <div class="tr-sub">上次 26m 前<span class="dim">·</span><span class="sp"></span>今天 1/3 次</div>
+                    </div>
+                    <div class="tr-row">
+                      <div class="tr-top"><span class="tr-name">sentinel</span><span class="tr-target">arm 0/10</span></div>
+                      <div class="tr-bar"><i style="width:0%"></i></div>
+                      <div class="tr-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                    </div>
+                  </div>
+                  <div class="lnote"><i>trigger_state.armed / arm_count / last_run / runs_today</i> 原字段 · <i>armed_target / runs_cap</i> 端点恒 null → 取自 config</div>
+                </div>
+              </div>
+
+              <!-- ④ 执行器：30min 确定性循环，计数 = by_status.adopted -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">执行器</span><span class="bh-d">30min 循环 · 非 LLM</span><span class="bh-r">1 待落地 · armed</span></div>
+                <div class="bld-c">
+                  <div class="ex-line"><span class="dot"></span><span><b>executor</b> · 30min 循环 · armed —— <span class="n">1 条 adopted 待落地</span></span></div>
+                  <div class="lnote">确定性 30 分钟周期：扫描「adopted 待落地」或「14d 超期提案」落地，保留旧版（可回滚）· 计数 = <i>by_status.adopted</i>，与触发武装无关</div>
+                </div>
+              </div>
+
+              <!-- ⑤ 召回：L2 深钻入口 = 内容行末尾的 mono 文字按钮（B 无卡片头可挂） -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">召回</span><span class="bh-d">30d 半衰期 · 零态 = 行头「无召回流量」淡显</span><span class="bh-r">无命中 3 · 在轨 42 · top5 217.3</span></div>
+                <div class="bld-c">
+                  <div class="rcl-top" style="margin-top:0;padding-top:0;border-top:none">
+                    <div class="k">高召回 · 30d 加权<span class="cap">path + weighted + last_hit</span></div>
+                    <div class="rcl-path">weekly/obsidian-同步.md<span class="w">w.86.0</span><span class="lh">last_hit 10-21 08:02</span></div>
+                    <div class="rcl-path">notes/同步架构-部署.md<span class="w">w.61.0</span><span class="lh">last_hit 10-20 22:41</span></div>
+                    <div class="rcl-path">notes/obsidian-同步架构.md<span class="w">w.42.0</span><span class="lh">last_hit 10-21 08:15</span></div>
+                    <div class="rcl-path">notes/部署清单.md<span class="w">w.28.5</span><span class="lh">last_hit 10-19 15:12</span></div>
+                    <div class="rcl-path">weekly/2026-10-18.md<span class="w">w.18.2</span><span class="lh">last_hit 10-18 09:30</span></div>
+                  </div>
+                  <button class="bld-l2" type="button" id="rcl-toggle-b" aria-expanded="false" aria-controls="fold-l2-b" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
+                    <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>L2 深钻 · docs / failed_queries 各 ≤200 行
+                  </button>
+                  <div class="fold" id="fold-l2-b">
+                    <div>
+                      <div class="l2-pad">
+                        <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · mono 表格窄列横向滚动</span></div>
+                        <div class="mtable">
+                          <table>
+                            <thead><tr><th>文档</th><th>加权</th><th>last_hit</th></tr></thead>
+                            <tbody>
+                              <tr><td>weekly/obsidian-同步.md</td><td><span class="w">86.0</span></td><td>10-21 08:02</td></tr>
+                              <tr><td>notes/同步架构-部署.md</td><td><span class="w">61.0</span></td><td>10-20 22:41</td></tr>
+                              <tr><td>notes/obsidian-同步架构.md</td><td><span class="w">42.0</span></td><td>10-21 08:15</td></tr>
+                              <tr><td>notes/部署清单.md</td><td><span class="w">28.5</span></td><td>10-19 15:12</td></tr>
+                              <tr><td>weekly/2026-10-18.md</td><td><span class="w">18.2</span></td><td>10-18 09:30</td></tr>
+                              <tr><td>notes/迁移备忘.md</td><td><span class="w">9.4</span></td><td>10-19 20:05</td></tr>
+                              <tr><td>notes/旧版-项目排期.md</td><td><span class="w">4.1</span></td><td>10-16 14:33</td></tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div class="l2-sub">失败查询<span class="cap">failed_queries · 生产 ≤200 行（窗口 7d）</span></div>
+                        <div class="mtable">
+                          <table>
+                            <thead><tr><th>query</th><th>最近</th><th>7d 次数</th></tr></thead>
+                            <tbody>
+                              <tr><td>cdp 端口 9222 残留进程</td><td>10-21 07:58</td><td>1</td></tr>
+                              <tr><td>Windows 换行 write_bytes 哈希</td><td>10-20 21:14</td><td>1</td></tr>
+                              <tr><td>sync lock in-memory 重启丢失</td><td>10-20 09:02</td><td>1</td></tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div class="lnote">L2 = 全页唯一按需层：点本行触发一次 <i>GET /api/recall/stats</i> · 演示各放 7 / 3 行 · 失败查询 7d 合计 3 = 行头「无命中 3」口径一致</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ⑥ 最近终态：merged / rejected / failed 各 1–2 条（终态 = 事件，保持文字行） -->
+              <div class="bld">
+                <div class="bld-h"><span class="bh-t">最近终态</span><span class="bh-d">proposals 终态 · 倒序</span><span class="bh-r">3 · <span class="err">1 failed</span></span></div>
+                <div class="bld-c">
+                  <div class="rev-rows">
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">summary</span><span class="tt">合并《部署清单》与《运维手册》</span><span class="dt">10-20</span></div>
+                      <div class="rev-sub"><span class="spill merged" style="font-size:9.5px;padding:1px 7px">merged</span>&nbsp;落地 notes/运维手册.md · merged_at 10-20 09:41</div>
+                    </div>
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">correction</span><span class="tt">修正《迁移备忘》版本号</span><span class="dt">10-20</span></div>
+                      <div class="rev-sub"><span class="spill rejected" style="font-size:9.5px;padding:1px 7px">rejected</span>&nbsp;理由：snippet 已被人工改过，提案过期</div>
+                    </div>
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                      <div class="rev-sub"><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span>&nbsp;执行器校验失败：source_refs 缺失 · 提案保留待修</div>
+                    </div>
+                  </div>
+                  <div class="lnote">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条 · 单条完整 12 行轨迹仍在终审详情（trail tail）· 全零时行头淡显「无终态」+ 内容行淡显占位</div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- rail = 真实应用 rail：无激活槽（监控页是页面不是面板）；通知 badge 4 + hover 分解 -->
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">4</span><span class="ttip" role="tooltip">待审 3 · 失败 1</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">方案 B · 账本行式（密度维度）</div>
+        <ul>
+          <li><b>差异 = 只动容器，不动内容</b>——卡片容器（背景 / 圆角 / 阴影 / 内边距）全部去掉；「行」成为最小单元：每区块 = 一行 mono 行头（区块名 + <b>右对齐计数/状态词</b>）+ 内容行，行距 4px，区块间靠 1px 细线分隔。mono 占比拉高，视觉从「设置页」变「<b>对账单</b>」。<b>内容、顺序、口径与稿 D 一致</b>。</li>
+          <li><b>选择它的理由</b>——监控页的主访问 = 快速扫一眼「有没有坏」：行头右对齐的状态词让六个答案排成一条纵向扫描线，<b>同屏信息量三方案最大</b>，无卡片间隙浪费；对经常开的工程师友好，像看一份系统对账单。</li>
+          <li><b>代价</b>——①「设置页气质」丢失：行距 4px 的 mono 墙对不常开的用户有压迫感，首访认知成本高；②区块视觉边界弱，「卡感」没了之后异常清单等<b>需要被看见</b>的区块只能靠红字，视觉锚点少；③内部行盒（tr-row / rev-row）去圆角降边后，层级全靠缩进和细线，细节对比度低。</li>
+          <li><b>零态落点</b>——区块计数 = 0 → 行头状态词淡显（<i>.bh-r.z</i>）+ 内容行 = 淡显占位（<i>.zline</i>），不省略区块（演示数据全非零，稿中不实例化）。</li>
+          <li><b>L2 入口</b>——无卡片头可挂，改为召回内容行末尾的 mono 文字按钮（<i>▾ L2 深钻</i>），展开机制同稿 A 0fr→1fr，不产生 a11y 隐面。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 场景 02C：摘要行式（交互维度） ============ -->
+<section class="scene" id="s-c" style="display:none">
+  <div class="s-head">
+    <span class="tag brass">SCENE 02C</span>
+    <h2>摘要行式（交互维度）</h2>
+    <span class="diff">六区块默认各收成一行摘要（数字 + 状态词 + ▾），整页默认 ≈ 两个组标题 + 六行，一屏读完；failed&gt;0 异常行默认展开红字；L2 两张表 = 召回体内二级子按钮（1 行 → 1 体 → 1 深钻，分层暴露）</span>
+    <span class="stage-badge">交互演示 · 六行可点</span>
+  </div>
+  <div class="s-body">
+    <div class="stage">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">monitoring / </span>memory-runtime</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span class="on">阅读</span><span>编辑</span></div>
+          <!-- 徽标 = 需人参与态总和 = 4（0 → 不渲染）；hover 深色 tooltip 分解 -->
+          <button class="bell-ic ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">4</span>
+            <span class="ttip" role="tooltip">待审 3 · 失败 1</span>
+          </button>
+        </div>
+        <div class="mwrap">
+          <div class="m-scroll">
+            <div class="mpage">
+              <div class="mp-head">
+                <!-- 单出口（锁定契约）；演示对比稿中不切帧（生产 = 回文档视图，面板不自动重开） -->
+                <button class="mp-back" type="button" title="返回文档视图（生产：回文档，面板不自动重开；演示对比稿中不切帧）"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+                <div class="mp-title">记忆运行时 · 后台监控</div>
+                <div class="mp-meta">30s 轮询缓存 · /api/memory/status + /api/memory/proposals · 后端成本为零<br>armed_target / runs_cap 端点恒 null → 目标值标「取自 config」：consolidator arm 3 / 日 3 · sentinel arm 10 / 日 2</div>
+              </div>
+
+              <!-- 组 1「状态」= 页面第一问「健康吗」 -->
+              <div class="mgroup">状态<span class="q">健康吗</span></div>
+
+              <!-- ① 九态：摘要行 = 行动态计数（待审/failed）；展开体 = 3×3 九格（正交变量锁定，三方案统一）
+                   零态摘要行特例：区块计数 = 0 → 整行淡显（.brow.z）+ cursor 降级，如「无异常 ▾」（C 稿零态专门落在摘要行上） -->
+              <div class="blk">
+                <button class="brow" type="button" id="brow-9c-c" aria-expanded="false" aria-controls="fold-9c-c">
+                  <span class="bn">九态</span><span class="bv">3 awaiting · 1 failed</span><span class="bw">by_status · 8 状态 + malformed</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold" id="fold-9c-c"><div class="body">
+                  <div class="s9">
+                    <div class="s9c"><div class="k">Processing</div><div class="v">1</div></div>
+                    <div class="s9c hot"><div class="k">Awaiting</div><div class="v">3</div></div>
+                    <div class="s9c"><div class="k">Adopted</div><div class="v">1</div></div>
+                    <div class="s9c"><div class="k">Rejected</div><div class="v">2</div></div>
+                    <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+                    <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+                    <div class="s9c err"><div class="k">Failed</div><div class="v">1</div></div>
+                    <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+                    <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+                  </div>
+                  <div class="c-note">顺序 = 产品现有 by_status 口径 · 零态格淡显 / awaiting 铜 / failed 红 · 区块全零时摘要行淡显「无异常 ▾」可收起不可误点</div>
+                </div></div>
+              </div>
+
+              <!-- ② 异常清单：failed>0 → 摘要行红字 + 默认展开（demo failed=1 → 此行默认开着）；
+                   零态 = 摘要行淡显「无异常 ▾」（.brow.z） -->
+              <div class="blk">
+                <button class="brow err" type="button" aria-expanded="true" aria-controls="fold-ano-c">
+                  <span class="bn">异常清单</span><span class="bv">1</span><span class="bw">failed · trail 按需取</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold open" id="fold-ano-c"><div class="body">
+                  <div class="ano-row">
+                    <div class="ano-top"><span class="tchip">entity_index</span><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18 11:07</span></div>
+                    <div class="trail-mini">
+                      <div class="tline"><span class="op">#129 · executor</span><span class="tp">apply rebuild · suggestions/2026-10-18T093000-entity-sync.md → 失败</span></div>
+                      <div class="tline"><span class="op">#130 · system</span><span class="tp">source_refs 缺失 · 提案保留待修（不自动重试）</span></div>
+                    </div>
+                  </div>
+                  <div class="c-note">trail 按需取 <i>/proposals/{relpath}/trail</i>（不随轮询）· malformed 当前 0，出现时同规格入列</div>
+                </div></div>
+              </div>
+
+              <!-- 组 2「系统」= 页面第二问「在干什么」 -->
+              <div class="mgroup">系统<span class="q">在干什么</span></div>
+
+              <!-- ③ 后台任务：摘要行 = 双任务 arm 计数；展开体 = 两行原字段（含细进度条） -->
+              <div class="blk">
+                <button class="brow" type="button" aria-expanded="false" aria-controls="fold-tasks-c">
+                  <span class="bn">后台任务</span><span class="bv">arm 2/3 · 0/10</span><span class="bw">2 任务 · 今天 1/3 + 0/2 · 目标取自 config</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold" id="fold-tasks-c"><div class="body">
+                  <div class="tr-rows">
+                    <div class="tr-row">
+                      <div class="tr-top"><span class="tr-name">consolidator</span><span class="tr-target">arm 2/3</span></div>
+                      <div class="tr-bar"><i style="width:66%"></i></div>
+                      <div class="tr-sub">上次 26m 前<span class="dim">·</span><span class="sp"></span>今天 1/3 次</div>
+                    </div>
+                    <div class="tr-row">
+                      <div class="tr-top"><span class="tr-name">sentinel</span><span class="tr-target">arm 0/10</span></div>
+                      <div class="tr-bar"><i style="width:0%"></i></div>
+                      <div class="tr-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                    </div>
+                  </div>
+                  <div class="c-note"><i>trigger_state.armed / arm_count / last_run / runs_today</i> 原字段 · <i>armed_target / runs_cap</i> 端点恒 null → 取自 config</div>
+                </div></div>
+              </div>
+
+              <!-- ④ 执行器：摘要行 = 待落地计数 + armed -->
+              <div class="blk">
+                <button class="brow" type="button" aria-expanded="false" aria-controls="fold-exec-c">
+                  <span class="bn">执行器</span><span class="bv">1 待落地</span><span class="bw">armed · 30min 循环 · 非 LLM</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold" id="fold-exec-c"><div class="body">
+                  <div class="ex-line"><span class="dot"></span><span><b>executor</b> · 30min 循环 · armed —— <span class="n">1 条 adopted 待落地</span></span></div>
+                  <div class="c-note">确定性 30 分钟周期：扫描「adopted 待落地」或「14d 超期提案」落地，保留旧版（可回滚）· 计数 = <i>by_status.adopted</i>，与触发武装无关</div>
+                </div></div>
+              </div>
+
+              <!-- ⑤ 召回：展开体 = 3 统计 + top5 列表 + L2 二级子按钮。
+                   L2 判断（注释口径）：两张表放召回体<b>内部的二级子按钮</b>后再展开——
+                   ① C = 交互维度，暴露按点击分层：摘要行（1 层）→ 区块体（2 层）→ 深钻表（3 层），
+                   与稿 D 的「L2 独立按钮动作」同构（稿 D 区块默认开 + L2 按钮 = 1 次点击到表；
+                   C 区块默认收 + 体按钮 = 2 次，代价换「整页默认一屏」）；
+                   ② L2 = 全页唯一按需 GET（/api/recall/stats），独立按钮动作让按需语义可见；
+                   ③ 若直接摊进体里，展开一次 = 统计 + 列表 + 7/3 行表同屏砸出，违背摘要优先。
+                   零态 = 摘要行淡显「无召回流量 ▾」（.brow.z） -->
+              <div class="blk">
+                <button class="brow" type="button" aria-expanded="false" aria-controls="fold-rcl-c">
+                  <span class="bn">召回</span><span class="bv">无命中 3 · 在轨 42</span><span class="bw">top5 加权 217.3 · 30d 半衰期</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold" id="fold-rcl-c"><div class="body">
+                  <div class="rcl-stats">
+                    <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">3</div></div>
+                    <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">42</div></div>
+                    <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">217.3</div></div>
+                  </div>
+                  <div class="rcl-top">
+                    <div class="k">高召回 · 30d 加权<span class="cap">path + weighted + last_hit</span></div>
+                    <div class="rcl-path">weekly/obsidian-同步.md<span class="w">w.86.0</span><span class="lh">last_hit 10-21 08:02</span></div>
+                    <div class="rcl-path">notes/同步架构-部署.md<span class="w">w.61.0</span><span class="lh">last_hit 10-20 22:41</span></div>
+                    <div class="rcl-path">notes/obsidian-同步架构.md<span class="w">w.42.0</span><span class="lh">last_hit 10-21 08:15</span></div>
+                    <div class="rcl-path">notes/部署清单.md<span class="w">w.28.5</span><span class="lh">last_hit 10-19 15:12</span></div>
+                    <div class="rcl-path">weekly/2026-10-18.md<span class="w">w.18.2</span><span class="lh">last_hit 10-18 09:30</span></div>
+                  </div>
+                  <button class="bld-l2" type="button" id="rcl-toggle-c" aria-expanded="false" aria-controls="fold-l2-c" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
+                    <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>L2 深钻 · docs / failed_queries 各 ≤200 行
+                  </button>
+                  <div class="fold" id="fold-l2-c">
+                    <div>
+                      <div class="l2-pad">
+                        <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · mono 表格窄列横向滚动</span></div>
+                        <div class="mtable">
+                          <table>
+                            <thead><tr><th>文档</th><th>加权</th><th>last_hit</th></tr></thead>
+                            <tbody>
+                              <tr><td>weekly/obsidian-同步.md</td><td><span class="w">86.0</span></td><td>10-21 08:02</td></tr>
+                              <tr><td>notes/同步架构-部署.md</td><td><span class="w">61.0</span></td><td>10-20 22:41</td></tr>
+                              <tr><td>notes/obsidian-同步架构.md</td><td><span class="w">42.0</span></td><td>10-21 08:15</td></tr>
+                              <tr><td>notes/部署清单.md</td><td><span class="w">28.5</span></td><td>10-19 15:12</td></tr>
+                              <tr><td>weekly/2026-10-18.md</td><td><span class="w">18.2</span></td><td>10-18 09:30</td></tr>
+                              <tr><td>notes/迁移备忘.md</td><td><span class="w">9.4</span></td><td>10-19 20:05</td></tr>
+                              <tr><td>notes/旧版-项目排期.md</td><td><span class="w">4.1</span></td><td>10-16 14:33</td></tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div class="l2-sub">失败查询<span class="cap">failed_queries · 生产 ≤200 行（窗口 7d）</span></div>
+                        <div class="mtable">
+                          <table>
+                            <thead><tr><th>query</th><th>最近</th><th>7d 次数</th></tr></thead>
+                            <tbody>
+                              <tr><td>cdp 端口 9222 残留进程</td><td>10-21 07:58</td><td>1</td></tr>
+                              <tr><td>Windows 换行 write_bytes 哈希</td><td>10-20 21:14</td><td>1</td></tr>
+                              <tr><td>sync lock in-memory 重启丢失</td><td>10-20 09:02</td><td>1</td></tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        <div class="c-note">L2 = 全页唯一按需层：点本按钮触发一次 <i>GET /api/recall/stats</i> · 演示各放 7 / 3 行 · 失败查询 7d 合计 3 = 摘要行「无命中 3」口径一致</div>
+                      </div>
+                    </div>
+                  </div>
+                </div></div>
+              </div>
+
+              <!-- ⑥ 最近终态：摘要行 = 条数 + failed -->
+              <div class="blk">
+                <button class="brow" type="button" aria-expanded="false" aria-controls="fold-rev-c">
+                  <span class="bn">最近终态</span><span class="bv">3</span><span class="bw">1 failed · 倒序 · proposals 终态</span>
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+                </button>
+                <div class="fold" id="fold-rev-c"><div class="body">
+                  <div class="rev-rows">
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">summary</span><span class="tt">合并《部署清单》与《运维手册》</span><span class="dt">10-20</span></div>
+                      <div class="rev-sub"><span class="spill merged" style="font-size:9.5px;padding:1px 7px">merged</span>&nbsp;落地 notes/运维手册.md · merged_at 10-20 09:41</div>
+                    </div>
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">correction</span><span class="tt">修正《迁移备忘》版本号</span><span class="dt">10-20</span></div>
+                      <div class="rev-sub"><span class="spill rejected" style="font-size:9.5px;padding:1px 7px">rejected</span>&nbsp;理由：snippet 已被人工改过，提案过期</div>
+                    </div>
+                    <div class="rev-row">
+                      <div class="rev-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                      <div class="rev-sub"><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span>&nbsp;执行器校验失败：source_refs 缺失 · 提案保留待修</div>
+                    </div>
+                  </div>
+                  <div class="c-note">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条 · 单条完整 12 行轨迹仍在终审详情（trail tail）· 全零时摘要行淡显「无终态 ▾」</div>
+                </div></div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- rail = 真实应用 rail：无激活槽；通知 badge 4 + hover 分解 -->
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">4</span><span class="ttip" role="tooltip">待审 3 · 失败 1</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">方案 C · 摘要行式（交互维度）</div>
+        <ul>
+          <li><b>差异 = 默认暴露层级</b>——卡片、行头全部让位给<b>六行摘要</b>（区块名 + 关键数字 + 状态词 + ▾，按钮语义，<i>aria-expanded</i>）；整页默认 ≈ 两个组标题 + 六行，<b>一屏读完</b>。点击展开内容区（0fr→1fr，同稿 A 模式，不产生 a11y 隐面）。内容、顺序、口径与稿 D 一致。</li>
+          <li><b>failed&gt;0 规则</b>——异常摘要行<b>默认展开 + 红字</b>（demo failed=1 → 该行默认开着，红字 = 六个摘要行里唯一跳出来的）；failed = 0 时回默认收起态。</li>
+          <li><b>零态摘要行（C 稿专门处理）</b>——计数 = 0 → 摘要行<b>整行淡显（.brow.z）+ cursor 降级</b>，如「无异常 ▾」/「无终态 ▾」/「无召回流量 ▾」：淡显落在行上而非内容占位（B/D 落 .zline），因为 C 的内容默认不存在（收起），答案必须写在行上。演示数据全非零，稿中不实例化。</li>
+          <li><b>L2 = 召回体内部二级子按钮</b>（本稿判断）——摘要行 → 区块体（统计 + top5）→ 深钻表，暴露按点击分层，与稿 D 的「L2 独立按钮 = 唯一按需 GET」同构；代价 = 比稿 D 多一次点击（稿 D 区块默认开）。判断理由见稿内注释⑤。</li>
+          <li><b>选择它的理由</b>——监控页的次要访问 = 「大概看一眼，有问题再点」：六行 = 六个答案的目录，认知负载最低；异常默认展开保证红字可见，不牺牲告警。</li>
+          <li><b>代价</b>——① 默认信息量三方案最低（数字在行上，细节要点）；② 六行全是按钮 = 页面「全交互」，扫读时点击目标被高估（不知道哪些值得点）；③ 展开后页变长，无锚点回跳，多区块同开时要滚动管理；④ 九态 3×3 藏在体里，「一眼九格」没了。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 场景 02D：仪表化卡片（图形维度） ============ -->
+<section class="scene" id="s-d" style="display:none">
+  <div class="s-head">
+    <span class="tag brass">SCENE 02D</span>
+    <h2>仪表化卡片（图形维度）</h2>
+    <span class="diff">卡片骨架保留（纸底大圆角卡堆叠，同现稿），内芯换数据图形：任务 = 刻度条 · 执行器 = 大数字 + 状态灯 · 召回 = top5 比例条 · 异常 = 红边卡；30s 轮询无时序，只画静态比例条，不画趋势曲线</span>
+    <span class="stage-badge">mock · 数据为真实字段形态</span>
+  </div>
+  <div class="s-body">
+    <div class="stage">
+      <div class="viewport">
+        <div class="topbar">
+          <div class="tlogo"><span class="mk">M</span><span class="wm">md-vault</span></div>
+          <div class="tfile"><span class="dim">monitoring / </span>memory-runtime</div>
+          <div class="spacer"></div>
+          <div class="mode-pill"><span class="on">阅读</span><span>编辑</span></div>
+          <!-- 徽标 = 需人参与态总和 = 4（0 → 不渲染）；hover 深色 tooltip 分解 -->
+          <button class="bell-ic ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1">
+            <svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>
+            <span class="nbadge">4</span>
+            <span class="ttip" role="tooltip">待审 3 · 失败 1</span>
+          </button>
+        </div>
+        <div class="mwrap">
+          <div class="m-scroll">
+            <div class="mpage">
+              <div class="mp-head">
+                <!-- 单出口（锁定契约）；演示对比稿中不切帧（生产 = 回文档视图，面板不自动重开） -->
+                <button class="mp-back" type="button" title="返回文档视图（生产：回文档，面板不自动重开；演示对比稿中不切帧）"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+                <div class="mp-title">记忆运行时 · 后台监控</div>
+                <div class="mp-meta">30s 轮询缓存 · /api/memory/status + /api/memory/proposals · 后端成本为零<br>armed_target / runs_cap 端点恒 null → 目标值标「取自 config」：consolidator arm 3 / 日 3 · sentinel arm 10 / 日 2</div>
+              </div>
+
+              <!-- 组 1「状态」= 页面第一问「健康吗」 -->
+              <div class="mgroup">状态<span class="q">健康吗</span></div>
+
+              <!-- ① 九态：卡片骨架保留，内芯 = 3×3 九格（正交变量锁定，三方案统一，不图形化——计数已是最小图形） -->
+              <div class="mcard">
+                <div class="mc-h"><span class="mc-t">九态</span><span class="mc-poll">by_status · 8 状态 + malformed · 30s 轮询</span></div>
+                <div class="s9">
+                  <div class="s9c"><div class="k">Processing</div><div class="v">1</div></div>
+                  <div class="s9c hot"><div class="k">Awaiting</div><div class="v">3</div></div>
+                  <div class="s9c"><div class="k">Adopted</div><div class="v">1</div></div>
+                  <div class="s9c"><div class="k">Rejected</div><div class="v">2</div></div>
+                  <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+                  <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+                  <div class="s9c err"><div class="k">Failed</div><div class="v">1</div></div>
+                  <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+                  <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+                </div>
+                <div class="mc-note">顺序 = 产品现有 by_status 口径 · 零态格淡显 / awaiting 铜 / failed 红 · 区块计数 = 0 → 内容行淡显占位（<i>.zline</i>），卡片常驻</div>
+              </div>
+
+              <!-- ② 异常清单 = 红边卡（D 对「需要被看见」的区块的图形处理；trail 内容与 B/C 相同） -->
+              <div class="mcard alert">
+                <div class="mc-h"><span class="mc-t">异常清单</span><span class="mc-poll">failed | malformed · trail 按需取</span><span class="alert-pill">1 failed</span></div>
+                <div class="ano-row" style="border-color:color-mix(in srgb,var(--st-error) 35%,var(--line))">
+                  <div class="ano-top"><span class="tchip">entity_index</span><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18 11:07</span></div>
+                  <div class="trail-mini">
+                    <div class="tline"><span class="op">#129 · executor</span><span class="tp">apply rebuild · suggestions/2026-10-18T093000-entity-sync.md → 失败</span></div>
+                    <div class="tline"><span class="op">#130 · system</span><span class="tp">source_refs 缺失 · 提案保留待修（不自动重试）</span></div>
+                  </div>
+                </div>
+                <div class="mc-note">红边 = 区块级强调（卡片保留下唯一可用的「跳出」手段）· trail 按需取 <i>/proposals/{relpath}/trail</i>（不随轮询）· malformed 当前 0，出现时同规格入列 · 全零 → 内容行淡显占位「无异常」</div>
+              </div>
+
+              <!-- 组 2「系统」= 页面第二问「在干什么」 -->
+              <div class="mgroup">系统<span class="q">在干什么</span></div>
+
+              <!-- ③ 后台任务 = 分段刻度条：实心段数 = 当前 arm，总段数 = 目标（arm 2/3 = 3 段中 2 实心；
+                   sentinel arm 0/10 = 10 段全空——demo 数据自带的零态样本）。
+                   刻度条是静态快照：30s 轮询无时序数据，不画动画填充 / 趋势（避免误导「在增长」）。 -->
+              <div class="mcard">
+                <div class="mc-h"><span class="mc-t">后台任务</span><span class="mc-poll">trigger_state · 目标取自 config</span></div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">consolidator</span><span class="tg">arm 2/3</span></div>
+                  <div class="segs"><i class="seg f"></i><i class="seg f"></i><i class="seg"></i></div>
+                  <div class="seg-sub">上次 26m 前<span class="sp"></span>今天 1/3 次</div>
+                </div>
+                <div class="seg-row">
+                  <div class="seg-top"><span class="nm">sentinel</span><span class="tg">arm 0/10</span></div>
+                  <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+                  <div class="seg-sub">上次 昨天 10:00<span class="sp"></span>今天 0/2 次</div>
+                </div>
+                <div class="mc-note">实心段 = 当前 arm · 总段数 = 目标（armed_target 端点恒 null → 取自 config）· 细信息（上次 / 今天次数）图形放不下，仍走 mono 注脚行 · <i>trigger_state.armed / arm_count / last_run / runs_today</i> 原字段</div>
+              </div>
+
+              <!-- ④ 执行器 = 大数字（待落地计数）+ armed 状态灯（实心圆点脉冲 = 在跑） -->
+              <div class="mcard">
+                <div class="mc-h"><span class="mc-t">执行器</span><span class="mc-poll">30min 循环 · 非 LLM</span></div>
+                <div class="exec-vis">
+                  <span class="lamp on" title="armed · 运行中"></span>
+                  <span class="big">1</span>
+                  <span class="cap-line"><b>executor</b> · 30min 循环 · armed<br>1 条 adopted 待落地 · 计数 = <i>by_status.adopted</i></span>
+                </div>
+                <div class="mc-note">大数字 = 待落地计数（by_status.adopted，与触发武装无关）· 状态灯 = armed 开/关（demo = 开，脉冲 = 在跑）· 确定性 30 分钟周期：扫描「adopted 待落地」或「14d 超期提案」落地，保留旧版（可回滚）</div>
+              </div>
+
+              <!-- ⑤ 召回 = top5 横条比例图：宽度 ∝ w 值（按最大值 86.0 归一：100 / 70.9 / 48.8 / 33.1 / 21.2 %），
+                   mono 标注 path + 值，替代纯列表。口径注：① 静态比例条，非时序（30s 轮询 = 快照）；
+                   ② 值域窄时归一化压缩差异（86 vs 18 看得清，61 vs 42 就模糊）——值标在条尾兜底；
+                   ③ last_hit 降为 path 下副注（图形列放不下三个字段）。L2 仍是独立按钮（唯一按需层）。 -->
+              <div class="mcard">
+                <div class="mc-h"><span class="mc-t">召回</span><span class="mc-poll">30d 半衰期 · L2 = 全页唯一按需层</span></div>
+                <div class="rcl-stats">
+                  <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">3</div></div>
+                  <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">42</div></div>
+                  <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">217.3</div></div>
+                </div>
+                <div class="wbar">
+                  <div class="wbar-h">top5 · 宽度 ∝ weighted（最大 86.0 = 100%）· 静态比例条，无时序</div>
+                  <div class="wline"><span class="p">weekly/obsidian-同步.md<span class="lh">last_hit 10-21 08:02</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">86.0</span></div>
+                  <div class="wline"><span class="p">notes/同步架构-部署.md<span class="lh">last_hit 10-20 22:41</span></span><span class="bar"><i style="width:70.9%"></i></span><span class="v">61.0</span></div>
+                  <div class="wline"><span class="p">notes/obsidian-同步架构.md<span class="lh">last_hit 10-21 08:15</span></span><span class="bar"><i style="width:48.8%"></i></span><span class="v">42.0</span></div>
+                  <div class="wline"><span class="p">notes/部署清单.md<span class="lh">last_hit 10-19 15:12</span></span><span class="bar"><i style="width:33.1%"></i></span><span class="v">28.5</span></div>
+                  <div class="wline"><span class="p">weekly/2026-10-18.md<span class="lh">last_hit 10-18 09:30</span></span><span class="bar"><i style="width:21.2%"></i></span><span class="v">18.2</span></div>
+                </div>
+                <button class="rcl-l2btn" type="button" id="rcl-toggle-d" aria-expanded="false" aria-controls="fold-l2-d" title="L2 深钻：/api/recall/stats 按需 GET（docs / failed_queries 各 cap 200 行）">
+                  <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>L2 深钻 · docs / failed_queries 各 ≤200 行
+                </button>
+                <div class="fold" id="fold-l2-d">
+                  <div>
+                    <div class="l2-pad">
+                      <div class="l2-sub">召回文档榜<span class="cap">/api/recall/stats → docs · 生产 ≤200 行 · mono 表格窄列横向滚动</span></div>
+                      <div class="mtable">
+                        <table>
+                          <thead><tr><th>文档</th><th>加权</th><th>last_hit</th></tr></thead>
+                          <tbody>
+                            <tr><td>weekly/obsidian-同步.md</td><td><span class="w">86.0</span></td><td>10-21 08:02</td></tr>
+                            <tr><td>notes/同步架构-部署.md</td><td><span class="w">61.0</span></td><td>10-20 22:41</td></tr>
+                            <tr><td>notes/obsidian-同步架构.md</td><td><span class="w">42.0</span></td><td>10-21 08:15</td></tr>
+                            <tr><td>notes/部署清单.md</td><td><span class="w">28.5</span></td><td>10-19 15:12</td></tr>
+                            <tr><td>weekly/2026-10-18.md</td><td><span class="w">18.2</span></td><td>10-18 09:30</td></tr>
+                            <tr><td>notes/迁移备忘.md</td><td><span class="w">9.4</span></td><td>10-19 20:05</td></tr>
+                            <tr><td>notes/旧版-项目排期.md</td><td><span class="w">4.1</span></td><td>10-16 14:33</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="l2-sub">失败查询<span class="cap">failed_queries · 生产 ≤200 行（窗口 7d）</span></div>
+                      <div class="mtable">
+                        <table>
+                          <thead><tr><th>query</th><th>最近</th><th>7d 次数</th></tr></thead>
+                          <tbody>
+                            <tr><td>cdp 端口 9222 残留进程</td><td>10-21 07:58</td><td>1</td></tr>
+                            <tr><td>Windows 换行 write_bytes 哈希</td><td>10-20 21:14</td><td>1</td></tr>
+                            <tr><td>sync lock in-memory 重启丢失</td><td>10-20 09:02</td><td>1</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                      <div class="mc-note">L2 = 全页唯一按需层：点本按钮触发一次 <i>GET /api/recall/stats</i> · 演示各放 7 / 3 行 · 失败查询 7d 合计 3 = 统计「7d 无命中 3」口径一致 · 全零 → 统计行淡显占位「无召回流量」</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- ⑥ 最近终态 = 保持文字行（判断：终态 = 事件非比例，不图形化——事件没有「刻度」可画，
+                   强行图形化只会产出无信息的装饰；三方案中唯一 D 也没换内芯的区块） -->
+              <div class="mcard">
+                <div class="mc-h"><span class="mc-t">最近终态</span><span class="mc-poll">proposals 终态 · 倒序</span></div>
+                <div class="rev-rows">
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">summary</span><span class="tt">合并《部署清单》与《运维手册》</span><span class="dt">10-20</span></div>
+                    <div class="rev-sub"><span class="spill merged" style="font-size:9.5px;padding:1px 7px">merged</span>&nbsp;落地 notes/运维手册.md · merged_at 10-20 09:41</div>
+                  </div>
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">correction</span><span class="tt">修正《迁移备忘》版本号</span><span class="dt">10-20</span></div>
+                    <div class="rev-sub"><span class="spill rejected" style="font-size:9.5px;padding:1px 7px">rejected</span>&nbsp;理由：snippet 已被人工改过，提案过期</div>
+                  </div>
+                  <div class="rev-row">
+                    <div class="rev-top"><span class="tchip">entity_index</span><span class="tt">重建《同步架构》实体索引</span><span class="dt">10-18</span></div>
+                    <div class="rev-sub"><span class="spill failed" style="font-size:9.5px;padding:1px 7px">failed</span>&nbsp;执行器校验失败：source_refs 缺失 · 提案保留待修</div>
+                  </div>
+                </div>
+                <div class="mc-note">取 <i>/proposals</i> 非 awaiting 最近终态各 1–2 条 · 单条完整 12 行轨迹仍在终审详情（trail tail）· 全零 → 内容行淡显占位「无终态」</div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- rail = 真实应用 rail：无激活槽；通知 badge 4 + hover 分解 -->
+      <div class="rail">
+        <div class="rnav">
+          <button class="rbtn" aria-label="文件"><span class="rn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></span></button>
+          <button class="rbtn" aria-label="搜索"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span class="rlabel">搜索</span></span></button>
+          <div class="rsep"></div>
+          <button class="rbtn ttip-anchor" aria-label="通知 · 需人参与 4：待审 3 + 失败 1"><span class="rn"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span></span><span class="badge">4</span><span class="ttip" role="tooltip">待审 3 · 失败 1</span></button>
+          <button class="rbtn reserved" aria-label="最近（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="rlabel">最近</span></span></button>
+        </div>
+        <div class="rbottom">
+          <button class="rbtn reserved" aria-label="设置（预留）"><span class="rn"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/></svg><span class="rlabel">设置</span></span></button>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-notes">
+      <div class="notes-card">
+        <div class="notes-title">方案 D · 仪表化卡片（图形维度）</div>
+        <ul>
+          <li><b>差异 = 只换内芯，不动骨架</b>——卡片（纸底大圆角、卡间距、卡内注脚）与稿 D 现稿一致；内芯换数据图形：<b>后台任务 = 分段刻度条</b>（arm 2/3 = 3 段中 2 实心，sentinel arm 0/10 = 10 段全空）、<b>执行器 = 大数字 1 + armed 状态灯</b>（实心圆点脉冲 = 在跑）、<b>召回 = top5 比例条</b>（宽度按最大值 86.0 归一，mono 标 path + 值，替代纯列表）、<b>异常 = 红边卡</b>。内容、顺序、口径与稿 D 一致。</li>
+          <li><b>口径注（本稿专门写明）</b>——30s 轮询 = 快照，<b>无时序数据</b>：只画静态比例条 / 刻度条，<b>不画动画填充、不画趋势曲线</b>（轮询间隔 30s 的「增长」是假象，趋势图会误导「在改善/在恶化」）；状态灯脉冲 = armed 在跑（状态不是时序，可保留）。归一化副作用：值域窄时差异被压缩（61 vs 42 的条长差 = 22 个百分比点，视觉上已近），条尾 mono 数值兜底。</li>
+          <li><b>最近终态 = 唯一不换内芯的区块</b>（本稿判断）——终态 = 事件非比例：「10-20 merged」没有刻度可画，强行图形化只会产出无信息装饰；事件流的语言就是文字行。</li>
+          <li><b>选择它的理由</b>——比例、开/关、多少是监控的原生语义，图形的扫读压缩 > 文字：刻度条一眼 2/3，比「arm 2/3」再快一档；卡片骨架保留 = 设置页气质不丢，异常红边在卡堆里天然跳出；对非工程师（看「有没有坏」）最友好。</li>
+          <li><b>代价</b>——① 图形信息密度低于 mono 文字：「上次 26m 前 / 今天 1/3 次」图形放不下，仍走注脚行，图形只表达一半；② top5 比例条把 last_hit 降为副注、path 在 200px 列截断，三字段变两行；③ 新图形组件（.seg / .lamp / .wbar）= 新 DOM + 动画 + 归一化口径，维护成本三方案最高；④ 同屏信息量仍不及 B（图形省字数但不省行数，六区块高度不变）。</li>
+          <li><b>零态落点</b>——卡片常驻，内容行 = 淡显占位（<i>.zline</i>），同 B；sentinel arm 0/10 的 10 段全空刻度条 = demo 数据自带的零态图形样本（不需要造数据）。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ============ 演示条（稿页导航，非产品 UI） ============ -->
+<div class="demo-bar">
+  <span class="dk">demo</span>
+  <span>02B / 02D → 召回区块「L2 深钻」按钮可展开（0fr→1fr）；02C → 六行摘要均可点展开，召回体内 L2 二级按钮再展开两表</span>
+  <span>rail / topbar 徽标 hover 出「待审 3 · 失败 1」深色 tooltip</span>
+  <span>「← 返回文档」仅展示（三 scene 各为独立 app 帧，返回目标不在本稿内；生产 = 回文档视图）</span>
+</div>
+
+<!-- ============ 页尾设计注释 ============ -->
+<div class="footnotes">
+  <div class="fn-title">设计注释 · 三方案对比与口径</div>
+  <div class="fn-grid">
+    <div class="fn-card">
+      <div class="fn-k">三方案对比</div>
+      <table class="ftable">
+        <thead><tr><th>维度</th><th>B 账本行式</th><th>C 摘要行式</th><th>D 仪表卡片</th></tr></thead>
+        <tbody>
+          <tr><td><b>默认高度</b></td><td>六区块全展开 ≈ 3 屏+</td><td>两组标题 + 六行摘要 ≈ 1 屏</td><td>六卡 ≈ 3 屏+（同 B）</td></tr>
+          <tr><td><b>扫读成本</b></td><td>行头右状态词 = 一条纵向扫描线，最低</td><td>数字在行上、细节要点开；默认信息量最低</td><td>图形压缩扫读（刻度条 / 状态灯 / 比例条直接可读）</td></tr>
+          <tr><td><b>交互层级</b></td><td>1 层（L2 按钮）</td><td>3 层（摘要 → 区块体 → L2 二级按钮）</td><td>1 层（L2 按钮）</td></tr>
+          <tr><td><b>气质</b></td><td>对账单 / 运维终端</td><td>目录 / 索引页</td><td>仪表板 / 仪表盘</td></tr>
+          <tr><td><b>各自最优场景</b></td><td>工程师常开、高频扫「有没有坏」</td><td>偶尔查看、异常驱动（点开才下钻）</td><td>视觉确认、比例 / 开关键语义</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="fn-card">
+      <div class="fn-k">与现稿 A / 稿 D 的关系</div>
+      <ul>
+        <li>本文件 = <b>稿 D 场景 02（监控页）的三个形式分叉</b>，不替代稿 D——稿 D 仍是基线稿（含面板 / 详情 / 移动端的完整系统），本稿只回答「监控页选哪种形式」。</li>
+        <li>内容层<b>完全复用稿 D 锁定契约</b>：数据、区块顺序、口径、rail、topbar、单出口、L2 唯一按需层，均未分叉。</li>
+        <li>B 的「行」与<b>稿 A 账本的行原语同源</b>（稿 A = 文档视图账本，B = 监控视图账本）——同一「行」原语在不同视图的两次落地，可互相验证。</li>
+        <li>D 的卡片骨架 = 稿 D 现稿 <i>.mcard</i> 原样；B/C 的内容组件（<i>.s9 / .tr-row / .ano-row / .rev-row / .rcl-top</i>）从稿 D 原样搬移，保证三方案差异只落在「布局与形式」。</li>
+      </ul>
+    </div>
+    <div class="fn-card">
+      <div class="fn-k">共用锁定契约（不分叉部分）</div>
+      <ul>
+        <li>独立页面 <b>680px 窄单列</b>居中 · topbar 文件槽 <i>monitoring / memory-runtime</i> · 单出口「← 返回文档」。</li>
+        <li>rail = 真实应用 rail：文件 / 搜索 / 通知 / 最近·虚线 / 设置·虚线，<b>无激活槽</b>（监控页是页面不是面板）；通知 badge <b>4</b>（= 需人参与态总和：待审 3 + failed 1）+ hover 深色 tooltip。</li>
+        <li>两组顺序不变：<b>状态（健康吗）先、系统（在干什么）后</b>；区块顺序 ①九态 ②异常清单 ③后台任务 ④执行器 ⑤召回 ⑥最近终态。</li>
+        <li>九态 = <b>3×3 九格</b>（正交变量锁定）· 零态<b>常驻淡显</b>不省略区块：B/D → 内容行淡显占位（<i>.zline</i>）；C → 摘要行整行淡显（<i>.brow.z</i>，C 稿专门处理）。</li>
+        <li>L2 深钻 = 全页唯一按需 <i>GET /api/recall/stats</i>（docs / failed_queries 各 cap 200 行），0fr→1fr + overflow 裁剪（复用稿 A 模式），<b>不用 opacity 隐面</b>，不产生 a11y 隐面。</li>
+        <li>30s 轮询缓存（/api/memory/status + /api/memory/proposals，后端成本为零）· armed_target / runs_cap 恒 null → 目标值标「取自 config」· 演示数据与稿 D 完全一致。</li>
+      </ul>
+    </div>
+    <div class="fn-card">
+      <div class="fn-k">判断记录（brief 未覆盖处，各一行）</div>
+      <ul>
+        <li>C 的 L2 = <b>召回体内部二级子按钮</b>（非直接摊进体里）：暴露按点击分层（摘要 → 体 → 深钻表），与稿 D「L2 独立按钮 = 唯一按需 GET」同构；代价 = 比稿 D 多一次点击（稿 D 区块默认开）。理由全文见稿内注释⑤。</li>
+        <li>D 的<b>最近终态保持文字行</b>：终态 = 事件非比例，没有刻度可画，图形化只产出装饰。</li>
+        <li>B 保留 <i>tr-bar</i> 细进度条：进度属于「内容」不属于「卡片形式」；分段刻度条是 D 的图形维度处理，B 不用（避免 B 向 D 漂移）。</li>
+        <li>「← 返回文档」三 scene 均<b>仅展示不切帧</b>：返回目标（场景 01 面板）不在本对比稿内；生产行为 = 回文档视图、面板不自动重开（重入走 rail【通知】）。</li>
+        <li>三 scene 的 topbar / rail <b>完全相同且不降暗</b>：chrome 属锁定契约、不在对比范围内——降暗会把对比焦点带偏到 chrome 上。</li>
+        <li>场景隐藏沿用稿 D 的 <i>display:none</i>（tab 切换 show() 同款）；折叠层用 0fr + overflow 裁剪；tooltip 沿用 opacity+visibility 同显隐——三类隐面各按稿 D 既有规则，不新造。</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  /* 稿页场景 tab（role=tab）+ hash 深链 #b/#c/#d（show() 与稿 D 同款：display:none 隐面） */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('#tabs [role=tab]'));
+  var scenes = Array.prototype.slice.call(document.querySelectorAll('.scene'));
+  var shortToId = { b: 's-b', c: 's-c', d: 's-d' };
+
+  function show(id) {
+    tabs.forEach(function (t) {
+      var on = t.dataset.scene === id;
+      t.classList.toggle('on', on);
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    scenes.forEach(function (s) { s.style.display = s.id === id ? '' : 'none'; });
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () {
+      var id = t.dataset.scene;
+      show(id);
+      var h = '#' + id.slice(2); /* s-b → #b */
+      if (location.hash !== h) history.replaceState(null, '', h);
+    });
+  });
+  window.addEventListener('hashchange', function () {
+    var id = shortToId[location.hash.replace('#', '')];
+    if (id) show(id);
+  });
+  var h0 = location.hash.replace('#', '');
+  if (shortToId[h0]) show(shortToId[h0]);
+
+  /* 折叠 0fr→1fr：所有 [aria-controls] 按钮翻转目标 .fold 并同步 aria-expanded。
+     覆盖：02B 召回 L2 按钮 / 02C 六行摘要 + 召回体 L2 二级按钮 / 02D 召回 L2 按钮。
+     0fr + overflow 裁剪，不用 opacity → 不产生 a11y 隐面（同稿 D .l2 规则）。 */
+  Array.prototype.forEach.call(document.querySelectorAll('button[aria-controls]'), function (btn) {
+    btn.addEventListener('click', function () {
+      var fold = document.getElementById(btn.getAttribute('aria-controls'));
+      if (!fold) return;
+      btn.setAttribute('aria-expanded', fold.classList.toggle('open') ? 'true' : 'false');
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
