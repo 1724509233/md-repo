@@ -31,6 +31,7 @@ class Bus:
         self._loop = asyncio.get_running_loop()
         self._t = threading.current_thread()   # 线程判定钉死：publish 内 threading.current_thread() is self._t
         self._subs = {}                        # topic -> [asyncio.Queue, ...]（同 topic 允许多订阅者，1→N fan-out）
+        self._filters = {}                     # topic -> predicate(payload) | 无（发布端早弃，§4a；fan-out 前执行）
     def subscribe(self, topic: str) -> asyncio.Queue: ...
     def publish(self, topic: str, payload: dict) -> None:
         try:                                   # 宽捕获：call_soon_threadsafe 对已关闭 loop 抛 RuntimeError
@@ -44,7 +45,7 @@ class Bus:
 
 **发布点契约**：三个发布点**不加** try/except 包 publish，调用方无需也不应 catch——永不抛由 Bus 内部宽捕获保证。此约束有真实后果面：watcher 回调本有 `_safe_call` 隔离（snapshot_watcher.py:240-248），但 API 协程（adopt/reject 端点）与 executor handlers 无隔离，publish 一旦外抛 = adopt 端点 500 / 合并 handler 记 error。
 
-模块级：`set_bus(bus | None)`（startup/shutdown 调用）、`get_bus() -> Bus | None`（loop 侧取实例订阅用）、`publish(topic, payload)`（bus 为 None → no-op）、`wake_wait(queue, timeout) -> None`（`asyncio.wait_for(queue.get(), timeout)` 封装；**超时不抛，但 `CancelledError` 必须透传**——外层 cancel 时 task 要能 promptly 退出，不得吞）。两个循环共用，**loop 侧唯一的"新逻辑"，集中于此单测**。
+模块级：`set_bus(bus | None)`（startup/shutdown 调用）、`get_bus() -> Bus | None`（loop 侧取实例订阅用）、`publish(topic, payload)`（bus 为 None → no-op）、`set_filter(topic, predicate | None)`（发布端早弃，§4a）、`wake_wait(queue, timeout) -> None`（`asyncio.wait_for(queue.get(), timeout)` 封装；**超时不抛，但 `CancelledError` 必须透传**——外层 cancel 时 task 要能 promptly 退出，不得吞）。两个循环共用，**loop 侧唯一的"新逻辑"，集中于此单测**。
 
 **Payload 契约（hint only, not authoritative）**：订阅者不消费 payload 数据，只用来叫醒；醒来后照旧跑游标/文件扫描重新派生全部事实。载荷保持极小：
 
@@ -52,17 +53,35 @@ class Bus:
 |---|---|---|
 | `change` | `{op, source, path}` | 每个 change 源 trigger agent 各一个（1→N fan-out，config 允许多个 change 源 agent 并存） |
 | `proposal` | `{relpath, status, actor}` | `_executor_loop` |
-| `recall` | `{hits, source}` | recall 源 trigger agent 的 `_armed_loop`（sentinel） |
+| `recall` | `{hits, source, traffic}` | recall 源 trigger agent 的 `_armed_loop`（sentinel） |
 
-## 4. 发布点（3 处，每处 1–3 行，**ledger commit 之后**发布）
+## 4. 发布点（3 处，**ledger commit 之后**发布，发布端早弃见 §4a）
 
-| 发布点 | 事件 | 线程上下文 |
+| 发布点 | 事件与条件 | 线程上下文 |
 |---|---|---|
-| `apply_change`（`server/vault/orchestration/file_ops.py:42`） | `change` | 混合：SnapshotWatcher 线程（跨线程）、API 协程、executor `to_thread` worker、sync client |
-| `proposals.advance`（`server/proposals.py:239`） | `proposal` | 混合：console adopt/reject（loop 线程）、executor merge/fail（to_thread）、系统过期（to_thread） |
-| `recall.log_query`（`server/vault/db/recall.py:30`） | `recall` | loop 线程（搜索响应路径） |
+| `apply_change`（`server/vault/orchestration/file_ops.py:42`） | `change`；早弃：source ∈ {executor, agent, *bgagents} 时跳过 | 混合：SnapshotWatcher 线程（跨线程）、API 协程、executor `to_thread` worker、sync client |
+| `proposals.advance`（`server/proposals.py:239`） | `proposal`；**仅 `new_status == "adopted"` 时发布** | 生产上仅 console adopt（loop 线程）；auto 管线复活时 `processing→adopted` 亦被覆盖 |
+| `recall.log_query`（`server/vault/db/recall.py:30`） | `recall`；早弃：`synthetic 且 hits > 0` 时跳过；zero-hit 恒发 | loop 线程（搜索响应路径） |
 
-`advance` 的发布在其内部 `apply_change` 记账成功之后——两个事件都发（change 事件走既有武装扫描口径，proposal 事件给 executor；executor 的 `merged/failed/expired` 自我唤醒 → 扫描 → no-op，无害）。`log_query` 的 zero-hit 也发布（无命中 = 失败信号，正是 sentinel 武装的对象）。
+**发布时序**：`advance` 的 proposal 事件在其内部 `apply_change` 记账成功之后发布。`log_query` 的 zero-hit 恒发（无命中 = 失败信号，正是 sentinel 武装的对象）。
+
+### 4a. 发布端早弃（优化，等价于扫描端过滤）
+
+动机：发布端不设防时，agent 自己的写、executor 产物、agent 自己的搜索都会唤醒全部订阅者再被扫描丢弃——事件量与唤醒次数和有效信号不成比例；`advance` 全迁移发布还会让 executor 自我唤醒（merged/failed/expired 事件 → 扫描 no-op）。
+
+三个过滤器（全部为**纯丢弃优化**：权威判定仍在扫描端，一行不改；过滤丢弃的事件最坏只使唤醒推迟到兜底周期）：
+
+| topic | 过滤条件（丢弃） | 等价性论证 |
+|---|---|---|
+| `change` | source ∈ {"executor", "agent"} ∪ 全部 bgagent alias | 任一 trigger agent 的排除集 = {自身alias, executor, agent, *bgagents} ⊇ 该集合（自身 alias ∈ bgagents）→ 被丢弃 source 的行在**所有** agent 的 `get_changes_sources` 计数中恒为 0 |
+| `recall` | traffic == "synthetic" 且 hits > 0 | 此时 recall_queries 行非 zero-hit（不计数）、recall_log 行 synthetic（低分计数排除）→ 对 `scan_recall_arming` 贡献为 0；zero-hit 恒发、非合成恒发（低分命中可能 < 0.2） |
+| `proposal` | `new_status != "adopted"`（发布条件，非过滤器） | executor 权威扫描（`_executor_armed`）仅对 adopted 未合并 / 14d 超期武装；非 adopted 迁移不产生新工作。executor 自己产生的迁移（merged/failed/expired）天然被条件排除 → **自激零残留**；`failed→pending` 重试边与 auto 管线复活走 `→adopted` 时仍会发布 |
+
+接线与语义注：
+- `events.set_filter(topic, predicate | None)`：predicate 在 `publish` 内 fan-out 前执行，纯函数；未注册 = 不过滤。`change` / `recall` 的 predicate 由 main.py 启动时注册（别名集合来自 config，与 `start_background_agents` 的 `all_aliases` 同源），**进程生命周期内静态**（config 无热加载）。
+- `recall` 载荷增加 `traffic` 字段（由 `log_query` 内 `_traffic(source)` 同源计算），predicate 不反推。
+- `reconcile` / human 系 source 不在 change 过滤集合 → 照常发布（唤醒武装检查 by design，见 §6）。
+- 扫描端过滤**保留为权威**：早弃只是减事件，不是替代——若过滤集合与扫描排除集未来漂移，正确性仍由扫描保证，代价仅是多/少几次唤醒。
 
 ## 5. 循环重接线（`server/bgagent/scheduler.py`）
 
@@ -102,7 +121,7 @@ while True:
 **bus 缺席降级**：loop 启动时 `get_bus()` 为 None（生产路径不会发生——main.py 先 set 后起任务；仅测试/异常场景）→ 该 loop 退回纯 `asyncio.sleep(interval)` 轮询（= 今天行为），debug 日志一次。事件唤醒是加速，不是正确性依赖。
 
 **启动接线（`server/main.py` `_run()`，:117 附近）**
-- `start_background_agents(...)` 之前：`events.set_bus(events.Bus())`（bgagent 任务与 uvicorn 同处 `asyncio.run(_serve())` 一个 loop，Bus 捕获之）。
+- `start_background_agents(...)` 之前：`events.set_bus(events.Bus())`（bgagent 任务与 uvicorn 同处 `asyncio.run(_serve())` 一个 loop，Bus 捕获之）；同处注册 `set_filter("change"/"recall")`（§4a，别名集合与 `all_aliases` 同源）。
 - `server.serve()` 返回后：`events.set_bus(None)`（关停，publish 变 no-op）。
 
 ## 6. 性质与失败语义
@@ -134,11 +153,14 @@ while True:
 5. `wake_wait`：事件到达立即返回；静默时超时返回不抛；**`CancelledError` 透传**（task cancel → promptly 退出，不得吞）。
 6. **stale Bus + 已关闭 loop**：`asyncio.run` 内建 Bus，run 结束后从测试线程 publish → 不抛（§3 宽捕获契约的回归）。
 7. **多订阅者 fan-out + topic 隔离**：同 topic 两订阅者各收一份；`change` 事件不进 `proposal` 队列（真实路径：多个 change 源 agent 并存）。
+8. **change 早弃**：注册 predicate 后 source ∈ {executor, agent} ∪ alias → 丢弃；web / reconcile / system → 通过。**对拍**：对 fixture 中每个 source 断言（predicate 丢弃）⟺（真实 `_self_exclusion` 对每个 agent 均含该 source）——与扫描端排除函数差分对拍。
+9. **recall 早弃**：`synthetic 且 hits>0` → 丢弃；`synthetic 且 hits=0` → 通过（zero-hit 恒发）；非合成 → 通过。**对拍**：丢弃条件命中的行对真实 `scan_recall_arming` 计数贡献为 0。
+10. **adopted-only**：monkeypatch `publish`，驱动 `TRANSITIONS` 全部合法迁移 → 仅 `new_status == "adopted"` 时调用（executor 自我 `advance(merged/failed/expired)` 均不发）。
 
 **循环集成（`tests/test_trigger.py` 追加；loop 注入短 `interval_s`）**
 1. 提前唤醒：5s 兜底 + 已 armed vault + 发 `proposal` 事件 → `executor_fn` 被调用，且调用时刻 ∈ [0, ~2s)，远早于 5s 兜底（断言调用计数 + 真实时间，不断言返回值）。
 2. 兜底自愈：不发事件 → 兜底 tick 照常执行。
-3. spurious 唤醒：发 `status=merged` 事件 → 扫描 no-op，`executor_fn` 计数不增。
+3. spurious 唤醒（防御）：手工向队列注入 `status=merged` 事件（adopted-only 后 advance 不再发此事件，但 loop 必须容忍 stale/外来事件）→ 扫描 no-op，`executor_fn` 计数不增。
 4. **bus 缺席降级**：`get_bus()` 为 None → 纯 sleep tick 照常（§5 安全网回归）。
 5. **超时竞态容忍**：`wake_wait` 超时返回后再 publish 一个事件 → 同轮扫描已覆盖，或下一次 `wake_wait` 在 100ms 内返回，不等满兜底（§6 keystone 回归）。
 6. armed loop 同构：change / recall 事件各提前唤醒一次 `_armed_check`（spy `run_fn`）；**recall 含 zero-hit 用例**（zero-hit 是 sentinel 武装的主要对象而非边缘——`log_query` zero-hit 也发布）。
