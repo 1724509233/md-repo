@@ -22,27 +22,35 @@ memory-runtime 的两个 30 分钟轮询循环被定性为"伪事件驱动"：
 
 ## 3. 事件总线（新文件 `server/events.py`）
 
-叶子模块：只 import `asyncio`。放 `server/` 顶层而非 `bgagent/`——`bgagent/__init__.py` 导出 `start_background_agents` → 导入 scheduler → executor → `file_ops`，若 `file_ops` 反过来 import `bgagent.events` 会触发循环导入；顶层叶子模块切断该环。模块级单例（`set_bus` + 模块函数 `publish`），与代码库现有 `_db_lock`（schema.py）、`_sync_lock`（api.py）、write_registry 同构。
+叶子模块：只 import 标准库（`asyncio` / `threading` / `logging`）。放 `server/` 顶层而非 `bgagent/`——`bgagent/__init__.py` 导出 `start_background_agents` → 导入 scheduler → executor → `file_ops`，若 `file_ops` 反过来 import `bgagent.events` 会触发循环导入；顶层叶子模块切断该环。模块级单例（`set_bus` + 模块函数 `publish`），与代码库现有 `_db_lock`（schema.py）、`_sync_lock`（api.py）、write_registry 同构。
 
 ```python
 class Bus:
     """进程内事件总线。持运行中 loop 引用 + 每 topic 的订阅者 asyncio.Queue 列表。"""
-    def __init__(self): self._loop = asyncio.get_running_loop(); self._subs = {}
+    def __init__(self):
+        self._loop = asyncio.get_running_loop()
+        self._t = threading.current_thread()   # 线程判定钉死：publish 内 threading.current_thread() is self._t
+        self._subs = {}                        # topic -> [asyncio.Queue, ...]（同 topic 允许多订阅者，1→N fan-out）
     def subscribe(self, topic: str) -> asyncio.Queue: ...
     def publish(self, topic: str, payload: dict) -> None:
-        # 本线程（== loop 线程）→ put_nowait
-        # 跨线程 → self._loop.call_soon_threadsafe(...)
-        # loop 已停止 / 未订阅 → 丢弃（debug 日志）
-        # 契约：publish 永不抛异常
+        try:                                   # 宽捕获：call_soon_threadsafe 对已关闭 loop 抛 RuntimeError
+            if threading.current_thread() is self._t:
+                for q in self._subs.get(topic, ()): q.put_nowait(payload)
+            else:
+                self._loop.call_soon_threadsafe(self._deliver, topic, payload)
+        except Exception:
+            logger.debug("event dropped: %s", topic, exc_info=True)   # 契约：publish 永不抛
 ```
 
-模块级：`set_bus(bus | None)`（startup/shutdown 调用）、`get_bus() -> Bus | None`（loop 侧取实例订阅用）、`publish(topic, payload)`（bus 为 None → no-op）、`wake_wait(queue, timeout) -> None`（`asyncio.wait_for(queue.get(), timeout)` 的封装 + 超时不抛，两个循环共用；**loop 侧唯一的"新逻辑"，集中于此单测**）。
+**发布点契约**：三个发布点**不加** try/except 包 publish，调用方无需也不应 catch——永不抛由 Bus 内部宽捕获保证。此约束有真实后果面：watcher 回调本有 `_safe_call` 隔离（snapshot_watcher.py:240-248），但 API 协程（adopt/reject 端点）与 executor handlers 无隔离，publish 一旦外抛 = adopt 端点 500 / 合并 handler 记 error。
+
+模块级：`set_bus(bus | None)`（startup/shutdown 调用）、`get_bus() -> Bus | None`（loop 侧取实例订阅用）、`publish(topic, payload)`（bus 为 None → no-op）、`wake_wait(queue, timeout) -> None`（`asyncio.wait_for(queue.get(), timeout)` 封装；**超时不抛，但 `CancelledError` 必须透传**——外层 cancel 时 task 要能 promptly 退出，不得吞）。两个循环共用，**loop 侧唯一的"新逻辑"，集中于此单测**。
 
 **Payload 契约（hint only, not authoritative）**：订阅者不消费 payload 数据，只用来叫醒；醒来后照旧跑游标/文件扫描重新派生全部事实。载荷保持极小：
 
-| topic | 载荷 | 唯一订阅者 |
+| topic | 载荷 | 订阅者 |
 |---|---|---|
-| `change` | `{op, source, path}` | 各 change 源 trigger agent 的 `_armed_loop` |
+| `change` | `{op, source, path}` | 每个 change 源 trigger agent 各一个（1→N fan-out，config 允许多个 change 源 agent 并存） |
 | `proposal` | `{relpath, status, actor}` | `_executor_loop` |
 | `recall` | `{hits, source}` | recall 源 trigger agent 的 `_armed_loop`（sentinel） |
 
@@ -57,6 +65,27 @@ class Bus:
 `advance` 的发布在其内部 `apply_change` 记账成功之后——两个事件都发（change 事件走既有武装扫描口径，proposal 事件给 executor；executor 的 `merged/failed/expired` 自我唤醒 → 扫描 → no-op，无害）。`log_query` 的 zero-hit 也发布（无命中 = 失败信号，正是 sentinel 武装的对象）。
 
 ## 5. 循环重接线（`server/bgagent/scheduler.py`）
+
+**统一 loop 骨架**（try/except 落点在此钉死，两个循环同构）：
+
+```python
+bus = events.get_bus()
+queue = None if bus is None else bus.subscribe(TOPIC)   # 订阅一次，循环外；队列贯穿循环生命周期
+while True:
+    if queue is None:                                  # bus 缺席降级 = 今天行为（debug 日志一次）
+        await asyncio.sleep(interval_s)
+    else:
+        await wake_wait(queue, interval_s)             # 事件或超时，合并同一路径
+        while not queue.empty():                       # 无条件 drain（N 事件 → 1 次扫描）
+            queue.get_nowait()                         # 无 await 在中间；跨线程 put 只经 call_soon_threadsafe 回调；
+                                                      # 代码注释钉死：勿改成 try/except QueueEmpty（引入 yield 点）
+    try:
+        ... 原有逻辑不动（扫描 / 判定 / 三闸门 / per-agent lock）...
+    except asyncio.CancelledError:
+        raise                                          # 透传，task promptly 退出
+    except Exception:
+        logger.exception(...)                          # 只记日志，不杀 task（与今天同构的存活骨架）
+```
 
 **`_executor_loop`（:317）**
 1. 进循环前 `queue = bus.subscribe("proposal")`（队列贯穿循环生命周期）。
@@ -83,6 +112,9 @@ class Bus:
 - **执行频率不变**：事件只提前"检查"，不提前"执行"；LLM run 仍受三闸门 + per-agent lock 约束，executor 合并幂等。
 - **队列增长**：payload 极小 + drain 合并；批同步数百文件的最坏情形 = 几次 no-op 扫描，无需背压。
 - **自排除不受影响**：事件只是唤醒，武装计数仍由扫描时按排除集（{alias, executor, agent, *bgagent}）过滤——合成流量依然永不武装。
+- **lost-wake 免疫（keystone）**：超时路径与事件路径合并进同一轮 drain + 扫描。`wait_for` 超时取消 `queue.get()` 的 CPython 竞态下（item 已出队但返回值被丢弃），item 虽已离队，同轮无条件扫描已覆盖数据（publish 在 commit 之后，数据必在库）；scan / drain 期间新到的事件由下一轮 `wake_wait` 立即拾取——两种情形都只变慢，不漏。
+- **LIMIT 500 cap 语义不变**（`get_changes_sources`，changes.py:79）：>500 行的 burst 游标取返回行 max seq，旧 head 被跳过——既有行为，非回归；事件驱动让"一次大 burst 一次扫描"更常见，cap-skip 语义保持、无需背压。
+- **reconcile 源**：`reconcile`（file_ops.py:140）不在自排除集，周期性 reconcile（30s，worker 线程）事件会唤醒武装检查——by design（与 watchdog 源同级），视为 human 侧流量。
 
 ## 7. 范围边界
 
@@ -90,6 +122,7 @@ class Bus:
 |---|---|
 | **In** | `server/events.py`（新）；scheduler 两个循环重接线；三个发布点；main.py 接线；`tests/test_events.py`（新）+ `tests/test_trigger.py` 追加 |
 | **Out** | `_agent_loop` cron 语义（不动）；MemoryConsole adopted 卡 UI（独立前端任务，仍 open）；已知缺口 L1/L2（actor 限制——本重构碰 `advance()` 但不改 actor 策略）；新配置项（零）；client 轮询循环（另一子系统） |
+| **Docs** | 重写 scheduler.py 过时 docstring（模块 docstring、常量注释、`_executor_loop` docstring）为"事件唤醒 + 30min 兜底"；2026-10-21 基线为历史快照不回改——其 §8.1 角色矩阵"触发方式"列由本 spec 取代（30min = 兜底间隔，事件 = 唤醒） |
 
 ## 8. 测试
 
@@ -98,14 +131,18 @@ class Bus:
 2. 跨线程 publish（真 `threading.Thread`，`call_soon_threadsafe` 投递）→ 收到。
 3. bus 未 set / 已关停（`set_bus(None)`）→ no-op 不抛。
 4. 合并：N 次 publish → 一次 drain 取空。
-5. `wake_wait`：事件到达立即返回；静默时超时返回不抛。
+5. `wake_wait`：事件到达立即返回；静默时超时返回不抛；**`CancelledError` 透传**（task cancel → promptly 退出，不得吞）。
+6. **stale Bus + 已关闭 loop**：`asyncio.run` 内建 Bus，run 结束后从测试线程 publish → 不抛（§3 宽捕获契约的回归）。
+7. **多订阅者 fan-out + topic 隔离**：同 topic 两订阅者各收一份；`change` 事件不进 `proposal` 队列（真实路径：多个 change 源 agent 并存）。
 
 **循环集成（`tests/test_trigger.py` 追加；loop 注入短 `interval_s`）**
-1. 提前唤醒：5s 兜底 + 已 armed vault + 发 `proposal` 事件 → `executor_fn` ~1s 内被调用（远早于兜底）。
+1. 提前唤醒：5s 兜底 + 已 armed vault + 发 `proposal` 事件 → `executor_fn` 被调用，且调用时刻 ∈ [0, ~2s)，远早于 5s 兜底（断言调用计数 + 真实时间，不断言返回值）。
 2. 兜底自愈：不发事件 → 兜底 tick 照常执行。
 3. spurious 唤醒：发 `status=merged` 事件 → 扫描 no-op，`executor_fn` 计数不增。
-4. armed loop 同构：change / recall 事件各提前唤醒一次 `_armed_check`（spy `run_fn`）。
-5. 回归：`test_trigger.py`（双源/seq 游标/三闸门/自排除）与 `test_executor.py` 全绿——扫描/判定函数未改，行为必须不变。
+4. **bus 缺席降级**：`get_bus()` 为 None → 纯 sleep tick 照常（§5 安全网回归）。
+5. **超时竞态容忍**：`wake_wait` 超时返回后再 publish 一个事件 → 同轮扫描已覆盖，或下一次 `wake_wait` 在 100ms 内返回，不等满兜底（§6 keystone 回归）。
+6. armed loop 同构：change / recall 事件各提前唤醒一次 `_armed_check`（spy `run_fn`）；**recall 含 zero-hit 用例**（zero-hit 是 sentinel 武装的主要对象而非边缘——`log_query` zero-hit 也发布）。
+7. 回归：`test_trigger.py`（双源/seq 游标/三闸门/自排除）与 `test_executor.py` 全绿——扫描/判定函数未改，行为必须不变。
 
 **端到端（提交前，用户原始场景）**
 起服务器 → 造 awaiting_review 提案 → 控制台采纳 → 日志 `[executor] armed — running deterministic merge` 秒级出现（今天最坏 30min）→ change_log 出现 `source='executor'` 行 → UI L0 "N 待落地" 随 30s 轮询翻 0。`pytest tests/ -v` 全绿。
