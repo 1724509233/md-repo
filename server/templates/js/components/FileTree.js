@@ -516,21 +516,25 @@ export const FileTree = {
           @toggle="toggleDir" />
       </nav>
 
-      <!-- 操作菜单浮层 -->
-      <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
-      <div v-if="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
-        :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
-        <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-          @click="startNew(menu.path, 'new-file')">新建文件</button>
-        <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-          @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
-        <button class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-          @click="startRename(menu.path, menu.isDir)">重命名</button>
-        <button class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-          @click="moveItem()">移动</button>
-        <button class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-          @click="confirmDelete()">删除</button>
-      </div>
+      <!-- 操作菜单浮层：Teleport 到 body —— 菜单是 fixed 顶层浮层，放在面板子树内会被
+           .panel-shell 困住（≤1023px 时其 transform 成为 fixed 包含块 + 层叠上下文，
+           overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
+      <Teleport to="body">
+        <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+        <div v-if="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
+          :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
+          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+            @click="startNew(menu.path, 'new-file')">新建文件</button>
+          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+            @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
+          <button class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+            @click="startRename(menu.path, menu.isDir)">重命名</button>
+          <button class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+            @click="moveItem()">移动</button>
+          <button class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+            @click="confirmDelete()">删除</button>
+        </div>
+      </Teleport>
     </div>
   `
 }
