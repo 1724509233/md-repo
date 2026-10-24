@@ -18,8 +18,9 @@
 #     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats）
 #   - prompt 文件必须存在（相对 config 文件目录）
 #   - **target_dir 互斥**：任意两个非 executor agent 的 target_dir 不得互为
-#     祖先/相等（Path.is_relative_to 对相等路径返回 True）。⇒ consolidator
-#     与 sentinel 不能同用 suggestions/，详见 consolidator 段注释。
+#     祖先/相等（Path.is_relative_to 对相等路径返回 True）；例外：两 scope 都
+#     落在提案区 suggestions/ 内可互叠（2026-10-24，immutable 提案 drop zone），
+#     本模板 consolidator/sentinel 同用 suggestions/（与生产一致）。
 #   - alias 全局唯一；report_dir 不得互叠（executor 豁免两项检查）
 #
 # 端口纪律：9889（避开生产 9888）；mock LLM 127.0.0.1:11435（tests/functional/mock_llm.py）。
@@ -63,24 +64,18 @@ background_agents:
       temperature: 0.0
 
   # ── consolidator（记忆固化者）───────────────────────────────────────────
-  # ⚠ target_dir 互斥约束：config.py 对任意两个非 executor agent 做
-  # is_relative_to 检查（相等即互叠），consolidator 与 sentinel 不能同用
-  # suggestions/。本模板把 consolidator 放到 weekly/（narrator 未配置，
-  # 目录空闲）。影响：
-  #   - mock consolidator 剧本的 write_doc 仍写 suggestions/（提案的合法
-  #     位置，执行器/控制台只认那里）。当前树 write_doc permission="allow"
-  #     ⇒ validate 不做 scope 检查，写入不受 target_dir 限制。
-  #   - 若 write_doc 权限回退为 "ask"，scope 检查生效，consolidator 写
-  #     suggestions/ 会被拒：此时改用**不含 sentinel** 的单角色配置（
-  #     consolidator + executor，target_dir: suggestions），或把剧本路径
-  #     改到 weekly/。
-  #   - 只想验证「suggestions/ 内跑 consolidator」时：从本模板删掉
-  #     sentinel 段、把 target_dir 改回 suggestions/ 即可通过解析。
+  # target_dir：与 sentinel 同用 suggestions/（2026-10-24 提案区豁免后合法，
+  # 与生产 config.yaml 一致）：提案一次性 + 唯一命名 + 状态机保护，共享无
+  # 互覆盖风险。write_doc 当前 permission="ask" ⇒ validate 强制 scope
+  # （policy.py），suggestions/ 即其真实写边界，mock 剧本的 write_doc 写
+  # suggestions/ 在 scope 内 ✓。
+  # 历史：豁免前 consolidator/sentinel 不能同用 suggestions/，本模板曾把
+  # consolidator 放 weekly/（narrator 未配置，目录空闲）。
   - name: "记忆固化（功能测试）"
     alias: consolidator
     enabled: true
     cron: "0 2 * * *"
-    target_dir: weekly                # 见上方互斥约束注释
+    target_dir: suggestions           # 提案区豁免，与 sentinel 共享（见上方注释）
     prompt: server/prompts/consolidator.md
     report_dir: .reports/consolidator
     max_rounds: 30
@@ -119,4 +114,4 @@ background_agents:
       base_url: "http://127.0.0.1:11435/v1"
       api_key: "test"
 
-# narrator 不配置（功能测试范围外；weekly/ 暂借给 consolidator，见上）。
+# narrator 不配置（功能测试范围外）。

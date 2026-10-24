@@ -9,6 +9,8 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
+from .proposals import PROPOSALS_DIR
+
 logger = logging.getLogger("md-vault.config")
 
 
@@ -221,7 +223,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
 
     Fail-fast: raises ValueError on duplicate alias, invalid cron, missing
     prompt file, target_dir/report_dir outside the vault, or overlapping
-    target_dirs. Returns [] when the section is absent.
+    target_dirs (scopes both contained in the proposal drop zone are exempt).
+    Returns [] when the section is absent.
     """
     path = Path(config_path)
     with open(path, "r", encoding="utf-8") as f:
@@ -314,6 +317,13 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         dupes = sorted({x for x in aliases if aliases.count(x) > 1})
         raise ValueError(f"duplicate background agent alias: {', '.join(dupes)}")
 
+    # Shared proposal drop zone: proposals are one-shot, uniquely named
+    # (YYYY-MM-DD_<type>_<slug>.md), status-machine protected and consumed by
+    # the executor — two scopes inside the zone cannot overwrite each other,
+    # so their overlap is exempt (memory-runtime spec assigns suggestions/ to
+    # both consolidator and sentinel).
+    proposals_zone = vault_resolved / PROPOSALS_DIR
+
     for i in range(len(agents)):
         for j in range(i + 1, len(agents)):
             # The executor role has no LLM write scope (its target_dir may be
@@ -323,6 +333,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
                 continue
             a, b = agents[i].target_dir, agents[j].target_dir
             if a.is_relative_to(b) or b.is_relative_to(a):
+                if a.is_relative_to(proposals_zone) and b.is_relative_to(proposals_zone):
+                    continue
                 raise ValueError(
                     f"background agents '{agents[i].alias}' and '{agents[j].alias}' "
                     f"have overlapping target_dir")
