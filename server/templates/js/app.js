@@ -11,6 +11,7 @@ import { AIChatPanel } from './components/AIChatPanel.js'
 import { MobileSheet } from './components/MobileSheet.js'
 import { ConflictBanner } from './components/ConflictBanner.js'
 import { MemoryConsole } from './components/MemoryConsole.js'
+import { MonitorPage } from './components/MonitorPage.js'
 import { ICONS } from './utils/icons.js'
 
 // 初始化 markdown 渲染器
@@ -36,7 +37,8 @@ const state = reactive({
   memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
   memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
   memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回）
-  memoryProposals: null   // GET /api/memory/proposals（null = 尚未轮询）
+  memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
+  monitoring: false       // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -49,6 +51,29 @@ const fileTreeRef = ref(null)
 
 // ─── 核心操作 ───
 let lastChangeTs = Date.now() / 1000
+
+/* ─── 动效编排（GPU 路径：transform/opacity；reduced-motion 下全部降级为直切/纯 opacity，
+   见 style.css 尾部「动效层」分节；互斥契约不变：开页→L0 收起、返回→面板不自动重开）─── */
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+// 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
+let notifCloseT = null
+function closeNotifDropdown() {
+  const el = document.querySelector('.notif-dropdown')
+  if (!el || reducedMotion()) { state.notifOpen = false; return }
+  el.classList.add('notif-closing')
+  clearTimeout(notifCloseT)
+  notifCloseT = setTimeout(() => { state.notifOpen = false }, 150)
+}
+// 监控页返回：.18s 溶解 → 收起并让文档区升起（文档区 .doc-enter 随 display:none→block 自动重放；
+// 与进入的非对称取舍见 style.css 注）
+let monBackT = null
+function exitMonitorPage() {
+  const el = document.querySelector('.mwrap')
+  if (!el || reducedMotion()) { state.monitoring = false; return }
+  el.classList.add('mp-out')
+  clearTimeout(monBackT)
+  monBackT = setTimeout(() => { state.monitoring = false }, 190)
+}
 
 async function loadDocs() {
   const data = await api.getDocs()
@@ -295,10 +320,13 @@ function activePanelCfg() {
   return panels.find(p => p.id === activePanel.value) || panels[0]
 }
 
-// ─── 记忆控制台 rail 槽位（原预留「通知」；徽标 = 待审队列长度，0 时不渲染）───
-const awaitingCount = computed(() => {
-  const st = state.memoryStatus
-  return (st && st.proposals && st.proposals.by_status && st.proposals.by_status.awaiting_review) || 0
+// ─── rail 通知槽徽标（定稿 2026-10-23：需人参与态总和 = 待审 + failed；0 → 不渲染；
+//     hover title = 分解构成「待审 N · 失败 M」，同设计稿场景 02 口径）───
+const badgeParts = computed(() => {
+  const bs = (state.memoryStatus && state.memoryStatus.proposals && state.memoryStatus.proposals.by_status) || {}
+  const awaiting = bs.awaiting_review || 0
+  const failed = bs.failed || 0
+  return { awaiting, failed, total: awaiting + failed }
 })
 
 function onMemoryRailClick() {
@@ -310,6 +338,18 @@ function onMemoryRailClick() {
 function onMemoryOpenDoc(path) {
   if (window.innerWidth <= 860) state.memoryOpen = false
   openDoc(path)
+}
+
+// ─── 后台监控页 L1（定稿设计 design/console-v4-watch.html 场景 02 · 非对称网格 02E）：
+//     本阶段唯一入口 window.openMonitorPage()（Phase B 的 L0「后台 →」调它；不加顶栏按钮）。
+//     互斥契约：开页 → L0 面板收起；「← 返回文档」→ 面板不自动重开（重入走 rail【通知】）───
+function openMonitorPage() {
+  clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
+  const el = document.querySelector('.mwrap')
+  if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
+  state.monitoring = true
+  state.memoryOpen = false
+  state.memoryDetail = null
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
@@ -436,13 +476,16 @@ export function createApp() {
         pollNotifications()
         pollMemory()
 
+        // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
+        window.openMonitorPage = openMonitorPage
+
         // 移动端 点击 overlay 关闭更多菜单 / 通知下拉
         document.addEventListener('click', (e) => {
           if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
           }
           if (state.notifOpen && !e.target.closest('[data-notif-bell]')) {
-            state.notifOpen = false
+            closeNotifDropdown()
           }
         })
 
@@ -452,21 +495,22 @@ export function createApp() {
       const isDesktop = () => window.innerWidth >= 1024
 
       function toggleNotifDropdown() {
-        state.notifOpen = !state.notifOpen
+        if (state.notifOpen) closeNotifDropdown()
+        else state.notifOpen = true
       }
 
       async function markAllRead() {
+        closeNotifDropdown()   // 退场与 API 并行
         await api.markNotificationsRead({ all: true })
         state.notifications = []
         state.unreadCount = 0
-        state.notifOpen = false
       }
 
       async function openNotif(n) {
+        closeNotifDropdown()   // 退场先行；深链接力 = 下拉溶解 → L0 面 cFaceIn 滑入 / page-turn 翻页
         await api.markNotificationsRead({ ids: [n.id] })
         state.notifications = state.notifications.filter(x => x.id !== n.id)
         state.unreadCount = Math.max(0, state.unreadCount - 1)
-        state.notifOpen = false
         // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 控制台开在首个提案的详情面
         let paths = []
         try {
@@ -507,7 +551,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, isDesktop, ICONS,
         activePanel, panels, reservedItems, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
-        onMemoryRailClick, onMemoryOpenDoc, awaitingCount, pollMemory,
+        onMemoryRailClick, onMemoryOpenDoc, badgeParts, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
@@ -534,14 +578,14 @@ export function createApp() {
               <span class="ricon" v-html="r.icon"></span>
               <span class="rlabel">{{ r.label }}</span>
             </button>
-            <!-- 记忆控制台槽位（原预留「通知」）：徽标 = 待审队列长度 -->
+            <!-- 记忆控制台槽位（原预留「通知」）：徽标 = 需人参与态总和（待审 + failed，定稿 2026-10-23；0 不渲染；hover title 分解构成） -->
             <button type="button"
               class="rbtn" :class="{ on: state.memoryOpen }"
-              :title="'记忆控制台' + (awaitingCount > 0 ? '（' + awaitingCount + ' 待审）' : '')"
+              :title="'记忆控制台' + (badgeParts.total > 0 ? ' · 待审 ' + badgeParts.awaiting + ' · 失败 ' + badgeParts.failed : '')"
               aria-label="记忆控制台页" @click="onMemoryRailClick">
               <span class="ricon" v-html="ICONS.bell"></span>
               <span class="rlabel">通知</span>
-              <span v-if="awaitingCount > 0" class="badge">{{ awaitingCount > 99 ? '99+' : awaitingCount }}</span>
+              <span v-if="badgeParts.total > 0" class="badge">{{ badgeParts.total > 99 ? '99+' : badgeParts.total }}</span>
             </button>
             <div class="rbottom">
               <button v-for="r in reservedItems.filter(x => x.bottom)" :key="r.id" type="button"
@@ -629,13 +673,18 @@ export function createApp() {
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
-            <div class="flex-1 overflow-y-auto p-4 md:p-6">
+            <!-- 编辑器面：监控页 L1 打开时收起（v-show 保持 DOM 与编辑态；两面互斥，
+                 监控页 = 定稿设计场景 02 独立页面，组件自持 .mwrap 滚动层）；
+                 .doc-enter = 自监控页返回时的入场（display:none→block 自动重放；reduced-motion → 纯 opacity） -->
+            <div v-show="!state.monitoring" class="doc-enter flex-1 overflow-y-auto p-4 md:p-6">
               <ConflictBanner v-if="state.conflict"
                 :tool-name="state.conflict.toolName" :path="state.conflict.path"
                 @accept="acceptConflict" @dismiss="state.conflict = null" />
               <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
                 @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
             </div>
+            <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
+            <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" />
           </main>
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
@@ -722,6 +771,7 @@ export function createApp() {
   app.component('MobileSheet', MobileSheet)
   app.component('ConflictBanner', ConflictBanner)
   app.component('MemoryConsole', MemoryConsole)
+  app.component('MonitorPage', MonitorPage)
 
   return app
 }

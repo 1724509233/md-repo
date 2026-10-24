@@ -98,6 +98,63 @@ def _proposal_sort_key(item: dict) -> tuple:
     return (_PROPOSAL_STATUS_ORDER.get(item["status"], 100), -item["age_days"])
 
 
+def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
+    """Per-item change_log tails (newest first) for the proposals list.
+
+    Same match as the /trail endpoint: ``path = <proposal file>`` plus
+    ``batch_id = <run_id>`` for items carrying a run_id (malformed items
+    have run_id '' → path rows only, mirroring the endpoint's
+    parse-failure fallback). One query for the whole list — a per-item
+    query would be N round-trips; a row matching several items (a shared
+    run_id batch) is repeated for each of them.
+
+    Returns a list of row lists parallel to ``items``; each row dict is
+    shaped like the /trail endpoint's (seq/ts/source/op/path, no
+    batch_id).
+    """
+    if not items:
+        return []
+    paths = [it["relpath"] for it in items]
+    run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
+    clauses = ["path = ?" for _ in paths]
+    params: list = list(paths)
+    if run_ids:
+        clauses.append(f"batch_id IN ({','.join('?' * len(run_ids))})")
+        params.extend(run_ids)
+    rows = conn.execute(
+        "SELECT seq, ts, source, op, path, batch_id FROM change_log "
+        f"WHERE {' OR '.join(clauses)} ORDER BY seq DESC",
+        params,
+    ).fetchall()
+
+    item_paths = set(paths)
+    path_map: dict[str, list[dict]] = {}
+    batch_map: dict[str, list[dict]] = {}
+    for r in rows:
+        d = dict(r)
+        bid = d.pop("batch_id")
+        if d["path"] in item_paths:
+            path_map.setdefault(d["path"], []).append(d)
+        if bid:
+            batch_map.setdefault(bid, []).append(d)
+
+    out: list[list[dict]] = []
+    for it in items:
+        merged = list(path_map.get(it["relpath"], []))
+        if it.get("run_id"):
+            merged += batch_map.get(it["run_id"], [])
+        # Dedup by seq (a state row of the proposal file itself matches both
+        # the path and the batch condition) and keep newest-first.
+        seen: set[int] = set()
+        trail: list[dict] = []
+        for d in sorted(merged, key=lambda x: -x["seq"]):
+            if d["seq"] not in seen:
+                seen.add(d["seq"])
+                trail.append(d)
+        out.append(trail)
+    return out
+
+
 def _guard_proposal_relpath(relpath: str) -> str:
     """Validate a proposal relpath is a top-level file under suggestions/.
 
@@ -119,8 +176,17 @@ def _guard_proposal_relpath(relpath: str) -> str:
     return safe.as_posix()
 
 
-def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
-    """Create the FastAPI application."""
+def create_app(vault_dir: Path, db_conn, ai_config=None,
+               bg_targets: dict[str, dict] | None = None) -> FastAPI:
+    """Create the FastAPI application.
+
+    ``bg_targets``: optional per-alias caps from the background-agent
+    config, ``{alias: {"armed_target": int | None, "runs_cap": int | None}}``
+    (wired in main.py from BackgroundAgentConfig: trigger.arm_count /
+    budget_runs_per_day). None → the status endpoint reports the
+    config-derived caps as null (pre-memory-console shape, backward
+    compatible).
+    """
     app = FastAPI(title="md-sync server")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
@@ -554,6 +620,13 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
             })
 
         items.sort(key=_proposal_sort_key)
+        # Trail summary on each row (the design's anomaly card shows a one-line
+        # trail without a drill): latest 3 change_log rows per proposal, same
+        # match as the /trail endpoint; one change_log query for the whole list.
+        trails = _proposal_trails(db_conn, items)
+        for it, tr in zip(items, trails):
+            it["trail"] = tr[:3]
+            it["trail_count"] = len(tr)
         return {"proposals": items}
 
     @app.post("/api/memory/proposals/{relpath:path}/adopt")
@@ -686,9 +759,10 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         # by_status keys are stable regardless of seed order; awaiting first.
         awaiting.sort(key=lambda x: -x["age_days"])
 
-        # agents: read trigger_state directly. The background-agent configs
-        # (arm_count, budget_runs_per_day) are loaded in main.py and NOT passed
-        # to create_app, so the config-derived caps are unavailable here → null.
+        # agents: read trigger_state directly; the config-derived caps
+        # (armed_target = trigger.arm_count, runs_cap = budget_runs_per_day)
+        # arrive via bg_targets (wired in main.py) and are looked up per
+        # alias — aliases absent from the config keep null.
         today = datetime.now().strftime("%Y-%m-%d")
         agents = []
         rows = db_conn.execute(
@@ -697,11 +771,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
         ).fetchall()
         for r in rows:
             runs_today = r["runs_count"] or 0 if r["runs_date"] == today else 0
+            caps = (bg_targets or {}).get(r["agent"]) or {}
             agents.append({
                 "alias": r["agent"], "armed": r["armed"] or 0,
-                "armed_target": None,  # config-derived (arm_count), unavailable here
+                "armed_target": caps.get("armed_target"),
                 "last_run": r["last_run_ts"] or 0, "runs_today": runs_today,
-                "runs_cap": None,  # config-derived (budget_runs_per_day), unavailable
+                "runs_cap": caps.get("runs_cap"),
             })
 
         # recall: demand over 7d (failed) + 30d (top docs). Old DBs may lack
@@ -720,8 +795,33 @@ def create_app(vault_dir: Path, db_conn, ai_config=None) -> FastAPI:
                 "failed_7d": 0, "docs_tracked": 0, "top": [], "recall_error": str(e),
             }
 
+        # executor: the deterministic 30-minute loop is a framework role, not
+        # an LLM agent — it has no trigger_state row. Its activity is the
+        # change_log rows it ledgered (source='executor', batch_id = the
+        # merged proposal's run_id): last_op_ts = newest such row (0 when it
+        # never ran), ops_today = the local-day window (same date basis as
+        # runs_today), last_batch = that row's run_id (null when unrecorded).
+        midnight = datetime.now().replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        exec_row = db_conn.execute(
+            "SELECT ts, batch_id FROM change_log WHERE source = 'executor' "
+            "ORDER BY ts DESC, seq DESC LIMIT 1"
+        ).fetchone()
+        exec_ops_today = db_conn.execute(
+            "SELECT count(*) FROM change_log "
+            "WHERE source = 'executor' AND ts >= ?", (midnight,),
+        ).fetchone()[0]
+        if exec_row is None:
+            executor_out = {"last_op_ts": 0, "ops_today": 0, "last_batch": None}
+        else:
+            executor_out = {
+                "last_op_ts": int(exec_row["ts"]),
+                "ops_today": exec_ops_today,
+                "last_batch": exec_row["batch_id"] or None,
+            }
+
         return {"proposals": {"by_status": by_status, "awaiting_review": awaiting},
-                "agents": agents, "recall": recall_out}
+                "agents": agents, "executor": executor_out, "recall": recall_out}
 
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):

@@ -868,3 +868,325 @@ pre code.hljs { background: transparent; padding: 0; }
   .q-card.fresh, .spill.awaiting::before { animation: none; }
   .done { animation: none; }
 }
+
+/* ============ 后台监控页 L1（定稿 design/console-v4-watch.html 场景 02 · 非对称网格 02E；
+   组件 CSS 自设计稿原样移植，类名与设计稿一致；既有类零改动，.rcl-stats/.rcl-stat/.tchip/.spill
+   复用记忆控制台既有定义；新增件 = .trail-mini .tcount 尾注行）============ */
+/* 设计稿 token 补全（生产 :root 只有纸墨 6 色；--st-* 抄产品 .status-dot 色，--serif/--sans/--mono/--ease 抄设计稿 :root 同值） */
+:root {
+  --st-ok: #059669;
+  --st-error: #ef4444;
+  --st-empty: #94a3b8;
+  --serif: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif;
+  --sans: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+  --ease: cubic-bezier(.32, .72, 0, 1);
+}
+/* 页面容器：主区域 flex 子件（flex:1 与编辑器面同一层）；.m-scroll = 唯一滚动层 */
+.mwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; min-width: 0; background: var(--paper); }
+.m-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 24px 28px 44px; }
+.mpage { max-width: 680px; margin: 0 auto; }
+.mp-head { margin-bottom: 16px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.mp-back { border: 1px solid var(--line); background: transparent; color: var(--ink-soft); font-family: var(--sans); font-size: 11px; font-weight: 500; border-radius: 999px; padding: 4px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s ease, color .15s ease; }
+.mp-back:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.mp-back svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.mp-title { font-size: 19px; font-weight: 700; margin-top: 10px; letter-spacing: .01em; }
+.mp-meta { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent); margin-top: 6px; line-height: 1.8; }
+/* 两组 = 页面问的两个问题：状态（健康吗）/ 系统（在干什么）。小写 caps 组标题行（设置页气质，与卡片区分）。
+   顺序理由 = 事件驱动访问（看到徽标 / 红点进来 → 先答「健康吗」），状态组保证落在首屏内。 */
+.mgroup { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); margin: 18px 2px 9px; display: flex; align-items: center; gap: 8px; }
+.mgroup:first-of-type { margin-top: 4px; }
+.mgroup::after { content: ''; flex: 1; height: 1px; background: color-mix(in srgb, var(--line) 75%, transparent); }
+.mgroup .q { font-family: var(--mono); font-size: 9px; font-weight: 400; letter-spacing: .03em; text-transform: none; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); }
+/* 零态显示规则：六区块全部常驻；某区块计数 = 0 时只渲染一行淡显占位（复用 dim 语义），不隐藏区块
+   ——健康页的访问目的 = 来确认「没问题」，空态必须可见地给出答案（文案：无异常 / 无终态 / 无召回流量）。 */
+.zline { font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 55%, transparent); text-align: center; padding: 10px 2px; border: 1px dashed color-mix(in srgb, var(--line) 70%, transparent); border-radius: 7px; }
+.mcard { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+.mcard:last-child { margin-bottom: 0; }
+.mc-h { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
+.mc-t { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--ink); }
+.mc-poll { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); }
+.mc-h.clickable { cursor: pointer; user-select: none; }
+.mc-h.clickable:hover .mc-t { color: var(--brass); }
+.mc-h .car { margin-left: auto; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); transition: transform .2s var(--ease); }
+.mc-h .car svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.mcard.open .car { transform: rotate(90deg); }
+.mc-note { font-family: var(--sans); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); margin-top: 10px; line-height: 1.65; }
+.mc-note b { color: var(--ink); }
+.mc-note i { font-style: normal; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--brass) 80%, var(--ink)); background: color-mix(in srgb, var(--brass) 8%, transparent); border-radius: 4px; padding: 1px 5px; }
+/* 九态 9 格（产品现有顺序；零态淡显 / awaiting 铜 / failed 红） */
+.s9 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+.s9c { background: color-mix(in srgb, var(--ink) 3%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 7px; padding: 8px 10px; min-width: 0; }
+.s9c .k { font-family: var(--sans); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s9c .v { font-family: var(--mono); font-size: 16px; font-weight: 500; margin-top: 1px; font-variant-numeric: tabular-nums; }
+.s9c.hot .v { color: var(--brass); }
+.s9c.err .v { color: var(--st-error); }
+.s9c.dim .v { color: color-mix(in srgb, var(--ink-soft) 50%, transparent); }
+/* L2 深钻：0fr→1fr 展开（overflow 裁剪，不用 opacity → 不产生 a11y 隐面；
+   入口 = 召回卡内独立 .rcl-l2btn 按钮（aria-controls 接线，aria-expanded 与折叠同步）） */
+.fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s var(--ease); }
+.fold.open { grid-template-rows: 1fr; }
+.fold > div { overflow: hidden; min-height: 0; }
+.l2-pad { padding-top: 12px; }
+.l2-sub { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin: 14px 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.l2-sub:first-child { margin-top: 0; }
+.l2-sub .cap { font-family: var(--mono); font-size: 9px; font-weight: 400; text-transform: none; letter-spacing: 0; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); }
+.mtable { border: 1px solid var(--line); border-radius: 7px; overflow-x: auto; }
+.mtable table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 10px; }
+.mtable th { font-family: var(--sans); font-size: 9px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.mtable td { padding: 5px 9px; border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); white-space: nowrap; color: var(--ink); }
+.mtable tr:last-child td { border-bottom: none; }
+.mtable td .w { color: var(--brass); font-variant-numeric: tabular-nums; }
+/* 异常清单（status=failed；行尾 trail 摘要 = 列表项新字段，最新 3 条；尾注「共 N 条」= 新增件 .tcount） */
+.ano-row { background: color-mix(in srgb, var(--ink) 2%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; display: flex; flex-direction: column; gap: 7px; }
+.ano-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ano-top .tt { font-family: var(--serif); font-size: 12.5px; font-weight: 600; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ano-top .dt { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); flex-shrink: 0; }
+.trail-mini { display: flex; flex-direction: column; gap: 3px; }
+.trail-mini .tline { display: flex; gap: 8px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); align-items: baseline; }
+.trail-mini .tline .op { color: var(--brass); flex-shrink: 0; min-width: 56px; }
+.trail-mini .tline .tp { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trail-mini .tcount { font-family: var(--mono); font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: right; }
+/* 最近终态（merged / rejected；文字行 = 终态为事件非比例，不图形化） */
+.rev-rows { display: flex; flex-direction: column; gap: 7px; }
+.rev-row { background: color-mix(in srgb, var(--ink) 2%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.rev-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rev-top .tt { font-family: var(--serif); font-size: 12.5px; font-weight: 600; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rev-top .dt { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); flex-shrink: 0; }
+.rev-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 分段刻度条（实心段 = 当前 arm，总段数 = 目标；armed_target 端点恒 null → 按 arm 画，arm=0 单段虚线占位） */
+.seg-row { margin-top: 10px; }
+.seg-row:first-of-type { margin-top: 0; }
+.seg-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 5px; }
+.seg-top .nm { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--ink); }
+.seg-top .tg { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.segs { display: flex; gap: 4px; }
+.seg { height: 10px; flex: 1; border-radius: 3px; background: color-mix(in srgb, var(--ink) 6%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }
+.seg.f { background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 70%, var(--line))); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.seg.e { background: transparent; border-style: dashed; border-color: color-mix(in srgb, var(--line) 90%, transparent); }
+.seg-sub { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); margin-top: 5px; }
+.seg-sub .sp { flex: 1; }
+.seg-sub .dim { color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+/* 执行器 = 大数字 + 状态灯（lamp 亮 = last_op_ts 在 30min 内，循环周期 30min，脉冲 = 在跑） */
+.exec-vis { display: flex; align-items: center; gap: 14px; padding: 4px 2px 2px; }
+.lamp { width: 11px; height: 11px; border-radius: 999px; background: var(--st-ok); flex-shrink: 0; }
+.lamp.on { animation: softPulse 2.2s ease-in-out infinite; box-shadow: 0 0 0 4px color-mix(in srgb, var(--st-ok) 15%, transparent); }
+.exec-vis .big { font-family: var(--mono); font-size: 34px; font-weight: 500; line-height: 1; color: var(--brass); font-variant-numeric: tabular-nums; }
+.exec-vis .cap-line { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); line-height: 1.7; }
+.exec-vis .cap-line b { font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--ink); }
+/* 召回 top5 横条比例图（宽度 ∝ weighted，按 top5 最大值归一，值标条尾兜底） */
+.wbar { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.wline { display: grid; grid-template-columns: 200px 1fr 44px; gap: 10px; align-items: center; min-width: 0; }
+.wbar-h { font-family: var(--mono); font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); margin-bottom: 2px; }
+.wline .p { font-family: var(--mono); font-size: 10px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+/* last_hit 降为 path 下副注（图形列放不下三个字段：path / 条 / 值 占满三列） */
+.wline .p .lh { display: block; font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); white-space: normal; margin-top: 1px; }
+.wline .bar { height: 12px; background: color-mix(in srgb, var(--ink) 5%, transparent); border-radius: 3px; overflow: hidden; }
+.wline .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 60%, var(--line))); border-radius: 3px; }
+.wline .v { font-family: var(--mono); font-size: 10.5px; color: var(--brass); text-align: right; font-variant-numeric: tabular-nums; }
+/* 异常清单 = 红边卡（failed > 0；.mcard.alert 叠加在 .mcard 之后 → 红边生效） */
+.mcard.alert { border-color: color-mix(in srgb, var(--st-error) 50%, var(--line)); background: color-mix(in srgb, var(--st-error) 3%, var(--surface)); }
+.alert-pill { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--st-error); border: 1px solid color-mix(in srgb, var(--st-error) 40%, var(--line)); background: color-mix(in srgb, var(--st-error) 7%, transparent); border-radius: 999px; padding: 1px 8px; }
+/* 召回 L2 入口 = 卡片内独立按钮（卡片头留给区块名） */
+.rcl-l2btn { margin-top: 10px; border: 1px solid var(--line); background: transparent; cursor: pointer; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); border-radius: 999px; padding: 5px 12px; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s ease, color .15s ease; }
+.rcl-l2btn:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.rcl-l2btn .car { display: inline-flex; transition: transform .2s var(--ease); color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+.rcl-l2btn .car svg { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rcl-l2btn[aria-expanded="true"] .car { transform: rotate(90deg); }
+/* 非对称网格（2026-10-23 定稿 = 02E）：row-major ①∣② / ③∣④ / ⑤ / ⑥ = 区块锁定顺序零重排；
+   列比 1:1.6（②trail 长路径与④大数字需宽，①③放窄列）；行内等高（stretch），
+   ④ 卡内容少 → exec-vis margin:auto 垂直居中，① 九格内容顶部对齐（自然流）。
+   六网格单元永远在场：网格模板不因数据增删变形、不 reflow；计数 = 0 → 卡内容 = 淡显占位（.zline）。
+   响应式：≥1024px 完整网格；≤1023px 回单列（六区块通栏堆叠、顺序不变）= 场景 04 窄屏回退。 */
+.mpage.grid { max-width: 1200px; margin-left: auto; margin-right: auto; display: grid; grid-template-columns: 1fr 1.6fr; column-gap: 12px; row-gap: 12px; align-items: stretch; }
+.mpage.grid .mp-head, .mpage.grid .mgroup { grid-column: 1 / -1; }
+.mpage.grid .mgroup { margin: 6px 2px 0; }
+.mpage.grid .mgroup:first-of-type { margin-top: 4px; }
+/* 行 3/4：⑤召回 ⑥最近终态 通栏（DOM 顺序 = ①②③④⑤⑥，row-major 自然落位，零重排） */
+.mpage.grid .mcard.full { grid-column: 1 / -1; }
+/* 网格内卡：卡间距 12px 由 gap 承担；flex 纵排让 mc-note 贴底，行内等高由 stretch 撑满 */
+.mpage.grid .mcard { margin-bottom: 0; display: flex; flex-direction: column; min-width: 0; }
+/* flex 纵排下 inline 子件会被 stretch 拉满：L2 按钮回到内容宽 pill（左对齐） */
+.mpage.grid .rcl-l2btn { align-self: flex-start; }
+/* ④ 执行器卡内容少 → 大数字 + 状态灯组垂直居中（①九格保持顶部对齐） */
+.mpage.grid .exec-vis { margin: auto 0; }
+@media (max-width: 1023px) {
+  /* ≤1023px（含 <768px）：单列，六区块通栏堆叠，顺序不变（无需第三套断点） */
+  .mpage.grid { grid-template-columns: 1fr; max-width: 680px; }
+}
+@media (max-width: 359px) {
+  /* 生产窄屏视口（<360px）：wline 固定部（path 200 + 值 44 + gap 20 = 264px）在 320px 屏
+     内宽 ~252px 下放不下 → path 改 auto、条取 flex。media query 按视口计。 */
+  .wline { grid-template-columns: auto 1fr 44px; }
+}
+/* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标） */
+@media (prefers-reduced-motion: reduce) {
+  .lamp.on { animation: none; }
+  .fold, .mc-h .car, .rcl-l2btn .car { transition: none; }
+}
+
+/* ============ 记忆控制台 v4 L0 主态（定稿 design/console-v4-watch.html 场景 01 · 面板 · 流水）
+   组件 CSS 自设计稿原样移植，类名与设计稿一致；既有类零改动（含 Phase A 段）。
+   复用既有定义：.tchip / .spill（含 merged/rejected/failed 色）/ .log-line / softPulse 键帧 /
+   .p-head / .picon / .c-scroll / .q-empty（空态沿用）；token --serif/--mono/--st-error = Phase A 段 :root。
+   新增件 = .l0bar 状态行（.l0-status 分解 + failed 告警红）/ .l0-go 行尾唯一 L0→L1 入口（failed>0 红点）/
+   .feed 流水时间轴（.f-day 日期头 · .f-item 行 + 竖线 · .f-agent 事件细行 · .f-card 卡 ·
+   .f-stamp / .f-trail mini-trail · .f-more 尾注）。
+   v3 九格脉搏 .p-tiles / 触发条 .tr-* / 召回块 .rcl* 的组件模板已删（CSS 留既有段不清理，零改动）。 ============ */
+/* L0 行动数 = 纯状态行（替代稿 C sticky 账目条：头栏 meta 行，单行，failed>0 告警红）。
+   整行不可点；行尾右对齐「后台 →」= 唯一 L0→L1 入口。300px 下单行成立（10.5px mono 实测约 260px）；
+   flex-wrap 兜底 = 生产文案变长（如 adopted 两位数）时入口自动折到下一行右侧，两种排布都成立。 */
+.l0bar { flex-shrink: 0; background: var(--surface); border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; align-items: center; row-gap: 2px; min-height: 32px; padding: 0 10px; position: relative; z-index: 2; }
+.l0-status { display: flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 0; overflow: hidden; }
+.l0-status .err { color: var(--st-error); font-weight: 500; }
+.l0-status .ld { color: color-mix(in srgb, var(--ink-soft) 50%, transparent); }
+.l0-status .dim { color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+/* 行尾常驻入口「后台 →」：唯一 L0→L1 入口（面板收起、监控页接管主区域，互斥由 app 承担）；failed>0 时带小红点 */
+.l0-go { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; border: none; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 10.5px; font-weight: 500; color: var(--ink-soft); padding: 6px 0; white-space: nowrap; transition: color .15s ease; }
+.l0-go svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease; }
+.l0-go:hover { color: var(--brass); }
+.l0-go:hover svg { transform: translateX(2px); }
+.l0-go .dot { width: 6px; height: 6px; border-radius: 999px; background: var(--st-error); flex-shrink: 0; }
+/* 时间轴（流水：agent 事件细行 / 待审卡 = 行动节点 / 终态卡 = 淡显痕迹；保留自稿 C） */
+.feed { padding: 10px 12px 14px; }
+.f-day { font-family: var(--sans); font-size: 9.5px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); display: flex; align-items: center; gap: 8px; padding: 8px 0 10px; }
+.f-day::after { content: ''; flex: 1; height: 1px; background: color-mix(in srgb, var(--line) 75%, transparent); }
+.f-item { position: relative; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; padding-bottom: 13px; }
+.f-item::before { content: ''; position: absolute; left: calc(32px - 4.5px); top: 14px; bottom: -2px; width: 1px; background: color-mix(in srgb, var(--line) 85%, transparent); }
+.f-item.last::before { display: none; }
+.f-dot { position: absolute; left: calc(32px - 4px); top: 12px; width: 5px; height: 5px; border-radius: 999px; background: color-mix(in srgb, var(--ink-soft) 40%, var(--line)); }
+.f-item.hot .f-dot { width: 7px; height: 7px; left: calc(32px - 5px); top: 11px; background: var(--brass); animation: softPulse 2.2s ease-in-out infinite; }
+.f-time { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); text-align: right; padding-top: 11px; font-variant-numeric: tabular-nums; }
+.f-card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; cursor: pointer; transition: border-color .15s, background-color .15s; text-align: left; font-family: var(--sans); display: block; width: 100%; }
+.f-card:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); background: color-mix(in srgb, var(--brass) 5%, var(--surface)); }
+.f-card.sel { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, var(--surface)); }
+.f-card.fresh { border-left: 2px solid var(--brass); }
+.f-row1 { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.f-title { font-family: var(--serif); font-size: 13.5px; font-weight: 600; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.45; }
+.f-stamp { flex-shrink: 0; font-family: var(--mono); font-size: 9px; letter-spacing: .04em; color: var(--brass); border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); border-radius: 999px; padding: 1px 7px; }
+.f-row2 { font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-row2 .sep { color: color-mix(in srgb, var(--ink-soft) 50%, transparent); margin: 0 2px; }
+.f-term { opacity: .82; }
+.f-term .f-row2 { font-size: 10px; }
+.f-trail { display: flex; flex-direction: column; gap: 4px; margin-top: 7px; padding-top: 7px; border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); }
+.f-trail .log-line { display: flex; align-items: center; gap: 7px; background: color-mix(in srgb, var(--ink) 2%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 6px; padding: 4px 8px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-soft); }
+.f-trail .seq { color: var(--brass); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.f-trail .act { color: var(--ink); flex-shrink: 0; }
+.f-trail .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--sans); font-size: 10px; }
+/* agent run 细行（最轻表达：alias + 时间 + 简短状态；无进度条/预算——那些在后台页 trigger_state 区块） */
+.f-agent .f-time { padding-top: 3px; }
+.f-agent-txt { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); padding-top: 2px; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.f-agent-txt svg { width: 10px; height: 10px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.f-agent-txt .nm { color: var(--ink-soft); }
+.f-agent-txt .msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 尾注：feed 截断计数 → 指向监控页 ⑥最近终态 / ②异常清单（终态全貌不在面板内展开） */
+.f-more { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: center; padding: 10px 0 4px; border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); }
+/* 动效降级（本分节新增件：.l0-go 箭头 / .f-item.hot 铜脉冲） */
+@media (prefers-reduced-motion: reduce) {
+  .f-item.hot .f-dot { animation: none; }
+  .l0-go, .l0-go svg { transition: none; }
+}
+
+/* ============ 动效层（2026-10-24）：后台监控页 L1 进入/返回 + 页内微动效 + 通知下拉出入 + 深链接力
+   纯追加：只加新 keyframes/类，既有规则零改动。沿用既有 token：.15/.18/.2/.25s · var(--ease)=cubic-bezier(.32,.72,0,1)
+   · softPulse 2.2s · badge-pop · marker-sweep。仅 GPU 路径（transform/opacity），
+   禁 width/flex-basis 过渡（仓库已知坑：触发 reflow）。
+   机制：v-show display:none→block 自动重启动画 → 文档区回返入场 / 监控页首载填充在每次进入时自然重放，
+   无需 JS 计时；轮询只重建同 key 节点的数据（v-for :key）→ 入场序列不重放（无闪烁），条宽/数字安静切换。
+   .mp-enter = 进入窗口类（JS 开启后 ~950ms 自清；序列总长 <600ms 预算）。 ============ */
+
+/* ── 1) 监控页进入：页头 + 两组标题 + 六卡错峰淡入 + 8px 上升（各 .25s · 错峰 40ms · 末张 ~560ms < 600ms 预算）。
+   机制 = fade + rise，不复用 page-turn 翻页：翻页（.45s rotateY）是文档区的唯一签名、专表「换文档」，
+   L0→L1 是层级切换非翻页；L0 面板自身轴是 translateX（cFaceIn），左轴 flip 与面板语言相冲；
+   fade + rise 读作「控制台交接给整页」。组标题与卡同序错峰，整页一次成形。 */
+@keyframes mpCardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.mwrap.mp-enter .mpage > div { animation: mpCardIn .25s var(--ease) both; }
+.mwrap.mp-enter .mpage > div:nth-child(1) { animation-delay: 0ms; }    /* 页头（含「← 返回文档」单出口） */
+.mwrap.mp-enter .mpage > div:nth-child(2) { animation-delay: 40ms; }   /* 组 1「状态」 */
+.mwrap.mp-enter .mpage > div:nth-child(3) { animation-delay: 80ms; }   /* ① 九态 */
+.mwrap.mp-enter .mpage > div:nth-child(4) { animation-delay: 120ms; }  /* ② 异常清单 */
+.mwrap.mp-enter .mpage > div:nth-child(5) { animation-delay: 160ms; }  /* 组 2「系统」 */
+.mwrap.mp-enter .mpage > div:nth-child(6) { animation-delay: 200ms; }  /* ③ 后台任务 */
+.mwrap.mp-enter .mpage > div:nth-child(7) { animation-delay: 240ms; }  /* ④ 执行器 */
+.mwrap.mp-enter .mpage > div:nth-child(8) { animation-delay: 280ms; }  /* ⑤ 召回（通栏） */
+.mwrap.mp-enter .mpage > div:nth-child(9) { animation-delay: 320ms; }  /* ⑥ 最近终态（通栏） */
+
+/* ── 页内微动效：首载「一次」= 仅在 .mp-enter 窗口内播放（条宽/刻度为快照，30s 轮询无时序，不画持续进度）
+   刻度条实心段 / 召回比例条 = 自左 scaleX 展开（GPU；宽 = 数据 inline 值，轮询跳变无过渡无闪烁）；
+   实心段轮询时 .e→.f 类变也会单次轻填（arm 增长的语义反馈）─── */
+@keyframes segFill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes barGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.mwrap.mp-enter .seg.f { animation: segFill .3s var(--ease) both; transform-origin: left center; }
+.mwrap.mp-enter .wline .bar i { animation: barGrow .4s var(--ease) both; transform-origin: left center; }
+.mwrap.mp-enter .wbar .wline:nth-child(3) .bar i { animation-delay: 60ms; }
+.mwrap.mp-enter .wbar .wline:nth-child(4) .bar i { animation-delay: 120ms; }
+.mwrap.mp-enter .wbar .wline:nth-child(5) .bar i { animation-delay: 180ms; }
+.mwrap.mp-enter .wbar .wline:nth-child(6) .bar i { animation-delay: 240ms; }
+/* 执行器状态灯首次点亮：随执行器卡落地 pop 入（on 态既有 2.2s 呼吸续接；off 态仅淡入呈待机点） */
+@keyframes lampPop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+.mwrap.mp-enter .lamp { animation: lampPop .25s var(--ease) 300ms both; }
+
+/* ── 2) 返回文档：与进入刻意不对称（进入 = 组装新上下文，560ms 错峰；返回 = 离场，快速溶解 + 文档区单次升起）。
+   镜像六卡退场会让「离场」拖沓，且文档区是单一内容面、无六卡可退；文档区入场用 viewFade 家族的 rise+fade，与其既有身份一致 */
+@keyframes mpOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(6px); } }
+.mwrap.mp-out .m-scroll { animation: mpOut .18s ease-in both; pointer-events: none; }
+@keyframes docEnterIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.doc-enter { animation: docEnterIn .2s var(--ease) both; }
+
+/* ── 3) 新告警强调：轮询发现 failed 数增长 / 新 failed 提案 → 红边卡一次环脉冲（softPulse 家族的克制节奏）
+   + 计数 pill pop（badge-pop 家族 scale）；~1.2s 后类自清，红边静态强调保留（定稿布局不变）─── */
+@keyframes alertFresh { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-error) 40%, transparent); } 100% { box-shadow: 0 0 0 7px transparent; } }
+.mcard.mp-fresh-alert { animation: alertFresh .6s ease-out 2; }
+@keyframes pillPop { from { transform: scale(.7); } to { transform: scale(1); } }
+.alert-pill.mp-pill-pop { display: inline-flex; animation: pillPop .25s var(--ease) both; }
+
+/* ── 4) 通知下拉：开沿用既有 notif-in（贴铃铛下垂 4px，.18s）＋条目错峰入场（前 6 条各延 20ms，其余直入）；
+   合 = 新增退场（反向 4px 上收 + 淡出 .14s，JS 150ms 后收起，与开方向对称）；
+   hover 语义 = 既有黄铜 8% 底色 + 2px 右移（行可点信号），按下加深底色（search-more:active 先例） */
+@keyframes nfItemIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
+.notif-dropdown .notif-item { animation: nfItemIn .18s ease-out both; }
+.notif-dropdown .notif-item:nth-child(2) { animation-delay: 20ms; }
+.notif-dropdown .notif-item:nth-child(3) { animation-delay: 40ms; }
+.notif-dropdown .notif-item:nth-child(4) { animation-delay: 60ms; }
+.notif-dropdown .notif-item:nth-child(5) { animation-delay: 80ms; }
+.notif-dropdown .notif-item:nth-child(6) { animation-delay: 100ms; }
+@keyframes notifOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-4px); } }
+.notif-dropdown.notif-closing { animation: notifOut .14s ease-in both; }
+.notif-dropdown.notif-closing .notif-item { animation: none; }
+/* 作用域到 .notif-dropdown：Play CDN 生成的样式表在 style.css link 之后，同特异性下
+   Tailwind .transition-colors 会压掉未作用域的 transition → 升两级特异性保住 transform 平滑 */
+.notif-dropdown .notif-item { transition: background-color .12s ease, transform .15s var(--ease); }
+.notif-dropdown .notif-item:hover { transform: translateX(2px); }
+.notif-dropdown .notif-item:active { background: color-mix(in srgb, var(--brass) 14%, transparent); }
+
+/* ── 5) 通知 → L0 深链接力：下拉退场（.14s）先行 → 面板宽度直切（既有纪律）+ 详情面 cFaceIn 滑入（既有 .2s）→
+   详情头标题黄铜下划线 sweep 一次（marker-sweep 家族，~.4s 后自清；非深链的队内钻取不加）─── */
+#memory-console-shell [data-face="detail"].mp-deep .d-title { position: relative; }
+#memory-console-shell [data-face="detail"].mp-deep .d-title::after {
+  content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
+  background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
+  border-radius: 2px; transform-origin: left center;
+  animation: marker-sweep .4s var(--ease) 120ms both;
+}
+
+/* 移动端（≤1023px）降级（对齐既有 pageFade 先例：单条 opacity、去位移/错峰） */
+@media (max-width: 1023px) {
+  .mwrap.mp-enter .mpage > div { animation: pageFade .2s ease both; }
+  .mwrap.mp-enter .mpage > div:nth-child(n) { animation-delay: 0ms; }
+  .mwrap.mp-out .m-scroll { animation: pageFade .18s ease-in both; }
+  .doc-enter { animation: pageFade .2s ease both; }
+}
+
+/* 动效降级（本分节新增件：监控页进入/返回/首载填充/新告警/通知下拉出入/深链接力） */
+@media (prefers-reduced-motion: reduce) {
+  .mwrap.mp-enter .mpage > div,
+  .mwrap.mp-enter .seg.f,
+  .mwrap.mp-enter .wline .bar i,
+  .mwrap.mp-enter .lamp { animation: none; }
+  .mwrap.mp-out .m-scroll { animation: none; }
+  .doc-enter { animation: pageFade .2s ease both; }
+  .mcard.mp-fresh-alert, .alert-pill.mp-pill-pop { animation: none; }
+  .notif-dropdown .notif-item { animation: none; transition: none; }
+  .notif-dropdown.notif-closing { animation: none; }
+  #memory-console-shell [data-face="detail"].mp-deep .d-title::after { animation: none; }
+}

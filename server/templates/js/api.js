@@ -136,6 +136,13 @@ export const api = {
     return res.json()
   },
 
+  /** GET /api/recall/stats — 召回深钻 L2（docs / failed_queries 各 ≤200 行；监控页按需触发，非轮询） */
+  async getRecallStats(days = 30, halfLife = 30) {
+    const res = await fetch('/api/recall/stats?days=' + days + '&half_life=' + halfLife)
+    if (!res.ok) throw new Error(`recall/stats → ${res.status}`)
+    return res.json()
+  },
+
   /** GET /api/memory/proposals — 全部提案（frontmatter 字段；解析失败为 malformed 项，不 500） */
   async getMemoryProposals() {
     const res = await fetch('/api/memory/proposals')

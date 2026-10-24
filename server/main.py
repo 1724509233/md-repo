@@ -20,6 +20,20 @@ from .write_registry import pop_source
 # Logging is configured in main() with console + file handlers.
 
 
+def _agent_caps(agents: list) -> dict[str, dict]:
+    """Per-alias config-derived caps for the console status endpoint, keyed
+    by alias: armed_target = trigger.arm_count (None when the agent has no
+    trigger block), runs_cap = budget_runs_per_day. create_app stays
+    config-agnostic; the wiring hands it the flat values."""
+    return {
+        a.alias: {
+            "armed_target": a.trigger["arm_count"] if a.trigger is not None else None,
+            "runs_cap": a.budget_runs_per_day,
+        }
+        for a in agents
+    }
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv if argv is not None else sys.argv[1:]
     config_path = argv[0] if argv else "config.yaml"
@@ -63,7 +77,8 @@ def main(argv: list[str] | None = None) -> None:
     # rebuild; legacy/desynced FTS: cheap repair from the content table).
     ensure_indexed(conn, vault_dir)
 
-    app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai)
+    app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai,
+                     bg_targets=_agent_caps(bg_agents))
 
     async def _run() -> None:
         logs_dir = vault_dir / ".sync" / "logs"

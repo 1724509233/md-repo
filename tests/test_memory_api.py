@@ -1,17 +1,22 @@
 """Tests for the memory-console routes (memory-runtime).
 
-Covers: the proposals list (shape, sort, malformed handling, age_days), the
-adopt/reject one-click review endpoints (state-machine transitions ledgered
-with actor "human", path guards, reason threading), and the /api/memory/status
-pulse (proposal counts, trigger_state agent panel, recall demand).
+Covers: the proposals list (shape, sort, malformed handling, age_days,
+trail summary), the adopt/reject one-click review endpoints
+(state-machine transitions ledgered with actor "human", path guards,
+reason threading), and the /api/memory/status pulse (proposal counts,
+trigger_state agent panel incl. the config-derived arm caps, the
+executor activity block, recall demand).
 """
 from __future__ import annotations
 
 import time
 from datetime import datetime
 
+from fastapi.testclient import TestClient
+
 from server import proposals
-from server.vault.db.changes import get_changes
+from server.api import create_app
+from server.vault.db.changes import get_changes, log_change
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -253,3 +258,167 @@ def test_status_recall_table_dropped(client, vault_dir, db_conn):
     assert recall["docs_tracked"] == 0
     assert recall["top"] == []
     assert recall["recall_error"]
+
+
+# ── /api/memory/status: agents[] config-derived caps ──────────────────────
+
+def test_status_agent_caps_from_bg_targets(vault_dir, db_conn):
+    """bg_targets wired → armed_target/runs_cap take the config values; an
+    alias absent from the config keeps null (no error, shape unchanged)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    db_conn.execute(
+        "INSERT INTO trigger_state "
+        "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "runs_date, runs_count) VALUES (?, ?, ?, 0.0, 0, ?, ?)",
+        ("consolidator", 1234.0, 2, today, 1),
+    )
+    db_conn.execute(
+        "INSERT INTO trigger_state "
+        "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "runs_date, runs_count) VALUES (?, ?, ?, 0.0, 0, ?, ?)",
+        ("narrator", 0.0, 0, "", 0),
+    )
+    db_conn.commit()
+
+    app = create_app(
+        vault_dir=vault_dir, db_conn=db_conn,
+        bg_targets={"consolidator": {"armed_target": 3, "runs_cap": 3}},
+    )
+    resp = TestClient(app).get("/api/memory/status")
+    assert resp.status_code == 200
+    agents = {a["alias"]: a for a in resp.json()["agents"]}
+    # Config entry present → the config values (the design's arm 2/3 · 1/3).
+    assert agents["consolidator"]["armed_target"] == 3
+    assert agents["consolidator"]["runs_cap"] == 3
+    assert agents["consolidator"]["armed"] == 2
+    assert agents["consolidator"]["runs_today"] == 1
+    # No config entry → null, the pre-wiring shape.
+    assert agents["narrator"]["armed_target"] is None
+    assert agents["narrator"]["runs_cap"] is None
+
+
+def test_status_agent_caps_null_without_bg_targets(vault_dir, db_conn):
+    """create_app without bg_targets (default None) → the caps stay null:
+    the pre-memory-console shape, backward compatible for existing callers
+    (conftest's app fixture exercises the same path)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    db_conn.execute(
+        "INSERT INTO trigger_state "
+        "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "runs_date, runs_count) VALUES (?, 0.0, 0, 0.0, 0, ?, 0)",
+        ("consolidator", today),
+    )
+    db_conn.commit()
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn)
+    resp = TestClient(app).get("/api/memory/status")
+    assert resp.status_code == 200
+    agent = resp.json()["agents"][0]
+    assert agent["armed_target"] is None
+    assert agent["runs_cap"] is None
+    # Shape unchanged: the same key set as when caps are filled.
+    assert set(agent) == {"alias", "armed", "armed_target", "last_run",
+                          "runs_today", "runs_cap"}
+
+
+# ── /api/memory/status: executor block ────────────────────────────────────
+
+def test_status_executor_block(client, vault_dir, db_conn):
+    """The executor's write attribution lands in change_log with
+    source='executor' (batch_id = the merged proposal's run_id); the block
+    aggregates it: last op, today's op count (local date, same basis as
+    runs_today), and the newest batch."""
+    now = time.time()
+    midnight = datetime.now().replace(
+        hour=0, minute=0, second=0, microsecond=0).timestamp()
+    mid = midnight + (now - midnight) / 2  # earlier today, any hour of the day
+    # A row from two days ago (strictly before local midnight) → excluded
+    # from ops_today, and older rows don't set last_op_ts either.
+    log_change(db_conn, "index/entities.md", "update", source="executor",
+               ts=now - 2 * 86400, batch_id="batch-old")
+    log_change(db_conn, "notes/a.md", "update", source="executor",
+               ts=mid, batch_id="batch-mid")
+    log_change(db_conn, "index/entities.md", "update", source="executor",
+               ts=now, batch_id="batch-new")
+    # A same-day non-executor row must not count.
+    log_change(db_conn, "notes/b.md", "update", source="web", ts=now)
+    db_conn.commit()
+
+    resp = client.get("/api/memory/status")
+    assert resp.status_code == 200
+    ex = resp.json()["executor"]
+    assert ex["last_op_ts"] == int(now)
+    assert ex["ops_today"] == 2
+    assert ex["last_batch"] == "batch-new"
+
+
+def test_status_executor_block_empty(vault_dir, db_conn):
+    """No executor rows → {last_op_ts: 0, ops_today: 0, last_batch: null}."""
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn)
+    resp = TestClient(app).get("/api/memory/status")
+    assert resp.status_code == 200
+    assert resp.json()["executor"] == {
+        "last_op_ts": 0, "ops_today": 0, "last_batch": None}
+
+
+# ── /api/memory/proposals: trail summary ──────────────────────────────────
+
+def test_list_trail_fields(client, vault_dir, db_conn):
+    """List items carry a trail summary: the newest 3 change_log rows
+    matching the /trail endpoint's match (path = the file OR batch_id =
+    run_id) + the total match count. Rows without ledger entries get
+    []/0; malformed items carry the same-shaped empty fields."""
+    # Proposal A (run_id "batch-test", the _create helper's batch): 4
+    # ledgered state transitions on the file itself + one executor file
+    # merge carrying the batch id but a different path.
+    r_a = _create(vault_dir, db_conn, type="summary", title="Trailing")
+    _to_awaiting(vault_dir, db_conn, r_a)  # processing + awaiting_review rows
+    resp = client.post(f"/api/memory/proposals/{r_a}/adopt")
+    assert resp.status_code == 200  # +adopted row (source=human)
+    proposals.advance(vault_dir, db_conn, r_a, "merged", actor="executor")
+    # +the executor's file merge (same batch, other path) — what the
+    # 30-minute loop ledgered via apply_change.
+    log_change(db_conn, "index/entities.md", "update", source="executor",
+               batch_id="batch-test")
+    db_conn.commit()
+
+    # Proposal B: a run of its own with no ledger rows → []/0 (the shared
+    # "batch-test" batch must not leak into it).
+    r_b = proposals.create_proposal(
+        vault_dir, type="entity_index", actor="consolidator",
+        run_id="batch-quiet", source_refs=["notes/test.md"], title="Quiet",
+        body="quiet body",
+    )
+    # Malformed: parse failure → run_id '' → path rows only, none exist.
+    r_m = _write_malformed(vault_dir)
+
+    resp = client.get("/api/memory/proposals")
+    assert resp.status_code == 200
+    items = {i["relpath"]: i for i in resp.json()["proposals"]}
+
+    a = items[r_a]
+    assert a["trail_count"] == 5  # 4 state rows + 1 batch file row
+    assert len(a["trail"]) == 3   # truncated to the newest 3
+    assert [t["seq"] for t in a["trail"]] == sorted(
+        (t["seq"] for t in a["trail"]), reverse=True)
+    # /trail-endpoint row shape (no batch_id) — the batch file row is the
+    # newest, the human adopt the oldest of the three.
+    assert all(set(t) == {"seq", "ts", "source", "op", "path"} for t in a["trail"])
+    assert a["trail"][0]["path"] == "index/entities.md"
+    assert a["trail"][0]["source"] == "executor"
+    assert a["trail"][2]["path"] == r_a
+    assert a["trail"][2]["source"] == "human"
+
+    # Same basis as the drill endpoint: the list trail is its first rows.
+    full = client.get(f"/api/memory/proposals/{r_a}/trail").json()["trail"]
+    assert len(full) == 5
+    assert [t["seq"] for t in a["trail"]] == [t["seq"] for t in full[:3]]
+
+    b = items[r_b]
+    assert b["trail"] == []
+    assert b["trail_count"] == 0
+
+    m = items[r_m]
+    assert m["status"] == "malformed"
+    assert m["trail"] == []
+    assert m["trail_count"] == 0
