@@ -150,3 +150,72 @@ def test_wake_wait_cancel_propagates():
         finally:
             events.set_bus(None)
     asyncio.run(go())
+
+
+# ── publisher-side early drop (differential vs the scan-side authority) ────
+
+def test_change_filter_differential(tmp_path, vault_dir):
+    """A source dropped by the publisher filter is excluded by EVERY agent's
+    real scan-side exclusion set — and vice versa (spec §4a)."""
+    cfg = _cfg(tmp_path, vault_dir)
+    all_aliases = {"cons", "cons2"}
+    excluded = {"executor", "agent"} | all_aliases
+    pred = lambda p: p.get("source") not in excluded
+    real = _self_exclusion(cfg, all_aliases)
+    for source in ["executor", "agent", "cons", "cons2", "web", "reconcile",
+                    "system", "human", "unknown", "client-mac"]:
+        drops = not pred({"source": source})
+        in_real = source in real
+        assert drops == in_real, (source, drops, in_real)
+
+
+def test_recall_filter_differential(db_conn, vault_dir, tmp_path):
+    """Rows matching the drop condition (synthetic AND hits>0) contribute
+    zero to the REAL scan_recall_arming count; everything the publisher
+    still emits contributes (spec §4a)."""
+    q0 = db_conn.execute("SELECT COALESCE(MAX(id), 0) FROM recall_queries").fetchone()[0]
+    h0 = db_conn.execute("SELECT COALESCE(MAX(id), 0) FROM recall_log").fetchone()[0]
+    pred = lambda p: not (p.get("traffic") == "synthetic" and p.get("hits", 0) > 0)
+
+    # synthetic + hits>0 → publisher drops → must contribute 0
+    recall_db.log_query(db_conn, "cons", "q with hits", "tier0",
+                        [{"path": "notes/test.md", "score": 0.9}])
+    recall_db.log_query(db_conn, "cons", "q with hits2", "tier0",
+                        [{"path": "notes/test.md", "score": 0.5}])
+    for p in ({"traffic": "synthetic", "hits": 1}, {"traffic": "synthetic", "hits": 1}):
+        assert not pred(p)
+    cnt, _, _ = recall_db.scan_recall_arming(db_conn, q0, h0)
+    assert cnt == 0
+
+    # zero-hit synthetic → publisher ALWAYS emits → counts
+    recall_db.log_query(db_conn, "cons", "zero hit", "tier0", [])
+    assert pred({"traffic": "synthetic", "hits": 0})
+    cnt2, _, _ = recall_db.scan_recall_arming(db_conn, q0, h0)
+    assert cnt2 == 1
+
+    # low-score human hit → publisher emits → counts
+    recall_db.log_query(db_conn, "web", "low score", "tier0",
+                        [{"path": "notes/test.md", "score": 0.1}])
+    assert pred({"traffic": "human", "hits": 1})
+    cnt3, _, _ = recall_db.scan_recall_arming(db_conn, q0, h0)
+    assert cnt3 == 2
+
+
+def test_set_filter_mechanism():
+    """set_filter gates fan-out; None clears; unfiltered topics untouched."""
+    async def go():
+        b = events.Bus()
+        events.set_bus(b)
+        try:
+            q = b.subscribe("change")
+            b.set_filter("change", lambda p: p.get("source") != "drop-me")
+            events.publish("change", {"source": "drop-me"})
+            events.publish("change", {"source": "keep"})
+            assert q.get_nowait()["source"] == "keep"
+            assert q.empty()
+            b.set_filter("change", None)
+            events.publish("change", {"source": "drop-me"})
+            assert q.get_nowait()["source"] == "drop-me"
+        finally:
+            events.set_bus(None)
+    asyncio.run(go())
