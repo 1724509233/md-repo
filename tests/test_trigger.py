@@ -398,3 +398,161 @@ def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path
     assert ran == []               # no LLM call
     assert len(hook.reports) == 1
     assert hook.reports[0].status == "idle"
+
+
+# ── event-driven loops (spec 2026-10-24) ──────────────────────────────────
+
+def _adopted_proposal(vault_dir, db_conn, title="wake"):
+    """Create a proposal and drive it to adopted (arms the executor scan)."""
+    from server import proposals
+
+    rel = proposals.create_proposal(
+        vault_dir, type="summary", actor="test", run_id="wake-test",
+        source_refs=["notes/test.md"], title=title, body="b",
+        now=1760000000.0)
+    proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+    proposals.advance(vault_dir, db_conn, rel, "adopted", actor="test")
+    return rel
+
+
+async def _poll(pred, timeout=5.0):
+    t0 = time.monotonic()
+    while not pred():
+        if time.monotonic() - t0 > timeout:
+            return False
+        await asyncio.sleep(0.05)
+    return True
+
+
+def test_executor_loop_event_wake(db_conn, vault_dir):
+    """proposal event wakes the executor far before the 300s backstop."""
+    from server import events
+    from server.bgagent.scheduler import _executor_loop
+
+    calls = []
+
+    def fake(vault, conn):
+        calls.append(time.monotonic())
+        return {"merged": 0, "expired": 0, "errors": []}
+
+    async def go():
+        b = events.Bus()
+        events.set_bus(b)
+        try:
+            task = asyncio.create_task(
+                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=300))
+            await asyncio.sleep(0.2)  # let the loop subscribe + enter wake_wait
+            t0 = time.monotonic()
+            _adopted_proposal(vault_dir, db_conn)  # advance(adopted) → publish
+            ok = await _poll(lambda: calls)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert ok and calls, "executor never ran"
+            assert calls[0] - t0 < 5, f"woke too late: {calls[0] - t0:.1f}s"
+        finally:
+            events.set_bus(None)
+    _run(go())
+
+
+def test_executor_loop_backstop_no_event(db_conn, vault_dir):
+    """No event at all → the backstop tick still runs the scan (0.3s here)."""
+    from server import events
+    from server.bgagent.scheduler import _executor_loop
+
+    events.set_bus(None)  # degraded: plain sleep loop
+    calls = []
+
+    def fake(vault, conn):
+        calls.append(time.monotonic())
+        return {"merged": 0, "expired": 0, "errors": []}
+
+    async def go():
+        try:
+            _adopted_proposal(vault_dir, db_conn)  # armed BEFORE the loop starts
+            task = asyncio.create_task(
+                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=0.3))
+            ok = await _poll(lambda: calls)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert ok and calls
+        finally:
+            events.set_bus(None)
+    _run(go())
+
+
+def test_executor_loop_spurious_event_noop(db_conn, vault_dir):
+    """A stale/foreign proposal event (e.g. merged — advance no longer
+    publishes those) must be tolerated: wake → scan → no-op."""
+    from server import events
+    from server.bgagent.scheduler import _executor_loop
+
+    calls = []
+
+    def fake(vault, conn):
+        calls.append(1)
+        return {"merged": 0, "expired": 0, "errors": []}
+
+    async def go():
+        b = events.Bus()
+        events.set_bus(b)
+        try:
+            task = asyncio.create_task(
+                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=300))
+            await asyncio.sleep(0.2)
+            events.publish("proposal", {"relpath": "suggestions/x.md",
+                                         "status": "merged"})
+            await asyncio.sleep(0.5)  # give the wake a beat to (not) run
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert calls == []  # vault not armed → scan no-op, executor untouched
+        finally:
+            events.set_bus(None)
+    _run(go())
+
+
+def test_armed_loop_event_wake(db_conn, vault_dir, tmp_path):
+    """change event + enough non-self-excluded rows → run_fn well before
+    the 300s backstop; the scan itself is unchanged."""
+    from server import events
+    from server.bgagent.scheduler import _armed_loop
+
+    cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=2)
+    ran = []
+    run_fn = _fake_run(ran)
+
+    async def go():
+        b = events.Bus()
+        events.set_bus(b)
+        try:
+            # lock created INSIDE the loop (Locks bind their loop on first
+            # await; creating it outside would bind it to a dead loop).
+            lock = asyncio.Lock()
+            task = asyncio.create_task(
+                _armed_loop(cfg, vault_dir, lock, [], run_fn, db_conn,
+                            {"cons"}, interval_s=300))
+            await asyncio.sleep(0.2)
+            t0 = time.monotonic()
+            log_change(db_conn, "notes/w1.md", "created", source="web")
+            log_change(db_conn, "notes/w2.md", "created", source="web")
+            events.publish("change", {"op": "create", "source": "web",
+                                       "path": "notes/w1.md"})
+            ok = await _poll(lambda: ran)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert ok and ran == ["cons"]
+            assert time.monotonic() - t0 < 5
+        finally:
+            events.set_bus(None)
+    _run(go())

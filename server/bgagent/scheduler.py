@@ -6,7 +6,7 @@ queueing), then re-anchor from "now" (no catch-up bursts).
 
 Memory-runtime v1 additions (trigger agents + executor role):
 
-- **Armed check** (30-min floor, on top of the cron): counts change events
+- **Armed check** (event-wake (``change`` event), with the 30-min timer demoted to backstop — both paths run the same scan; on top of the cron): counts change events
   matching ``trigger.events`` whose source is NOT in the self-exclusion set
   (this agent's alias + "executor" + "agent" + every bgagent alias —
   framework-enforced, synthetic traffic must never arm its own scheduler).
@@ -16,7 +16,7 @@ Memory-runtime v1 additions (trigger agents + executor role):
   finds no non-self-excluded create event since the last run records an
   ``idle`` RunReport and does NOT invoke the LLM (no work, free tick).
 - **Executor**: a framework role, not an LLM agent. One shared asyncio task
-  calls ``run_executor`` every 30 minutes; armed only when suggestions/
+  woken by ``proposal`` events (adopted) or the 30-min backstop; same armed-glob scan either way; armed only when suggestions/
   holds an adopted-unmerged or an overdue awaiting_review proposal. No work
   → silent no-op (debug level, no log spam).
 """
@@ -33,6 +33,7 @@ from croniter import croniter
 
 from ..config import BackgroundAgentConfig
 from ..proposals import EXPIRE_AFTER_S, _created_ts, scan as scan_proposals
+from .. import events
 from ..vault.db import recall as recall_db
 from ..vault.db.changes import count_changes_sources, get_changes_sources
 from ..vault.db.schema import _db_lock
@@ -286,10 +287,25 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
 
 async def _armed_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
                       lock: asyncio.Lock, hooks: list[NotificationHook],
-                      run_fn: Callable, conn, all_aliases: set[str]) -> None:
+                      run_fn: Callable, conn, all_aliases: set[str],
+                      interval_s: float = ARMED_CHECK_INTERVAL_S) -> None:
+    """Event-wake armed check: a ``change`` event or the ``interval_s``
+    backstop wakes the SAME authoritative scan (_armed_check) — lost-wake
+    immune because both paths converge on it. No bus (tests / degraded) →
+    plain sleep loop, exactly the old behavior."""
     alias = cfg.alias
+    bus = events.get_bus()
+    queue = bus.subscribe("change") if bus is not None else None
     while True:
-        await asyncio.sleep(ARMED_CHECK_INTERVAL_S)
+        if queue is not None:
+            await events.wake_wait(queue, interval_s)
+            while True:  # drain: payloads are wake hints only (scan is authority)
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        else:
+            await asyncio.sleep(interval_s)
         try:
             await _armed_check(cfg, vault_dir, lock, hooks, run_fn, conn, all_aliases)
         except asyncio.CancelledError:
@@ -315,14 +331,30 @@ def _executor_armed(vault_dir: Path) -> bool:
 
 
 async def _executor_loop(vault_dir: Path, conn,
-                         executor_fn: Callable = run_executor) -> None:
-    """Every 30 minutes: run the deterministic executor if armed.
+                         executor_fn: Callable = run_executor,
+                         interval_s: float = EXECUTOR_INTERVAL_S) -> None:
+    """Event-wake executor: a ``proposal`` event or the ``interval_s``
+    backstop wakes the authoritative glob scan (_executor_armed); armed →
+    deterministic merge in a worker thread.
 
-    No work → silent no-op (debug level only — must not spam).
+    The scan is the sole authority (adopted-unmerged or 14d overdue);
+    the event only shortens the wait. No work → silent no-op
+    (debug level only — must not spam). No bus → plain sleep loop
+    (old behavior).
     """
     vault = Path(vault_dir).resolve()
+    bus = events.get_bus()
+    queue = bus.subscribe("proposal") if bus is not None else None
     while True:
-        await asyncio.sleep(EXECUTOR_INTERVAL_S)
+        if queue is not None:
+            await events.wake_wait(queue, interval_s)
+            while True:  # drain: payloads are wake hints only (scan is authority)
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+        else:
+            await asyncio.sleep(interval_s)
         try:
             if not _executor_armed(vault):
                 logger.debug("[executor] no adopted/overdue proposals — no-op")
