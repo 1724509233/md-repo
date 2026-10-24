@@ -8,6 +8,7 @@ from pathlib import Path
 
 import uvicorn
 
+from . import events
 from .api import create_app
 from .bgagent import InAppHook, start_background_agents
 from .bgagent.notify import cleanup_old_notifications
@@ -85,6 +86,17 @@ def main(argv: list[str] | None = None) -> None:
         logs_dir.mkdir(parents=True, exist_ok=True)
         start_logrotate(None, logs_dir)
 
+        # Event bus: wake signals for the arming/executor loops
+        # (spec 2026-10-24). Publisher-side filters drop events that
+        # contribute zero to every agent's arming scan — pure volume
+        # reduction; the scan-side exclusion stays the authority.
+        events.set_bus(events.Bus())
+        _excluded_sources = {"executor", "agent"} | {a.alias for a in bg_agents}
+        events.set_filter("change",
+                          lambda p: p.get("source") not in _excluded_sources)
+        events.set_filter("recall", lambda p: not (
+            p.get("traffic") == "synthetic" and p.get("hits", 0) > 0))
+
         def _on_created(path: str) -> None:
             source = pop_source(path)
             apply_change(conn, vault_dir, path, "created", source=source)
@@ -126,6 +138,7 @@ def main(argv: list[str] | None = None) -> None:
     async def _serve() -> None:
         await _run()
         await server.serve()
+        events.set_bus(None)
 
     asyncio.run(_serve())
 
