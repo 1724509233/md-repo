@@ -10,6 +10,7 @@ vault/
 config.yaml
 .playwright-mcp/
 .opencode/
+.openchamber/
 scripts/probe_events.log
 archive/
 start.sh
