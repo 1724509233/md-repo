@@ -219,3 +219,80 @@ def test_set_filter_mechanism():
         finally:
             events.set_bus(None)
     asyncio.run(go())
+
+
+# ── publish-point wiring smoke ─────────────────────────────────────────────
+
+def test_apply_change_publishes_change(db_conn, vault_dir):
+    """apply_change publishes {op, source, path} with the normalized op."""
+    rec = []
+
+    class _Rec:
+        def publish(self, topic, payload):
+            rec.append((topic, payload))
+
+    real_bus = events._bus
+    events._bus = _Rec()  # bypass set_bus: publish() reads _bus at call time
+    try:
+        from server.vault.orchestration.file_ops import apply_change
+        p = vault_dir / "notes" / "wire.md"
+        p.write_bytes(b"# Wire\n")
+        apply_change(db_conn, vault_dir, "notes/wire.md", "created", source="web")
+    finally:
+        events._bus = real_bus
+    assert rec and rec[0][0] == "change"
+    assert rec[0][1] == {"op": "create", "source": "web", "path": "notes/wire.md"}
+
+
+def test_advance_publishes_only_adopted(db_conn, vault_dir):
+    """Drive EVERY legal transition in TRANSITIONS: the proposal event
+    fires exactly when new_status == 'adopted' (spec §8 item 10)."""
+    rec = []
+
+    class _Rec:
+        def publish(self, topic, payload):
+            rec.append((topic, payload))
+
+    real_bus = events._bus
+    events._bus = _Rec()
+    try:
+        from server import proposals
+
+        def rel_at(status):
+            rel = proposals.create_proposal(
+                vault_dir, type="summary", actor="test", run_id="r1",
+                source_refs=["notes/test.md"], title=f"t-{status}", body="b",
+                now=1760000000.0)
+            if status == "processing":
+                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+            elif status == "adopted":
+                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+                proposals.advance(vault_dir, db_conn, rel, "adopted", actor="test")
+            elif status == "awaiting_review":
+                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+                proposals.advance(vault_dir, db_conn, rel, "awaiting_review", actor="test")
+            elif status == "failed":
+                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+                proposals.advance(vault_dir, db_conn, rel, "failed", actor="test")
+            return rel
+
+        def prop_events():
+            # apply_change emits 'change' on every transition; only the
+            # 'proposal' topic is under test.
+            return [pl for t, pl in rec if t == "proposal"]
+
+        pairs = [(s, d) for s, ds in proposals.TRANSITIONS.items()
+                 for d in ds]
+        assert len(pairs) == 10
+        for src, dst in pairs:
+            rec.clear()
+            rel = rel_at(src)  # setup may emit (e.g. adopted passes through)
+            rec.clear()
+            proposals.advance(vault_dir, db_conn, rel, dst, actor="test")
+            if dst == "adopted":
+                assert prop_events() == [
+                    {"relpath": rel, "status": "adopted"}], (src, dst, rec)
+            else:
+                assert prop_events() == [], (src, dst, rec)  # no self-wake
+    finally:
+        events._bus = real_bus

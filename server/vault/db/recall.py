@@ -14,6 +14,7 @@ import sqlite3
 import time
 
 from .schema import _db_lock
+from ... import events
 
 TRAFFIC_CLASSES = ("human", "on_demand", "synthetic")
 
@@ -58,6 +59,12 @@ def log_query(conn: sqlite3.Connection, source: str, query: str,
                 hit_rows,
             )
         conn.commit()
+
+    # Event wakeup (after commit). Zero-hit searches always publish —
+    # they are the arming signal; synthetic-with-hits is dropped by the
+    # startup-registered filter (contributes 0 to scan_recall_arming).
+    events.publish("recall", {"hits": len(results), "source": source,
+                              "traffic": traffic})
 
 
 def doc_traffic(conn: sqlite3.Connection, since_ts: float,

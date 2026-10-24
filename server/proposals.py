@@ -39,6 +39,7 @@ from pathlib import Path
 
 import yaml
 
+from . import events
 from .vault.fs.vault_ops import atomic_write_bytes
 from .vault.orchestration.file_ops import apply_change
 
@@ -283,6 +284,12 @@ def advance(
     # batch_id = the proposal's run_id (the batch that produced it).
     apply_change(conn, Path(vault_dir), relpath, "update", source=actor,
                  batch_id=str(data.get("run_id") or ""))
+
+    # Event wakeup: only adopted (executor's sole actionable state).
+    # Every other transition produces no executor work — publishing them
+    # would just self-wake the executor loop (spec §4a).
+    if new_status == "adopted":
+        events.publish("proposal", {"relpath": relpath, "status": new_status})
 
     out = parse_proposal(fp)
     out["relpath"] = relpath

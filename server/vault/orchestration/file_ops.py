@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from ..db.changes import log_change
 from ..db.file_index import delete_file, upsert_file
-from ..db.schema import _db_lock
+from ..db.schema import _ACTION_TO_OP, _db_lock
 from ..file_entry import FileEntry
 from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .move_detect import pair_moves
@@ -27,6 +27,7 @@ from .indexer import (
     index_segments,
 )
 from .refs import _remove_dead_links, _update_references
+from ... import events
 
 
 def _is_index_excluded(path: str) -> bool:
@@ -133,6 +134,12 @@ def apply_change(
             # Rewrite references in other docs so links survive the rename.
             if from_path and update_refs:
                 _update_references(conn, vault_dir, from_path, path)
+
+    # Event wakeup (after the change_log row is committed by log_change).
+    # Publisher-side filter (registered at startup) drops self/excluded
+    # sources; the scan-side exclusion stays the authority (spec §4a).
+    events.publish("change", {"op": _ACTION_TO_OP.get(action, action),
+                              "source": source, "path": path})
 
 
 # ── Startup reconcile (merged from the former reconcile.py) ──
