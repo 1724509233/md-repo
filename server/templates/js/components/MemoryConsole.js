@@ -123,7 +123,7 @@ export const MemoryConsole = {
     const recall = computed(() => (state.memoryStatus && state.memoryStatus.recall) || {})
     const recall_error = computed(() => !!recall.value.recall_error)
 
-    // ─── feed 流水（设计场景 01 定稿：agent 事件细行 / 待审卡 / 终态卡淡显痕迹；
+    // ─── feed 流水（设计场景 01 定稿：agent 事件细行 / 待审卡 / adopted 在途卡 / 终态卡淡显痕迹；
     //     时间轴分组 今天 / 昨天 / MM-DD，无时间数据归「更早」；倒序取前 FEED_CAP 条，
     //     尾注 f-more 计数指向监控页「最近终态 / 异常清单」）───
     const FEED_CAP = 8
@@ -168,10 +168,23 @@ export const MemoryConsole = {
           let row2
           if (p.status === 'merged') row2 = (landed ? '落地 ' + landed : p.relpath) + ' · merged_at ' + (p.merged_at ? fmtMerged(p.merged_at) : '—')
           else if (p.status === 'rejected') row2 = '理由：' + (p.reject_reason || '—')
-          else row2 = trail.length ? ('最近 op · ' + trail[trail.length - 1].path) + ' · 提案保留待修' : '提案保留待修 · 详情见「后台 →」'
+          else row2 = p.reject_reason ? '理由：' + p.reject_reason + ' · 提案保留待修'
+            : (trail.length ? ('最近 op · ' + trail[trail.length - 1].path) + ' · 提案保留待修' : '提案保留待修 · 详情见「后台 →」')
           return {
             kind: 'term', key: 't-' + p.relpath, relpath: p.relpath, type: p.type,
             title: p.title, status: p.status, created: p.created || null, row2, trail: trail.slice(-2)
+          }
+        })
+      // adopted 在途卡（执行器队列）：与终态卡同壳、不淡显；trail 同口径（API 新→旧序，
+      // 先按 seq 升序再 slice(-2)，直接 slice 会取到最老 2 行且倒排）
+      const adopted = (state.memoryProposals || [])
+        .filter(p => p.status === 'adopted')
+        .map(p => {
+          const trail = Array.isArray(p.trail) ? [...p.trail].sort((a, b) => (a.seq || 0) - (b.seq || 0)).slice(-2) : []
+          return {
+            kind: 'adopted', key: 'd-' + p.relpath, relpath: p.relpath, type: p.type,
+            title: p.title, status: 'adopted', created: p.created || null,
+            row2: '等待执行器落地 · merged_at 待定', trail
           }
         })
       /* 日期 → 组 key（t / y / MM-DD / x = 无日期数据「更早」）+ 标签 */
@@ -183,7 +196,7 @@ export const MemoryConsole = {
       const parseDay = s => { const m = String(s || '').match(/\d{4}-\d{2}-\d{2}/); return m ? new Date(Number(m[0].slice(0, 4)), Number(m[0].slice(5, 7)) - 1, Number(m[0].slice(8, 10))) : null }
       /* 组内序 = 设计稿示例（agent 细行 → 待审卡 → 终态卡）；awaiting 最旧在前（v3 审查队列口径）、
          终态倒序；组间按日期倒序（今天 > 昨天 > 旧日期 > 更早） */
-      const sortVal = x => x.kind === 'agent' ? 0 : x.kind === 'awaiting' ? 1 : 2
+      const sortVal = x => x.kind === 'agent' ? 0 : x.kind === 'awaiting' ? 1 : x.kind === 'adopted' ? 2 : 3
       const rank = k => k === 'x' ? 0
         : k === 't' ? Number(dayKey(now).replace(/-/g, ''))
         : k === 'y' ? Number(dayKey(yest).replace(/-/g, ''))
@@ -196,6 +209,7 @@ export const MemoryConsole = {
       }
       for (const e of events) push(keyOf(e.date), e)
       for (const a of awaiting) push(keyOf(parseDay(a.created)), a)
+      for (const d of adopted) push(keyOf(parseDay(d.created)), d)
       for (const t of terminals) push(keyOf(parseDay(t.created)), t)
       groups.sort((a, b) => rank(b.key) - rank(a.key))
       for (const g of groups) {
@@ -524,6 +538,17 @@ export const MemoryConsole = {
                   <button class="f-card" :class="{ fresh: it.fresh }" type="button" :title="it.relpath" @click="pick(it)">
                     <div class="f-row1"><span class="tchip"><span v-html="TYPE_ICONS[it.type] || TYPE_ICON_DEFAULT"></span>{{ it.type || 'unknown' }}</span><span class="f-title">{{ it.title }}</span><span class="f-stamp">awaiting</span></div>
                     <div class="f-row2">{{ it.src }}<template v-if="it.run_id"><span class="sep">·</span>{{ it.run_id }}</template></div>
+                  </button>
+                </div>
+                <div v-else-if="it.kind === 'adopted'" class="f-item" :class="{ last: it.lastItem }">
+                  <span class="f-dot"></span>
+                  <span class="f-time">{{ it.time }}</span>
+                  <button class="f-card" type="button" :title="it.relpath" @click="pick(it)">
+                    <div class="f-row1"><span class="tchip">{{ it.type || 'unknown' }}</span><span class="f-title">{{ it.title }}</span><span class="spill adopted" style="font-size:9.5px;padding:1px 7px">adopted</span></div>
+                    <div class="f-row2">{{ it.row2 }}</div>
+                    <div v-if="it.trail.length" class="f-trail">
+                      <div v-for="(t, ti) in it.trail" :key="ti" class="log-line"><span class="seq">#{{ t.seq }}</span><span class="act">{{ t.source }}</span><span class="msg">{{ trailMsg(t) }}</span></div>
+                    </div>
                   </button>
                 </div>
                 <div v-else class="f-item f-term" :class="{ last: it.lastItem }">

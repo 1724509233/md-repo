@@ -23,8 +23,12 @@ Failure taxonomy:
   merged.
 - No handler for the type (v1: ``reminder``) → recorded in ``errors``, the
   proposal stays ``adopted`` (never silently swallowed).
-- Other exceptions → recorded in ``errors``, proposal stays ``adopted``
-  (retry on the next cycle).
+- ``ValueError`` (structural validation failure, e.g. missing payload or
+  empty ``source_refs``) → the proposal itself is defective: advanced to
+  ``failed`` with the reason, logged in detail.
+- Other exceptions (environment/process level, e.g. disk or DB lock) →
+  recorded in ``errors``, proposal stays ``adopted`` (retry on the next
+  cycle), logged in detail.
 
 Handler coverage: v1 shipped entity_index, link, summary, correction
 (reminder intentionally absent — recorded as error). ``archive`` was added
@@ -32,6 +36,7 @@ in v2 (sentinel archival channel; reversible cold storage).
 """
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 from pathlib import Path
@@ -40,6 +45,8 @@ from ..proposals import advance, expire_overdue, scan
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 from ..vault.orchestration.file_ops import apply_change
 from ..write_registry import register_write
+
+logger = logging.getLogger("md-vault.bgagent")
 
 # v1 handler coverage: reminder intentionally absent (recorded as error).
 _ENTITY_RE = re.compile(r"(?m)^## ")
@@ -309,10 +316,18 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
             handler(conn, vault, p)
             advance(vault, conn, rel, "merged", actor="executor")
             merged += 1
-        except _MergeFailed as e:
+        except _MergeFailed as e:            # 已有：内容状态问题（old 缺失/多义等）
+            logger.warning("[executor] merge failed %s: %s: %s", rel, type(e).__name__, e)
             advance(vault, conn, rel, "failed", actor="executor", reject_reason=str(e)[:200])
         except Exception as e:
-            errors.append(f"{rel}: {type(e).__name__}: {e}")
+            if isinstance(e, ValueError):
+                # 结构性校验错误 = 提案本身畸形（payload 缺失 / source_refs 空），非进程级崩溃
+                logger.warning("[executor] merge failed (structural) %s: %s: %s", rel, type(e).__name__, e)
+                advance(vault, conn, rel, "failed", actor="executor", reject_reason=str(e)[:200])
+            else:
+                # 环境/进程级（磁盘、DB 锁）：提案无辜，留 adopted 重试
+                logger.warning("[executor] merge error %s: %s: %s", rel, type(e).__name__, e)
+                errors.append(f"{rel}: {type(e).__name__}: {e}")
 
     expired = expire_overdue(vault, conn)
     return {"merged": merged, "expired": expired, "errors": errors}

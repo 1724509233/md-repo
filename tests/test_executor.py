@@ -1,6 +1,7 @@
 """Tests for the deterministic executor (memory-runtime v1).
 
 Covers: one happy path per merge handler, correction failure → failed,
+ValueError (structural) → failed, unexpected error → stays adopted + errors,
 no-handler type → errors, changelog source="executor", merged back-fill,
 path-traversal guard, correction ambiguity guard, atomic vault writes.
 """
@@ -62,13 +63,16 @@ def test_entity_index_merge_and_upsert(vault_dir, db_conn):
     assert "## person-y" in ent2
 
 
-def test_entity_index_bad_payload_errors(vault_dir, db_conn):
+def test_entity_index_bad_payload_failed(vault_dir, db_conn):
+    # Structural ValueError (missing 'entity' key) → advanced to ``failed`` with
+    # an actionable reject_reason; NOT recorded in errors (not retryable).
     rel = _adopted(vault_dir, db_conn, "entity_index", payload={"value": "no key"})
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 0
-    assert any("entity" in e for e in summary["errors"])
-    # Stays adopted (retryable), not silently dropped.
-    assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
+    assert summary["errors"] == []
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "entity" in p["reject_reason"]
 
 
 # ── link ─────────────────────────────────────────────────────────────────
@@ -94,14 +98,18 @@ def test_link_merge_and_idempotent(vault_dir, db_conn):
     assert content2.count("[[notes/other.md]]") == 1
 
 
-def test_link_missing_source_ref_errors(vault_dir, db_conn):
+def test_link_missing_source_ref_failed(vault_dir, db_conn):
+    # Deliberate R1 semantics: a missing source file is a data-state error, not
+    # a process-level crash; retrying is pointless → advanced to ``failed``.
     rel = _adopted(vault_dir, db_conn, "link",
                    source_refs=["notes/absent.md"],
                    payload={"target": "notes/x.md"})
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 0
-    assert summary["errors"]
-    assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
+    assert summary["errors"] == []
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "not found" in p["reject_reason"]
 
 
 # ── summary ──────────────────────────────────────────────────────────────
@@ -118,6 +126,26 @@ def test_summary_merge(vault_dir, db_conn):
     assert "Decision D" in text
     assert "The decision body." in text
     assert proposals.parse_proposal(vault_dir / rel)["status"] == "merged"
+
+
+def test_summary_no_source_refs_failed(vault_dir, db_conn):
+    # Malformed summary: source_refs empty → structural ValueError → ``failed``.
+    # ``_adopted`` substitutes a default ref for an empty list, so drive the
+    # legal transitions directly (summary is a review type).
+    rel = proposals.create_proposal(
+        vault_dir, type="summary", actor="consolidator", run_id="b",
+        source_refs=[], title="No Src", body="x",
+    )
+    proposals.advance(vault_dir, db_conn, rel, "processing", actor="consolidator")
+    proposals.advance(vault_dir, db_conn, rel, "awaiting_review", actor="consolidator")
+    proposals.advance(vault_dir, db_conn, rel, "adopted", actor="human")
+
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "no source_refs" in p["reject_reason"]
 
 
 # ── correction ───────────────────────────────────────────────────────────
@@ -154,6 +182,18 @@ def test_correction_old_missing_fails_not_merges(vault_dir, db_conn):
     assert (vault_dir / "notes" / "fix.md").read_bytes() == b"# Doc\n\nnothing\n"
 
 
+def test_correction_no_payload_failed(vault_dir, db_conn):
+    # Malformed correction: payload null → structural ValueError → ``failed``
+    # with an actionable reject_reason; NOT recorded in errors.
+    rel = _adopted(vault_dir, db_conn, "correction", payload=None, reversible=False)
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "correction payload requires" in p["reject_reason"]
+
+
 # ── reminder (no v1 handler) ─────────────────────────────────────────────
 
 def test_reminder_no_handler_goes_to_errors(vault_dir, db_conn):
@@ -162,6 +202,28 @@ def test_reminder_no_handler_goes_to_errors(vault_dir, db_conn):
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 0
     assert any("reminder" in e for e in summary["errors"])
+    assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
+
+
+# ── unexpected (non-ValueError) handler error → stays adopted ────────────
+
+def test_handler_unexpected_error_stays_adopted(vault_dir, db_conn, monkeypatch):
+    # A non-ValueError exception (env/process-level: disk, DB lock, …) must NOT
+    # park the proposal: it stays ``adopted`` for retry and is recorded in
+    # errors. Patch one handler entry to raise RuntimeError.
+    import server.bgagent.executor as _ex
+
+    rel = _adopted(vault_dir, db_conn, "entity_index",
+                   payload={"entity": "boom", "value": "v"})
+
+    def boom(conn, vault, p):
+        raise RuntimeError("simulated env failure")
+
+    monkeypatch.setitem(_ex._HANDLERS, "entity_index", boom)
+    summary = run_executor(vault_dir, db_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"]
+    assert any("RuntimeError" in e for e in summary["errors"])
     assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
 
 

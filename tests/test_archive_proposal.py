@@ -167,7 +167,10 @@ def test_archive_system_dir_sync_failed(vault_dir, db_conn):
 
 # ── executor: payload without path → adopted + error ───────────────────────
 
-def test_archive_no_path_payload_stays_adopted(vault_dir, db_conn):
+def test_archive_no_path_payload_failed(vault_dir, db_conn):
+    """A payload without ``path`` can never succeed; under the structural
+    (ValueError) classification it is advanced to ``failed``, not retried
+    forever (v2 archive's old design had treated it as retryable)."""
     (vault_dir / "notes" / "doc.md").write_bytes(b"# Doc\n")
     rel = proposals.create_proposal(
         vault_dir, type="archive", actor="sentinel", run_id="b",
@@ -179,10 +182,10 @@ def test_archive_no_path_payload_stays_adopted(vault_dir, db_conn):
 
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 0
-    assert summary["errors"]
-    assert any("ValueError" in e and "path" in e for e in summary["errors"])
-    # Stays adopted (retryable), not failed.
-    assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
+    assert summary["errors"] == []
+    p = proposals.parse_proposal(vault_dir / rel)
+    assert p["status"] == "failed"
+    assert "path" in p["reject_reason"]
 
 
 # ── executor: end-to-end (archive + unrelated non-adopted) ─────────────────
