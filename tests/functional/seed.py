@@ -3,8 +3,9 @@
 Usage:
 
     python -m tests.functional.seed --vault <path> proposals \
-        --type archive --status adopted --actor sentinel --days-ago 0 \
-        --title cold-doc --payload-json '{"path": "notes/cold-doc.md", "reason": "90d 零召回"}'
+        --type summary --status awaiting_review --actor consolidator --days-ago 0 \
+        --title seed-digest --payload-json '{"form": "cache", "body": "…"}' \
+        --source-ref notes/cold-doc.md
     python -m tests.functional.seed --vault <path> recall \
         --source web --query 打包镜像版本 --days-ago 0.5 \
         --path notes/cold-doc.md --score 0.1
@@ -15,13 +16,13 @@ Usage:
 
 Design notes (verified against the code this mirrors):
 
-- Proposal files follow ``server/proposals.py``: name ``YYYY-MM-DD_<type>_<slug>.md``
-  (date = creation date, backfilled by --days-ago), frontmatter carries the
-  full field set from ``_default_fields``: type/actor/run_id/status/
-  reversible/source_refs/reject_reason/merged_at (+payload). Status is
-  validated against ``proposals.TRANSITIONS`` (8 states). ``reversible``
-  defaults per the authorization policy (auto types → true, review types →
-  false), same rule as ``create_proposal``.
+- Proposal records follow ``server/proposals.py`` (v2): the state source is
+  the ``proposals`` table in ``<vault>/.sync/index.db``; the files under
+  ``suggestions/`` are read-only projections named
+  ``YYYY-MM-DD_<type>_p<id>.md`` (date = creation date, backfilled by
+  --days-ago; ``id`` = the record PK). The seed inserts the record via
+  ``create()`` then drives it to --status through legal ``advance()``
+  transitions only (see ``_DRIVE_PATHS``); each step re-projects the file.
 - recall rows mirror ``server/vault/db/recall.py::log_query``: one
   ``recall_queries`` row per search (zero-hit included) plus one
   ``recall_log`` row per hit. ``--days-ago`` backdates ``ts`` (log_query
@@ -43,8 +44,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import yaml
-
 from server import proposals as P
 from server.vault.db.changes import log_change
 from server.vault.db.recall import _traffic
@@ -59,6 +58,21 @@ def _open_db(vault: Path):
 
 
 # ── proposals ─────────────────────────────────────────────────────────────
+
+# Legal state-machine paths from create() (status=pending) to each target
+# status, per proposals.TRANSITIONS. merged sets merged_at; reject/expire
+# come via the awaiting_review branch (the only legal route to them).
+_DRIVE_PATHS: dict[str, tuple[str, ...]] = {
+    "pending": (),
+    "processing": ("processing",),
+    "adopted": ("processing", "adopted"),
+    "awaiting_review": ("processing", "awaiting_review"),
+    "failed": ("processing", "failed"),
+    "merged": ("processing", "adopted", "merged"),
+    "rejected": ("processing", "awaiting_review", "rejected"),
+    "expired": ("processing", "awaiting_review", "expired"),
+}
+
 
 def cmd_proposals(args: argparse.Namespace, vault: Path) -> None:
     if args.type not in P.VALID_TYPES:
@@ -78,38 +92,17 @@ def cmd_proposals(args: argparse.Namespace, vault: Path) -> None:
             raise SystemExit("error: --payload-json must be a JSON object")
 
     created = datetime.fromtimestamp(time.time() - args.days_ago * 86400)
-    date = created.strftime("%Y-%m-%d")
     run_id = args.run_id or f"seed-{int(created.timestamp())}"
 
-    fm = {
-        "type": args.type,
-        "actor": args.actor,
-        "run_id": run_id,
-        "status": args.status,
-        # Policy default, same rule as create_proposal: auto → True, review → False.
-        "reversible": args.type in P.AUTO_TYPES,
-        "source_refs": [str(r) for r in args.source_ref],
-        "reject_reason": "",
-        "merged_at": "",
-    }
-    if payload is not None:
-        fm["payload"] = payload
-
-    body = f"# {args.title}\n\nfunctional-test seed proposal (Tier-1).\n"
-    text = "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False) + "---\n" + body
-
-    # Same naming/collision rules as create_proposal (slug via its _slugify).
-    base = f"{date}_{args.type}_{P._slugify(args.title)}"
-    rel = f"{P.PROPOSALS_DIR}/{base}.md"
-    n = 2
-    while (vault / rel).exists():
-        rel = f"{P.PROPOSALS_DIR}/{base}-{n}.md"
-        n += 1
-
-    d = vault / P.PROPOSALS_DIR
-    d.mkdir(parents=True, exist_ok=True)
-    (vault / rel).write_bytes(text.encode("utf-8"))
-    print(f"wrote 1 proposal file: {rel}")
+    conn = _open_db(vault)
+    rec = P.create(
+        conn, vault, args.type, args.actor, run_id,
+        [str(r) for r in args.source_ref], args.title, payload,
+        now=created.timestamp())
+    for step in _DRIVE_PATHS[args.status]:
+        rec = P.advance(conn, vault, rec["id"], step, actor=args.actor)
+    print(f"seeded proposal record #{rec['id']} → {rec['relpath']} "
+          f"(status={rec['status']})")
 
 
 # ── recall ────────────────────────────────────────────────────────────────
@@ -184,9 +177,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="backfill the creation date by N days (float ok)")
     p.add_argument("--title", default="seed proposal", help="title (also derives the slug)")
     p.add_argument("--payload-json", default=None,
-                   help="payload as a JSON object (archive: {path, reason}; "
-                        "entity_index: {entity, value}; link: {target}; "
-                        "correction: {file, old, new})")
+                   help="payload as a JSON object (entity_index: {entity, attrs}; "
+                        "relatedness: {target}; summary: {form, body, assertions?}; "
+                        "errata: {contradiction, excerpts, candidate, rationale}; "
+                        "reminder: {body})")
     p.add_argument("--source-ref", action="append", default=[],
                    help="source_refs entry (repeatable)")
     p.add_argument("--run-id", default=None, help="frontmatter run_id (default seed-<ts>)")

@@ -317,6 +317,35 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts)"
     )
 
+    # Relatedness ledger (reversible-automation v2, P2): machine-discovered
+    # document-level relation edges (spec §四 relatedness, §4.4 分层呈现).
+    # One row = one edge (source note, target note, basis, run provenance).
+    # DB-only: never projected into user files. Reversal = delete the row or
+    # mark ignored. ``ignored`` is the human's one-click dismissal — a DB
+    # flag, not a file change (spec §4.4 忽略 = DB 行写标记). Ignored rows
+    # are kept as telemetry (忽略→遥测→回读: the consolidator's readback
+    # shows ignored pairs so it proposes them less).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS relatedness (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            target TEXT NOT NULL,
+            basis TEXT NOT NULL DEFAULT '',
+            actor TEXT NOT NULL,
+            generated_at REAL NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            ignored INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_relatedness_pair ON relatedness(source, target)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_relatedness_actor ON relatedness(actor)"
+    )
+
     # Ensure the segments search index exists.
     from .segments_sql import init_segments
 

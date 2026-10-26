@@ -176,11 +176,15 @@ def _readback_block(alias: str) -> str:
     pending counts (status + type breakdown) and failed proposals with their
     reject_reason (trust-escalation feedback).
 
-    Framework-level (not in the prompt file), bounded (top N + truncation
-    marker), and silent when the DB is unavailable or the role has nothing
-    open/failed (nothing to say).
+    P2: the relatedness feedback loop (spec §4.4 忽略→遥测→回读, D9) rides
+    the same injection: the role's live machine edges (the suggestion layer)
+    and the ignored pairs the human dismissed (telemetry — propose them
+    less). Framework-level (not in the prompt file), bounded (top N +
+    truncation marker), and silent when the DB is unavailable or the role
+    has nothing open/failed/edge-related (nothing to say).
     """
     from .. import proposals
+    from ..vault.db import relatedness as rel_mod
     from ..vault.db.conn import get_conn
 
     conn = get_conn()
@@ -202,26 +206,58 @@ def _readback_block(alias: str) -> str:
         elif r["status"] == "failed":
             failed.append(r)
 
-    if not open_counts and not failed:
-        return ""
+    lines: list[str] = []
+    if open_counts or failed:
+        lines.append("## 你的提案回读（未决积压与失败）")
+        if open_counts:
+            states = " / ".join(f"{n} {s}" for s, n in open_counts.items())
+            types = ", ".join(f"{n} {t}" for t, n in sorted(open_types.items()))
+            lines.append(f"- 未决 {sum(open_counts.values())} 条（{states}；类型：{types}）")
+        if failed:
+            # Newest first (updated_at desc): spec §5.3 requires the LATEST
+            # failure in the next run's context — id order (scan) is oldest
+            # first and would hide recent failures once the backlog exceeds
+            # READBACK_TOP_N.
+            failed.sort(key=lambda r: r["updated_at"], reverse=True)
+            for r in failed[:READBACK_TOP_N]:
+                reason = r["reject_reason"] or "(no reason recorded)"
+                lines.append(
+                    f"- 失败 #{r['id']} [{r['type']}] {r['relpath']}: {reason}")
+            if len(failed) > READBACK_TOP_N:
+                lines.append(f"- …另有 {len(failed) - READBACK_TOP_N} 条失败未列出")
 
-    lines = ["## 你的提案回读（未决积压与失败）"]
-    if open_counts:
-        states = " / ".join(f"{n} {s}" for s, n in open_counts.items())
-        types = ", ".join(f"{n} {t}" for t, n in sorted(open_types.items()))
-        lines.append(f"- 未决 {sum(open_counts.values())} 条（{states}；类型：{types}）")
-    if failed:
-        # Newest first (updated_at desc): spec §5.3 requires the LATEST
-        # failure in the next run's context — id order (scan) is oldest
-        # first and would hide recent failures once the backlog exceeds
-        # READBACK_TOP_N.
-        failed.sort(key=lambda r: r["updated_at"], reverse=True)
-        for r in failed[:READBACK_TOP_N]:
-            reason = r["reject_reason"] or "(no reason recorded)"
+    # Relatedness telemetry (spec §5.3: 被忽略的 relatedness 配对进回读注入).
+    try:
+        edges = rel_mod.edges_for_actor(conn, alias)
+    except Exception:
+        logger.warning("[bg:%s] readback relatedness failed", alias, exc_info=True)
+        edges = []
+    live = [e for e in edges if not e["ignored"]]
+    ignored_pairs: dict[tuple[str, str], int] = {}
+    for e in edges:
+        if e["ignored"]:
+            key = (e["source"], e["target"])
+            ignored_pairs[key] = ignored_pairs.get(key, 0) + 1
+    if live or ignored_pairs:
+        lines.append("## 相关性边（机器建议层 · 只进账本，不进笔记）")
+        if live:
             lines.append(
-                f"- 失败 #{r['id']} [{r['type']}] {r['relpath']}: {reason}")
-        if len(failed) > READBACK_TOP_N:
-            lines.append(f"- …另有 {len(failed) - READBACK_TOP_N} 条失败未列出")
+                f"- 当前生效 {len(live)} 条机器边（最近 {min(len(live), READBACK_TOP_N)} 条）：")
+            for e in live[:READBACK_TOP_N]:
+                basis = str(e.get("basis") or "").replace("\n", " ")[:60]
+                lines.append(
+                    f"  - {e['source']} → {e['target']}"
+                    + (f"（{basis}）" if basis else ""))
+            if len(live) > READBACK_TOP_N:
+                lines.append(f"  - …另有 {len(live) - READBACK_TOP_N} 条未列出")
+        if ignored_pairs:
+            pairs = sorted(ignored_pairs.items(), key=lambda kv: kv[1], reverse=True)
+            lines.append("- 人工忽略过的配对（遥测：下次少提这些，人不要了就别再推）：")
+            for (src, tgt), n in pairs[:READBACK_TOP_N]:
+                lines.append(f"  - {src} → {tgt}（忽略 ×{n}）")
+            if len(pairs) > READBACK_TOP_N:
+                lines.append(f"  - …另有 {len(pairs) - READBACK_TOP_N} 个配对未列出")
+
     return "\n".join(lines)
 
 

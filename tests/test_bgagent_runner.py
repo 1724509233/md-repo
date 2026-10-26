@@ -488,8 +488,8 @@ def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
             seen.append(r)
 
     recs = [
-        {"id": 1, "type": "link", "status": "adopted",
-         "relpath": "suggestions/2026-10-21_link_a.md"},
+        {"id": 1, "type": "relatedness", "status": "adopted",
+         "relpath": "suggestions/2026-10-21_relatedness_a.md"},
         {"id": 2, "type": "summary", "status": "awaiting_review",
          "relpath": "suggestions/2026-10-21_summary_b.md"},
     ]
@@ -506,7 +506,7 @@ def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
     # _events() writes notes/b.md (1 file) + the 2 folded record paths.
     assert report.files_changed == 3
     assert seen[0].proposal_paths == [
-        "suggestions/2026-10-21_link_a.md", "suggestions/2026-10-21_summary_b.md"]
+        "suggestions/2026-10-21_relatedness_a.md", "suggestions/2026-10-21_summary_b.md"]
     assert seen[0].kind == "review"  # a review-channel record is pending
 
 
@@ -521,8 +521,8 @@ def test_run_report_kind_batch_without_review_records(tmp_path: Path, monkeypatc
             seen.append(r)
 
     monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at: [
-        {"id": 1, "type": "link", "status": "adopted",
-         "relpath": "suggestions/2026-10-21_link_a.md"}])
+        {"id": 1, "type": "relatedness", "status": "adopted",
+         "relpath": "suggestions/2026-10-21_relatedness_a.md"}])
 
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
@@ -566,7 +566,7 @@ def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
     vault.mkdir(exist_ok=True)
     # Seed records under this alias: 1 open (adopted), 1 failed with reason.
     rec_open = proposals.create(
-        db_conn, vault, "link", actor="test-org", run_id="test-org-earlier",
+        db_conn, vault, "relatedness", actor="test-org", run_id="test-org-earlier",
         source_refs=["notes/a.md"], justification="j",
         payload={"target": "notes/b.md"})
     proposals.advance(db_conn, vault, rec_open["id"], "processing", actor="t")

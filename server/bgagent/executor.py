@@ -1,28 +1,54 @@
-"""Deterministic executor (memory-runtime v1).
+"""Deterministic executor (memory-runtime v1, reversible-automation v2 P2).
 
 The ONLY component allowed to translate ``status: adopted`` proposals into
-vault file changes (constitution iron rule 1: the main memory area is
-read-only for everyone; the sole executor lands adopted proposals).
+vault changes (constitution iron rule 1). Pure determinism — no LLM.
 
-Pure determinism — no LLM. One cycle (:func:`run_executor`):
+One cycle (:func:`run_executor`):
 
 1. Read ``status: adopted`` proposal records from the vault index DB and
    merge them through the per-type handlers (the suggestions/ files are
    projections, never scanned — the record IS the state).
-2. Expire overdue ``awaiting_review`` records (14 days, created_at).
-3. Return ``{"merged": n, "expired": n, "errors": [str, ...]}``.
+2. Retired-type records (v1 ``link`` / ``correction`` / ``archive``) are
+   parked in ``failed`` with an actionable reason — there is no v2 handler
+   (the verbs were retired, spec §四 退役三件); human processes them
+   (spec: 存量提案人工处理，不迁移).
+3. Expire overdue ``awaiting_review`` records (14 days, created_at).
+4. Return ``{"merged": n, "expired": n, "errors": [str, ...]}``.
+
+Handler coverage (v2 verb table, spec §四):
+
+- ``entity_index`` — upsert a ``## entity`` section into ``index/entities.md``
+  (structured attrs, D7: fields not prose; machine zone).
+- ``relatedness`` — insert/refresh one edge row in the ``relatedness`` table
+  (DB-only, D9: zero file landing; the state transition ledger suffices).
+- ``summary`` — dual form (D8): cache ``index/summaries/<stem>-summary.md``
+  (slot, regenerable) / report ``index/summaries/<date>_summary_<slug>.md``
+  (independent file, per-assertion refs validated for non-emptiness and
+  existence, advisory title frame, never merged into user notes).
+- ``errata`` — additive contradiction card ``index/errata/<stem>.md``
+  (D6: surface + annotated candidate, single gate; the original text is
+  never touched, no pointer added).
+- ``reminder`` — intentionally absent (no landing, v1 design: the console
+  notification card IS the delivery). Recorded in ``errors``, stays adopted.
+
+Snapshot tiers (D12: machine-zone snapshots default OFF in v2b; LLM-unique
+output forced ON in v2a — R2): every handler here runs the forced capture
+pattern (capture before write → finalize after). v2b will gate the
+*regenerable* handlers (``entity_index``) behind the config switch; no
+switch exists in v2a (all forced on). Relatedness inserts no file, so it
+has nothing to capture.
 
 Merge handlers register the write as source="executor" (write_registry) and
-ledger the file change via ``apply_change(source="executor")``; the state
-transition to ``merged`` is ledgered by ``advance`` (source="executor") and
-backs out ``merged_at``.
+ledger file changes via ``apply_change(source="executor")`` (relatedness
+writes no file — the advance() ledger row is its state record); the state
+transition to ``merged`` is ledgered by ``advance`` and backs out
+``merged_at``.
 
 Failure taxonomy:
 
-- ``_MergeFailed`` (typed business failure, e.g. correction old text not
-  found) → the proposal is advanced to ``failed`` with the reason, NOT
-  merged.
-- No handler for the type (v1: ``reminder``) → recorded in ``errors``, the
+- ``_MergeFailed`` (typed business failure) → the proposal is advanced to
+  ``failed`` with the reason, NOT merged.
+- No handler for the type (``reminder``) → recorded in ``errors``, the
   proposal stays ``adopted`` (never silently swallowed).
 - ``ValueError`` (structural validation failure, e.g. missing payload or
   empty ``source_refs``) → the proposal itself is defective: advanced to
@@ -30,28 +56,26 @@ Failure taxonomy:
 - Other exceptions (environment/process level, e.g. disk or DB lock) →
   recorded in ``errors``, proposal stays ``adopted`` (retry on the next
   cycle), logged in detail.
-
-Handler coverage: v1 shipped entity_index, link, summary, correction
-(reminder intentionally absent — recorded as error). ``archive`` was added
-in v2 (sentinel archival channel; reversible cold storage).
 """
 from __future__ import annotations
 
 import logging
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
-from ..proposals import advance, expire_overdue, scan
+from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..snapshots import capture, finalize, gc, hash_bytes
+from ..vault.db.relatedness import upsert_edge
+from ..vault.db.schema import _db_lock
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 from ..vault.orchestration.file_ops import apply_change
 from ..write_registry import register_write
 
 logger = logging.getLogger("md-vault.bgagent")
 
-# v1 handler coverage: reminder intentionally absent (recorded as error).
-_ENTITY_RE = re.compile(r"(?m)^## ")
+_SECTION_RE = re.compile(r"(?m)^## ")
 
 
 class _MergeFailed(Exception):
@@ -71,12 +95,21 @@ def _vault_path(vault: Path, rel: str) -> Path:
     return vault / safe
 
 
+def _slugify(stem: str) -> str:
+    """Filesystem-safe slug from a stem (CJK-safe); fallback 'report'."""
+    s = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", stem, flags=re.UNICODE).strip("-")
+    return s[:40] or "report"
+
+
 # ── entity_index: upsert a markdown section into index/entities.md ───────
+# R2 tier: regenerable machine-zone write (LLM 否 — 上游产出). v2a: capture
+# forced on (no switch); v2b: the config switch lands here (D12: 机器区快照
+# 默认关 — but the switch does not exist in v2a; all handlers forced on).
 
 def _parse_sections(text: str) -> list[tuple[str, str]]:
     """Split a markdown doc into (## heading, body) pairs (order preserved)."""
     sections = []
-    for part in _ENTITY_RE.split(text)[1:]:
+    for part in _SECTION_RE.split(text)[1:]:
         nl = part.find("\n")
         if nl == -1:
             sections.append((part.strip(), ""))
@@ -95,13 +128,35 @@ def _render_entities(sections: list[tuple[str, str]]) -> str:
 
 
 def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
-    """Upsert payload {entity, value} as a `## entity` section in
-    index/entities.md (replace existing section, append if absent)."""
+    """Upsert payload {entity, attrs: {field: scalar}} as a ``## entity``
+    section in ``index/entities.md`` (replace existing section, append if
+    absent). D7: attrs are fields, not narrative — the v1 prose shape
+    ``{entity, value}`` is rejected structurally (parked as failed)."""
     payload = p.get("payload") or {}
     key = str(payload.get("entity") or "").strip()
     if not key:
         raise ValueError("entity_index payload requires an 'entity' key")
-    value = str(payload.get("value") or "")
+    if "value" in payload and "attrs" not in payload:
+        raise ValueError(
+            "entity_index payload must use the structured shape {entity, attrs} — "
+            "the v1 prose shape {entity, value} is retired (D7: attrs are fields, not narrative)"
+        )
+    attrs = payload.get("attrs")
+    if not isinstance(attrs, dict) or not attrs:
+        raise ValueError("entity_index payload requires a non-empty 'attrs' dict {field: value}")
+
+    # D7 structural re-validation at merge time (spec §5.2 v2a 复算 = 结构校验):
+    # attrs values must be scalars; nested structures / empty values refuse.
+    for k, v in attrs.items():
+        if isinstance(v, (dict, list)):
+            raise ValueError(f"entity_index attrs['{k}'] must be a scalar value, got {type(v).__name__}")
+        if isinstance(v, str) and not v.strip():
+            raise ValueError(f"entity_index attrs['{k}'] must be a non-empty value")
+
+    body_lines = [f"- {k}: {v}" for k, v in attrs.items()]
+    for ref in (p.get("source_refs") or []):
+        body_lines.append(f"- source: {ref}")
+    section_body = "\n".join(body_lines)
 
     rel = "index/entities.md"
     fp = vault / rel
@@ -111,17 +166,16 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     out: list[tuple[str, str]] = []
     for heading, body in sections:
         if heading == key:
-            out.append((heading, value))
+            out.append((heading, section_body))
             replaced = True
         else:
             out.append((heading, body))
     if not replaced:
-        out.append((key, value))
+        out.append((key, section_body))
 
     fp.parent.mkdir(parents=True, exist_ok=True)
     new_bytes = _render_entities(out).encode("utf-8")
-    # 可逆层（P1）：执行器落地 = LLM 独一产出，强制 pre-image（不变量 10）。
-    # capture 失败返回 None（degraded）：写照常进行，仅记日志。
+    # 可逆层（P1）：执行器落地强制 pre-image（不变量 10）；v2b 才配开关（R2）。
     snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
     register_write(rel, "executor")
@@ -132,58 +186,59 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
                  source="executor", batch_id=str(p.get("run_id") or ""))
 
 
-# ── link: append a wikilink line inside the <!-- related --> block ───────
+# ── relatedness: one DB edge row, zero file landing (D9) ──────────────────
+# No file write → no apply_change file row; the advance() state-transition
+# ledger row IS this handler's state record. Nothing to snapshot (no file).
 
-def _related_block(text: str) -> str | None:
-    m = re.search(r"<!-- related -->\n(.*?)\n<!-- /related -->", text, re.DOTALL)
-    return m.group(1) if m else None
+def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+    """Insert/refresh one (source, target) edge in the ``relatedness`` table.
 
-
-def _merge_link(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
-    """Append [[target]] (payload 'target') to the `<!-- related -->` block
-    at the end of source_refs[0] (created if absent); idempotent — an
-    existing line produces no file change."""
+    source = source_refs[0], target = payload['target'], basis = the record
+    justification. Both files must exist (spec §5.2 v2a 结构校验: drift →
+    surface, 不盲落). Idempotent per pair (upsert_edge); a pair the human
+    dismissed (ignored rows) gets a fresh live row when re-proposed — the
+    readback's ignored grouping then shows the repeat.
+    """
     refs = p.get("source_refs") or []
     if not refs:
-        raise ValueError("link proposal has no source_refs")
+        raise ValueError("relatedness proposal has no source_refs")
     payload = p.get("payload") or {}
     target = str(payload.get("target") or "").strip()
     if not target:
-        raise ValueError("link payload requires a 'target'")
+        raise ValueError("relatedness payload requires a 'target'")
 
-    rel = str(refs[0])
-    fp = _vault_path(vault, refs[0])
-    if not fp.is_file():
-        raise ValueError(f"link source file not found: {rel}")
+    source = str(refs[0])
+    for rel in (source, target):
+        fp = _vault_path(vault, rel)
+        if not fp.is_file():
+            raise ValueError(f"relatedness file not found: {rel}")
 
-    line = f"[[{target}]]"
-    text = fp.read_bytes().decode("utf-8")
-    block = _related_block(text)
-    if block is not None and line in block.splitlines():
-        return  # already linked — state transition only
-
-    if block is not None:
-        text = text.replace("<!-- /related -->", f"{line}\n<!-- /related -->", 1)
-    else:
-        if not text.endswith("\n"):
-            text += "\n"
-        text += f"\n<!-- related -->\n{line}\n<!-- /related -->\n"
-
-    # 可逆层（P1）：link 落地写用户源文档（spec 实证 4），全文 pre-image 兜底。
-    snap = capture(conn, vault, rel, "update", "executor",
-                   run_id=str(p.get("run_id") or ""))
-    register_write(rel, "executor")
-    new_bytes = text.encode("utf-8")
-    atomic_write_bytes(fp, new_bytes)
-    if snap is not None:
-        finalize(conn, snap, hash_bytes(new_bytes))
-    apply_change(conn, vault, rel, "update", source="executor",
-                 batch_id=str(p.get("run_id") or ""))
+    with _db_lock:
+        upsert_edge(
+            conn, source, target,
+            basis=str(p.get("justification") or ""),
+            actor=str(p.get("actor") or ""),
+            run_id=str(p.get("run_id") or ""),
+        )
 
 
-# ── summary: body lands next to the source doc as <stem>-summary.md ──────
+# ── summary: dual form, machine zone (D8, spec §4.2) ──────────────────────
+# R2 tier: LLM 是（上游）→ LLM-unique output → forced pre-image (invariant
+# 10) in v2a; v2b 开关同样不触及 LLM 独一产出侧。
 
 def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+    """Land the summary in the machine zone (spec §四: 机器区).
+
+    - ``form: "cache"`` — ``index/summaries/<stem>-summary.md``: one slot per
+      source doc, slot-overwrite (旧全文 = 该调用 pre-image, regenerable).
+    - ``form: "report"`` — ``index/summaries/<date>_summary_<slug>.md``:
+      independent file; per-assertion refs (non-empty + files exist, D8
+      执行器结构校验); advisory title frame (「分析认为…」); never merged
+      into user notes (记忆化 = 人的复制动作, §10 拍板记录).
+
+    The v1 placement (next to the source doc in the user area) is retired:
+    landing there would violate the user-area zero-write constraint.
+    """
     refs = p.get("source_refs") or []
     if not refs:
         raise ValueError("summary proposal has no source_refs")
@@ -192,21 +247,54 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     if not src_fp.is_file():
         raise ValueError(f"summary source file not found: {src_rel}")
 
-    stem = Path(src_rel).stem
-    out_rel = (Path(src_rel).parent / f"{stem}-summary.md").as_posix()
-    out_fp = _vault_path(vault, out_rel)
-    existed = out_fp.is_file()
-    # Record semantics: the summary text lives in payload["body"]; the title
-    # is derived (no free-form title field on the record).
     payload = p.get("payload") or {}
+    form = payload.get("form")
     body = str(payload.get("body") or "").strip()
-    title = f"{stem} summary"
-    text = f"# {title}\n\n{body}\n" if body else f"# {title}\n"
+    stem = Path(src_rel).stem
 
+    if form == "cache":
+        if not body:
+            raise ValueError("summary cache form requires a non-empty 'body'")
+        out_rel = f"index/summaries/{stem}-summary.md"
+        text = f"# {stem} summary\n\n{body}\n"
+    elif form == "report":
+        if not body:
+            raise ValueError("summary report form requires a non-empty 'body'")
+        assertions = payload.get("assertions")
+        if not isinstance(assertions, list) or not assertions:
+            raise ValueError("summary report form requires a non-empty 'assertions' list [{text, refs}]")
+        # D8 执行器结构校验：refs 非空 + 文件存在（语义性支持度校验 = v2b 候选）。
+        for i, a in enumerate(assertions):
+            if not isinstance(a, dict):
+                raise ValueError(f"summary assertion #{i} must be a dict {{text, refs}}")
+            refs_i = a.get("refs")
+            if not isinstance(refs_i, list) or not refs_i:
+                raise ValueError(
+                    f"summary assertion #{i} has empty refs — a report assertion "
+                    "without source refs is rejected (D8)"
+                )
+            for r in refs_i:
+                fp = _vault_path(vault, str(r))
+                if not fp.is_file():
+                    raise ValueError(
+                        f"summary assertion #{i} refs a missing file: {r}"
+                    )
+        date = datetime.fromtimestamp(float(p.get("created_at") or 0)).strftime("%Y-%m-%d")
+        out_rel = f"index/summaries/{date}_summary_{_slugify(stem)}.md"
+        # Advisory 框架：标题固定，机器生成的新因果判断只以「假设」面目出现。
+        text = f"# 分析认为\n\n{body}\n"
+    else:
+        raise ValueError(
+            "summary payload requires 'form': 'cache' or 'report' "
+            "(the v1 shape {body} without form is retired — D8 双形态)"
+        )
+
+    out_fp = vault / out_rel
+    existed = out_fp.is_file()
     out_fp.parent.mkdir(parents=True, exist_ok=True)
     new_bytes = text.encode("utf-8")
-    # 可逆层（P1）：summary 缓存型 = LLM 独一产出，槽覆盖强制 pre-image
-    # （不变量 10：旧 summary 全文即此 pre-image，重跑不必然复现）。
+    # 可逆层（P1）：summary = LLM 独一产出，槽覆盖强制 pre-image（不变量 10：
+    # 旧全文即此 pre-image；报告型点态不可再生，pre-image 是唯一存档）。
     snap = capture(conn, vault, out_rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
     register_write(out_rel, "executor")
@@ -217,114 +305,72 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
                  source="executor", batch_id=str(p.get("run_id") or ""))
 
 
-# ── correction: exact replacement in the original doc ────────────────────
+# ── errata: additive contradiction card, machine zone (D6, spec §4.3) ─────
+# 单闸门：人 adopt = 确认，卡才落地（物化 = 确权）。落地后系统对该卡只读：
+# merged 记录永不重跑 handler，所以「不重合并」即「只读」。原文永不改、
+# 不加指针（D6：机器指出伤口，缝合线由人画）。
 
-def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
-    """payload {file, old, new}: exact replacement. If ``old`` is absent the
-    replacement fails and the proposal is marked ``failed`` (not merged) —
-    the original text stays untouched."""
+def _merge_errata(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+    """Render the §4.3 card into ``index/errata/<stem>.md`` (stem = the
+    first source ref). The candidate is annotated ``candidate, by: <actor>``
+    (invariant 7: 候选是待人署名的草稿) — never a silent assertion."""
     payload = p.get("payload") or {}
-    f = str(payload.get("file") or "").strip()
-    old, new = payload.get("old"), payload.get("new")
-    if not f or old is None or new is None:
-        raise ValueError("correction payload requires {file, old, new}")
-
-    fp = _vault_path(vault, f)
-    if not fp.is_file():
-        raise _MergeFailed(f"correction target not found: {f}")
-    text = fp.read_bytes().decode("utf-8")
-    if old not in text:
-        # Record the missing snippet in the reason: reject_reason is the
-        # trust-escalation data source and must be actionable.
-        snippet = str(old).replace("\n", "\\n")[:120]
-        raise _MergeFailed(
-            f"correction old text not found in {f} (stale proposal): {snippet!r}")
-
-    count = text.count(old)
-    if count > 1:
-        # Deterministic executor must not guess WHICH occurrence — park the
-        # proposal as failed so the snippet can be refined (failed → pending).
-        raise _MergeFailed(
-            f"correction old text is ambiguous in {f}: "
-            f"{count} occurrences — refine the snippet"
+    contradiction = str(payload.get("contradiction") or "").strip()
+    candidate = str(payload.get("candidate") or "").strip()
+    rationale = str(payload.get("rationale") or "").strip()
+    if not contradiction or not candidate or not rationale:
+        raise ValueError("errata payload requires non-empty {contradiction, candidate, rationale}")
+    excerpts = payload.get("excerpts")
+    if not isinstance(excerpts, list) or len(excerpts) < 2:
+        raise ValueError(
+            "errata payload requires at least 2 excerpts "
+            "[(path, quote, label?)] — a single excerpt is a claim, not a contradiction"
         )
+    for i, e in enumerate(excerpts):
+        if not isinstance(e, dict):
+            raise ValueError(f"errata excerpt #{i} must be a dict {{path, quote, label?}}")
+        if not str(e.get("path") or "").strip() or not str(e.get("quote") or "").strip():
+            raise ValueError(f"errata excerpt #{i} requires non-empty 'path' and 'quote'")
 
-    new_bytes = text.replace(old, new, 1).encode("utf-8")
-    # 可逆层（P1）：correction 落地写用户源文档，全文 pre-image 兜底。
-    snap = capture(conn, vault, f, "update", "executor",
+    refs = p.get("source_refs") or []
+    if not refs:
+        raise ValueError("errata proposal has no source_refs")
+    stem = Path(str(refs[0])).stem
+    actor = str(p.get("actor") or "")
+
+    lines = ["## 矛盾", contradiction, ""]
+    letters = "ABCDEFGH"
+    for i, e in enumerate(excerpts):
+        path = str(e["path"]).strip()
+        label = str(e.get("label") or "").strip()
+        quote = str(e["quote"]).strip()
+        where = f"{path} {label}" if label else path
+        lines.append(f"摘录 {letters[i]}（{where}）：{quote}")
+    lines += ["", f"## 候选读法（candidate, by: {actor}）", candidate, "",
+              "## 理由", rationale, ""]
+
+    rel = f"index/errata/{stem}.md"
+    fp = vault / rel
+    existed = fp.is_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    new_bytes = "\n".join(lines).encode("utf-8")
+    # 可逆层（P1）：勘误卡 = LLM 独一产出（矛盾措辞/候选读法），强制
+    # pre-image（不变量 10）。
+    snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    register_write(f, "executor")
+    register_write(rel, "executor")
     atomic_write_bytes(fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
-    apply_change(conn, vault, f, "update", source="executor",
-                 batch_id=str(p.get("run_id") or ""))
-
-
-# ── archive: move a doc to archive/<path> (v2 cold storage) ───────────────
-# Top-level system dirs that must never be archived: proposals, entity
-# index, sync internals, and archive itself (no double-archive).
-_ARCHIVE_SYSTEM_DIRS = frozenset({"suggestions", "index", ".sync", "archive"})
-
-
-def _merge_archive(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
-    """Move a doc to ``archive/<path>`` preserving the subpath (v2 cold storage).
-
-    Payload: ``{"path": "<vault-relative doc>", "reason": "<optional>"}``.
-
-    Crash-window semantics: if the source is missing but the dest exists,
-    the move already completed in a crashed prior cycle — idempotent no-op;
-    the subsequent ``advance(..., "merged")`` then books the state.
-    """
-    payload = p.get("payload") or {}
-    rel = str(payload.get("path") or "").strip()
-    if not rel:
-        raise ValueError("archive payload requires a non-empty 'path'")
-
-    # Path guard: escape / bad path → _MergeFailed (park in failed, actionable).
-    src_fp = _vault_path(vault, rel)
-
-    # System-dir guard: proposals, entity index, internals, double-archive.
-    parts = Path(rel).parts
-    if parts and parts[0] in _ARCHIVE_SYSTEM_DIRS:
-        raise _MergeFailed(f"archive target is a system path, cannot archive: {rel}")
-
-    dest_rel = f"archive/{rel}"
-    dest_fp = vault / dest_rel
-
-    src_exists = src_fp.is_file()
-    dest_exists = dest_fp.is_file()
-
-    if dest_exists and src_exists:
-        raise _MergeFailed(
-            f"archive destination already exists: {dest_rel} — resolve manually; no silent overwrite"
-        )
-    if not src_exists and dest_exists:
-        return  # crash window: move already completed, idempotent no-op
-    if not src_exists and not dest_exists:
-        raise _MergeFailed(f"archive target not found: {rel}")
-
-    # src exists, dest missing: perform the move.
-    # 可逆层（P1）：archive = 移动用户区文件（v2 冷存储通道），
-    # 对源路径捕获全文 pre-image（op=move，new_path = 目的地）。
-    snap = capture(conn, vault, rel, "move", "executor",
-                   run_id=str(p.get("run_id") or ""), new_path=dest_rel)
-    dest_fp.parent.mkdir(parents=True, exist_ok=True)
-    register_write(dest_rel, "executor")
-    register_write(rel, "executor")  # source deletion attribution (prune pattern)
-    src_fp.rename(dest_fp)
-    if snap is not None:
-        finalize(conn, snap, hash_bytes(dest_fp.read_bytes()))
-    apply_change(conn, vault, dest_rel, "move", from_path=rel, source="executor",
-                 batch_id=str(p.get("run_id") or ""))
+    apply_change(conn, vault, rel, "update" if existed else "create",
+                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 _HANDLERS = {
     "entity_index": _merge_entity_index,
-    "link": _merge_link,
+    "relatedness": _merge_relatedness,
     "summary": _merge_summary,
-    "correction": _merge_correction,
-    "archive": _merge_archive,
+    "errata": _merge_errata,
 }
 
 
@@ -334,7 +380,10 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
     """One executor cycle. Returns {"merged": n, "expired": n, "errors": [...]}.
 
     See the module docstring for the failure taxonomy. ``reminder`` has no
-    v1 handler and is reported in ``errors`` without merging.
+    handler by design (no landing) and is reported in ``errors`` without
+    merging. Retired v1 types (link / correction / archive) have no v2
+    handler: their adopted records are parked in ``failed`` with an
+    actionable reason (human processes 存量, no migration — spec §四).
     """
     vault = Path(vault_dir)
     merged = 0
@@ -343,6 +392,24 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
     for p in scan(conn, status="adopted"):
         rec_id = p["id"]
         rel = p["relpath"]
+
+        # Retired v1 verbs: no v2 handler. Park in failed (actionable reason)
+        # instead of re-erroring every cycle — the human's queue, not ours.
+        if p["type"] in RETIRED_TYPES:
+            logger.warning(
+                "[executor] retired type parked as failed %s: type '%s' has no v2 handler",
+                rel, p["type"],
+            )
+            advance(
+                conn, vault, rec_id, "failed", actor="executor",
+                reject_reason=(
+                    f"type '{p['type']}' is retired in v2 (no executor handler) — "
+                    "process manually: link → relatedness ledger; correction → "
+                    "errata + human rebase; archive → human move"
+                ),
+            )
+            continue
+
         handler = _HANDLERS.get(p["type"])
         try:
             if handler is None:

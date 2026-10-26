@@ -48,8 +48,8 @@ def test_list_shape_sort_age(client, vault_dir, db_conn):
     r_old = _create(vault_dir, db_conn, type="entity_index",
                     now=time.time() - 5 * 86400)
     r_new = _create(vault_dir, db_conn, type="entity_index")
-    # adopted (auto type → link).
-    r_adopted = _create(vault_dir, db_conn, type="link")
+    # adopted (auto type → relatedness).
+    r_adopted = _create(vault_dir, db_conn, type="relatedness")
     proposals.advance(db_conn, vault_dir, r_adopted["id"], "processing", actor="t")
     proposals.advance(db_conn, vault_dir, r_adopted["id"], "adopted", actor="t")
 

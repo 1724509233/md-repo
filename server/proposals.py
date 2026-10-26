@@ -18,23 +18,26 @@ State machine (illegal transitions raise ``ValueError``):
     awaiting_review → adopted | rejected | expired
     failed → pending
 
-Authorization tier (constitution §5, "授权初分表"):
+Authorization tiers (spec §四 verb catalog — the full-table replacement of
+constitution v0.1 §5, "授权初分表"):
 
-The §5 initial split covered the v1 five types (entity_index, link, summary,
-correction, reminder). ``archive`` was added in v2 as the sentinel's archival
-channel (reversible cold storage → auto, recoverable per memory-recall.md 模块 5).
+- ``entity_index`` / ``relatedness`` → auto channel (adopted after
+  processing): regenerable machine-zone artifacts (entity index section;
+  the relatedness DB edge — delete the row / mark it ignored to reverse).
+- ``summary`` / ``errata`` / ``reminder`` → review channel
+  (awaiting_review after processing): LLM-unique output whose pre-image is
+  the only archive (summaries), the single-gate contradiction card (errata:
+  adopt = confirmation; materialization is a human act), and additions to
+  the person's life (reminder).
 
-- ``entity_index`` / ``link`` / ``archive`` → auto channel (adopted after
-  processing)
-- ``summary`` / ``correction`` / ``reminder`` → review channel
-  (awaiting_review after processing)
-
-Creation writes no change_log row (matches v1 behavior: the file appeared
-quietly; the ledger records state transitions and merges). Every status
-transition and merge IS recorded in the change_log via ``apply_change``
-(source = actor, batch_id = the producing run_id, so the console trail and
-notifications keep working). ``events.publish("proposal")`` fires only on
-``adopted`` — the executor's sole actionable state (spec §4a).
+Retired types (D5, spec §四 "退役三件"): ``link`` (machine relations now
+live in the relatedness ledger, never in user files), ``correction``
+(exact user-text replacement is the human-only ``rebase``; surfacing
+contradictions is ``errata``), ``archive`` (automation never moves user
+files — the sentinel reports read-only). Retired rows created before the
+cutover keep working on every read path (scan / console / counts): no
+validator touches ``row["type"]`` on reads; only ``create`` and the
+``propose`` tool reject retired types.
 """
 from __future__ import annotations
 
@@ -52,10 +55,28 @@ from .vault.orchestration.file_ops import apply_change
 
 PROPOSALS_DIR = "suggestions"
 
-VALID_TYPES = frozenset({"entity_index", "link", "summary", "correction", "reminder", "archive"})
+VALID_TYPES = frozenset({"entity_index", "relatedness", "summary", "errata", "reminder"})
 
-AUTO_TYPES = frozenset({"entity_index", "link", "archive"})
-REVIEW_TYPES = frozenset({"summary", "correction", "reminder"})
+# Spec §四: regenerable machine-zone writes = auto; LLM-unique output and
+# human-facing additions = review. errata materialization is a human gate
+# (single gate: adopt = confirmation; the system never touches the user
+# area before materialization, D6).
+AUTO_TYPES = frozenset({"entity_index", "relatedness"})
+REVIEW_TYPES = frozenset({"summary", "errata", "reminder"})
+
+# Retired by the v2 verb catalog (D5). Kept as documentation + test anchor:
+# the propose tool returns an operational reason naming the replacement,
+# and the read paths (scan / console / counts) must tolerate legacy rows
+# of these types without crashing (frozen constraint: no validator may
+# reject a row's type on read).
+RETIRED_TYPES = frozenset({"link", "correction", "archive"})
+
+# Creation writes no change_log row (matches v1 behavior: the file appeared
+# quietly; the ledger records state transitions and merges). Every status
+# transition and merge IS recorded in the change_log via ``apply_change``
+# (source = actor, batch_id = the producing run_id, so the console trail and
+# notifications keep working). ``events.publish("proposal")`` fires only on
+# ``adopted`` — the executor's sole actionable state.
 
 TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"processing"}),

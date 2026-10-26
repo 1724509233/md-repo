@@ -32,10 +32,10 @@
 - 遵循"链接优先于层级"原则：**不要**主动建议大规模按主题重排目录；仅当用户明确要求、
   或存在明确的命名/路径混乱时才建议移动。
 
-**suggestions/ 提案协议**：
-- `suggestions/` 下的文档受状态机保护：文件名必须为 `YYYY-MM-DD_<type>_<slug>.md`，frontmatter 必须含合法 `type`（entity_index / link / summary / correction / reminder / archive）和 `status`，文件名 type 段与 frontmatter 一致。
-- 新建提案 status 只能 `pending`（内部流程）或 `awaiting_review`（外部评审通道）。
-- **不要直接修改已有提案的 status**：状态迁移必须走 proposal 状态机（server 端 advance），直写改 status 会被拒绝。正文、payload 等其它字段的修改不受限。
+**suggestions/ 提案协议（v2）**：
+- `suggestions/` 是系统专属的投影目录：写/移动/删除该目录下的文件一律被拒。创建提案只能走 `propose` 工具（type / payload / source_refs / justification 四参）——状态源是账本记录（DB），文件是只读投影（文件名 `YYYY-MM-DD_<type>_p<id>.md` 由记录主键派生，frontmatter 带 `projection: true, source_record`）。
+- 合法类型（v2 动词表）：entity_index / relatedness / summary / errata / reminder。旧三类型 link / correction / archive 已退役——propose 会拒绝并说明替代动词（link → relatedness；correction → errata + 人的 rebase；archive → 人的拖拽动作）。
+- **不要尝试修改已有提案的 status**：状态迁移走状态机（人在记忆控制台 adopt/reject），agent 无直写路径。
 
 ## 行为准则
 - 涉及**不可逆操作**（删除、批量移动、大范围编辑）时，先展示操作预览并获得用户确认。

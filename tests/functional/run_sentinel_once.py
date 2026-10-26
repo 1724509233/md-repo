@@ -20,8 +20,10 @@ Usage:
 
     python -m tests.functional.run_sentinel_once --config config.fun.yaml
 
-Exit code: 0 iff the run produced at least one proposal record for this
-run (DB lookup by the run's proposal relpaths — v2 state source), else 1.
+Exit code: 0 iff the run finished ok with observable output — at least one
+proposal record for this run (DB lookup by the run's proposal relpaths —
+v2 state source), or a non-empty agent summary (v2 sentinel: read-only
+governance report, it files no proposals), else 1.
 """
 from __future__ import annotations
 
@@ -85,13 +87,15 @@ def main(argv: list[str] | None = None) -> int:
             "payload": p["payload"],
         })
 
-    ok = bool(recs)
+    ok = (report.status == "ok"
+          and (bool(recs) or bool(report.summary)))
     print(json.dumps(
         {"ok": ok, "status": report.status, "ops_total": report.ops_total,
          "files_changed": report.files_changed, "kind": report.kind,
          "summary": report.summary, "proposals": recs},
         ensure_ascii=False, indent=2))
-    verdict = "PASS" if ok else "FAIL (no proposal record for this run)"
+    verdict = "PASS" if ok else (
+        "FAIL (no proposal record and no agent summary for this run)")
     print(f"run: status={report.status} proposals={len(recs)} -> {verdict}",
           file=sys.stderr)
     return 0 if ok else 1

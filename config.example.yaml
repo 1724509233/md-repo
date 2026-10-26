@@ -59,7 +59,7 @@ background_agents:
   #   timeout_s: 1800
   #   budget_runs_per_day: 3
   #   budget_max_proposals: 5
-  #   verbs: [entity_index, link, summary]   # propose 动词白名单（v2；缺省 = 不限）
+  #   verbs: [entity_index, relatedness, summary]   # propose 动词白名单（v2 动词表；缺省 = 不限）
   #   trigger:
   #     events: [create]
   #     arm_count: 3
@@ -92,8 +92,9 @@ background_agents:
   #     api_key: ""
 
 # ── 记忆运行时 v2：哨兵（示例，取消注释启用）─────────────────────────────
-# 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶、产出 archive 提案。
-# 写 scope 只有 suggestions/（主数据区只读；归档由执行器落地）。
+# 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶判断、产出**只读报告**
+# （「N 篇 90 天未动，建议归档」——v2：archive 动词退役，自动化不搬用户区文件，
+# 搬动 = 人在 Obsidian 拖）。哨兵无提案动词：tools 里不放 propose（无写动作）。
 # trigger.source: recall = 从召回账本武装（metric: failed_or_low = 失败查询
 # + 低分命中计数，合成流量不计入）；cron 保留为每周心跳（复盘不靠自觉）。
 # tools 白名单 = 行为维度授权（缺省 = 全部工具）。
@@ -107,15 +108,14 @@ background_agents:
 #   max_rounds: 30
 #   timeout_s: 1800
 #   budget_runs_per_day: 2
-#   budget_max_proposals: 3
+#   budget_max_proposals: 0
 #   trigger:
 #     source: recall
 #     metric: failed_or_low
 #     arm_count: 10
 #     min_interval_h: 24
 #   tools: [read_doc, search_docs, list_files, recent_changes,
-#           get_related_docs, recall_stats, propose]
-#   verbs: [archive]   # 哨兵只产归档提案（v2 propose 通道）
+#           get_related_docs, recall_stats]   # 只读：无 propose、无写工具
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b

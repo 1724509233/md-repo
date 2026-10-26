@@ -4,17 +4,15 @@ Scripted playbooks, selected by the request's system prompt:
 
 - system prompt contains ``sentinel`` → **sentinel playbook**
   - turn 0: tool_call ``recall_stats`` {"days": 30}   (bypass recall read)
-  - turn 1: tool_call ``write_doc`` → suggestions/<today>_archive_cold-doc.md
-    with the full frontmatter demanded by server/prompts/sentinel.md
-    (type: archive, actor: sentinel, run_id: batch-<ts>, status: adopted,
-    reversible: true, source_refs, reject_reason/merged_at empty strings,
-    payload.path + payload.reason) + review-material body
-  - turn 2: Chinese summary text
+  - turn 1: text — read-only governance report per server/prompts/sentinel.md
+    (v2: the archive verb is retired, the sentinel files no proposals; the
+    report names the cold docs and says the move is a human drag in Obsidian)
 - otherwise → **consolidator playbook**
   - turn 0: tool_call ``recent_changes`` (in the default full-tool registry;
     all its args are optional: path/since/source/limit)
-  - turn 1: tool_call ``write_doc`` → a type: summary, status: awaiting_review
-    proposal per server/prompts/consolidator.md
+  - turn 1: tool_call ``propose`` → a type: summary (form: cache) proposal
+    per server/prompts/consolidator.md (v2: write_doc into suggestions/ is
+    gated — the propose tool is the channel; state lands in the ledger DB)
   - turn 2: Chinese summary text
 
 Wire format: the agent runtime (server/agent/runtime.py) calls
@@ -29,7 +27,7 @@ Self-check (no server, prints both playbooks' request→response sequences):
         ``python -m tests.functional.mock_llm --once``
 
 Playbook constants (must match the scratch-vault seeds, see spec §5 smoke):
-- sentinel archives ``notes/cold-doc.md`` — seed it into the vault.
+- sentinel reports on ``notes/cold-doc.md`` (read-only) — seed it into the vault.
 - consolidator's summary references the same doc as its source_ref.
 """
 from __future__ import annotations
@@ -45,82 +43,74 @@ MOCK_MODEL = "mock"
 RUN_ID = f"batch-{datetime.now():%Y%m%d-%H%M}"   # per process, sentinel.md: batch-<YYYYMMDD-HHMM>
 TODAY = datetime.now().strftime("%Y-%m-%d")
 
-ARCHIVE_TARGET = "notes/cold-doc.md"          # sentinel 归档对象（scratch vault 须已 seed）
+COLD_DOC = "notes/cold-doc.md"                # 观测对象：哨兵判冷报告对象（scratch vault 须已 seed）
 CONSOL_SOURCE = "notes/cold-doc.md"           # consolidator summary 的 source_ref
 
-_SENTINEL_PROPOSAL_PATH = f"suggestions/{TODAY}_archive_cold-doc.md"
-_CONSOL_PROPOSAL_PATH = f"suggestions/{TODAY}_summary_seed-digest.md"
+# v2 投影命名：YYYY-MM-DD_<type>_p<id>.md（id = 记录主键；canned 响应用 p1）。
+_CONSOL_PROPOSAL_PATH = f"suggestions/{TODAY}_summary_p1.md"
 
 
-def sentinel_proposal_content() -> str:
-    """sentinel.md 规定的完整 frontmatter + 终审材料正文。"""
-    return f"""---
-type: archive
-actor: sentinel
-run_id: {RUN_ID}
-status: adopted
-reversible: true
-source_refs:
-  - {ARCHIVE_TARGET}
-reject_reason: ""
-merged_at: ""
-payload:
-  path: "{ARCHIVE_TARGET}"
-  reason: "90 天零召回，无相似失败查询（functional-test scripted run）"
----
-
-# 归档提案：{ARCHIVE_TARGET}
-
-- 近 90 天召回统计：human 0 / on_demand 0 / synthetic 0（seed 数据；时间衰减加权 0）。
-- 失败查询对账：召回账本中无与该文档相似的失败查询（不存在「想找到却没找到」的缺口）。
-- 判冷依据：窗口内零命中 + 无相似失败查询 ⇒ 真冷（非检索质量缺口）。
-- 恢复方法：归档后路径 = `archive/{ARCHIVE_TARGET}`，还原 = 移回原路径。
-"""
+def sentinel_report_text() -> str:
+    """sentinel.md「结束」段要求的只读治理报告（v2：无提案，无写动作）。"""
+    return (
+        f"检查了近 30 天召回遥测（human/on_demand/synthetic 三分流量，半衰期 30d）：\n"
+        f"- 判冷对象 {COLD_DOC}：human 0 / on_demand 0 / synthetic 0（seed 数据，"
+        f"时间衰减加权 0）。\n"
+        f"- 失败查询对账：召回账本中无与该文档相似的失败查询（不存在「想找到却"
+        f"没找到」的缺口），判定真冷（非检索质量缺口）。\n"
+        f"- 建议归档清单（≤3 条，宁缺毋滥）：{COLD_DOC}（判冷依据：窗口内零命中 + "
+        f"无相似失败查询；90 天零召回，functional-test scripted run）。\n"
+        f"搬动 = 人在 Obsidian 把它拖到 archive/（v2：哨兵只读，不产提案）。"
+        f"未发现其他 query gap。"
+    )
 
 
-def consolidator_proposal_content() -> str:
-    """consolidator.md 模板：type: summary, status: awaiting_review（无 payload）。"""
-    return f"""---
-type: summary
-actor: consolidator
-run_id: {RUN_ID}
-status: awaiting_review
-reversible: true
-source_refs:
-  - {CONSOL_SOURCE}
-reject_reason: ""
-merged_at: ""
----
+def consolidator_propose_args() -> dict:
+    """consolidator.md 模板：propose 通道的 summary（cache 形态）调用参数。
 
-# 决策记录：cold-doc 内容蒸馏（scripted）
-
-对账近期人类通道 create 事件（recent_changes source=web 24h）后蒸馏的决策记录草稿：
-该文档承载一条值得留存的结论。采纳后执行器落到 source_refs[0] 同目录 <stem>-summary.md。
-"""
+    actor / run_id / status 由系统填写；summary 双形态中 cache = 对用户自己
+    文字的可再生有损压缩（body = 决策记录草稿，不是复述）。
+    """
+    stem = CONSOL_SOURCE.removeprefix("notes/").removesuffix(".md")
+    return {
+        "type": "summary",
+        "payload": {
+            "form": "cache",
+            "body": (
+                "决策记录草稿：cold-doc 承载一条值得留存的部署结论"
+                "（scripted：内容可从原文笔记再生）。采纳后执行器落机器区 "
+                f"index/summaries/{stem}-summary.md。"
+            ),
+        },
+        "source_refs": [CONSOL_SOURCE],
+        "justification": "对账近期人类通道 create 事件后蒸馏；正文是决策记录草稿，"
+                         "不是复述（consolidator.md 纪律）。",
+    }
 
 
 # ── playbook scripting ────────────────────────────────────────────────────
 
 def _script(role: str, turn: int) -> tuple[str, str, dict] | str:
-    """Return ("tool", name, args) for tool turns, or summary text for turn >= 2."""
+    """Return ("tool", name, args) for tool turns, or summary text once the
+    script's tool turns are exhausted (v2: the sentinel stops at turn 1 with
+    a read-only report — it files no proposals)."""
     if role == "sentinel":
         if turn == 0:
             return ("tool", "recall_stats", {"days": 30})
-        if turn == 1:
-            return ("tool", "write_doc",
-                    {"path": _SENTINEL_PROPOSAL_PATH,
-                     "content": sentinel_proposal_content()})
-        return ("检查了近 30 天召回遥测：1 个文档（"
-                f"{ARCHIVE_TARGET}）零召回且无相似失败查询，判定真冷，产出 1 条归档提案"
-                f"（{_SENTINEL_PROPOSAL_PATH}）。未发现其他 query gap。")
+        return sentinel_report_text()
     if turn == 0:
         return ("tool", "recent_changes", {"source": "web", "since": "24h", "limit": 50})
     if turn == 1:
-        return ("tool", "write_doc",
-                {"path": _CONSOL_PROPOSAL_PATH,
-                 "content": consolidator_proposal_content()})
+        return ("tool", "propose", consolidator_propose_args())
     return ("对账了近期人类通道 create 事件，固化 1 条碎片，产出 1 条 summary 提案"
             f"（{_CONSOL_PROPOSAL_PATH}，awaiting_review）。对账命中 0 条旧情景。")
+
+
+def _tool_turns(role: str) -> int:
+    n = 0
+    while isinstance(_script(role, n), tuple):
+        n += 1
+    return n
 
 
 def _detect_role(messages: list[dict]) -> str:
@@ -234,7 +224,7 @@ class _Handler(BaseHTTPRequestHandler):
 def serve(host: str, port: int) -> None:
     httpd = ThreadingHTTPServer((host, port), _Handler)
     print(f"[mock] serving {MOCK_MODEL} on http://{host}:{port} "
-          f"(run_id={RUN_ID} archive_target={ARCHIVE_TARGET}); Ctrl-C to stop",
+          f"(run_id={RUN_ID} cold_doc={COLD_DOC}); Ctrl-C to stop",
           file=sys.stderr)
     try:
         httpd.serve_forever()
@@ -274,19 +264,20 @@ def _simulate(role: str) -> list[dict]:
     tool_results = {
         "sentinel": {
             "recall_stats": ("Recall traffic (window: 30d, half-life: 30d)\n"
-                             f"{ARCHIVE_TARGET} | 0 | 0 | 0 | 0.0 | 30d ago"),
-            "write_doc": f"Saved: {_SENTINEL_PROPOSAL_PATH} "
-                         f"({len(sentinel_proposal_content())} chars)",
+                             f"{COLD_DOC} | 0 | 0 | 0 | 0.0 | 30d ago"),
         },
         "consolidator": {
             "recent_changes": "14:05 web       create   notes/cold-doc.md",
-            "write_doc": f"Saved: {_CONSOL_PROPOSAL_PATH} "
-                         f"({len(consolidator_proposal_content())} chars)",
+            "propose": "proposal #1 created → "
+                       f"{_CONSOL_PROPOSAL_PATH} (status: awaiting_review)",
         },
     }[role]
-    for turn in range(2):
+    turn = 0
+    while True:
         spec = _script(role, turn)
-        kind, name, args = spec
+        if isinstance(spec, str):
+            break
+        _kind, name, args = spec
         tc_id = f"call_mock_{turn + 1}"
         msgs.append({"role": "assistant", "content": None, "tool_calls": [
             {"id": tc_id, "type": "function",
@@ -294,14 +285,16 @@ def _simulate(role: str) -> list[dict]:
                           "arguments": json.dumps(args, ensure_ascii=False)}}]})
         msgs.append({"role": "tool", "tool_call_id": tc_id,
                      "content": tool_results[name]})
+        turn += 1
     return msgs
 
 
 def run_once_selfcheck() -> int:
     for role in ("sentinel", "consolidator"):
         print(f"════ {role} playbook ════ (run_id={RUN_ID})")
-        full = _simulate(role)          # [system, user] + 2×(assistant, tool)
-        for turn in range(3):
+        full = _simulate(role)          # [system, user] + n×(assistant, tool)
+        turns = _tool_turns(role) + 1   # + 1: the final text turn
+        for turn in range(turns):
             base = full[: 2 + 2 * turn]  # request as it stands at this turn
             print(f"── turn {turn} ──")
             for m in base:

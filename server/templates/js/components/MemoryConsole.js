@@ -12,14 +12,13 @@
 const { ref, computed, watch, inject, nextTick } = Vue
 import { api } from '../api.js'
 
-/* 类型 chip 图标（单色线条，stroke: currentColor；未知类型回退时钟） */
+/* 类型 chip 图标（单色线条，stroke: currentColor；未知/存量退役类型回退时钟） */
 const TYPE_ICONS = {
   entity_index: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
-  link: '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  relatedness: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>',
   summary: '<svg viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>',
-  correction: '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
-  reminder: '<svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>',
-  archive: '<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1"/><path d="M6 10v9h12v-9M10 14h4"/></svg>'
+  errata: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/></svg>',
+  reminder: '<svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>'
 }
 const TYPE_ICON_DEFAULT = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
 

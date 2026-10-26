@@ -103,12 +103,12 @@ def test_kind_review_mixed(tmp_path: Path, monkeypatch):
     proposal_paths sorted."""
     report = _run_with_records(
         tmp_path, monkeypatch,
-        [_rec("adopted", type_="link", relpath="suggestions/2026-10-20_link_a.md"),
+        [_rec("adopted", type_="relatedness", relpath="suggestions/2026-10-20_relatedness_a.md"),
          _rec("awaiting_review", type_="summary",
               relpath="suggestions/2026-10-20_summary_b.md")])
     assert report.kind == "review"
     assert report.proposal_paths == [
-        "suggestions/2026-10-20_link_a.md", "suggestions/2026-10-20_summary_b.md"]
+        "suggestions/2026-10-20_relatedness_a.md", "suggestions/2026-10-20_summary_b.md"]
 
 
 def test_kind_batch_without_db(tmp_path: Path):

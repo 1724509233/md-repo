@@ -154,16 +154,30 @@ def finalize(conn, snapshot: dict, post_hash: str) -> None:
     """Record the post-write hash and claim the file's live slot.
 
     Call this AFTER the write succeeded. Demotes any previous live row for
-    the same path (single live slot, spec D18) and marks this snapshot live.
+    the same path (single live slot, spec D18) and marks this snapshot
+    live+finalized.
+
+    R1 (P2, single-statement form per P2 gate): ONE UPDATE = one atomic
+    statement in any journal mode — no transaction management code, no
+    busy boundary, cross-process atomic under SQLite's single writer.
+    (The earlier ``with conn:`` "explicit transaction" was a NO-OP: the
+    shared connection is in autocommit mode, ``isolation_level=None``,
+    where ``with conn:`` opens no transaction — P2 gate verified
+    empirically.) Semantics, per branch: other live rows for the path are
+    demoted; this row is claimed even while still in-flight (``live=0``);
+    every other row is untouched.
     """
     with _db_lock:
         conn.execute(
-            "UPDATE snapshots SET live = 0 WHERE path = ? AND live = 1 AND id != ?",
-            (snapshot["path"], snapshot["id"]),
-        )
-        conn.execute(
-            "UPDATE snapshots SET post_hash = ?, live = 1, finalized = 1 WHERE id = ?",
-            (post_hash, snapshot["id"]),
+            """
+            UPDATE snapshots SET
+                live      = CASE WHEN id = ? THEN 1 ELSE 0 END,
+                post_hash = CASE WHEN id = ? THEN ? ELSE post_hash END,
+                finalized = CASE WHEN id = ? THEN 1 ELSE finalized END
+            WHERE path = ? AND (live = 1 OR id = ?)
+            """,
+            (snapshot["id"], snapshot["id"], post_hash, snapshot["id"],
+             snapshot["path"], snapshot["id"]),
         )
 
 

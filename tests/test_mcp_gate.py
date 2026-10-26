@@ -64,7 +64,10 @@ def test_gate_refuses_main_memory_area(path, tmp_path):
     # Explains the write was NOT performed and points at the propose tool.
     assert "NOT performed" in err
     assert "propose tool" in err
-    assert "type 'correction'" in err
+    # v2 verb table: the protocol guidance names the review-channel errata
+    # and the auto-channel relatedness replacements for the retired verbs.
+    assert "type 'errata'" in err
+    assert "type 'relatedness'" in err
     # v2: even the old buffer path is now system-owned — the external agent
     # gets the same propose pointer, never a writable suggestions/.
     assert "direct writes into suggestions/ are also rejected" in err
@@ -156,16 +159,19 @@ def test_mcp_propose_creates_stamped_record(db_conn, tmp_path):
     """The external channel keeps a proposal path after the P0 cutover:
     _mcp_propose runs the shared record pipeline with write_source="mcp"
     (the ledger's source convention), no run stamp, unrestricted verbs.
-    correction is a review-tier type → the record lands awaiting_review
+    errata is a review-tier type → the record lands awaiting_review
     for a human (no silent merge)."""
     from server import proposals
     from server.mcp_server import _mcp_propose
 
     vault = tmp_path / "vault"
     out = _mcp_propose(
-        vault, "correction",
-        {"file": "notes/a.md", "old": "x", "new": "y"},
-        ["notes/a.md"], "fix the typo")
+        vault, "errata",
+        {"contradiction": "the two notes disagree",
+         "excerpts": [{"path": "notes/a.md", "quote": "x"},
+                      {"path": "notes/b.md", "quote": "y"}],
+         "candidate": "reading A", "rationale": "dates conflict"},
+        ["notes/a.md"], "surface the contradiction")
     assert out.startswith("proposal #")
     rec = proposals.scan(db_conn)[0]
     assert rec["actor"] == "mcp"
@@ -175,16 +181,36 @@ def test_mcp_propose_creates_stamped_record(db_conn, tmp_path):
 
 
 def test_mcp_propose_malformed_is_zero_disk(db_conn, tmp_path):
-    """The channel entry enforces the same per-verb validation: a
-    correction missing 'new' → error string, no record, no file."""
+    """The channel entry enforces the same per-verb validation: an errata
+    missing 'candidate' → error string, no record, no file."""
+    from server import proposals
+    from server.mcp_server import _mcp_propose
+
+    vault = tmp_path / "vault"
+    out = _mcp_propose(
+        vault, "errata",
+        {"contradiction": "c",
+         "excerpts": [{"path": "notes/a.md", "quote": "x"},
+                      {"path": "notes/b.md", "quote": "y"}],
+         "rationale": "r"},  # candidate missing
+        ["notes/a.md"], "j")
+    assert out.startswith("Error:")
+    assert "candidate" in out
+    assert proposals.scan(db_conn) == []
+    assert not (vault / "suggestions").is_dir()
+
+
+def test_mcp_propose_retired_type_redirects(db_conn, tmp_path):
+    """D5: a retired v1 verb through the external channel gets the
+    operational redirect (names the replacement), not a record."""
     from server import proposals
     from server.mcp_server import _mcp_propose
 
     vault = tmp_path / "vault"
     out = _mcp_propose(
         vault, "correction",
-        {"file": "notes/a.md", "old": "x"},
+        {"file": "notes/a.md", "old": "x", "new": "y"},
         ["notes/a.md"], "j")
     assert out.startswith("Error:")
+    assert "retired" in out and "errata" in out
     assert proposals.scan(db_conn) == []
-    assert not (vault / "suggestions").is_dir()

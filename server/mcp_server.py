@@ -57,8 +57,9 @@ class McpExternalGate(WriteGate):
                 return (
                     "Error: the main memory area is read-only for external agents — "
                     "this write was NOT performed. To propose a change, use the "
-                    "propose tool (e.g. type 'correction' with payload {file, old, "
-                    "new} to fix an existing doc, type 'archive' to archive a note); "
+                    "propose tool (e.g. type 'errata' with payload {contradiction, "
+                    "excerpts, candidate, rationale} to surface a contradiction, or "
+                    "type 'relatedness' with payload {target} to suggest a relation); "
                     "direct writes into suggestions/ are also rejected — it holds "
                     "system-owned projections of proposal records (see "
                     "server/proposals.py)."
@@ -83,6 +84,86 @@ def _ledger_mcp_write(db_conn, path: str, existed: bool, content: str) -> None:
             "change_log entry for MCP write %s failed", path, exc_info=True)
 
 
+def _mcp_write(vault_dir: Path, db_conn, path: str, content: str) -> str:
+    """The MCP channel's write_doc body (R1, P2): the external write goes
+    through the same reversibility layer as the agent channel — the full
+    pre-image is captured BEFORE the write (create class: no pre-image
+    bytes, just the row); a failed write drops the capture (no residue);
+    the ledger row is appended afterwards. Mirrors
+    ``server/agent/tools/write_doc.py`` (actor="mcp", no run stamp — stdio
+    has no bgagent run)."""
+    from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
+    from server.vault.db.conn import get_conn
+
+    fp = vault_dir / path
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    existed = fp.is_file()
+    new_bytes = content.encode("utf-8")
+    conn = get_conn()
+    snap = None
+    if conn is not None:
+        snap = capture(conn, vault_dir, path, "update" if existed else "create", "mcp")
+    try:
+        fp.write_bytes(new_bytes)
+    except OSError:
+        if snap is not None:
+            discard(conn, vault_dir, snap)
+        raise
+    if snap is not None:
+        try:
+            finalize(conn, snap, hash_bytes(new_bytes))
+            gc_after_capture(conn, vault_dir)
+        except Exception as e:  # fail-open (spec D19): the write already
+            # succeeded — do not error the external MCP client. The
+            # in-flight row (live=0, finalized=0) stays rollback-able via
+            # by_call, and GC never reclaims in-flight rows.
+            logging.getLogger("mcp_server").warning(
+                "snapshot finalize failed after successful MCP write %s: %s "
+                "(write stands; pre-image stays rollback-able in-flight)",
+                path, e, exc_info=True)
+    _ledger_mcp_write(db_conn, path, existed, content)
+    if existed:
+        return f"Saved: {path} ({len(content)} chars, overwritten)"
+    return f"Saved: {path} ({len(content)} chars)"
+
+
+def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: str) -> str:
+    """The MCP channel's edit_doc body (R1, P2): the full pre-image is
+    captured before the edit; an errored edit (not-found/ambiguous) drops
+    the capture so it never claims the file's live slot. Mirrors
+    ``server/agent/tools/edit_doc.py`` (actor="mcp")."""
+    from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
+    from server.vault.db.conn import get_conn
+    from server.vault.service import edit_file
+
+    fp = vault_dir / path
+    if not fp.is_file():
+        return _edit_doc_tool._file_not_found_hint(path)
+    conn = get_conn()
+    snap = None
+    if conn is not None:
+        snap = capture(conn, vault_dir, path, "update", "mcp")
+    result = edit_file(vault_dir, path, old_string, new_string)
+    if conn is not None:
+        if result.startswith("Error"):
+            discard(conn, vault_dir, snap)  # discard is None-safe
+        elif snap is not None:
+            # Hash the post-edit content from disk (edit_file already wrote it).
+            try:
+                finalize(conn, snap, hash_bytes(fp.read_bytes()))
+                gc_after_capture(conn, vault_dir)
+            except Exception as e:  # fail-open (spec D19): the edit stands;
+                # the in-flight row stays rollback-able via by_call.
+                logging.getLogger("mcp_server").warning(
+                    "snapshot finalize failed after successful MCP edit %s: %s "
+                    "(edit stands; pre-image stays rollback-able in-flight)",
+                    path, e, exc_info=True)
+    if result.startswith("Edited"):
+        new_content = fp.read_bytes().decode("utf-8", errors="replace")
+        _ledger_mcp_write(db_conn, path, True, new_content)
+    return result
+
+
 def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[str],
                  justification: str) -> str:
     """The MCP channel's propose entry (oracle gate P0-Q6a).
@@ -105,7 +186,7 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
 
 def main():
     from server.config import load_server_config
-    from server.vault.service import init_db, ensure_indexed, edit_file
+    from server.vault.service import init_db, ensure_indexed
     from server.ai import rag_search
     from server.agent import ChannelPolicy, validate_tool_call
     
@@ -195,14 +276,7 @@ def main():
         error = validate_tool_call("write_doc", {"path": path, "content": content}, MCP_POLICY)
         if error:
             return error
-        fp = vault_dir / path
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        existed = fp.is_file()
-        fp.write_bytes(content.encode("utf-8"))
-        _ledger_mcp_write(db_conn, path, existed, content)
-        if existed:
-            return f"Saved: {path} ({len(content)} chars, overwritten)"
-        return f"Saved: {path} ({len(content)} chars)"
+        return _mcp_write(vault_dir, db_conn, path, content)
     
     @mcp.tool()
     async def edit_doc(path: str, old_string: str, new_string: str) -> str:
@@ -210,20 +284,12 @@ def main():
         error = validate_tool_call("edit_doc", {"path": path, "old_string": old_string, "new_string": new_string}, MCP_POLICY)
         if error:
             return error
-        fp = vault_dir / path
-        if not fp.is_file():
-            return _edit_doc_tool._file_not_found_hint(path)
-        result = edit_file(vault_dir, path, old_string, new_string)
-        if result.startswith("Edited"):
-            # Hash the post-edit content from disk (edit_file already wrote it).
-            new_content = fp.read_bytes().decode("utf-8", errors="replace")
-            _ledger_mcp_write(db_conn, path, True, new_content)
-        return result
+        return _mcp_edit(vault_dir, db_conn, path, old_string, new_string)
     
     @mcp.tool()
     async def propose(type: str, payload: dict, source_refs: list[str],
                       justification: str = "") -> str:
-        """Create a proposal record — the only write path into the proposal channel (direct writes into suggestions/ are rejected). Types: entity_index {entity, value} | link {target} | summary {body} | correction {file, old, new} | archive {path} | reminder {body}. source_refs: vault-relative paths the proposal is based on. justification: human-readable reason (becomes the review material). Auto-channel types merge on the next executor cycle; review-channel types wait for a human decision."""
+        """Create a proposal record — the only write path into the proposal channel (direct writes into suggestions/ are rejected). Types: entity_index {entity, attrs: {field: value}} | relatedness {target} | summary {form: 'cache'|'report', body, assertions?} | errata {contradiction, excerpts: [{path, quote, label?}], candidate, rationale} | reminder {body}. source_refs: vault-relative paths the proposal is based on. justification: human-readable reason (becomes the review material). Auto-channel types (entity_index, relatedness) merge on the next executor cycle; review-channel types (summary, errata, reminder) wait for a human decision."""
         return _mcp_propose(vault_dir, type, payload, source_refs, justification)
     
     mcp.run(transport="stdio")

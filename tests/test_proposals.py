@@ -58,12 +58,12 @@ def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None):
 def test_create_record_and_projection(vault_dir, db_conn):
     now = time.time()
     rec = _create(vault_dir, db_conn, type="entity_index",
-                  payload={"entity": "mirror-x", "value": "v0.9.2"}, now=now)
+                  payload={"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}, now=now)
     assert rec["status"] == "pending"
     assert rec["type"] == "entity_index"
     assert rec["actor"] == "consolidator"
     assert rec["run_id"] == "batch-test"
-    assert rec["payload"] == {"entity": "mirror-x", "value": "v0.9.2"}
+    assert rec["payload"] == {"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}
     assert rec["source_refs"] == ["notes/test.md"]
     assert rec["justification"] == "proposal body text"
     assert rec["reject_reason"] == ""
@@ -83,7 +83,7 @@ def test_create_record_and_projection(vault_dir, db_conn):
     assert fm["type"] == "entity_index"
     assert fm["actor"] == "consolidator"
     assert fm["run_id"] == "batch-test"
-    assert fm["payload"] == {"entity": "mirror-x", "value": "v0.9.2"}
+    assert fm["payload"] == {"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}
     assert "proposal body text" in body
 
 
@@ -117,7 +117,7 @@ def test_legal_review_reject_path(vault_dir, db_conn):
 
 
 def test_legal_failed_retry_path(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="correction")
+    rec = _create(vault_dir, db_conn, type="relatedness")
     _drive(vault_dir, db_conn, rec["id"], "failed", actor="executor")
     p = proposals.advance(db_conn, vault_dir, rec["id"], "pending", actor="t")
     assert p["status"] == "pending"
@@ -166,12 +166,18 @@ def test_advance_missing_record_raises(vault_dir, db_conn):
 # ── authorization dispatch (auto vs review) ──────────────────────────────
 
 def test_authorization_policy():
+    # v2 verb table: regenerable machine-zone writes = auto; LLM-unique
+    # output and human-facing additions = review.
     assert proposals.authorization("entity_index") == "adopted"
-    assert proposals.authorization("link") == "adopted"
-    assert proposals.authorization("archive") == "adopted"
+    assert proposals.authorization("relatedness") == "adopted"
     assert proposals.authorization("summary") == "awaiting_review"
-    assert proposals.authorization("correction") == "awaiting_review"
+    assert proposals.authorization("errata") == "awaiting_review"
     assert proposals.authorization("reminder") == "awaiting_review"
+    # Retired v1 verbs are outside the verb table: ValueError (the propose
+    # tool redirects them operationally before this dispatch is ever used).
+    for retired in ("link", "correction", "archive"):
+        with pytest.raises(ValueError):
+            proposals.authorization(retired)
     with pytest.raises(ValueError):
         proposals.authorization("bogus")
 
@@ -200,7 +206,7 @@ def test_process_proposal_auto_vs_review(vault_dir, db_conn):
 
 def test_scan_returns_all_id_order(vault_dir, db_conn):
     _create(vault_dir, db_conn, type="entity_index")
-    r2 = _create(vault_dir, db_conn, type="link")
+    r2 = _create(vault_dir, db_conn, type="relatedness")
     out = proposals.scan(db_conn)
     assert len(out) == 2
     assert [p["id"] for p in out] == sorted(p["id"] for p in out)
@@ -378,17 +384,17 @@ def test_propose_malformed_payload_zero_disk(vault_dir, db_conn):
     before_rows = db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
 
     tool = ProposeTool()
-    # entity_index with an empty 'value'
+    # entity_index with an empty 'attrs' dict
     out = tool.call({"type": "entity_index",
-                     "payload": {"entity": "e", "value": "   "},
+                     "payload": {"entity": "e", "attrs": {}},
                      "source_refs": ["notes/test.md"],
                      "justification": "j"}, _ctx(vault_dir))
     assert out.startswith("Error:")
-    # link without source_refs
-    out = tool.call({"type": "link", "payload": {"target": "notes/x.md"},
+    # relatedness without source_refs
+    out = tool.call({"type": "relatedness", "payload": {"target": "notes/x.md"},
                      "source_refs": [], "justification": "j"}, _ctx(vault_dir))
     assert out.startswith("Error:")
-    # summary without body
+    # summary without a form
     out = tool.call({"type": "summary", "payload": {},
                      "source_refs": ["notes/test.md"], "justification": "j"},
                     _ctx(vault_dir))
@@ -400,21 +406,21 @@ def test_propose_malformed_payload_zero_disk(vault_dir, db_conn):
 
 def test_propose_unknown_type_rejected(vault_dir, db_conn):
     tool = ProposeTool()
-    out = tool.call({"type": "errata", "payload": None,
+    out = tool.call({"type": "bogus", "payload": None,
                      "source_refs": [], "justification": "j"}, _ctx(vault_dir))
     assert out.startswith("Error:")
-    assert "errata" in out
+    assert "unknown proposal type" in out
     assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
 def test_propose_privileged_verb_rejected(vault_dir, db_conn):
     """type ∉ the role's verbs (config) → actionable error, zero writes."""
     tool = ProposeTool()
-    out = tool.call({"type": "archive", "payload": {"path": "notes/test.md"},
+    out = tool.call({"type": "reminder", "payload": {"body": "at 07:00"},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir, verbs=("entity_index", "link", "summary")))
+                    _ctx(vault_dir, verbs=("entity_index", "relatedness", "summary")))
     assert out.startswith("Error:")
-    assert "archive" in out and "entity_index" in out  # lists the allowed verbs
+    assert "reminder" in out and "entity_index" in out  # lists the allowed verbs
     assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
     assert not (vault_dir / "suggestions").is_dir()
 
@@ -422,7 +428,7 @@ def test_propose_privileged_verb_rejected(vault_dir, db_conn):
 def test_propose_success_auto_and_review(vault_dir, db_conn):
     tool = ProposeTool()
     out = tool.call(
-        {"type": "entity_index", "payload": {"entity": "e", "value": "v"},
+        {"type": "entity_index", "payload": {"entity": "e", "attrs": {"f": "v"}},
          "source_refs": ["notes/test.md"], "justification": "why"},
         _ctx(vault_dir, verbs=("entity_index",)))
     assert out.startswith("proposal #")
@@ -433,12 +439,67 @@ def test_propose_success_auto_and_review(vault_dir, db_conn):
     assert (vault_dir / rec["relpath"]).is_file()
 
     out2 = tool.call(
-        {"type": "summary", "payload": {"body": "decision draft"},
+        {"type": "summary", "payload": {"form": "cache", "body": "decision draft"},
          "source_refs": ["notes/test.md"], "justification": "why"},
         _ctx(vault_dir, verbs=("summary",)))
     assert out2.startswith("proposal #")
     rec2 = proposals.scan(db_conn, status="awaiting_review")[0]
     assert rec2["status"] == "awaiting_review"  # review channel
+
+
+def test_propose_retired_types_redirect_operational(vault_dir, db_conn):
+    """D5 (spec §四 退役三件): the three v1 verbs are rejected BEFORE the
+    envelope check with an *operational* reason naming the replacement —
+    the model learns the redirect, not just the ban. Zero disk writes."""
+    tool = ProposeTool()
+    before_files = _count_files(vault_dir)
+    # (type, needle) — the replacement each redirect must name.
+    for t, needle in (("link", "relatedness"),
+                      ("correction", "errata"),
+                      ("archive", "read-only")):
+        out = tool.call({"type": t, "payload": None, "source_refs": [],
+                         "justification": "j"}, _ctx(vault_dir))
+        assert out.startswith("Error:")
+        assert "retired" in out, f"{t} must be named retired"
+        assert needle in out, f"{t} redirect must name its replacement ({needle!r})"
+    assert _count_files(vault_dir) == before_files  # nothing on disk
+    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+
+
+def test_propose_entity_v1_prose_shape_rejected(vault_dir, db_conn):
+    """D7: the v1 prose shape {entity, value} is rejected structurally at
+    the propose entry — attrs are fields, not narrative."""
+    tool = ProposeTool()
+    out = tool.call({"type": "entity_index",
+                     "payload": {"entity": "e", "value": "some prose"},
+                     "source_refs": ["notes/test.md"], "justification": "j"},
+                    _ctx(vault_dir))
+    assert out.startswith("Error:")
+    assert "attrs" in out  # names the required structured shape
+    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+
+
+def test_propose_summary_report_refs_rejected(vault_dir, db_conn):
+    """D8 / invariant 7 (propose half): a report assertion without its own
+    source refs is rejected at the write entry — a report claim with no
+    supporting paths is not landable."""
+    tool = ProposeTool()
+    # Empty refs on the assertion.
+    out = tool.call({"type": "summary",
+                     "payload": {"form": "report", "body": "b",
+                                 "assertions": [{"text": "t", "refs": []}]},
+                     "source_refs": ["notes/test.md"], "justification": "j"},
+                    _ctx(vault_dir))
+    assert out.startswith("Error:")
+    assert "refs" in out
+    # assertions missing entirely.
+    out = tool.call({"type": "summary",
+                     "payload": {"form": "report", "body": "b"},
+                     "source_refs": ["notes/test.md"], "justification": "j"},
+                    _ctx(vault_dir))
+    assert out.startswith("Error:")
+    assert "assertions" in out
+    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
 def test_write_doc_into_suggestions_rejected(vault_dir):

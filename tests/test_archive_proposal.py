@@ -1,212 +1,181 @@
-"""Tests for the archive proposal type (memory-runtime v2 sentinel channel).
+"""Tests for the retired ``archive`` verb (reversible-automation v2, D5).
 
-Covers: authorization policy (auto), create/process round-trip, fresh move,
-idempotent crash window, dest-exists conflict, missing-both failure,
-system-dir guard, missing-path payload, end-to-end executor run.
+In v1, ``archive`` was an auto-tier verb: the sentinel role proposed moving
+a dormant note into ``archive/`` and the executor moved the file. In v2 the
+three user-area placement/text verbs (link / correction / archive) are
+**retired** — automation never moves or rewrites user files (constitution
+iron rule: the user area gets zero automation writes). This file pins the
+retirement semantics for ``archive``:
+
+- write gate: ``proposals.create`` / ``proposals.authorization`` refuse
+  retired types (the verb table is the write entry point);
+- propose tool: operational redirect naming the replacement (the sentinel
+  reports read-only — "N docs untouched for 90d, suggest archiving" — and
+  proposes nothing), zero disk writes;
+- read-path tolerance: legacy 存量 rows (link / correction / archive)
+  predate the cutover and must be returned by the read paths (scan /
+  record / records_by_run) without crashing — the read paths never
+  validate row type;
+- executor: a legacy ``adopted`` stock row is parked in ``failed`` with an
+  actionable reason (no v2 handler, no migration — 存量提案人工处理).
 """
 from __future__ import annotations
 
+import json as _json
+import time
+
 from server import proposals
+from server.agent.tools.propose import ProposeTool
+from server.agent.tools.tool import ToolContext
 from server.bgagent.executor import run_executor
-from server.vault.db.changes import get_changes
 
 
-def _adopted_archive(vault_dir, conn, path, justification="archiving"):
-    """Create an archive proposal record and drive it to ``adopted`` via legal transitions."""
-    rec = proposals.create(
-        conn, vault_dir, "archive", actor="sentinel", run_id="batch-test",
-        source_refs=[path], justification=justification,
-        payload={"path": path},
-    )
-    proposals.advance(conn, vault_dir, rec["id"], "processing", actor="sentinel")
-    proposals.advance(conn, vault_dir, rec["id"], "adopted", actor="sentinel")
-    return rec
-
-
-# ── proposals: authorization & lifecycle ───────────────────────────────────
-
-def test_archive_authorization():
-    assert proposals.authorization("archive") == "adopted"
-
-
-def test_archive_create_roundtrip(vault_dir, db_conn):
-    rec = proposals.create(
-        db_conn, vault_dir, "archive", actor="sentinel", run_id="b",
-        source_refs=["notes/test.md"], justification="archiving",
-        payload={"path": "notes/test.md"},
-    )
-    assert rec["relpath"].startswith("suggestions/")
-    assert rec["type"] == "archive"
-    assert rec["status"] == "pending"
-    assert rec["payload"] == {"path": "notes/test.md"}
-    # auto type: reversible cold storage. No per-record reversibility flag
-    # in the record world — the authorization tier IS the reversibility.
-    assert "archive" in proposals.AUTO_TYPES
-
-
-def test_archive_process_proposal_adopted(vault_dir, db_conn):
-    rec = proposals.create(
-        db_conn, vault_dir, "archive", actor="sentinel", run_id="b",
-        source_refs=["notes/test.md"], justification="x",
-        payload={"path": "notes/test.md"},
-    )
-    p = proposals.process_proposal(db_conn, vault_dir, rec["id"], actor="sentinel")
-    assert p["status"] == "adopted"
-
-
-# ── executor: fresh move ───────────────────────────────────────────────────
-
-def test_archive_fresh_move(vault_dir, db_conn):
-    src = vault_dir / "notes" / "old-doc.md"
-    src.write_bytes(b"# Old Doc\n\nContent to archive.\n")
-
-    rec = _adopted_archive(vault_dir, db_conn, "notes/old-doc.md")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 1
-    assert summary["errors"] == []
-
-    # Source gone, dest present with subpath preserved.
-    assert not src.exists()
-    dest = vault_dir / "archive" / "notes" / "old-doc.md"
-    assert dest.is_file()
-    assert dest.read_bytes() == b"# Old Doc\n\nContent to archive.\n"
-
-    # Proposal merged.
-    assert proposals.record(db_conn, rec["id"])["status"] == "merged"
-
-    # Change log: move row with correct path/old_path/source.
-    rows = [r for r in get_changes(db_conn, since=0)
-            if r["source"] == "executor" and r["op"] == "move"]
-    assert rows
-    assert any(
-        r["path"] == "archive/notes/old-doc.md"
-        and r["from_path"] == "notes/old-doc.md"
-        for r in rows
+def _ctx(vault_dir, verbs=None):
+    return ToolContext(
+        vault_dir=vault_dir, write_source="consolidator",
+        run_id="consolidator-20261026T000000", verbs=verbs,
     )
 
 
-# ── executor: idempotent crash window ──────────────────────────────────────
+def _planted_retired(conn, type, payload=None, source_refs=None, now=None):
+    """Plant a legacy v1 存量 record directly in the DB as ``adopted``.
 
-def test_archive_idempotent_crash_window(vault_dir, db_conn):
-    # Source missing, dest pre-created: move already completed in a crashed cycle.
-    dest = vault_dir / "archive" / "notes" / "old-doc.md"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(b"# Old Doc\n\nContent to archive.\n")
-    # notes/old-doc.md does NOT exist
-
-    rec = _adopted_archive(vault_dir, db_conn, "notes/old-doc.md")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 1
-    assert summary["errors"] == []
-
-    assert proposals.record(db_conn, rec["id"])["status"] == "merged"
-
-
-# ── executor: dest exists AND source exists → failed ────────────────────────
-
-def test_archive_both_exist_failed(vault_dir, db_conn):
-    src = vault_dir / "notes" / "doc.md"
-    src.write_bytes(b"# Doc\n")
-    dest = vault_dir / "archive" / "notes" / "doc.md"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(b"# Different Doc\n")
-
-    rec = _adopted_archive(vault_dir, db_conn, "notes/doc.md")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 0
-    # _MergeFailed → failed state (not in errors list).
-    p = proposals.record(db_conn, rec["id"])
-    assert p["status"] == "failed"
-    assert "destination" in p["reject_reason"]
-    # Neither file was modified.
-    assert src.read_bytes() == b"# Doc\n"
-    assert dest.read_bytes() == b"# Different Doc\n"
-
-
-# ── executor: source missing AND dest missing → failed ─────────────────────
-
-def test_archive_missing_both_failed(vault_dir, db_conn):
-    # notes/gone.md does not exist anywhere.
-    rec = _adopted_archive(vault_dir, db_conn, "notes/gone.md")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 0
-    p = proposals.record(db_conn, rec["id"])
-    assert p["status"] == "failed"
-    assert "notes/gone.md" in p["reject_reason"]
-
-
-# ── executor: system-dir guard ─────────────────────────────────────────────
-
-def test_archive_system_dir_failed(vault_dir, db_conn):
-    # suggestions/x.md: proposals cannot be archived.
-    (vault_dir / "suggestions").mkdir(exist_ok=True)
-    (vault_dir / "suggestions" / "x.md").write_bytes(b"# X\n")
-    rec = _adopted_archive(vault_dir, db_conn, "suggestions/x.md")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 0
-    p = proposals.record(db_conn, rec["id"])
-    assert p["status"] == "failed"
-    assert "system path" in p["reject_reason"]
-    # File untouched.
-    assert (vault_dir / "suggestions" / "x.md").read_bytes() == b"# X\n"
-
-
-def test_archive_system_dir_sync_failed(vault_dir, db_conn):
-    # .sync/index.db: internals cannot be archived.
-    rec = _adopted_archive(vault_dir, db_conn, ".sync/index.db")
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 0
-    p = proposals.record(db_conn, rec["id"])
-    assert p["status"] == "failed"
-    assert "system path" in p["reject_reason"]
-
-
-# ── executor: payload without path → adopted + error ───────────────────────
-
-def test_archive_no_path_payload_failed(vault_dir, db_conn):
-    """A payload without ``path`` can never succeed; under the structural
-    (ValueError) classification it is advanced to ``failed``, not retried
-    forever (v2 archive's old design had treated it as retryable)."""
-    (vault_dir / "notes" / "doc.md").write_bytes(b"# Doc\n")
-    rec = proposals.create(
-        db_conn, vault_dir, "archive", actor="sentinel", run_id="b",
-        source_refs=["notes/doc.md"], justification="x",
-        payload={"reason": "missing path key"},  # no 'path' key
+    ``proposals.create`` rejects retired types (the verb table is the write
+    gate); these rows are the pre-cutover stock the spec says humans
+    process (no migration).
+    """
+    now = now if now is not None else time.time()
+    date = time.strftime("%Y-%m-%d", time.localtime(now))
+    cur = conn.execute(
+        """
+        INSERT INTO proposals
+            (type, actor, run_id, status, payload, source_refs, justification,
+             reject_reason, created_at, updated_at, merged_at, relpath)
+        VALUES (?, ?, ?, 'adopted', ?, ?, ?, '', ?, ?, '', '')
+        """,
+        (type, "sentinel", "legacy-run",
+         _json.dumps(payload) if payload is not None else "",
+         _json.dumps(source_refs or []), "legacy", now, now),
     )
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="sentinel")
-    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="sentinel")
+    rid = cur.lastrowid
+    conn.execute(
+        "UPDATE proposals SET relpath = ? WHERE id = ?",
+        (f"suggestions/{date}_{type}_p{rid}.md", rid),
+    )
+    return rid
+
+
+# ── write gate: retired types are outside the verb table ─────────────────
+
+def test_archive_authorization_raises():
+    # v1: archive was auto (adopted). v2: outside the verb table entirely —
+    # the dispatch refuses it (the propose tool redirects before reaching
+    # this code path).
+    import pytest
+    with pytest.raises(ValueError):
+        proposals.authorization("archive")
+
+
+def test_archive_create_rejected_zero_writes(vault_dir, db_conn):
+    import pytest
+    before_files = sum(1 for p in vault_dir.rglob("*") if p.is_file())
+    with pytest.raises(ValueError):
+        proposals.create(
+            db_conn, vault_dir, "archive", actor="sentinel", run_id="b",
+            source_refs=["notes/test.md"], justification="archiving",
+            payload={"path": "notes/test.md"},
+        )
+    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert sum(1 for p in vault_dir.rglob("*") if p.is_file()) == before_files
+    assert not (vault_dir / "suggestions").is_dir()
+
+
+# ── propose tool: operational redirect (read-only sentinel) ───────────────
+
+def test_propose_archive_redirect_read_only(vault_dir, db_conn):
+    """D5: archive → the model gets the operational redirect naming the
+    read-only sentinel report, not a bare ban. Zero disk writes."""
+    tool = ProposeTool()
+    out = tool.call(
+        {"type": "archive", "payload": {"path": "notes/test.md"},
+         "source_refs": ["notes/test.md"], "justification": "dormant"},
+        _ctx(vault_dir))
+    assert out.startswith("Error:")
+    assert "retired" in out
+    assert "read-only" in out  # the replacement: sentinel reports, proposes nothing
+    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert not (vault_dir / "suggestions").is_dir()
+    assert not (vault_dir / "archive").is_dir()
+
+
+# ── read-path tolerance: legacy 存量 rows never crash a read ──────────────
+
+def test_legacy_rows_read_path_tolerance(vault_dir, db_conn):
+    """The read paths (scan / record / records_by_run) never validate row
+    type: the three retired v1 types are frozen 存量 and must surface in
+    the console/counts exactly like any other row."""
+    rid_link = _planted_retired(db_conn, "link",
+                                payload={"target": "notes/x.md"},
+                                source_refs=["notes/test.md"])
+    rid_correction = _planted_retired(
+        db_conn, "correction",
+        payload={"file": "notes/test.md", "old": "a", "new": "b"},
+        source_refs=["notes/test.md"])
+    rid_archive = _planted_retired(db_conn, "archive",
+                                   payload={"path": "notes/test.md"},
+                                   source_refs=["notes/test.md"])
+
+    rows = proposals.scan(db_conn)
+    assert {r["id"] for r in rows} == {rid_link, rid_correction, rid_archive}
+    assert {r["type"] for r in rows} == {"link", "correction", "archive"}
+
+    for rid in (rid_link, rid_correction, rid_archive):
+        rec = proposals.record(db_conn, rid)
+        assert rec is not None and rec["status"] == "adopted"
+
+    by_run = proposals.records_by_run(db_conn, "legacy-run", 0)
+    assert {r["id"] for r in by_run} == {rid_link, rid_correction, rid_archive}
+
+
+# ── executor: stock adopted rows park in failed, nothing moves ────────────
+
+def test_legacy_archive_adopted_parked_no_moves(vault_dir, db_conn):
+    """A pre-cutover ``archive`` record stuck at ``adopted``: the v2
+    executor has no archive handler — it parks the row in ``failed`` with
+    an actionable reason (human move). No file moves, no archive/ dir,
+    user area byte-identical."""
+    user_before = (vault_dir / "notes" / "test.md").read_bytes()
+    rid = _planted_retired(db_conn, "archive",
+                           payload={"path": "notes/test.md"},
+                           source_refs=["notes/test.md"])
 
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 0
-    assert summary["errors"] == []
-    p = proposals.record(db_conn, rec["id"])
+    assert summary["errors"] == []  # parked: the human's queue, not ours
+
+    p = proposals.record(db_conn, rid)
     assert p["status"] == "failed"
-    assert "path" in p["reject_reason"]
+    assert "retired" in p["reject_reason"]
+    assert "human move" in p["reject_reason"]
+
+    assert (vault_dir / "notes" / "test.md").read_bytes() == user_before
+    assert not (vault_dir / "archive").is_dir()
+    # The projection was re-rendered on the transition (system zone).
+    assert (vault_dir / p["relpath"]).is_file()
 
 
-# ── executor: end-to-end (archive + unrelated non-adopted) ─────────────────
-
-def test_archive_run_executor_end_to_end(vault_dir, db_conn):
-    src = vault_dir / "notes" / "to-archive.md"
-    src.write_bytes(b"# To Archive\n")
-
-    # Adopted archive proposal.
-    rec_archive = _adopted_archive(vault_dir, db_conn, "notes/to-archive.md")
-
-    # Unrelated pending summary record (not adopted → executor skips it).
-    rec_pending = proposals.create(
-        db_conn, vault_dir, "summary", actor="consolidator", run_id="b",
-        source_refs=["notes/test.md"], justification="x",
-        payload={"body": "x"},
-    )
-
-    summary = run_executor(vault_dir, db_conn)
-    assert summary["merged"] == 1
-
-    # Archive file moved.
-    assert not src.exists()
-    assert (vault_dir / "archive" / "notes" / "to-archive.md").is_file()
-
-    # Archive record merged; pending summary record untouched.
-    assert proposals.record(db_conn, rec_archive["id"])["status"] == "merged"
-    assert proposals.record(db_conn, rec_pending["id"])["status"] == "pending"
+def test_retired_park_reasons_name_replacements(vault_dir, db_conn):
+    """Each retired verb's park reason names its v2 replacement path —
+    the human sees what to do, not just that the verb is gone."""
+    rid_link = _planted_retired(db_conn, "link",
+                                payload={"target": "notes/x.md"},
+                                source_refs=["notes/test.md"])
+    rid_correction = _planted_retired(
+        db_conn, "correction",
+        payload={"file": "notes/test.md", "old": "a", "new": "b"},
+        source_refs=["notes/test.md"])
+    run_executor(vault_dir, db_conn)
+    reason_link = proposals.record(db_conn, rid_link)["reject_reason"]
+    reason_correction = proposals.record(db_conn, rid_correction)["reject_reason"]
+    assert "relatedness" in reason_link
+    assert "errata" in reason_correction

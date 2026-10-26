@@ -118,6 +118,26 @@ def test_gc_never_reclaims_inflight_rows(vault_dir, db_conn):
     assert [r["id"] for r in batch] == [snap["id"]]
 
 
+def test_finalize_claims_inflight_row_and_demotes_predecessor(vault_dir, db_conn):
+    """P2 gate: finalize is a single atomic UPDATE — it must claim its own
+    row even while still in-flight (``live=0``, the ``OR id = ?`` branch),
+    demote the previous live row for the same path, and leave everything
+    else untouched."""
+    (vault_dir / "notes" / "test.md").write_bytes(SAMPLE)
+    s1 = snapshots.capture(db_conn, vault_dir, "notes/test.md", "update", "agent")
+    snapshots.finalize(db_conn, s1, snapshots.hash_bytes(b"v1\n"))
+    s2 = snapshots.capture(db_conn, vault_dir, "notes/test.md", "update", "agent")
+    # s2 is still in-flight (no write yet) — finalize must claim it anyway.
+    snapshots.finalize(db_conn, s2, snapshots.hash_bytes(b"v2\n"))
+    rows = db_conn.execute(
+        "SELECT id, live, finalized FROM snapshots "
+        "WHERE path = 'notes/test.md' ORDER BY id"
+    ).fetchall()
+    assert (rows[0]["live"], rows[0]["finalized"]) == (0, 1)  # s1 demoted
+    assert (rows[1]["live"], rows[1]["finalized"]) == (1, 1)  # s2 claimed
+    assert snapshots.live_preimage(db_conn, "notes/test.md")["id"] == s2["id"]
+
+
 def test_create_op_has_no_preimage_bytes(vault_dir, db_conn):
     snap = snapshots.capture(db_conn, vault_dir, "notes/brand-new.md", "create",
                              "agent", run_id="t")
@@ -188,18 +208,21 @@ def test_agent_move_docs_produces_preimage(vault_dir, db_conn):
 def test_executor_summary_slot_overwrite_keeps_old_full_text(vault_dir, db_conn):
     """Invariant 10 (spec anchor): with the summary cache slot overwritten a
     second time, the pre-image row still holds the old full text readable
-    back (LLM-unique output, forced pre-image)."""
-    _adopted(vault_dir, db_conn, "summary", payload={"body": "first body"})
+    back (LLM-unique output, forced pre-image). v2: the slot lives in the
+    machine zone (index/summaries/), never next to the source note."""
+    _adopted(vault_dir, db_conn, "summary",
+             payload={"form": "cache", "body": "first body"})
     assert run_executor(vault_dir, db_conn)["merged"] == 1
-    out = vault_dir / "notes" / "test-summary.md"
+    out = vault_dir / "index" / "summaries" / "test-summary.md"
     first = out.read_bytes()
     assert b"first body" in first
 
-    _adopted(vault_dir, db_conn, "summary", payload={"body": "second body"})
+    _adopted(vault_dir, db_conn, "summary",
+             payload={"form": "cache", "body": "second body"})
     assert run_executor(vault_dir, db_conn)["merged"] == 1
     assert b"second body" in out.read_bytes()
 
-    live = snapshots.live_preimage(db_conn, "notes/test-summary.md")
+    live = snapshots.live_preimage(db_conn, "index/summaries/test-summary.md")
     assert live is not None and live["op"] == "update"
     assert live["actor"] == "executor"
     assert live["run_id"] == "batch-snap"
@@ -216,12 +239,12 @@ def test_executor_summary_slot_overwrite_keeps_old_full_text(vault_dir, db_conn)
 
 def test_executor_entity_index_produces_preimage(vault_dir, db_conn):
     _adopted(vault_dir, db_conn, "entity_index",
-             payload={"entity": "e1", "value": "v1"})
+             payload={"entity": "e1", "attrs": {"f": "v1"}})
     assert run_executor(vault_dir, db_conn)["merged"] == 1
     live = snapshots.live_preimage(db_conn, "index/entities.md")
     assert live is not None and live["op"] == "create"  # first write: no pre-image bytes
     _adopted(vault_dir, db_conn, "entity_index",
-             payload={"entity": "e1", "value": "v2"})
+             payload={"entity": "e1", "attrs": {"f": "v2"}})
     assert run_executor(vault_dir, db_conn)["merged"] == 1
     live2 = snapshots.live_preimage(db_conn, "index/entities.md")
     assert live2["op"] == "update"

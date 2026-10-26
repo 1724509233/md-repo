@@ -14,8 +14,8 @@
 #     这里取 0.001h = 3.6s，功能测试要能连续重复 run）
 #   - budget_* 无上限校验（int 即可）；"拉高" = 100 / 50
 #   - tools 名称必须存在于 TOOL_REGISTRY（server/agent/tools/__init__.py，
-#     当前 10 个：read_doc/search_docs/list_files/write_doc/delete_doc/
-#     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats）
+#     当前 11 个：read_doc/search_docs/list_files/write_doc/delete_doc/
+#     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats/propose）
 #   - prompt 文件必须存在（相对 config 文件目录）
 #   - **target_dir 互斥**：任意两个非 executor agent 的 target_dir 不得互为
 #     祖先/相等（Path.is_relative_to 对相等路径返回 True）；例外：两 scope 都
@@ -33,9 +33,9 @@ server:
 
 background_agents:
   # ── sentinel（记忆哨兵）─────────────────────────────────────────────────
-  # Tier-2 冒烟的主角：mock 剧本按 sentinel.md 产出 archive 提案（status:
-  # adopted），执行器随后落地移动到 archive/。写 scope = suggestions/
-  # （唯一写动作 write_doc 在 suggestions/ 内）。trigger.source: recall 从
+  # Tier-2 冒烟的主角：mock 剧本按 sentinel.md 产出**只读治理报告**（v2：
+  # archive 动词退役，哨兵不产提案——harness 以 status ok + 非空 summary 判
+  # PASS）。tools 只读：无写工具、无 propose。trigger.source: recall 从
   # 召回账本武装（arm_count: 1 = 一条失败/低分信号即武装）。
   - name: "记忆哨兵（功能测试）"
     alias: sentinel
@@ -54,7 +54,7 @@ background_agents:
       arm_count: 1
       min_interval_h: 0.001           # 解析器无下限；3.6s 冷却足够连续重复
     tools: [read_doc, search_docs, list_files, recent_changes,
-            get_related_docs, recall_stats, write_doc]   # 白名单 = config.example.yaml sentinel 段
+            get_related_docs, recall_stats]   # 只读：无 propose、无写工具（白名单 = config.example.yaml sentinel 段）
     model:
       provider: openai
       model_id: mock
@@ -66,11 +66,10 @@ background_agents:
   # ── consolidator（记忆固化者）───────────────────────────────────────────
   # target_dir：与 sentinel 同用 suggestions/（2026-10-24 提案区豁免后合法，
   # 与生产 config.yaml 一致）：提案一次性 + 唯一命名 + 状态机保护，共享无
-  # 互覆盖风险。write_doc 当前 permission="ask" ⇒ validate 强制 scope
-  # （policy.py），suggestions/ 即其真实写边界，mock 剧本的 write_doc 写
-  # suggestions/ 在 scope 内 ✓。
-  # 历史：豁免前 consolidator/sentinel 不能同用 suggestions/，本模板曾把
-  # consolidator 放 weekly/（narrator 未配置，目录空闲）。
+  # 互覆盖风险。唯一写动作 = propose 工具（创建账本记录）；suggestions/ 的
+  # 直接写/移动/删除一律被拒（SuggestionsGate）。
+  # 历史：v1 mock 剧本用 write_doc 写提案文件（suggestions/ 在 scope 内 ✓）；
+  # v2 改走 propose 通道（write_doc 进 suggestions/ 已被拒）。
   - name: "记忆固化（功能测试）"
     alias: consolidator
     enabled: true
@@ -86,8 +85,9 @@ background_agents:
       events: [create]
       arm_count: 1
       min_interval_h: 0.001
-    # tools 缺省 = 全部工具（consolidator 角色规格）；recent_changes 参数
-    # 全可选（path/since/source/limit），mock 剧本第 1 轮调它。
+    # tools 缺省 = 全部工具（含 propose；consolidator 角色规格）；recent_changes
+    # 参数全可选（path/since/source/limit），mock 剧本第 1 轮调它，第 2 轮走
+    # propose 产出 summary 提案。
     model:
       provider: openai
       model_id: mock
