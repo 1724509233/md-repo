@@ -112,9 +112,12 @@ python -m client.main config.yaml
 | `search_docs` | 自动 | FTS5 + jieba 中文搜索 |
 | `list_files` | 自动 | 列出 vault 文件 |
 | `get_related_docs` | 自动 | 图谱关联文档（wikilink/tag/related） |
+| `recent_changes` | 自动 | 变更日志查询（谁改了什么，按 source 过滤） |
+| `recall_stats` | 自动 | 召回遥测统计（sentinel 治理用） |
 | `write_doc` | **需确认** | 创建/覆盖文档 |
+| `edit_doc` | **需确认** | 精确文本替换 |
 | `delete_doc` | **需确认** | 删除文档 |
-| `move_doc` | **需确认** | 移动/重命名文档 |
+| `move_docs` | **需确认** | 移动/重命名文档（批量） |
 
 安全边界：路径不能越出 vault、仅限 `.md` 文件、`.sync/` 目录受保护。
 
@@ -138,28 +141,37 @@ python -m client.main config.yaml
 ## 测试
 
 ```bash
-pytest tests/ -v          # 72 tests
+pytest tests/ -v          # 574 tests
 ```
 
 ## 项目结构
 
 ```
 ├── server/
-│   ├── main.py          # 入口：config → db → app → uvicorn
-│   ├── api.py           # FastAPI 路由工厂
-│   ├── agent.py         # Agent 工具调用 + SSE 流
-│   ├── ai.py            # RAG 搜索 + LLM 流式
-│   ├── config.py        # YAML 配置解析
-│   ├── db.py            # SQLite 索引 + change_log + FTS5 + 图谱
-│   ├── watcher.py       # watchdog 文件系统监听
+│   ├── main.py              # 入口：config → db → app → watcher → uvicorn
+│   ├── api.py               # FastAPI 路由工厂（create_app）
+│   ├── sync.py              # manifest 对比（compare_files，无 IO 纯函数）
+│   ├── snapshot_watcher.py  # SnapshotWatcher：doorbell + 脏集合 + 快照对比
+│   ├── write_registry.py    # 写归因注册表（变更 source 归因）
+│   ├── events.py            # 进程内事件总线（change / recall / 等）
+│   ├── ai.py                # RAG 搜索 + LLM 流式
+│   ├── mcp_server.py        # MCP stdio server（AI 助手接入）
+│   ├── proposals.py         # 提案状态机（suggestions/ 提案区）
+│   ├── recovery.py          # 恢复演练：证明 index.db 是可重建缓存
+│   ├── logrotate.py         # 客户端旧日志定期清理
+│   ├── config.py            # YAML 配置解析
+│   ├── vault/               # 索引子系统：db/（SQLite+FTS5+图谱）· fs/（切块+链接解析）· orchestration/（索引+refs+移动检测）；公共 API = service.py
+│   ├── agent/               # LLM agent：tools/（10 工具）· runtime · session · policy · reminders
+│   ├── bgagent/             # 后台 agent：scheduler（cron+arming）· runner · notify · executor
+│   ├── prompts/             # bgagent 角色提示词（sentinel / consolidator / narrator）
 │   └── templates/
-│       ├── index.html   # Web UI（单文件，Tailwind CDN）
-│       └── style.css    # 自定义样式
+│       ├── index.html       # Web UI（单文件，Tailwind CDN）
+│       └── style.css        # 自定义样式
 ├── client/
-│   ├── main.py          # 轮询循环入口
-│   └── sync.py          # 扫描 + 同步逻辑
-├── tests/               # pytest 套件（63 tests）
-└── docs/superpowers/    # 设计文档 + 实施计划
+│   ├── main.py              # 轮询循环入口
+│   └── sync.py              # 扫描 + 同步逻辑
+├── tests/                   # pytest 套件（574 tests）
+└── docs/                    # 设计文档 + 实施计划（superpowers/specs · plans）
 ```
 
 ## MCP Server（接入 OpenCode 等 AI 助手）

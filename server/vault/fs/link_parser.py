@@ -22,9 +22,11 @@ def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
     """Resolve a wikilink target to a vault-relative path.
 
     Resolution order:
-    1. Exact relative path (e.g. 'notes/a.md')
-    2. Same-directory relative (e.g. './a.md' from the linking file's dir)
-    3. Vault-wide search by filename (e.g. 'a.md' → find 'notes/a.md')
+    1. Exact relative path from vault root (e.g. 'notes/a.md')
+    2. Vault-wide search by filename (e.g. 'a.md' → find 'notes/a.md').
+       Only resolves when the filename is unique; ambiguous matches
+       return None. rglob results are cached per filename
+       (see _wikilink_cache).
 
     Returns the vault-relative path, or None if not found.
     """
