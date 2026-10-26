@@ -1,11 +1,13 @@
 """Tests for the memory-console routes (memory-runtime).
 
-Covers: the proposals list (shape, sort, malformed handling, age_days,
-trail summary), the adopt/reject one-click review endpoints
-(state-machine transitions ledgered with actor "human", path guards,
-reason threading), and the /api/memory/status pulse (proposal counts,
-trigger_state agent panel incl. the config-derived arm caps, the
-executor activity block, recall demand).
+Covers: the proposals list (shape, sort, age_days, trail summary — DB
+records are the source; the response shape stays stable vs the v1
+frontmatter list: ``reversible`` derives from the authorization tier,
+``title`` from source_refs/type), the adopt/reject one-click review
+endpoints (record-level state-machine transitions ledgered with actor
+"human", path guards, reason threading), and the /api/memory/status
+pulse (proposal counts, trigger_state agent panel incl. the
+config-derived arm caps, the executor activity block, recall demand).
 """
 from __future__ import annotations
 
@@ -21,74 +23,62 @@ from server.vault.db.changes import get_changes, log_change
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-def _create(vault_dir, conn, type="entity_index", title="T", source_refs=None,
-            now=None, actor="consolidator"):
-    return proposals.create_proposal(
-        vault_dir, type=type, actor=actor, run_id="batch-test",
-        source_refs=source_refs or ["notes/test.md"], title=title,
-        body="proposal body", now=now,
+def _create(vault_dir, conn, type="entity_index", source_refs=None,
+            now=None, actor="consolidator", run_id="batch-test"):
+    return proposals.create(
+        conn, vault_dir, type, actor=actor, run_id=run_id,
+        source_refs=source_refs or ["notes/test.md"],
+        justification="proposal body", payload=None, now=now,
     )
 
 
-def _to_awaiting(vault_dir, conn, rel, actor="tester"):
-    """Drive a pending review-type proposal to awaiting_review."""
-    proposals.advance(vault_dir, conn, rel, "processing", actor=actor)
-    return proposals.advance(vault_dir, conn, rel, "awaiting_review", actor=actor)
-
-
-def _write_malformed(vault_dir, name="2026-01-01_bogus_bad.md"):
-    """Raw bad-frontmatter file (unclosed YAML) → parse failure."""
-    fp = vault_dir / "suggestions" / name
-    fp.write_bytes(b"---\nstatus: [unclosed\n---\nmalformed body\n")
-    return f"suggestions/{name}"
+def _to_awaiting(vault_dir, conn, rec, actor="tester"):
+    """Drive a pending review-type record to awaiting_review."""
+    proposals.advance(conn, vault_dir, rec["id"], "processing", actor=actor)
+    return proposals.advance(conn, vault_dir, rec["id"], "awaiting_review", actor=actor)
 
 
 # ── GET /api/memory/proposals ──────────────────────────────────────────────
 
-def test_list_shape_sort_malformed_age(client, vault_dir, db_conn):
+def test_list_shape_sort_age(client, vault_dir, db_conn):
     # awaiting_review (review type → summary), created now.
-    r_ar = _create(vault_dir, db_conn, type="summary", title="Review me")
+    r_ar = _create(vault_dir, db_conn, type="summary")
     _to_awaiting(vault_dir, db_conn, r_ar)
     # two pending proposals with distinct ages (tiebreak: age desc).
-    r_old = _create(vault_dir, db_conn, type="entity_index", title="Old",
+    r_old = _create(vault_dir, db_conn, type="entity_index",
                     now=time.time() - 5 * 86400)
-    r_new = _create(vault_dir, db_conn, type="entity_index", title="New")
+    r_new = _create(vault_dir, db_conn, type="entity_index")
     # adopted (auto type → link).
-    r_adopted = _create(vault_dir, db_conn, type="link", title="Adopted")
-    proposals.advance(vault_dir, db_conn, r_adopted, "processing", actor="t")
-    proposals.advance(vault_dir, db_conn, r_adopted, "adopted", actor="t")
-    # one malformed file.
-    malformed_rel = _write_malformed(vault_dir)
+    r_adopted = _create(vault_dir, db_conn, type="link")
+    proposals.advance(db_conn, vault_dir, r_adopted["id"], "processing", actor="t")
+    proposals.advance(db_conn, vault_dir, r_adopted["id"], "adopted", actor="t")
 
     resp = client.get("/api/memory/proposals")
     assert resp.status_code == 200
     items = resp.json()["proposals"]
-    assert len(items) == 5
+    assert len(items) == 4
 
     # awaiting_review first.
-    assert items[0]["relpath"] == r_ar
+    assert items[0]["relpath"] == r_ar["relpath"]
     assert items[0]["status"] == "awaiting_review"
-    # within pending, newer-before-older is broken by age desc: older first.
+    # within pending, older-before-newer (age desc).
     pend = [i["relpath"] for i in items if i["status"] == "pending"]
-    assert pend == [r_old, r_new]
-    # malformed last.
-    assert items[-1]["status"] == "malformed"
-    assert items[-1]["relpath"] == malformed_rel
-    assert items[-1]["error"]
+    assert pend == [r_old["relpath"], r_new["relpath"]]
 
     # field shape on a normal item.
-    old_item = next(i for i in items if i["relpath"] == r_old)
+    old_item = next(i for i in items if i["relpath"] == r_old["relpath"])
     assert old_item["status"] == "pending"
     assert old_item["type"] == "entity_index"
     assert old_item["actor"] == "consolidator"
-    assert old_item["reversible"] is True  # auto type default
+    assert old_item["reversible"] is True  # auto type
     assert old_item["source_refs"] == ["notes/test.md"]
-    assert old_item["created"]  # ISO date string from the filename prefix
+    assert old_item["title"] == "notes/test.md"  # derived: first source ref
+    assert old_item["created"]  # ISO date string from created_at
     assert old_item["age_days"] == 5
 
 
-def test_list_empty_when_no_dir(client, vault_dir, db_conn):
-    # suggestions/ not created yet.
+def test_list_empty_when_no_records(client, vault_dir, db_conn):
+    # Nothing in the proposals table (and no suggestions/ dir either).
     assert not (vault_dir / "suggestions").is_dir()
     resp = client.get("/api/memory/proposals")
     assert resp.status_code == 200
@@ -98,15 +88,14 @@ def test_list_empty_when_no_dir(client, vault_dir, db_conn):
 # ── POST .../adopt ─────────────────────────────────────────────────────────
 
 def test_adopt_success_and_ledger(client, vault_dir, db_conn):
-    # entity_index with a bad payload: adoptable by the API, but the executor
-    # (the only thing that applies changes) will fail to merge it.
-    rel = _create(vault_dir, db_conn, type="summary", title="Adopt me")
-    _to_awaiting(vault_dir, db_conn, rel)
+    rec = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec)
+    rel = rec["relpath"]
 
     resp = client.post(f"/api/memory/proposals/{rel}/adopt")
     assert resp.status_code == 200
     assert resp.json() == {"relpath": rel, "status": "adopted"}
-    assert proposals.parse_proposal(vault_dir / rel)["status"] == "adopted"
+    assert proposals.record_by_relpath(db_conn, rel)["status"] == "adopted"
 
     # Ledgered with the human actor (source="human", op="update").
     rows = get_changes(db_conn, since=0, path=rel, source="human")
@@ -116,19 +105,20 @@ def test_adopt_success_and_ledger(client, vault_dir, db_conn):
 
 def test_adopt_wrong_status_and_bad_paths(client, vault_dir, db_conn):
     # pending → 400 (with the current status in the detail).
-    r_pend = _create(vault_dir, db_conn, type="entity_index", title="Pending")
-    resp = client.post(f"/api/memory/proposals/{r_pend}/adopt")
+    rec = _create(vault_dir, db_conn, type="entity_index")
+    resp = client.post(f"/api/memory/proposals/{rec['relpath']}/adopt")
     assert resp.status_code == 400
     assert "pending" in resp.json()["detail"]
 
     # bad paths → 400/404, never 500.
     assert client.post("/api/memory/proposals/../x/adopt").status_code in (400, 404)
     assert client.post("/api/memory/proposals//abs.md/adopt").status_code in (400, 404)
-    assert client.post("/api/memory/proposals/notes/test.md/adopt").status_code in (400, 404)
+    assert client.post(
+        "/api/memory/proposals/notes/test.md/adopt").status_code in (400, 404)
     assert client.post(
         "/api/memory/proposals/suggestions/sub/x.md/adopt").status_code in (400, 404)
 
-    # missing file → 404.
+    # missing record → 404 (v1: missing file → 404).
     assert client.post(
         "/api/memory/proposals/suggestions/nope.md/adopt").status_code == 404
 
@@ -136,8 +126,9 @@ def test_adopt_wrong_status_and_bad_paths(client, vault_dir, db_conn):
 # ── POST .../reject ────────────────────────────────────────────────────────
 
 def test_reject_threads_reason(client, vault_dir, db_conn):
-    rel = _create(vault_dir, db_conn, type="summary", title="Reject me")
-    _to_awaiting(vault_dir, db_conn, rel)
+    rec = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec)
+    rel = rec["relpath"]
 
     resp = client.post(
         f"/api/memory/proposals/{rel}/reject",
@@ -147,16 +138,19 @@ def test_reject_threads_reason(client, vault_dir, db_conn):
     body = resp.json()
     assert body["status"] == "rejected"
     assert body["relpath"] == rel
-    # Reason is stripped and threaded into the frontmatter on disk.
+    # Reason is stripped and threaded into the record.
     assert body["reject_reason"] == "summary is wrong"
-    p = proposals.parse_proposal(vault_dir / rel)
+    p = proposals.record_by_relpath(db_conn, rel)
     assert p["status"] == "rejected"
     assert p["reject_reason"] == "summary is wrong"
+    # And the projection file was re-rendered with the new state.
+    assert "status: rejected" in (vault_dir / rel).read_text(encoding="utf-8")
 
 
 def test_reject_reason_required(client, vault_dir, db_conn):
-    rel = _create(vault_dir, db_conn, type="summary", title="Need reason")
-    _to_awaiting(vault_dir, db_conn, rel)
+    rec = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec)
+    rel = rec["relpath"]
 
     assert client.post(
         f"/api/memory/proposals/{rel}/reject", json={}).status_code == 400
@@ -164,13 +158,13 @@ def test_reject_reason_required(client, vault_dir, db_conn):
         f"/api/memory/proposals/{rel}/reject", json={"reason": "   "}
     ).status_code == 400
     # status unchanged after the failed rejects.
-    assert proposals.parse_proposal(vault_dir / rel)["status"] == "awaiting_review"
+    assert proposals.record_by_relpath(db_conn, rel)["status"] == "awaiting_review"
 
 
 def test_reject_wrong_status(client, vault_dir, db_conn):
-    r_pend = _create(vault_dir, db_conn, type="entity_index", title="Pending")
+    rec = _create(vault_dir, db_conn, type="entity_index")
     resp = client.post(
-        f"/api/memory/proposals/{r_pend}/reject", json={"reason": "nope"})
+        f"/api/memory/proposals/{rec['relpath']}/reject", json={"reason": "nope"})
     assert resp.status_code == 400
     assert "pending" in resp.json()["detail"]
 
@@ -178,11 +172,10 @@ def test_reject_wrong_status(client, vault_dir, db_conn):
 # ── GET /api/memory/status ─────────────────────────────────────────────────
 
 def test_status_shape_and_counts(client, vault_dir, db_conn):
-    # Seed proposals with distinct statuses + one malformed.
-    r_ar = _create(vault_dir, db_conn, type="summary", title="AR")
+    # Seed records with distinct statuses.
+    r_ar = _create(vault_dir, db_conn, type="summary")
     _to_awaiting(vault_dir, db_conn, r_ar)
-    r_pend = _create(vault_dir, db_conn, type="entity_index", title="PEND")
-    _write_malformed(vault_dir)
+    _create(vault_dir, db_conn, type="entity_index")
 
     # Trigger-state row (inserted directly, as the scheduler would).
     today = datetime.now().strftime("%Y-%m-%d")
@@ -222,12 +215,13 @@ def test_status_shape_and_counts(client, vault_dir, db_conn):
     by_status = data["proposals"]["by_status"]
     assert by_status["awaiting_review"] == 1
     assert by_status["pending"] == 1
-    assert by_status["malformed"] == 1
-    # Stable shape: the full status set is always present (zero-count too).
+    # Records cannot be malformed (the DB row IS the state) — the key stays
+    # in the shape for the poller with a zero count.
+    assert by_status["malformed"] == 0
     assert by_status["merged"] == 0
     assert by_status["adopted"] == 0
     assert len(by_status) == 9
-    assert data["proposals"]["awaiting_review"][0]["relpath"] == r_ar
+    assert data["proposals"]["awaiting_review"][0]["relpath"] == r_ar["relpath"]
 
     # agents: the trigger_state row; config-derived caps unavailable → null.
     agent = data["agents"][0]
@@ -365,38 +359,32 @@ def test_status_executor_block_empty(vault_dir, db_conn):
 
 def test_list_trail_fields(client, vault_dir, db_conn):
     """List items carry a trail summary: the newest 3 change_log rows
-    matching the /trail endpoint's match (path = the file OR batch_id =
-    run_id) + the total match count. Rows without ledger entries get
-    []/0; malformed items carry the same-shaped empty fields."""
-    # Proposal A (run_id "batch-test", the _create helper's batch): 4
-    # ledgered state transitions on the file itself + one executor file
-    # merge carrying the batch id but a different path.
-    r_a = _create(vault_dir, db_conn, type="summary", title="Trailing")
-    _to_awaiting(vault_dir, db_conn, r_a)  # processing + awaiting_review rows
-    resp = client.post(f"/api/memory/proposals/{r_a}/adopt")
+    matching the /trail endpoint's match (path = the projection file OR
+    batch_id = run_id) + the total match count. Records without ledger
+    entries get []/0."""
+    # Record A (run_id "batch-test", the _create helper's batch): 4
+    # ledgered state transitions on the projection file + one executor
+    # file merge carrying the batch id but a different path.
+    rec_a = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec_a)  # processing + awaiting_review rows
+    resp = client.post(f"/api/memory/proposals/{rec_a['relpath']}/adopt")
     assert resp.status_code == 200  # +adopted row (source=human)
-    proposals.advance(vault_dir, db_conn, r_a, "merged", actor="executor")
+    proposals.advance(db_conn, vault_dir, rec_a["id"], "merged", actor="executor")
     # +the executor's file merge (same batch, other path) — what the
     # 30-minute loop ledgered via apply_change.
     log_change(db_conn, "index/entities.md", "update", source="executor",
                batch_id="batch-test")
     db_conn.commit()
 
-    # Proposal B: a run of its own with no ledger rows → []/0 (the shared
+    # Record B: a run of its own with no ledger rows → []/0 (the shared
     # "batch-test" batch must not leak into it).
-    r_b = proposals.create_proposal(
-        vault_dir, type="entity_index", actor="consolidator",
-        run_id="batch-quiet", source_refs=["notes/test.md"], title="Quiet",
-        body="quiet body",
-    )
-    # Malformed: parse failure → run_id '' → path rows only, none exist.
-    r_m = _write_malformed(vault_dir)
+    rec_b = _create(vault_dir, db_conn, type="entity_index", run_id="batch-quiet")
 
     resp = client.get("/api/memory/proposals")
     assert resp.status_code == 200
     items = {i["relpath"]: i for i in resp.json()["proposals"]}
 
-    a = items[r_a]
+    a = items[rec_a["relpath"]]
     assert a["trail_count"] == 5  # 4 state rows + 1 batch file row
     assert len(a["trail"]) == 3   # truncated to the newest 3
     assert [t["seq"] for t in a["trail"]] == sorted(
@@ -406,19 +394,15 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     assert all(set(t) == {"seq", "ts", "source", "op", "path"} for t in a["trail"])
     assert a["trail"][0]["path"] == "index/entities.md"
     assert a["trail"][0]["source"] == "executor"
-    assert a["trail"][2]["path"] == r_a
+    assert a["trail"][2]["path"] == rec_a["relpath"]
     assert a["trail"][2]["source"] == "human"
 
     # Same basis as the drill endpoint: the list trail is its first rows.
-    full = client.get(f"/api/memory/proposals/{r_a}/trail").json()["trail"]
+    full = client.get(
+        f"/api/memory/proposals/{rec_a['relpath']}/trail").json()["trail"]
     assert len(full) == 5
     assert [t["seq"] for t in a["trail"]] == [t["seq"] for t in full[:3]]
 
-    b = items[r_b]
+    b = items[rec_b["relpath"]]
     assert b["trail"] == []
     assert b["trail_count"] == 0
-
-    m = items[r_m]
-    assert m["status"] == "malformed"
-    assert m["trail"] == []
-    assert m["trail_count"] == 0

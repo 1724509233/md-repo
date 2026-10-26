@@ -223,6 +223,57 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_notifications_ts ON notifications(ts)"
     )
 
+    # Proposal records (reversible-automation v2, P0): the DB row is the
+    # single source of truth for proposal state. The markdown file under
+    # suggestions/ is a system-exclusive idempotent projection of the row
+    # (frontmatter carries projection: true + source_record: <id>). State
+    # transitions update the row and append a proposal_transitions row; the
+    # projection file is re-rendered on every transition.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proposals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            type TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            payload TEXT DEFAULT '',
+            source_refs TEXT DEFAULT '[]',
+            justification TEXT NOT NULL DEFAULT '',
+            reject_reason TEXT NOT NULL DEFAULT '',
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            merged_at TEXT NOT NULL DEFAULT '',
+            relpath TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposals_actor ON proposals(actor)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposals_relpath ON proposals(relpath)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS proposal_transitions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            proposal_id INTEGER NOT NULL REFERENCES proposals(id),
+            from_status TEXT,
+            to_status TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            ts REAL NOT NULL,
+            reason TEXT NOT NULL DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_proposal_transitions_pid ON proposal_transitions(proposal_id)"
+    )
+
     # Ensure the segments search index exists.
     from .segments_sql import init_segments
 

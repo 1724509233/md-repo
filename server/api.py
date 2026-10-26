@@ -72,25 +72,14 @@ _PROPOSAL_STATUS_ORDER = {
     "merged": 7,
     "malformed": 8,
 }
-_PROPOSAL_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?=[_\- ])")
 
 
-def _proposal_date_info(relpath: str) -> tuple:
-    """(created_iso, created_ts) parsed from the ``YYYY-MM-DD`` filename
-    prefix, or ``(None, None)`` when the prefix is absent/unparseable.
-
-    Proposals carry no created_at frontmatter; the filename date is the
-    creation date (mirrors proposals._created_ts).
-    """
-    m = _PROPOSAL_DATE_RE.match(Path(relpath).stem)
-    if not m:
-        return None, None
-    try:
-        y, mo, d = (int(x) for x in m.groups())
-        dt = datetime(y, mo, d)
-    except ValueError:
-        return None, None
-    return dt.strftime("%Y-%m-%d"), dt.timestamp()
+def _proposal_title(p: dict) -> str:
+    """Console display title for a record: the first source ref (the note
+    the proposal is about), falling back to the type. Records carry no
+    free-form title (v1's body H1); this keeps the response shape stable."""
+    refs = p.get("source_refs") or []
+    return refs[0] if refs else (p.get("type") or "")
 
 
 def _proposal_sort_key(item: dict) -> tuple:
@@ -583,40 +572,25 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
     @app.get("/api/memory/proposals")
     async def memory_proposals() -> dict:
-        """List every proposal in suggestions/ (top level) with frontmatter
-        fields. A parse failure yields a ``malformed`` item, never a 500."""
+        """List every proposal record (DB = the state source of truth; the
+        suggestions/ files are projections, never scanned). Response shape
+        is stable vs the v1 frontmatter list: ``reversible`` derives from
+        the authorization tier, ``title`` from source_refs/type."""
         from . import proposals
-
-        d = Path(vault_dir) / proposals.PROPOSALS_DIR
-        if not d.is_dir():
-            return {"proposals": []}
 
         now = time.time()
         items: list[dict] = []
-        for fp in sorted(d.glob("*.md")):
-            if not fp.is_file():
-                continue
-            rel = fp.relative_to(Path(vault_dir)).as_posix()
-            stem = fp.stem
-            created_iso, created_ts = _proposal_date_info(rel)
-            age_days = int((now - created_ts) // 86400) if created_ts is not None else 0
-            try:
-                p = proposals.parse_proposal(fp)
-            except Exception as e:
-                items.append({
-                    "relpath": rel, "type": "", "actor": "", "run_id": "",
-                    "status": "malformed", "reversible": False, "source_refs": [],
-                    "reject_reason": "", "merged_at": "", "title": stem,
-                    "created": created_iso, "age_days": age_days, "error": str(e),
-                })
-                continue
+        for p in proposals.scan(db_conn):
+            created_iso = datetime.fromtimestamp(p["created_at"]).strftime("%Y-%m-%d")
+            age_days = int((now - p["created_at"]) // 86400)
             items.append({
-                "relpath": rel, "type": p["type"], "actor": p["actor"],
+                "relpath": p["relpath"], "type": p["type"], "actor": p["actor"],
                 "run_id": p["run_id"], "status": p["status"],
-                "reversible": p["reversible"], "source_refs": p["source_refs"],
+                "reversible": p["type"] in proposals.AUTO_TYPES,
+                "source_refs": p["source_refs"],
                 "reject_reason": p["reject_reason"], "merged_at": p["merged_at"],
-                "title": p["title"] or stem,
-                "created": created_iso, "age_days": age_days,
+                "title": _proposal_title(p), "created": created_iso,
+                "age_days": age_days,
             })
 
         items.sort(key=_proposal_sort_key)
@@ -639,18 +613,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         from . import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        fp = Path(vault_dir) / rel
-        if not fp.is_file():
+        rec = proposals.record_by_relpath(db_conn, rel)
+        if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
-        try:
-            cur = proposals.parse_proposal(fp)["status"]
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"malformed proposal: {e}")
-        if cur != "awaiting_review":
+        if rec["status"] != "awaiting_review":
             raise HTTPException(
-                status_code=400, detail=f"status is {cur!r}, must be awaiting_review")
+                status_code=400,
+                detail=f"status is {rec['status']!r}, must be awaiting_review")
         try:
-            proposals.advance(vault_dir, db_conn, rel, "adopted", actor="human")
+            proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="human")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except FileNotFoundError:
@@ -664,8 +635,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         from . import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        fp = Path(vault_dir) / rel
-        if not fp.is_file():
+        rec = proposals.record_by_relpath(db_conn, rel)
+        if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         try:
             body = await request.json()
@@ -675,15 +646,11 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         if not isinstance(reason, str) or not reason.strip():
             raise HTTPException(status_code=400, detail="reason is required")
         reason = reason.strip()
-        try:
-            cur = proposals.parse_proposal(fp)["status"]
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"malformed proposal: {e}")
-        if cur != "awaiting_review":
+        if rec["status"] != "awaiting_review":
             raise HTTPException(
-                status_code=400, detail=f"status is {cur!r}, must be awaiting_review")
+                status_code=400, detail=f"status is {rec['status']!r}, must be awaiting_review")
         try:
-            proposals.advance(vault_dir, db_conn, rel, "rejected",
+            proposals.advance(db_conn, vault_dir, rec["id"], "rejected",
                               actor="human", reject_reason=reason)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -700,13 +667,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         from . import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        batch = ""
-        fp = Path(vault_dir) / rel
-        if fp.is_file():
-            try:
-                batch = proposals.parse_proposal(fp).get("run_id") or ""
-            except Exception:
-                batch = ""  # malformed frontmatter → path rows only
+        rec = proposals.record_by_relpath(db_conn, rel)
+        batch = rec["run_id"] if rec is not None else ""
         sql = "SELECT seq, ts, source, op, path FROM change_log WHERE path = ?"
         params: list = [rel]
         if batch:
@@ -724,25 +686,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         from .vault.db import recall as recall_db
 
         # proposals: by_status counts + the awaiting_review review queue.
+        # DB records are the source (suggestions/ files are projections).
         items = []
-        d = Path(vault_dir) / proposals.PROPOSALS_DIR
-        if d.is_dir():
-            now = time.time()
-            for fp in sorted(d.glob("*.md")):
-                if not fp.is_file():
-                    continue
-                rel = fp.relative_to(Path(vault_dir)).as_posix()
-                stem = fp.stem
-                created_iso, created_ts = _proposal_date_info(rel)
-                age_days = int((now - created_ts) // 86400) if created_ts is not None else 0
-                try:
-                    p = proposals.parse_proposal(fp)
-                except Exception:
-                    p = {"status": "malformed", "type": "", "actor": "", "title": stem}
-                items.append({
-                    "relpath": rel, "type": p.get("type", ""), "actor": p.get("actor", ""),
-                    "age_days": age_days, "title": p.get("title") or stem, "status": p["status"],
-                })
+        now = time.time()
+        for p in proposals.scan(db_conn):
+            age_days = int((now - p["created_at"]) // 86400)
+            items.append({
+                "relpath": p["relpath"], "type": p["type"], "actor": p["actor"],
+                "age_days": age_days, "title": _proposal_title(p), "status": p["status"],
+            })
         # by_status always carries the full status set (stable shape for the
         # poller); awaiting holds the review queue (oldest first).
         by_status = {

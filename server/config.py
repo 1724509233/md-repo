@@ -59,6 +59,11 @@ class BackgroundAgentConfig:
       target_dir overlap check (nothing writes under LLM scope control).
     - ``tools``: optional tool whitelist — a non-empty tuple of tool names
       that must exist in the agent tool registry. None (absent) = all tools.
+    - ``verbs``: optional proposal-verb whitelist (reversible-automation v2)
+      — a non-empty tuple of proposal types this role may ``propose``
+      (subset of proposals.VALID_TYPES). None (absent) = unrestricted
+      (the role may propose any type; the desktop channel is always
+      unrestricted). Enforced at the propose tool via ToolContext.verbs.
     - ``escalation``: optional law-layer metadata mapping condition keys
       (``zero_recall_candidate``, ``query_gap_detected``) to actions
       (``notify``, ``report``). In v2 the framework enforces escalation
@@ -82,6 +87,7 @@ class BackgroundAgentConfig:
     trigger: dict | None = None
     is_executor: bool = False
     tools: tuple[str, ...] | None = None   # None = all tools (backward compatible)
+    verbs: tuple[str, ...] | None = None   # None = unrestricted propose (v2)
     escalation: dict | None = None
 
 
@@ -218,6 +224,33 @@ def _parse_tools(tools_raw, index: int, alias: str) -> tuple[str, ...] | None:
     return tuple(tools_raw)
 
 
+def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
+    """Parse + validate the optional proposal-verb whitelist (v2).
+
+    Shape: a non-empty list of proposal types, each of which must be in
+    ``proposals.VALID_TYPES``. Absent/None → None (unrestricted, backward
+    compatible). The proposals import is deferred (same cycle-avoidance as
+    :func:`_parse_tools`).
+    """
+    if verbs_raw is None:
+        return None
+    if not isinstance(verbs_raw, list) or not verbs_raw:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): verbs must be a non-empty "
+            f"list of proposal types")
+    if not all(isinstance(v, str) and v for v in verbs_raw):
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): verbs must be a list of "
+            f"non-empty strings")
+    from .proposals import VALID_TYPES
+    bad = [v for v in verbs_raw if v not in VALID_TYPES]
+    if bad:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): verbs contains unknown "
+            f"proposal type(s): {bad} (valid: {sorted(VALID_TYPES)})")
+    return tuple(verbs_raw)
+
+
 def load_background_agents(config_path: str, vault_dir: Path) -> list[BackgroundAgentConfig]:
     """Load and validate the 'background_agents' section.
 
@@ -278,6 +311,7 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
 
         trigger = _parse_trigger(raw.get("trigger"), i, alias)
         tools = _parse_tools(raw.get("tools"), i, alias)
+        verbs = _parse_verbs(raw.get("verbs"), i, alias)
         escalation = _parse_escalation(raw.get("escalation"), i, alias)
 
         agents.append(BackgroundAgentConfig(
@@ -304,6 +338,7 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
             trigger=trigger,
             is_executor=bool(raw.get("is_executor", False)),
             tools=tools,
+            verbs=verbs,
             escalation=escalation,
         ))
 
@@ -317,11 +352,11 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         dupes = sorted({x for x in aliases if aliases.count(x) > 1})
         raise ValueError(f"duplicate background agent alias: {', '.join(dupes)}")
 
-    # Shared proposal drop zone: proposals are one-shot, uniquely named
-    # (YYYY-MM-DD_<type>_<slug>.md), status-machine protected and consumed by
-    # the executor — two scopes inside the zone cannot overwrite each other,
-    # so their overlap is exempt (memory-runtime spec assigns suggestions/ to
-    # both consolidator and sentinel).
+    # Shared proposal drop zone: proposal records are one-shot, uniquely
+    # named (suggestions/YYYY-MM-DD_<type>_p<id>.md), state-machine
+    # protected and consumed by the executor — two scopes inside the zone
+    # cannot overwrite each other, so their overlap is exempt (memory-runtime
+    # spec assigns suggestions/ to both consolidator and sentinel).
     proposals_zone = vault_resolved / PROPOSALS_DIR
 
     for i in range(len(agents)):

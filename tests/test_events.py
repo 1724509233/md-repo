@@ -258,23 +258,24 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
     try:
         from server import proposals
 
-        def rel_at(status):
-            rel = proposals.create_proposal(
-                vault_dir, type="summary", actor="test", run_id="r1",
-                source_refs=["notes/test.md"], title=f"t-{status}", body="b",
+        def rec_at(status):
+            rec = proposals.create(
+                db_conn, vault_dir, "summary", actor="test", run_id="r1",
+                source_refs=["notes/test.md"], justification="b",
                 now=1760000000.0)
+            rid = rec["id"]
             if status == "processing":
-                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
             elif status == "adopted":
-                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
-                proposals.advance(vault_dir, db_conn, rel, "adopted", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "adopted", actor="test")
             elif status == "awaiting_review":
-                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
-                proposals.advance(vault_dir, db_conn, rel, "awaiting_review", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "awaiting_review", actor="test")
             elif status == "failed":
-                proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
-                proposals.advance(vault_dir, db_conn, rel, "failed", actor="test")
-            return rel
+                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "failed", actor="test")
+            return rec
 
         def prop_events():
             # apply_change emits 'change' on every transition; only the
@@ -286,12 +287,12 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
         assert len(pairs) == 10
         for src, dst in pairs:
             rec.clear()
-            rel = rel_at(src)  # setup may emit (e.g. adopted passes through)
+            crec = rec_at(src)  # setup may emit (e.g. adopted passes through)
             rec.clear()
-            proposals.advance(vault_dir, db_conn, rel, dst, actor="test")
+            proposals.advance(db_conn, vault_dir, crec["id"], dst, actor="test")
             if dst == "adopted":
                 assert prop_events() == [
-                    {"relpath": rel, "status": "adopted"}], (src, dst, rec)
+                    {"relpath": crec["relpath"], "status": "adopted"}], (src, dst, rec)
             else:
                 assert prop_events() == [], (src, dst, rec)  # no self-wake
     finally:

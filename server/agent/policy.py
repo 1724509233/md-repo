@@ -86,67 +86,38 @@ class WriteGate:
 class SuggestionsGate(WriteGate):
     """suggestions/ 不变量的单接线（vault 不变量，任何通道绕不过）。
 
-    Direct writes must never forge the proposal state machine: write/edit
-    into suggestions/ go through ``proposals.validate_suggestions_write``
-    (reads the old content; ``count == 1`` assumed for edit_doc; when the
-    file is missing the gate defers to the tool's canonical error).
-
-    The suggestions subtree (any depth) is state-machine territory for
-    move/delete and any other ask tool — a move could rename a proposal
-    (breaking the filename convention) or hide it under a subdirectory
-    (out of scan()'s sight); a delete would kill a proposal while the
-    ledger keeps an orphan row. Cleanup goes through the Web UI human
-    channel (``/api/docs/manage``), not agent tool writes.
+    v2 (reversible-automation): the DB record is the single source of truth
+    for proposal state; the file under suggestions/ is a *system-exclusive
+    idempotent projection* of that record. Consequently EVERY ask-tool
+    write/move/delete touching the suggestions/ subtree (any depth) is
+    rejected — the LLM creates proposals via the ``propose`` tool, and state
+    transitions go through the record state machine (proposals.advance;
+    human adopt/reject via the memory console). There is no longer any
+    legitimate direct-write shape, so no content-semantic branching.
 
     "Is this a write tool" is determined structurally via
-    ``TOOL_REGISTRY[tool_name].permission == "ask"``; ``tool_name`` is only
-    used for the content-semantic branches (write/edit validate content).
+    ``TOOL_REGISTRY[tool_name].permission == "ask"``.
 
-    Fail-closed: a registered ask tool + a path hitting the suggestions
-    subtree + no known branch → rejected. A future ask tool (e.g.
-    rename_doc) must be covered explicitly here — otherwise the default
-    branch rejects it loudly instead of silently letting it through.
+    Fail-closed: the generic path scan rejects any ask tool call (including
+    future ones) that names a path under suggestions/ — no per-tool branch
+    to miss.
     """
 
     name = "suggestions"
 
     _TERRITORY_ERROR = (
-        "Error: suggestions/ is state-machine territory — proposals cannot be "
-        "moved/deleted by direct tool writes (use the memory console)"
+        "Error: suggestions/ is the proposal channel — proposals cannot be "
+        "written/moved/deleted by direct tool writes. Create proposals with "
+        "the propose tool: propose(type, payload, source_refs, justification). "
+        "State transitions belong to the proposal state machine; human "
+        "adopt/reject actions go through the memory console."
     )
 
     def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
         tool = TOOL_REGISTRY.get(tool_name)
-        # read 工具一律 no-op；只有已注册的 ask 工具进入内容规则
+        # read 工具一律 no-op；只有已注册的 ask 工具进入规则
         if tool is None or tool.permission != "ask":
             return None
-
-        if tool_name == "write_doc":
-            path = args.get("path")
-            if not isinstance(path, str) or _first_segment(path) != "suggestions":
-                return None
-            from .. import proposals
-            fp = vault_dir / path
-            old = fp.read_bytes().decode("utf-8", errors="replace") if fp.is_file() else None
-            return proposals.validate_suggestions_write(path, args["content"], old)
-
-        if tool_name == "edit_doc":
-            path = args.get("path")
-            if not isinstance(path, str) or _first_segment(path) != "suggestions":
-                return None
-            fp = vault_dir / path
-            if not fp.is_file():
-                return None  # 文件不存在时让位工具规范错误（not-found hint）
-            old = fp.read_bytes().decode("utf-8", errors="replace")
-            if old.count(args["old_string"]) != 1:
-                return None  # count != 1 让位 edit_file 规范错误
-            from .. import proposals
-            return proposals.validate_suggestions_write(
-                path, old.replace(args["old_string"], args["new_string"], 1), old)
-
-        # move_docs / delete_doc 与其他 ask 工具：suggestions 子树（任意深度）
-        # 一律拒绝（缺口闭合，spec §4 #6/#7）。fail-closed 默认分支：新 ask
-        # 工具触碰子树但未命中已知分支 → 同样拒绝（CI 由 meta-test 钉住）。
         for _label, p in _extract_paths(args):
             if _first_segment(p) == "suggestions":
                 return self._TERRITORY_ERROR

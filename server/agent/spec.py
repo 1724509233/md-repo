@@ -51,6 +51,11 @@ class AgentSpec:
     # "agent" = desktop agent channel; bgagent runs set this to their alias so
     # the ledger distinguishes roles (memory-runtime v1).
     write_source: str = "agent"
+    # Proposal channel (reversible-automation v2): the run id stamped on every
+    # proposal record this agent produces (runner sets it per run), and the
+    # role's allowed proposal verbs (None = unrestricted, desktop agent).
+    run_id: str = ""
+    verbs: tuple[str, ...] | None = None
 
     def policy(self) -> ChannelPolicy:
         """Channel permission policy derived from this spec (check inputs).

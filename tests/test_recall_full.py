@@ -486,7 +486,7 @@ def test_runner_no_whitelist_uses_full_registry(tmp_path):
         return await run_once(cfg, tmp_path / "vault", runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    assert len(rt.agent.spec.tools) == 10
+    assert len(rt.agent.spec.tools) == 11  # propose added in v2
 
 
 def test_runner_unmatched_whitelist_raises(tmp_path):

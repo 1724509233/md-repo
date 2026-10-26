@@ -43,6 +43,8 @@ class LoopRuntime(Runtime):
             read_doc_max_chars=spec.read_doc_max_chars,
             last_read_ts=agent.last_read_ts,
             write_source=spec.write_source,
+            run_id=spec.run_id,
+            verbs=spec.verbs,
         )
 
         for _round in range(spec.max_rounds):

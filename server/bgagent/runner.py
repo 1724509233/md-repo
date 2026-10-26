@@ -145,46 +145,84 @@ def _status_icon(op: dict) -> str:
     return {"ok": "✓", "error": "✗"}.get(op.get("status"), "⏳")
 
 
-def _derive_kind(vault: Path, files_changed: set[str]) -> str:
-    """Derive the notification kind from written proposal files.
+def _run_records(run_id: str, started_at: float) -> list[dict]:
+    """The proposal records this run produced (via the propose tool).
 
-    If any file written under ``suggestions/`` has frontmatter with
-    ``status: awaiting_review`` or ``reversible: false`` → "review".
-    Unreadable frontmatter (file missing, I/O error) → "review"
-    (safe default: over-notify). No proposal files written → "batch".
+    The propose tool emits no path args, so record attribution goes through
+    the run_id stamp (trusted, ctx-injected): records whose run_id matches
+    and whose creation falls in this run's window. Lazy DB access; empty on
+    no-connection/degraded — the run proceeds, the console simply lacks the
+    deep links.
     """
-    from ..proposals import PROPOSALS_DIR, parse_proposal
+    from .. import proposals
+    from ..vault.db.conn import get_conn
 
-    proposal_paths = [
-        p for p in files_changed
-        if p.startswith(PROPOSALS_DIR + "/")
-    ]
-    if not proposal_paths:
-        return "batch"
-
-    for rel_path in proposal_paths:
-        try:
-            p = parse_proposal(vault / rel_path)
-        except Exception:
-            return "review"
-        if p["status"] == "awaiting_review" or not p["reversible"]:
-            return "review"
-    return "batch"
+    conn = get_conn()
+    if conn is None:
+        return []
+    try:
+        return proposals.records_by_run(conn, run_id, started_at)
+    except Exception:
+        logger.warning("[runner] records_by_run failed for %s", run_id, exc_info=True)
+        return []
 
 
-def _proposal_paths(files_changed: set[str]) -> list[str]:
-    """Vault-relative proposal paths (.md under suggestions/) the run touched.
+READBACK_TOP_N = 5  # readback failure entries are bounded (top N + marker)
 
-    Mechanically derived from the run's own file-op tracking — no vault
-    re-scan, no content reads. Feeds the notifications row so the console
-    UI can list/deep-link the run's proposals without trusting the summary.
+
+def _readback_block(alias: str) -> str:
+    """Read-back injection (reversible-automation v2, spec §5.3): at the
+    context head of each run, the role is told its own proposal backlog —
+    pending counts (status + type breakdown) and failed proposals with their
+    reject_reason (trust-escalation feedback).
+
+    Framework-level (not in the prompt file), bounded (top N + truncation
+    marker), and silent when the DB is unavailable or the role has nothing
+    open/failed (nothing to say).
     """
-    from ..proposals import PROPOSALS_DIR
+    from .. import proposals
+    from ..vault.db.conn import get_conn
 
-    return sorted(
-        p for p in files_changed
-        if p.startswith(PROPOSALS_DIR + "/") and p.endswith(".md")
-    )
+    conn = get_conn()
+    if conn is None:
+        return ""
+    try:
+        mine = [r for r in proposals.scan(conn) if r["actor"] == alias]
+    except Exception:
+        logger.warning("[bg:%s] readback scan failed", alias, exc_info=True)
+        return ""
+
+    open_counts: dict[str, int] = {}
+    open_types: dict[str, int] = {}
+    failed: list[dict] = []
+    for r in mine:
+        if r["status"] in ("pending", "processing", "adopted", "awaiting_review"):
+            open_counts[r["status"]] = open_counts.get(r["status"], 0) + 1
+            open_types[r["type"]] = open_types.get(r["type"], 0) + 1
+        elif r["status"] == "failed":
+            failed.append(r)
+
+    if not open_counts and not failed:
+        return ""
+
+    lines = ["## 你的提案回读（未决积压与失败）"]
+    if open_counts:
+        states = " / ".join(f"{n} {s}" for s, n in open_counts.items())
+        types = ", ".join(f"{n} {t}" for t, n in sorted(open_types.items()))
+        lines.append(f"- 未决 {sum(open_counts.values())} 条（{states}；类型：{types}）")
+    if failed:
+        # Newest first (updated_at desc): spec §5.3 requires the LATEST
+        # failure in the next run's context — id order (scan) is oldest
+        # first and would hide recent failures once the backlog exceeds
+        # READBACK_TOP_N.
+        failed.sort(key=lambda r: r["updated_at"], reverse=True)
+        for r in failed[:READBACK_TOP_N]:
+            reason = r["reject_reason"] or "(no reason recorded)"
+            lines.append(
+                f"- 失败 #{r['id']} [{r['type']}] {r['relpath']}: {reason}")
+        if len(failed) > READBACK_TOP_N:
+            lines.append(f"- …另有 {len(failed) - READBACK_TOP_N} 条失败未列出")
+    return "\n".join(lines)
 
 
 def _cell(op: dict) -> str:
@@ -309,6 +347,10 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     """
     vault = vault_dir.resolve()
     started_at = time.time()
+    # Run id = the proposal record stamp (trusted: the propose tool takes it
+    # from ToolContext, the model never sees it). Same shape as the report
+    # frontmatter run_id.
+    run_id = f"{cfg.alias}-{datetime.fromtimestamp(started_at).strftime('%Y%m%dT%H%M%S')}"
     stats = _RunStats()
     status, error_msg = "ok", ""
 
@@ -327,11 +369,16 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     else:
         tools = list(TOOL_REGISTRY.values())
 
+    # Read-back (spec §5.3): the run's context head carries the role's own
+    # proposal backlog state (pending counts + failures with reasons).
+    readback = _readback_block(cfg.alias)
+
     spec = AgentSpec(
         # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
         # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。
         system_prompt=cfg.prompt.read_text(encoding="utf-8")
-        + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
+        + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}"
+        + (f"\n\n{readback}" if readback else ""),
         model=cfg.model,
         tools=tools,
         max_rounds=cfg.max_rounds,
@@ -342,6 +389,9 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # 写归因精确到角色（memory-runtime v1）：工具层 register_write 读
         # ctx.write_source，落库 changelog source=<alias> 而非笼统 "agent"。
         write_source=cfg.alias,
+        # Proposal channel (v2): trusted run stamp + role verb whitelist.
+        run_id=run_id,
+        verbs=cfg.verbs,
     )
     agent = Agent(spec, runtime=runtime_cls())
 
@@ -371,17 +421,27 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
 
     stats.finalize()
     finished_at = time.time()
+
+    # Proposal records this run produced (the propose tool emits no path
+    # args): fold their projection paths into the run's changed-files
+    # accounting (report 变更文件 + notification deep links).
+    records = _run_records(run_id, started_at)
+    if records:
+        stats.files_changed.update(r["relpath"] for r in records)
+
     _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
 
     report_path = (cfg.report_dir / _report_name(started_at, cfg.alias)).relative_to(vault).as_posix()
-    kind = _derive_kind(vault, stats.files_changed)
+    # Notification kind: a review-channel record (awaiting_review) means a
+    # human decision is pending → "review"; auto-channel only → "batch".
+    kind = "review" if any(r["status"] == "awaiting_review" for r in records) else "batch"
     report = RunReport(
         alias=cfg.alias, name=cfg.name, status=status,
         started_at=started_at, finished_at=finished_at,
         report_path=report_path, ops_total=len(stats.ops),
         files_changed=len(stats.files_changed), summary=stats.summary[:200],
         kind=kind,
-        proposal_paths=_proposal_paths(stats.files_changed),
+        proposal_paths=sorted(r["relpath"] for r in records),
     )
     for hook in hooks or []:
         hook.notify(report)

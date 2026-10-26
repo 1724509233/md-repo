@@ -20,8 +20,8 @@ Usage:
 
     python -m tests.functional.run_sentinel_once --config config.fun.yaml
 
-Exit code: 0 iff the run produced at least one parseable proposal under
-suggestions/ (the Tier-2 assertion), else 1.
+Exit code: 0 iff the run produced at least one proposal record for this
+run (DB lookup by the run's proposal relpaths — v2 state source), else 1.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from pathlib import Path
 from server.bgagent.notify import InAppHook
 from server.bgagent.runner import run_once
 from server.config import load_background_agents
-from server.proposals import parse_proposal
+from server import proposals
 from server.vault.db import conn as db_conn
 from server.vault.db.schema import init_db
 
@@ -70,28 +70,29 @@ def main(argv: list[str] | None = None) -> int:
 
     report = asyncio.run(run_once(cfg, vault, hooks=[InAppHook(conn)]))
 
-    proposals = []
+    # v2: report.proposal_paths are the run's proposal RECORD relpaths
+    # (DB = state source; the suggestions/ files are projections).
+    recs = []
     for rel in report.proposal_paths:
-        try:
-            p = parse_proposal(vault / rel)
-        except Exception as e:  # malformed → count as failure
-            print(f"error: cannot parse proposal {rel}: {e}", file=sys.stderr)
+        p = proposals.record_by_relpath(conn, rel)
+        if p is None:
+            print(f"error: no proposal record for {rel}", file=sys.stderr)
             return 1
-        proposals.append({
+        recs.append({
             "relpath": rel, "type": p["type"], "status": p["status"],
-            "actor": p["actor"], "reversible": p["reversible"],
+            "actor": p["actor"],
             "run_id": p["run_id"],
             "payload": p["payload"],
         })
 
-    ok = bool(proposals)
+    ok = bool(recs)
     print(json.dumps(
         {"ok": ok, "status": report.status, "ops_total": report.ops_total,
          "files_changed": report.files_changed, "kind": report.kind,
-         "summary": report.summary, "proposals": proposals},
+         "summary": report.summary, "proposals": recs},
         ensure_ascii=False, indent=2))
-    verdict = "PASS" if ok else "FAIL (no parseable proposal under suggestions/)"
-    print(f"run: status={report.status} proposals={len(proposals)} -> {verdict}",
+    verdict = "PASS" if ok else "FAIL (no proposal record for this run)"
+    print(f"run: status={report.status} proposals={len(recs)} -> {verdict}",
           file=sys.stderr)
     return 0 if ok else 1
 

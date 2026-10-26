@@ -26,6 +26,12 @@ class ToolContext:
     read_doc_max_chars: int = 4000
     last_read_ts: dict | None = None
     write_source: str = "agent"
+    # Proposal channel (reversible-automation v2): trusted stamps for the
+    # propose tool. ``run_id`` is the bgagent run's batch id (the model can
+    # never set it — spec §三.3.1); ``verbs`` is the role's allowed proposal
+    # types (None = unrestricted channel, e.g. the desktop agent).
+    run_id: str = ""
+    verbs: tuple[str, ...] | None = None
 
 
 # ── Shared path validators ──────────────────────────────────────────────

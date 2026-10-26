@@ -16,8 +16,9 @@ Memory-runtime v1 additions (trigger agents + executor role):
   finds no non-self-excluded create event since the last run records an
   ``idle`` RunReport and does NOT invoke the LLM (no work, free tick).
 - **Executor**: a framework role, not an LLM agent. One shared asyncio task
-  woken by ``proposal`` events (adopted) or the 30-min backstop; same armed-glob scan either way; armed only when suggestions/
-  holds an adopted-unmerged or an overdue awaiting_review proposal. No work
+  woken by ``proposal`` events (adopted) or the 30-min backstop; same armed
+  DB scan either way; armed only when the proposals table holds an
+  adopted-unmerged or an overdue awaiting_review record. No work
   → silent no-op (debug level, no log spam).
 """
 from __future__ import annotations
@@ -32,7 +33,7 @@ from typing import Callable
 from croniter import croniter
 
 from ..config import BackgroundAgentConfig
-from ..proposals import EXPIRE_AFTER_S, _created_ts, scan as scan_proposals
+from ..proposals import EXPIRE_AFTER_S, scan as scan_proposals
 from .. import events
 from ..vault.db import recall as recall_db
 from ..vault.db.changes import count_changes_sources, get_changes_sources
@@ -316,17 +317,15 @@ async def _armed_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
 
 # ── executor loop (framework role, not an LLM agent) ─────────────────────
 
-def _executor_armed(vault_dir: Path) -> bool:
-    """Armed iff suggestions/ holds an adopted-unmerged or an overdue
-    (awaiting_review > 14 days) proposal."""
+def _executor_armed(vault_dir: Path, conn) -> bool:
+    """Armed iff the proposals table holds an adopted-unmerged record or an
+    overdue (awaiting_review, created_at > 14 days) record."""
     now = time.time()
-    for p in scan_proposals(vault_dir):
+    for p in scan_proposals(conn):
         if p["status"] == "adopted":
             return True
-        if p["status"] == "awaiting_review":
-            created = _created_ts(p["relpath"])
-            if created is not None and now - created > EXPIRE_AFTER_S:
-                return True
+        if p["status"] == "awaiting_review" and now - p["created_at"] > EXPIRE_AFTER_S:
+            return True
     return False
 
 
@@ -334,7 +333,7 @@ async def _executor_loop(vault_dir: Path, conn,
                          executor_fn: Callable = run_executor,
                          interval_s: float = EXECUTOR_INTERVAL_S) -> None:
     """Event-wake executor: a ``proposal`` event or the ``interval_s``
-    backstop wakes the authoritative glob scan (_executor_armed); armed →
+    backstop wakes the authoritative DB scan (_executor_armed); armed →
     deterministic merge in a worker thread.
 
     The scan is the sole authority (adopted-unmerged or 14d overdue);
@@ -356,7 +355,7 @@ async def _executor_loop(vault_dir: Path, conn,
         else:
             await asyncio.sleep(interval_s)
         try:
-            if not _executor_armed(vault):
+            if not _executor_armed(vault, conn):
                 logger.debug("[executor] no adopted/overdue proposals — no-op")
                 continue
             logger.info("[executor] armed — running deterministic merge")

@@ -6,9 +6,10 @@ read-only for everyone; the sole executor lands adopted proposals).
 
 Pure determinism — no LLM. One cycle (:func:`run_executor`):
 
-1. Scan ``suggestions/`` for ``status: adopted`` proposals and merge them
-   through the per-type handlers.
-2. Expire overdue ``awaiting_review`` proposals (14 days).
+1. Read ``status: adopted`` proposal records from the vault index DB and
+   merge them through the per-type handlers (the suggestions/ files are
+   projections, never scanned — the record IS the state).
+2. Expire overdue ``awaiting_review`` records (14 days, created_at).
 3. Return ``{"merged": n, "expired": n, "errors": [str, ...]}``.
 
 Merge handlers register the write as source="executor" (write_registry) and
@@ -181,8 +182,11 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     out_rel = (Path(src_rel).parent / f"{stem}-summary.md").as_posix()
     out_fp = _vault_path(vault, out_rel)
     existed = out_fp.is_file()
-    title = p.get("title") or f"{stem} summary"
-    body = (p.get("body") or "").strip()
+    # Record semantics: the summary text lives in payload["body"]; the title
+    # is derived (no free-form title field on the record).
+    payload = p.get("payload") or {}
+    body = str(payload.get("body") or "").strip()
+    title = f"{stem} summary"
     text = f"# {title}\n\n{body}\n" if body else f"# {title}\n"
 
     out_fp.parent.mkdir(parents=True, exist_ok=True)
@@ -303,31 +307,30 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
     merged = 0
     errors: list[str] = []
 
-    for p in scan(vault):
-        if p["status"] != "adopted":
-            continue
+    for p in scan(conn, status="adopted"):
+        rec_id = p["id"]
         rel = p["relpath"]
         handler = _HANDLERS.get(p["type"])
         try:
             if handler is None:
-                # No handler (v1: reminder): never silently swallowed.
-                errors.append(f"{rel}: no handler for type '{p['type']}' (v1)")
+                # No handler (reminder): never silently swallowed.
+                errors.append(f"proposal #{rec_id} ({rel}): no handler for type '{p['type']}'")
                 continue
             handler(conn, vault, p)
-            advance(vault, conn, rel, "merged", actor="executor")
+            advance(conn, vault, rec_id, "merged", actor="executor")
             merged += 1
         except _MergeFailed as e:            # 已有：内容状态问题（old 缺失/多义等）
             logger.warning("[executor] merge failed %s: %s: %s", rel, type(e).__name__, e)
-            advance(vault, conn, rel, "failed", actor="executor", reject_reason=str(e)[:200])
+            advance(conn, vault, rec_id, "failed", actor="executor", reject_reason=str(e)[:200])
         except Exception as e:
             if isinstance(e, ValueError):
                 # 结构性校验错误 = 提案本身畸形（payload 缺失 / source_refs 空），非进程级崩溃
                 logger.warning("[executor] merge failed (structural) %s: %s: %s", rel, type(e).__name__, e)
-                advance(vault, conn, rel, "failed", actor="executor", reject_reason=str(e)[:200])
+                advance(conn, vault, rec_id, "failed", actor="executor", reject_reason=str(e)[:200])
             else:
                 # 环境/进程级（磁盘、DB 锁）：提案无辜，留 adopted 重试
                 logger.warning("[executor] merge error %s: %s: %s", rel, type(e).__name__, e)
                 errors.append(f"{rel}: {type(e).__name__}: {e}")
 
-    expired = expire_overdue(vault, conn)
+    expired = expire_overdue(conn, vault)
     return {"merged": merged, "expired": expired, "errors": errors}

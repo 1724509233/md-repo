@@ -1,16 +1,18 @@
 """MCP external-write gate tests (memory-runtime v2, MCP 外写收口).
 
-Constitution: the immune pipeline — external writes land only in the
-suggestions/ buffer (physical isolation); the main memory area is
-read-only for external agents. Each successful external write is
-ledgered with source="mcp"; telemetry must never break the tool
-response (same pattern as test_recall_telemetry).
+Constitution (v2): the main memory area is read-only for external agents,
+AND suggestions/ is a system-owned projection zone (the propose tool is the
+only write path into it). So EVERY external write is rejected: the channel
+gate (:class:`McpExternalGate`) refuses the main area with protocol
+guidance pointing at the propose tool, and the vault-level SuggestionsGate
+(refuse-any-write into suggestions/) refuses the rest — applied
+unconditionally by ``validate_tool_call``. Telemetry (``_ledger_mcp_write``)
+must never break the tool response (same pattern as test_recall_telemetry);
+the ledger helpers are exercised directly below.
 
-The channel rule now lives in :class:`McpExternalGate` (mcp_server.py),
-injected via ``ChannelPolicy(gates=...)`` and invoked by
-``validate_tool_call`` — the gate is exercised directly below exactly as
-validate_tool_call invokes it (write_doc surface; the protocol-guidance
-wording assertions are unchanged).
+The channel rule lives in :class:`McpExternalGate` (mcp_server.py),
+injected via ``ChannelPolicy(gates=...)`` — the gate is exercised directly
+below exactly as validate_tool_call invokes it (write_doc surface).
 """
 from __future__ import annotations
 
@@ -30,11 +32,14 @@ from server.mcp_server import McpExternalGate, _ledger_mcp_write
     [
         "suggestions/x.md",
         "suggestions/sub/deep.md",
-        # Spec expression: top segment == "suggestions" → allowed.
+        # Spec expression: top segment == "suggestions".
         "suggestions",
     ],
 )
-def test_gate_allows_suggestions_buffer(path, tmp_path):
+def test_gate_noop_for_suggestions_buffer(path, tmp_path):
+    """The channel gate has no opinion about the buffer — v2's
+    suggestions/ rejection is the vault-level SuggestionsGate's job
+    (validate_tool_call applies it unconditionally, see below)."""
     assert McpExternalGate().check("write_doc", {"path": path}, tmp_path) is None
 
 
@@ -56,11 +61,13 @@ def test_gate_refuses_main_memory_area(path, tmp_path):
     err = McpExternalGate().check("write_doc", {"path": path}, tmp_path)
     assert err is not None
     assert err.startswith("Error:")
-    # Explains the write was NOT performed and points to the pipeline.
+    # Explains the write was NOT performed and points at the propose tool.
     assert "NOT performed" in err
-    assert "suggestions/" in err
-    assert "type: correction" in err
-    assert "status: awaiting_review" in err
+    assert "propose tool" in err
+    assert "type 'correction'" in err
+    # v2: even the old buffer path is now system-owned — the external agent
+    # gets the same propose pointer, never a writable suggestions/.
+    assert "direct writes into suggestions/ are also rejected" in err
 
 
 def test_gate_fires_through_validate_tool_call(tmp_path):
@@ -72,15 +79,16 @@ def test_gate_fires_through_validate_tool_call(tmp_path):
         "write_doc", {"path": "notes/x.md", "content": "x"}, policy)
     assert err is not None
     assert "NOT performed" in err
-    assert "type: correction" in err
-    assert "status: awaiting_review" in err
-    # suggestions/ buffer stays writable through the channel path
-    # (valid proposal content: filename + frontmatter invariants pass).
-    assert validate_tool_call(
+    assert "propose tool" in err
+    # v2: the suggestions/ buffer is no longer writable through the channel
+    # either — the vault-level SuggestionsGate refuses it (propose pointer).
+    err2 = validate_tool_call(
         "write_doc",
         {"path": "suggestions/2026-10-22_summary_x.md",
-         "content": "---\ntype: summary\nstatus: pending\n---\n# T\n\nbody\n"},
-        policy) is None
+         "content": "---\nstatus: pending\n---\n# T\n\nbody\n"},
+        policy)
+    assert err2 is not None
+    assert "propose" in err2
 
 
 def test_gate_noop_for_read_tools(tmp_path):
@@ -140,3 +148,43 @@ def test_ledger_dropped_table_never_raises(db_conn):
     db_conn.execute("DROP TABLE change_log")
     db_conn.commit()
     _ledger_mcp_write(db_conn, "suggestions/x.md", False, "content")
+
+
+# --- propose channel (oracle gate P0-Q6a) ----------------------------------
+
+def test_mcp_propose_creates_stamped_record(db_conn, tmp_path):
+    """The external channel keeps a proposal path after the P0 cutover:
+    _mcp_propose runs the shared record pipeline with write_source="mcp"
+    (the ledger's source convention), no run stamp, unrestricted verbs.
+    correction is a review-tier type → the record lands awaiting_review
+    for a human (no silent merge)."""
+    from server import proposals
+    from server.mcp_server import _mcp_propose
+
+    vault = tmp_path / "vault"
+    out = _mcp_propose(
+        vault, "correction",
+        {"file": "notes/a.md", "old": "x", "new": "y"},
+        ["notes/a.md"], "fix the typo")
+    assert out.startswith("proposal #")
+    rec = proposals.scan(db_conn)[0]
+    assert rec["actor"] == "mcp"
+    assert rec["run_id"] == ""
+    assert rec["status"] == "awaiting_review"
+    assert rec["relpath"].startswith("suggestions/")
+
+
+def test_mcp_propose_malformed_is_zero_disk(db_conn, tmp_path):
+    """The channel entry enforces the same per-verb validation: a
+    correction missing 'new' → error string, no record, no file."""
+    from server import proposals
+    from server.mcp_server import _mcp_propose
+
+    vault = tmp_path / "vault"
+    out = _mcp_propose(
+        vault, "correction",
+        {"file": "notes/a.md", "old": "x"},
+        ["notes/a.md"], "j")
+    assert out.startswith("Error:")
+    assert proposals.scan(db_conn) == []
+    assert not (vault / "suggestions").is_dir()

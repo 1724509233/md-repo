@@ -135,7 +135,7 @@ def test_spec_built_with_auto_approve_and_scope(tmp_path: Path):
     assert spec.write_scope == cfg.target_dir
     assert spec.report_dir == cfg.report_dir
     assert spec.max_rounds == 5
-    assert len(spec.tools) == 10   # full registry (recall_stats added in v2)
+    assert len(spec.tools) == 11   # full registry (propose added in v2)
     assert spec.system_prompt.startswith("you are a test organizer")
     assert "当前时间：" in spec.system_prompt  # runner 注入运行开始时间（分钟精度）
 
@@ -471,48 +471,70 @@ def test_hooks_receive_run_report(tmp_path: Path):
     assert seen[0].summary == "合并了 2 篇碎片。"
 
 
-def test_run_report_collects_proposal_paths(tmp_path: Path):
-    """Run that wrote proposal files → RunReport carries their paths (sorted);
-    non-proposal writes are excluded."""
+def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
+    """The run's proposal records (created via the propose tool with the
+    run_id stamp; the DB is the state source, the suggestions/ files are
+    projections) fold into files_changed + proposal_paths (sorted), and
+    kind='review' when any record is awaiting_review."""
+    from server.bgagent import runner
+
     seen = []
 
     class Hook(NotificationHook):
         def notify(self, r: RunReport) -> None:
             seen.append(r)
 
-    events = [
-        Event("round", {"n": 1}),
-        Event("tool_call", {"id": "c1", "name": "write_doc",
-                            "args": {"path": "suggestions/2026-10-21_summary_b.md",
-                                     "content": "x"}}),
-        Event("tool_result", {"id": "c1",
-                              "result": "Saved: suggestions/2026-10-21_summary_b.md (1 chars)"}),
-        Event("tool_call", {"id": "c2", "name": "write_doc",
-                            "args": {"path": "suggestions/2026-10-21_link_a.md",
-                                     "content": "y"}}),
-        Event("tool_result", {"id": "c2",
-                              "result": "Saved: suggestions/2026-10-21_link_a.md (1 chars)"}),
-        Event("tool_call", {"id": "c3", "name": "write_doc",
-                            "args": {"path": "notes/b.md", "content": "z"}}),
-        Event("tool_result", {"id": "c3", "result": "Saved: notes/b.md (1 chars)"}),
-        Event("token", {"text": "完成。"}),
-        Event("done", {"reason": "final"}),
+    recs = [
+        {"id": 1, "type": "link", "status": "adopted",
+         "relpath": "suggestions/2026-10-21_link_a.md"},
+        {"id": 2, "type": "summary", "status": "awaiting_review",
+         "relpath": "suggestions/2026-10-21_summary_b.md"},
     ]
+    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at: recs)
+
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
-    rt = FakeRuntime(events)
+    rt = FakeRuntime(_events())
 
     async def go():
         return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
 
     report = asyncio.run(go())
+    # _events() writes notes/b.md (1 file) + the 2 folded record paths.
     assert report.files_changed == 3
     assert seen[0].proposal_paths == [
         "suggestions/2026-10-21_link_a.md", "suggestions/2026-10-21_summary_b.md"]
+    assert seen[0].kind == "review"  # a review-channel record is pending
+
+
+def test_run_report_kind_batch_without_review_records(tmp_path: Path, monkeypatch):
+    """Only auto-channel records (adopted) → kind 'batch'."""
+    from server.bgagent import runner
+
+    seen = []
+
+    class Hook(NotificationHook):
+        def notify(self, r: RunReport) -> None:
+            seen.append(r)
+
+    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at: [
+        {"id": 1, "type": "link", "status": "adopted",
+         "relpath": "suggestions/2026-10-21_link_a.md"}])
+
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    assert seen[0].kind == "batch"
 
 
 def test_run_report_no_proposal_writes_empty(tmp_path: Path):
-    """Run with only non-proposal writes → proposal_paths stays at the default."""
+    """Run without a registered proposal DB → no records → proposal_paths
+    stays empty and kind stays 'batch'."""
     seen = []
 
     class Hook(NotificationHook):
@@ -527,7 +549,84 @@ def test_run_report_no_proposal_writes_empty(tmp_path: Path):
         return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    assert not seen[0].proposal_paths  # 无非提案写 → 空（落库为 ''）
+    assert not seen[0].proposal_paths  # no records → empty (落库为 '')
+    assert seen[0].kind == "batch"
+
+
+def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
+    """inv-8: a run's failures are visible in the NEXT run's context —
+    the readback block (open counts + failed proposals with their
+    reject_reason) is injected into system_prompt after the 当前时间 line."""
+    from server import proposals
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    # Seed records under this alias: 1 open (adopted), 1 failed with reason.
+    rec_open = proposals.create(
+        db_conn, vault, "link", actor="test-org", run_id="test-org-earlier",
+        source_refs=["notes/a.md"], justification="j",
+        payload={"target": "notes/b.md"})
+    proposals.advance(db_conn, vault, rec_open["id"], "processing", actor="t")
+    proposals.advance(db_conn, vault, rec_open["id"], "adopted", actor="t")
+
+    rec_fail = proposals.create(
+        db_conn, vault, "summary", actor="test-org", run_id="test-org-earlier",
+        source_refs=["notes/a.md"], justification="j",
+        payload={"body": "b"})
+    proposals.advance(db_conn, vault, rec_fail["id"], "processing", actor="t")
+    proposals.advance(db_conn, vault, rec_fail["id"], "failed", actor="t",
+                      reject_reason="boom")
+
+    cfg = _cfg(tmp_path)
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    prompt = rt.agent.spec.system_prompt
+    assert "## 你的提案回读（未决积压与失败）" in prompt
+    assert "1 adopted" in prompt
+    assert f"失败 #{rec_fail['id']} [summary]" in prompt
+    assert "boom" in prompt
+    # Context head: after the time line, before anything else.
+    assert prompt.index("当前时间：") < prompt.index("## 你的提案回读")
+
+
+def test_readback_injects_newest_failures_first(tmp_path: Path, db_conn):
+    """inv-8 (oracle gate P0-Q6b): with more than READBACK_TOP_N recorded
+    failures, the injected list is the N most recent (updated_at desc) —
+    the newest failure is always visible, the oldest drops off."""
+    import time
+
+    from server import proposals
+    from server.bgagent.runner import READBACK_TOP_N
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    n = READBACK_TOP_N + 1
+    recs = []
+    for i in range(n):
+        rec = proposals.create(
+            db_conn, vault, "summary", actor="test-org",
+            run_id=f"test-org-f-{i}", source_refs=["notes/a.md"],
+            justification="j", payload={"body": "b"})
+        proposals.advance(db_conn, vault, rec["id"], "processing", actor="t")
+        proposals.advance(db_conn, vault, rec["id"], "failed", actor="t",
+                          reject_reason=f"boom-{i}")
+        recs.append(rec)
+        time.sleep(0.005)  # separate the wall-clock updated_at sort keys
+
+    cfg = _cfg(tmp_path)
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    prompt = rt.agent.spec.system_prompt
+    assert f"失败 #{recs[-1]['id']} [summary]" in prompt   # newest present
+    assert "boom-0" not in prompt                          # oldest dropped
 
 
 def test_retention_prunes_old_reports(tmp_path: Path):

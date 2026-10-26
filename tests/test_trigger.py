@@ -229,7 +229,11 @@ def test_trigger_tick_runs_when_human_event(db_conn, vault_dir, tmp_path):
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
     _ensure_trigger_row(db_conn, cfg.alias)
     _record_run(db_conn, cfg.alias)
-    log_change(db_conn, "h.md", "create", source="web")  # human work → real run
+    log_change(db_conn, "h.md", "create", source="web", ts=time.time() + 1)  # human work → real run
+    # Explicit future ts: the idle gate compares ts > last_run_ts, and two
+    # back-to-back time.time() calls can tie on the same Windows clock tick
+    # (the same pitfall the arming scan avoids with its seq cursor), which
+    # would silently drop the event and flake this test (idle instead of run).
 
     ran = []
     run_fn = _fake_run(ran)
@@ -403,16 +407,16 @@ def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path
 # ── event-driven loops (spec 2026-10-24) ──────────────────────────────────
 
 def _adopted_proposal(vault_dir, db_conn, title="wake"):
-    """Create a proposal and drive it to adopted (arms the executor scan)."""
+    """Create a proposal record and drive it to adopted (arms the executor scan)."""
     from server import proposals
 
-    rel = proposals.create_proposal(
-        vault_dir, type="summary", actor="test", run_id="wake-test",
-        source_refs=["notes/test.md"], title=title, body="b",
-        now=1760000000.0)
-    proposals.advance(vault_dir, db_conn, rel, "processing", actor="test")
-    proposals.advance(vault_dir, db_conn, rel, "adopted", actor="test")
-    return rel
+    rec = proposals.create(
+        db_conn, vault_dir, "summary", actor="test", run_id="wake-test",
+        source_refs=["notes/test.md"], justification=title,
+        payload={"body": "b"}, now=1760000000.0)
+    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="test")
+    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="test")
+    return rec
 
 
 async def _poll(pred, timeout=5.0):

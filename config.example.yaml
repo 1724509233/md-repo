@@ -59,6 +59,7 @@ background_agents:
   #   timeout_s: 1800
   #   budget_runs_per_day: 3
   #   budget_max_proposals: 5
+  #   verbs: [entity_index, link, summary]   # propose 动词白名单（v2；缺省 = 不限）
   #   trigger:
   #     events: [create]
   #     arm_count: 3
@@ -113,7 +114,8 @@ background_agents:
 #     arm_count: 10
 #     min_interval_h: 24
 #   tools: [read_doc, search_docs, list_files, recent_changes,
-#           get_related_docs, recall_stats, write_doc]
+#           get_related_docs, recall_stats, propose]
+#   verbs: [archive]   # 哨兵只产归档提案（v2 propose 通道）
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b
@@ -121,8 +123,8 @@ background_agents:
 #     api_key: ""
 #
 # ── 记忆运行时 v3：叙事者（示例，取消注释启用）──────────────────────────
-# 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，产出周报到 weekly/。
-# 不产提案（budget_max_proposals: 0）。
+# 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，产出周报到 weekly/；
+# 另可产 reminder 提案（终审通道，控制台提醒人）。
 # - name: "叙事者"
 #   alias: narrator
 #   enabled: true
@@ -133,7 +135,8 @@ background_agents:
 #   max_rounds: 30
 #   timeout_s: 1800
 #   budget_runs_per_day: 1
-#   budget_max_proposals: 0
+#   budget_max_proposals: 2
+#   verbs: [reminder]   # 叙事者只产提醒提案（v2 propose 通道）
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b

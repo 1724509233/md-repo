@@ -34,15 +34,16 @@ related_no_links = GetRelatedDocsTool.related_no_links
 
 
 class McpExternalGate(WriteGate):
-    """Channel rule (MCP only): external writes land only in the suggestions/
-    buffer (memory-runtime v2 immune pipeline, physical isolation).
+    """Channel rule (MCP only): the main memory area is read-only for
+    external agents (memory-runtime v2 immune pipeline, physical isolation).
 
     Replaces ``_gate_external_write``; injected via
     ``ChannelPolicy(gates=...)``. The protocol-guidance error wording is the
-    contract with external LLMs — preserved verbatim (main area read-only +
-    how to write a proposal). Read tools are no-ops (validate_tool_call
-    invokes gates for every tool). Unconditional by constitution — no
-    config flag.
+    contract with external LLMs — it points at the propose tool as the
+    proposal channel (v2: direct suggestions/ writes are rejected by the
+    VAULT_GATES SuggestionsGate, which sees the projection files as
+    system-owned). Read tools are no-ops (validate_tool_call invokes gates
+    for every tool). Unconditional by constitution — no config flag.
     """
 
     name = "mcp_external"
@@ -55,10 +56,12 @@ class McpExternalGate(WriteGate):
             if p.split("/", 1)[0] != "suggestions":
                 return (
                     "Error: the main memory area is read-only for external agents — "
-                    "this write was NOT performed. Write the content as a proposal into "
-                    "suggestions/ (frontmatter: type: correction to fix an existing doc, "
-                    "status: awaiting_review; filename YYYY-MM-DD_<type>_<slug>.md; "
-                    "see server/proposals.py)."
+                    "this write was NOT performed. To propose a change, use the "
+                    "propose tool (e.g. type 'correction' with payload {file, old, "
+                    "new} to fix an existing doc, type 'archive' to archive a note); "
+                    "direct writes into suggestions/ are also rejected — it holds "
+                    "system-owned projections of proposal records (see "
+                    "server/proposals.py)."
                 )
         return None
 
@@ -78,6 +81,26 @@ def _ledger_mcp_write(db_conn, path: str, existed: bool, content: str) -> None:
     except Exception:
         logging.getLogger("mcp_server").warning(
             "change_log entry for MCP write %s failed", path, exc_info=True)
+
+
+def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[str],
+                 justification: str) -> str:
+    """The MCP channel's propose entry (oracle gate P0-Q6a).
+
+    Restores the external proposal channel after the P0 cutover made
+    suggestions/ a system-owned projection zone: the external agent
+    proposes through the same record pipeline as every other channel —
+    trusted stamps (write_source="mcp" is the ledger's source convention),
+    no run stamp (stdio has no bgagent run), unrestricted verbs, full
+    envelope + per-verb validation. Returns the tool's result string.
+    """
+    from server.agent.tools.propose import ProposeTool
+    from server.agent.tools.tool import ToolContext
+
+    return ProposeTool().call(
+        {"type": type, "payload": payload, "source_refs": source_refs,
+         "justification": justification},
+        ToolContext(vault_dir=vault_dir, write_source="mcp"))
 
 
 def main():
@@ -196,6 +219,12 @@ def main():
             new_content = fp.read_bytes().decode("utf-8", errors="replace")
             _ledger_mcp_write(db_conn, path, True, new_content)
         return result
+    
+    @mcp.tool()
+    async def propose(type: str, payload: dict, source_refs: list[str],
+                      justification: str = "") -> str:
+        """Create a proposal record — the only write path into the proposal channel (direct writes into suggestions/ are rejected). Types: entity_index {entity, value} | link {target} | summary {body} | correction {file, old, new} | archive {path} | reminder {body}. source_refs: vault-relative paths the proposal is based on. justification: human-readable reason (becomes the review material). Auto-channel types merge on the next executor cycle; review-channel types wait for a human decision."""
+        return _mcp_propose(vault_dir, type, payload, source_refs, justification)
     
     mcp.run(transport="stdio")
 

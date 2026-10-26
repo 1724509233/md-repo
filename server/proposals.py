@@ -1,11 +1,15 @@
-"""Proposal state machine (memory-runtime v1).
+"""Proposal records (reversible-automation v2, P0).
 
-A proposal is a markdown file with YAML frontmatter, stored in the vault's
-top-level ``suggestions/`` directory. The file IS the single source of truth
-for proposal status — no DB queue table (constitution: "suggestion 的 status
-以文件 frontmatter 为唯一状态源, DB 不建队列表").
+The DB row in the ``proposals`` table is the single source of truth for
+proposal state. The markdown file under ``suggestions/`` is a
+system-exclusive, *idempotent projection* of that row: the same record
+always renders to byte-identical bytes, and every status transition
+re-renders the projection. State moves happen only at record level
+(:func:`advance`); hand-edits of the projection file are overwritten on the
+next transition and never drive state.
 
-File name: ``YYYY-MM-DD_<type>_<slug>.md`` (date = creation date).
+File name: ``suggestions/YYYY-MM-DD_<type>_p<id>.md`` (date = creation
+date, ``id`` = the record primary key — deterministic and collision-free).
 
 State machine (illegal transitions raise ``ValueError``):
 
@@ -21,18 +25,20 @@ correction, reminder). ``archive`` was added in v2 as the sentinel's archival
 channel (reversible cold storage → auto, recoverable per memory-recall.md 模块 5).
 
 - ``entity_index`` / ``link`` / ``archive`` → auto channel (adopted after
-  processing, reversible forced to true — derivatives / cold storage, cheap
-  to rebuild or restore)
+  processing)
 - ``summary`` / ``correction`` / ``reminder`` → review channel
-  (awaiting_review after processing; reversible is content-dependent, set by
-  the producer at creation)
+  (awaiting_review after processing)
 
-Every status transition and merge is recorded in the change_log via
-``apply_change`` (source = actor, so the ledger distinguishes who acted).
+Creation writes no change_log row (matches v1 behavior: the file appeared
+quietly; the ledger records state transitions and merges). Every status
+transition and merge IS recorded in the change_log via ``apply_change``
+(source = actor, batch_id = the producing run_id, so the console trail and
+notifications keep working). ``events.publish("proposal")`` fires only on
+``adopted`` — the executor's sole actionable state (spec §4a).
 """
 from __future__ import annotations
 
-import re
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -64,90 +70,115 @@ TRANSITIONS: dict[str, frozenset[str]] = {
 # Awaiting-review proposals older than this are expired (待审队列也要遗忘).
 EXPIRE_AFTER_S = 14 * 86400
 
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
-_DATE_PREFIX_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?=[_\- ])")
 
+# ── Record access ─────────────────────────────────────────────────────────
 
-# ── Frontmatter read/write ────────────────────────────────────────────────
-# The segmenter's frontmatter regex only extracts; proposals need round-trip
-# YAML read/write, so a minimal reader/writer lives here (PyYAML is an
-# existing dependency).
+def _row_to_record(row) -> dict:
+    """Map a proposals-table row to the canonical record dict."""
+    def _json(value, default):
+        if not value:
+            return default
+        try:
+            parsed = json.loads(value)
+        except (ValueError, TypeError):
+            return default
+        # default=None marks "no type expectation" (payload): accept any JSON.
+        if default is None or isinstance(parsed, type(default)):
+            return parsed
+        return default
 
-def _split_frontmatter(text: str) -> tuple[dict, str]:
-    m = _FRONTMATTER_RE.match(text)
-    if m is None:
-        return {}, text
-    data = yaml.safe_load(m.group(1))
-    if not isinstance(data, dict):
-        data = {}
-    return data, text[m.end():]
-
-
-def _render_frontmatter(data: dict, body: str) -> str:
-    return "---\n" + yaml.safe_dump(data, allow_unicode=True, sort_keys=False) + "---\n" + body
-
-
-def _default_fields(data: dict) -> dict:
-    """Normalize a parsed frontmatter dict with defaults for all spec fields."""
-    refs = data.get("source_refs")
-    if not isinstance(refs, list):
-        refs = []
     return {
-        "type": str(data.get("type") or ""),
-        "actor": str(data.get("actor") or ""),
-        "run_id": str(data.get("run_id") or ""),
-        "status": str(data.get("status") or ""),
-        "reversible": bool(data.get("reversible", False)),
-        "source_refs": [str(r) for r in refs],
-        "reject_reason": str(data.get("reject_reason") or ""),
-        "merged_at": str(data.get("merged_at") or ""),
-        "payload": data.get("payload") if isinstance(data.get("payload"), dict) else None,
+        "id": row["id"],
+        "type": row["type"],
+        "actor": row["actor"],
+        "run_id": row["run_id"],
+        "status": row["status"],
+        "payload": _json(row["payload"], None),
+        "source_refs": _json(row["source_refs"], []),
+        "justification": row["justification"],
+        "reject_reason": row["reject_reason"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "merged_at": row["merged_at"],
+        "relpath": row["relpath"],
     }
 
 
-# ── Parsing / scanning ────────────────────────────────────────────────────
+def record(conn, record_id: int) -> dict | None:
+    """Fetch one proposal record by id, or None when absent."""
+    row = conn.execute(
+        "SELECT * FROM proposals WHERE id = ?", (record_id,)
+    ).fetchone()
+    return _row_to_record(row) if row is not None else None
 
-def parse_proposal(path) -> dict:
-    """Parse a proposal file. Returns frontmatter fields + title + body.
 
-    ``path`` may be absolute or vault-relative; the result carries the input
-    as ``path``. Raises ``FileNotFoundError`` if the file is missing.
+def record_by_relpath(conn, relpath: str) -> dict | None:
+    """Fetch the proposal record owning a projection relpath, or None.
+
+    The console URLs stay relpath-based; this is the record lookup behind
+    them (v2: the row, not the file, is the state).
     """
-    fp = Path(path)
-    text = fp.read_bytes().decode("utf-8")
-    data, body = _split_frontmatter(text)
-    out = _default_fields(data)
-    out["path"] = str(path)
-    out["body"] = body
-    out["title"] = _first_heading(body)
-    return out
+    row = conn.execute(
+        "SELECT * FROM proposals WHERE relpath = ?", (relpath,)
+    ).fetchone()
+    return _row_to_record(row) if row is not None else None
 
 
-def _first_heading(body: str) -> str:
-    for line in body.splitlines():
-        m = re.match(r"^#\s+(.+?)\s*$", line)
-        if m:
-            return m.group(1)
-    return ""
+def scan(conn, status: str | None = None) -> list[dict]:
+    """All proposal records (id order); optionally filtered by status."""
+    if status is None:
+        rows = conn.execute("SELECT * FROM proposals ORDER BY id").fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM proposals WHERE status = ? ORDER BY id", (status,)
+        ).fetchall()
+    return [_row_to_record(r) for r in rows]
 
 
-def scan(vault_dir) -> list[dict]:
-    """Parse every proposal in the vault's suggestions/ dir (sorted).
+def records_by_run(conn, run_id: str, since_ts: float) -> list[dict]:
+    """Records produced by a run (created at or after ``since_ts``), id order.
 
-    Each result dict additionally carries ``relpath`` (vault-relative posix
-    path) for use with :func:`advance`.
+    ``since_ts`` is the run's start timestamp; run ids are unique per run,
+    the bound guards against clock-skew duplicates of a reused id.
     """
-    d = Path(vault_dir) / PROPOSALS_DIR
-    if not d.is_dir():
-        return []
-    out = []
-    for fp in sorted(d.glob("*.md")):
-        if not fp.is_file():
-            continue
-        p = parse_proposal(fp)
-        p["relpath"] = fp.relative_to(Path(vault_dir)).as_posix()
-        out.append(p)
-    return out
+    rows = conn.execute(
+        "SELECT * FROM proposals WHERE run_id = ? AND created_at >= ? ORDER BY id",
+        (run_id, since_ts),
+    ).fetchall()
+    return [_row_to_record(r) for r in rows]
+
+
+# ── Projection (record → suggestions/<file>.md) ───────────────────────────
+
+def render_projection(record: dict) -> str:
+    """Render the projection file content for a record.
+
+    Deterministic: the same record always renders to identical bytes
+    (fixed key order, no timestamps beyond the record's own fields), so
+    re-projection is idempotent and hand-edits are detectable/overwritten.
+    """
+    fm = {
+        "projection": True,
+        "source_record": record["id"],
+        "type": record["type"],
+        "actor": record["actor"],
+        "run_id": record["run_id"],
+        "status": record["status"],
+        "source_refs": record["source_refs"],
+        "reject_reason": record["reject_reason"],
+        "merged_at": record["merged_at"],
+    }
+    if record.get("payload") is not None:
+        fm["payload"] = record["payload"]
+    body = (record.get("justification") or "").strip()
+    return "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False) + "---\n" + body + "\n"
+
+
+def project(vault_dir, record: dict) -> None:
+    """Write (or re-write) the record's projection file. Idempotent."""
+    fp = Path(vault_dir) / record["relpath"]
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(fp, render_projection(record).encode("utf-8"))
 
 
 # ── Policy (authorization initial split) ─────────────────────────────────
@@ -155,8 +186,8 @@ def scan(vault_dir) -> list[dict]:
 def authorization(type_: str) -> str:
     """Policy function: post-processing state for a proposal type.
 
-    auto types → ``adopted`` (reversible=true enforced in ``advance``);
-    review types → ``awaiting_review``. Unknown type raises ``ValueError``.
+    auto types → ``adopted``; review types → ``awaiting_review``.
+    Unknown type raises ``ValueError``.
     """
     if type_ in AUTO_TYPES:
         return "adopted"
@@ -167,263 +198,163 @@ def authorization(type_: str) -> str:
 
 # ── Creation ──────────────────────────────────────────────────────────────
 
-def _slugify(title: str) -> str:
-    import hashlib
-
-    slug = re.sub(r"[^a-z0-9]+", "-", (title or "").lower()).strip("-")
-    if not slug:
-        # CJK-only (or symbol-only) titles: deterministic short hash.
-        slug = hashlib.sha1((title or "").encode("utf-8")).hexdigest()[:8]
-    return slug[:60]
-
-
-def create_proposal(
+def create(
+    conn,
     vault_dir,
     type: str,
     actor: str,
     run_id: str,
     source_refs: list[str],
-    title: str,
-    body: str,
+    justification: str,
     payload: dict | None = None,
-    reversible: bool | None = None,
     now: float | None = None,
-) -> str:
-    """Write a new proposal file with ``status: pending``. Returns the
-    vault-relative path.
+) -> dict:
+    """Insert a new proposal record with ``status: pending`` and project it.
 
-    ``reversible``: None → policy default (auto types: True; review types:
-    False — conservative, the producer can set it by content).
-    ``now``: injectable epoch timestamp (tests); date in the filename.
+    Returns the created record dict. No change_log row is written (v1
+    behavior: creation is quiet; the ledger records transitions/merges).
+    ``now`` is injectable (tests) and fixes both created_at and the
+    filename date.
     """
     if type not in VALID_TYPES:
         raise ValueError(f"unknown proposal type: {type!r}")
-    if not title:
-        raise ValueError("title is required")
     if not isinstance(source_refs, list):
         raise ValueError("source_refs must be a list")
 
     now = now if now is not None else time.time()
     date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
 
-    d = Path(vault_dir) / PROPOSALS_DIR
-    d.mkdir(parents=True, exist_ok=True)
-
-    base = f"{date}_{type}_{_slugify(title)}"
-    rel = f"{PROPOSALS_DIR}/{base}.md"
-    n = 2
-    while (Path(vault_dir) / rel).exists():
-        rel = f"{PROPOSALS_DIR}/{base}-{n}.md"
-        n += 1
-
-    if reversible is None:
-        reversible = type in AUTO_TYPES
-    fm = {
-        "type": type,
-        "actor": actor,
-        "run_id": run_id,
-        "status": "pending",
-        "reversible": reversible,
-        "source_refs": [str(r) for r in source_refs],
-        "reject_reason": "",
-        "merged_at": "",
-    }
-    if payload is not None:
-        fm["payload"] = payload
-    text = _render_frontmatter(fm, f"# {title}\n\n{body.strip()}\n")
-    atomic_write_bytes(Path(vault_dir) / rel, text.encode("utf-8"))
-    return rel
+    cur = conn.execute(
+        """
+        INSERT INTO proposals
+            (type, actor, run_id, status, payload, source_refs, justification,
+             reject_reason, created_at, updated_at, merged_at, relpath)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, '', ?, ?, '', '')
+        """,
+        (
+            type, actor, str(run_id or ""),
+            json.dumps(payload) if payload is not None else "",
+            json.dumps([str(r) for r in source_refs], ensure_ascii=False),
+            justification, now, now,
+        ),
+    )
+    record_id = cur.lastrowid
+    # relpath derives from the PK: deterministic, collision-free.
+    relpath = f"{PROPOSALS_DIR}/{date}_{type}_p{record_id}.md"
+    conn.execute(
+        "UPDATE proposals SET relpath = ? WHERE id = ?", (relpath, record_id)
+    )
+    rec = record(conn, record_id)
+    conn.execute(
+        """
+        INSERT INTO proposal_transitions
+            (proposal_id, from_status, to_status, actor, ts, reason)
+        VALUES (?, NULL, 'pending', ?, ?, 'created')
+        """,
+        (record_id, actor, now),
+    )
+    project(vault_dir, rec)
+    return rec
 
 
 # ── State machine ─────────────────────────────────────────────────────────
 
 def advance(
-    vault_dir,
     conn,
-    relpath: str,
+    vault_dir,
+    record_id: int,
     new_status: str,
     actor: str,
     reject_reason: str = "",
 ) -> dict:
-    """Transition a proposal to ``new_status`` (legal moves only).
+    """Transition a proposal record to ``new_status`` (legal moves only).
 
-    Rewrites the file frontmatter (body preserved) and records the change in
-    the change_log via ``apply_change`` (source = ``actor``). Returns the
-    updated parsed proposal. Raises ``ValueError`` on illegal transitions
-    (including unknown ``new_status``) and ``FileNotFoundError`` if the file
-    is missing.
+    Updates the row, appends a proposal_transitions row, and re-projects
+    the file (system-exclusive write; hand-edits are overwritten). Every
+    transition is ledgered via ``apply_change`` (source = actor, batch_id =
+    the record's run_id); ``events.publish("proposal")`` fires only on
+    ``adopted``. Returns the updated record. Raises ``ValueError`` on
+    illegal transitions (including unknown ``new_status``) and
+    ``FileNotFoundError`` if the record is missing.
     """
-    fp = Path(vault_dir) / relpath
-    if not fp.is_file():
-        raise FileNotFoundError(f"proposal not found: {relpath}")
+    rec = record(conn, record_id)
+    if rec is None:
+        raise FileNotFoundError(f"proposal not found: {record_id}")
 
-    text = fp.read_bytes().decode("utf-8")
-    data, body = _split_frontmatter(text)
-    cur = str(data.get("status") or "")
-    if new_status not in TRANSITIONS.get(cur, frozenset()):
-        raise ValueError(f"illegal transition: {cur or '<empty>'} → {new_status}")
+    cur_status = rec["status"]
+    if new_status not in TRANSITIONS.get(cur_status, frozenset()):
+        raise ValueError(
+            f"illegal transition: {cur_status or '<empty>'} → {new_status}"
+        )
 
-    new_data = _default_fields(data)
-    # Preserve unknown extra frontmatter keys (forward compat).
-    for k, v in data.items():
-        if k not in new_data:
-            new_data[k] = v
-    new_data["status"] = new_status
-    if reject_reason:
-        new_data["reject_reason"] = reject_reason
+    merged_at = rec["merged_at"]
     if new_status == "merged":
-        new_data["merged_at"] = datetime.now().isoformat(timespec="seconds")
-    # Auto types (entity_index, link, archive) always force reversible=True:
-    # derivatives are cheap to rebuild; archive is recoverable cold storage.
-    if cur == "processing" and new_status == "adopted" and new_data["type"] in AUTO_TYPES:
-        new_data["reversible"] = True
+        merged_at = datetime.now().isoformat(timespec="seconds")
+    new_reason = rec["reject_reason"]
+    if reject_reason:
+        new_reason = reject_reason
 
-    atomic_write_bytes(fp, _render_frontmatter(new_data, body).encode("utf-8"))
+    now = time.time()
+    conn.execute(
+        "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
+        (new_status, new_reason, merged_at, now, record_id),
+    )
+    conn.execute(
+        """
+        INSERT INTO proposal_transitions
+            (proposal_id, from_status, to_status, actor, ts, reason)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (record_id, cur_status, new_status, actor, now, reject_reason),
+    )
 
-    # Ledger: every transition is a change event (source = acting role);
-    # batch_id = the proposal's run_id (the batch that produced it).
-    apply_change(conn, Path(vault_dir), relpath, "update", source=actor,
-                 batch_id=str(data.get("run_id") or ""))
+    updated = record(conn, record_id)
+    project(vault_dir, updated)
+
+    # Ledger: every transition is a change event on the projection path
+    # (source = acting role; batch_id = the producing run).
+    apply_change(conn, Path(vault_dir), updated["relpath"], "update",
+                 source=actor, batch_id=updated["run_id"])
 
     # Event wakeup: only adopted (executor's sole actionable state).
-    # Every other transition produces no executor work — publishing them
-    # would just self-wake the executor loop (spec §4a).
     if new_status == "adopted":
-        events.publish("proposal", {"relpath": relpath, "status": new_status})
+        events.publish("proposal", {"relpath": updated["relpath"], "status": new_status})
 
-    out = parse_proposal(fp)
-    out["relpath"] = relpath
-    return out
+    return updated
 
 
-def process_proposal(vault_dir, conn, relpath: str, actor: str) -> dict:
+def process_proposal(conn, vault_dir, record_id: int, actor: str) -> dict:
     """pending → processing → the authorized post-processing state.
 
     Applies the authorization policy for the proposal's type (auto →
     adopted, review → awaiting_review). Convenience for the two-transition
     sequence; each transition is ledgered separately.
     """
-    fp = Path(vault_dir) / relpath
-    if not fp.is_file():
-        raise FileNotFoundError(f"proposal not found: {relpath}")
-    data, _ = _split_frontmatter(fp.read_bytes().decode("utf-8"))
-    cur = str(data.get("status") or "")
-    if cur != "pending":
-        raise ValueError(f"process_proposal requires status pending, got {cur!r}")
-    target = authorization(str(data.get("type") or ""))
-    advance(vault_dir, conn, relpath, "processing", actor=actor)
-    return advance(vault_dir, conn, relpath, target, actor=actor)
+    rec = record(conn, record_id)
+    if rec is None:
+        raise FileNotFoundError(f"proposal not found: {record_id}")
+    if rec["status"] != "pending":
+        raise ValueError(
+            f"process_proposal requires status pending, got {rec['status']!r}"
+        )
+    target = authorization(rec["type"])
+    advance(conn, vault_dir, record_id, "processing", actor=actor)
+    return advance(conn, vault_dir, record_id, target, actor=actor)
 
 
 # ── Expiry ────────────────────────────────────────────────────────────────
 
-def _created_ts(relpath: str) -> float | None:
-    """Creation timestamp from the filename date (YYYY-MM-DD prefix).
-
-    Proposals carry no created_at frontmatter field; the filename date is
-    the creation date. Returns None when the prefix is absent/unparseable.
-    """
-    stem = Path(relpath).stem
-    m = _DATE_PREFIX_RE.match(stem)
-    if not m:
-        return None
-    try:
-        y, mo, d = (int(x) for x in m.groups())
-        return datetime(y, mo, d).timestamp()
-    except ValueError:
-        return None
-
-
-def expire_overdue(vault_dir, conn, now_ts: float | None = None) -> int:
-    """Expire ``awaiting_review`` proposals older than 14 days.
+def expire_overdue(conn, vault_dir, now_ts: float | None = None) -> int:
+    """Expire ``awaiting_review`` records older than 14 days (created_at).
 
     Returns the number expired. Each expiry is a ledgered transition
     (actor = "system").
     """
     now = now_ts if now_ts is not None else time.time()
     count = 0
-    for p in scan(vault_dir):
-        if p["status"] != "awaiting_review":
+    for rec in scan(conn, status="awaiting_review"):
+        if now - rec["created_at"] <= EXPIRE_AFTER_S:
             continue
-        created = _created_ts(p["relpath"])
-        if created is None or now - created <= EXPIRE_AFTER_S:
-            continue
-        advance(vault_dir, conn, p["relpath"], "expired", actor="system")
+        advance(conn, vault_dir, rec["id"], "expired", actor="system")
         count += 1
     return count
-
-
-# ── Write-path validation ─────────────────────────────────────────────────
-
-_PROPOSAL_FILENAME_RE = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})_([a-z]+)_[A-Za-z0-9][A-Za-z0-9-]*\.md$")
-
-
-def validate_suggestions_write(relpath: str, new_text: str,
-                               old_text: str | None = None) -> str | None:
-    """Validate a direct file write to a top-level suggestions/ proposal file.
-
-    Returns an "Error: ..." string to reject the write, or None to allow.
-    ``old_text``: None = creating a new file; str = overwriting/editing an
-    existing file (its current content, for the status invariant check).
-
-    Invariants enforced (raw writes may never forge state; status
-    transitions belong to advance()):
-    - path is exactly ``suggestions/<name>.md`` (top level only — scan()
-      indexes top-level files, deeper paths would be invisible bypasses)
-    - filename: ``YYYY-MM-DD_<type>_<slug>.md``; real calendar date; type
-      segment in VALID_TYPES; slug non-empty (collision suffix ``-N`` is
-      just part of the slug char class)
-    - new content has a YAML frontmatter block parsing to a dict
-    - frontmatter ``type`` is in VALID_TYPES AND equals the filename type
-      segment
-    - frontmatter ``status``:
-        * new file (old_text None, or old content has no frontmatter):
-          must be "pending" or "awaiting_review"
-        * existing file: must equal the old file's status (same status =
-          body/other-field edit, allowed; any change rejected)
-    """
-    # Backslashes are directory separators on Windows: normalize so a
-    # backslashed path cannot dodge the two-segment check (safe_rel_path
-    # precedent).
-    relpath = relpath.replace("\\", "/")
-    parts = relpath.split("/")
-    if len(parts) != 2 or parts[0] != "suggestions":
-        return (f"Error: suggestions/ writes must be top-level files "
-                f"(suggestions/<name>.md), got '{relpath}'")
-    name = parts[1]
-    m = _PROPOSAL_FILENAME_RE.match(name)
-    if m is None:
-        return f"Error: proposal filename must be YYYY-MM-DD_<type>_<slug>.md (got '{name}')"
-    try:
-        datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-    except ValueError:
-        return f"Error: proposal filename must be YYYY-MM-DD_<type>_<slug>.md (got '{name}')"
-    file_type = m.group(4)
-
-    data, _ = _split_frontmatter(new_text)
-    if not data:
-        return ("Error: suggestions/ files require a YAML frontmatter block "
-                "with type and status")
-    ftype = data.get("type")
-    if ftype not in VALID_TYPES or ftype != file_type:
-        return (f"Error: frontmatter type must be one of "
-                f"{', '.join(sorted(VALID_TYPES))} and must match the "
-                f"filename type segment")
-
-    status = str(data.get("status") or "")
-    old_status = None
-    if old_text is not None:
-        old_data, _ = _split_frontmatter(old_text)
-        if old_data:
-            old_status = str(old_data.get("status") or "")
-    if old_status is None:
-        if status not in ("pending", "awaiting_review"):
-            return (f"Error: new proposals start with status: pending (or "
-                    f"awaiting_review for external review-channel "
-                    f"proposals), got '{status}'")
-    elif status != old_status:
-        return (f"Error: status cannot be changed by a direct write "
-                f"('{old_status}' → '{status}'); status transitions go "
-                f"through the proposal state machine (proposals.advance)")
-    return None
