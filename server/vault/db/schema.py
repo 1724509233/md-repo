@@ -274,6 +274,49 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_proposal_transitions_pid ON proposal_transitions(proposal_id)"
     )
 
+    # Pre-image snapshots (reversible-automation v2, P1): the reversibility
+    # layer. One row per file touched by one tool call (call_id = the
+    # rollback unit); blob_name points at the full pre-image bytes under
+    # .sync/snapshots/. Single live slot per path (live=1): finalizing a
+    # new capture demotes the previous live row — GC reclaims superseded
+    # rows, never the live one (spec invariant 2). post_hash is '' until
+    # the write is confirmed (snapshots.finalize). finalized=1 marks a
+    # confirmed write; in-flight rows (captured, not finalized) are crash
+    # residue — GC never reclaims them (oracle gate P1-B1: the row may be
+    # the file's only pre-image, and it stays rollback-able).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            call_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            old_path TEXT NOT NULL DEFAULT '',
+            new_path TEXT NOT NULL DEFAULT '',
+            op TEXT NOT NULL CHECK(op IN ('create','update','delete','move')),
+            pre_hash TEXT NOT NULL DEFAULT '',
+            post_hash TEXT NOT NULL DEFAULT '',
+            actor TEXT NOT NULL,
+            run_id TEXT NOT NULL DEFAULT '',
+            blob_name TEXT NOT NULL DEFAULT '',
+            live INTEGER NOT NULL DEFAULT 0,
+            finalized INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_path_live ON snapshots(path, live)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_call ON snapshots(call_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_run ON snapshots(run_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_snapshots_ts ON snapshots(ts)"
+    )
+
     # Ensure the segments search index exists.
     from .segments_sql import init_segments
 

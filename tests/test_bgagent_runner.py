@@ -135,7 +135,10 @@ def test_spec_built_with_auto_approve_and_scope(tmp_path: Path):
     assert spec.write_scope == cfg.target_dir
     assert spec.report_dir == cfg.report_dir
     assert spec.max_rounds == 5
-    assert len(spec.tools) == 11   # full registry (propose added in v2)
+    # 10 = full registry minus delete_doc (bgagent channel hard-removal,
+    # spec §3.2/D3: registry is the mechanism, config whitelist is hygiene).
+    assert len(spec.tools) == 10
+    assert not any(t.name == "delete_doc" for t in spec.tools)
     assert spec.system_prompt.startswith("you are a test organizer")
     assert "当前时间：" in spec.system_prompt  # runner 注入运行开始时间（分钟精度）
 

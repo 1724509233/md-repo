@@ -57,6 +57,8 @@ class MoveDocsTool(DocTool):
         return None
 
     def _execute(self, args, ctx: ToolContext) -> str:
+        from ...snapshots import (capture, discard, finalize, gc_after_capture,
+                                  hash_bytes, new_call_id)
         from ...vault.db.conn import get_conn
         from ...vault.orchestration.refs import _update_references_batch
         from ...write_registry import register_write
@@ -75,16 +77,39 @@ class MoveDocsTool(DocTool):
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
         ref_count = _update_references_batch(get_conn(), ctx.vault_dir, moves, pre_rename=True)
 
-        # Phase 3: perform all filesystem renames
-        # DB update (files, change_log, FTS, graph) is handled by the snapshot
-        # watcher via _on_moved → apply_change. We only register the write so
-        # the watcher attributes the change to "agent" instead of "watchdog".
-        for from_path, to_path in moves:
-            src = ctx.vault_dir / from_path
-            dst = ctx.vault_dir / to_path
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            register_write(to_path, ctx.write_source)
-            src.rename(dst)
+        # Phase 3: perform all filesystem renames. The whole batch is ONE
+        # tool call → one call_id snapshot group (rollback unit, P1): every
+        # source file's pre-image is captured before any rename. On a
+        # partial-rename failure the captures are discarded (the live slot
+        # is untouched) and the error surfaces as before.
+        conn = get_conn()
+        pairs = []  # (from_path, to_path, snapshot | None)
+        if conn is not None:
+            call_id = new_call_id()
+            for from_path, to_path in moves:
+                pairs.append((from_path, to_path, capture(
+                    conn, ctx.vault_dir, from_path, "move", ctx.write_source,
+                    run_id=ctx.run_id, call_id=call_id, new_path=to_path)))
+        try:
+            # DB update (files, change_log, FTS, graph) is handled by the snapshot
+            # watcher via _on_moved → apply_change. We only register the write so
+            # the watcher attributes the change to "agent" instead of "watchdog".
+            for from_path, to_path in moves:
+                src = ctx.vault_dir / from_path
+                dst = ctx.vault_dir / to_path
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                register_write(to_path, ctx.write_source)
+                src.rename(dst)
+        except OSError:
+            if conn is not None:
+                for _, _, snap in pairs:
+                    discard(conn, ctx.vault_dir, snap)
+            raise
+        if conn is not None:
+            for from_path, to_path, snap in pairs:
+                if snap is not None:
+                    finalize(conn, snap, hash_bytes((ctx.vault_dir / to_path).read_bytes()))
+            gc_after_capture(conn, ctx.vault_dir)
 
         lines = [f"Moved {len(moves)} file(s):"]
         for from_path, to_path in moves:

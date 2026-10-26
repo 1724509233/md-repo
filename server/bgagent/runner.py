@@ -369,6 +369,18 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     else:
         tools = list(TOOL_REGISTRY.values())
 
+    # 删除权硬摘（P1，spec §3.2 / §7.2，D3）：bgagent 通道永远拿不到
+    # delete_doc —— 注册表是机制，配置白名单只是卫生；无论 config 的 tools
+    # 怎么写（列了 delete_doc 或全量默认），这里一律滤除。交互/桌面通道
+    # 的工具集不经此函数，不受影响。
+    tools = [t for t in tools if t.name != "delete_doc"]
+    if not tools:
+        # 白名单只列了 delete_doc = 配置与宪法矛盾：fail-fast，不裸跑。
+        raise ValueError(
+            f"[bg:{cfg.alias}] no usable tools: the bgagent channel cannot "
+            f"receive delete_doc (hard-removed, spec §3.2); config tools="
+            f"{sorted(cfg.tools) if cfg.tools is not None else 'default (all)'}")
+
     # Read-back (spec §5.3): the run's context head carries the role's own
     # proposal backlog state (pending counts + failures with reasons).
     readback = _readback_block(cfg.alias)

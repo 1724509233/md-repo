@@ -486,7 +486,11 @@ def test_runner_no_whitelist_uses_full_registry(tmp_path):
         return await run_once(cfg, tmp_path / "vault", runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    assert len(rt.agent.spec.tools) == 11  # propose added in v2
+    names = [t.name for t in rt.agent.spec.tools]
+    # 10 = full registry minus delete_doc (bgagent channel hard-removal,
+    # spec §3.2/D3: the registry, not the config whitelist, is the mechanism).
+    assert len(names) == 10
+    assert "delete_doc" not in names
 
 
 def test_runner_unmatched_whitelist_raises(tmp_path):

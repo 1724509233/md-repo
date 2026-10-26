@@ -46,6 +46,7 @@ from pathlib import Path
 import yaml
 
 from . import events
+from .vault.db.schema import _db_lock
 from .vault.fs.vault_ops import atomic_write_bytes
 from .vault.orchestration.file_ops import apply_change
 
@@ -224,35 +225,41 @@ def create(
     now = now if now is not None else time.time()
     date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
 
-    cur = conn.execute(
-        """
-        INSERT INTO proposals
-            (type, actor, run_id, status, payload, source_refs, justification,
-             reject_reason, created_at, updated_at, merged_at, relpath)
-        VALUES (?, ?, ?, 'pending', ?, ?, ?, '', ?, ?, '', '')
-        """,
-        (
-            type, actor, str(run_id or ""),
-            json.dumps(payload) if payload is not None else "",
-            json.dumps([str(r) for r in source_refs], ensure_ascii=False),
-            justification, now, now,
-        ),
-    )
-    record_id = cur.lastrowid
-    # relpath derives from the PK: deterministic, collision-free.
-    relpath = f"{PROPOSALS_DIR}/{date}_{type}_p{record_id}.md"
-    conn.execute(
-        "UPDATE proposals SET relpath = ? WHERE id = ?", (relpath, record_id)
-    )
-    rec = record(conn, record_id)
-    conn.execute(
-        """
-        INSERT INTO proposal_transitions
-            (proposal_id, from_status, to_status, actor, ts, reason)
-        VALUES (?, NULL, 'pending', ?, ?, 'created')
-        """,
-        (record_id, actor, now),
-    )
+    # Row-write section under the shared DB lock (the connection is shared
+    # across the event-loop thread and executor worker threads). The
+    # projection file write stays OUTSIDE the lock: project() is plain file
+    # I/O, and apply_change (called later by advance) takes the lock itself
+    # — nesting would deadlock on the non-reentrant _db_lock.
+    with _db_lock:
+        cur = conn.execute(
+            """
+            INSERT INTO proposals
+                (type, actor, run_id, status, payload, source_refs, justification,
+                 reject_reason, created_at, updated_at, merged_at, relpath)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?, '', ?, ?, '', '')
+            """,
+            (
+                type, actor, str(run_id or ""),
+                json.dumps(payload) if payload is not None else "",
+                json.dumps([str(r) for r in source_refs], ensure_ascii=False),
+                justification, now, now,
+            ),
+        )
+        record_id = cur.lastrowid
+        # relpath derives from the PK: deterministic, collision-free.
+        relpath = f"{PROPOSALS_DIR}/{date}_{type}_p{record_id}.md"
+        conn.execute(
+            "UPDATE proposals SET relpath = ? WHERE id = ?", (relpath, record_id)
+        )
+        rec = record(conn, record_id)
+        conn.execute(
+            """
+            INSERT INTO proposal_transitions
+                (proposal_id, from_status, to_status, actor, ts, reason)
+            VALUES (?, NULL, 'pending', ?, ?, 'created')
+            """,
+            (record_id, actor, now),
+        )
     project(vault_dir, rec)
     return rec
 
@@ -295,18 +302,22 @@ def advance(
         new_reason = reject_reason
 
     now = time.time()
-    conn.execute(
-        "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
-        (new_status, new_reason, merged_at, now, record_id),
-    )
-    conn.execute(
-        """
-        INSERT INTO proposal_transitions
-            (proposal_id, from_status, to_status, actor, ts, reason)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (record_id, cur_status, new_status, actor, now, reject_reason),
-    )
+    # Row-write section under the shared DB lock (see create()). The
+    # re-read, the projection file write and apply_change (which takes the
+    # lock itself) stay outside — no nested/non-reentrant lock holds.
+    with _db_lock:
+        conn.execute(
+            "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
+            (new_status, new_reason, merged_at, now, record_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO proposal_transitions
+                (proposal_id, from_status, to_status, actor, ts, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (record_id, cur_status, new_status, actor, now, reject_reason),
+        )
 
     updated = record(conn, record_id)
     project(vault_dir, updated)

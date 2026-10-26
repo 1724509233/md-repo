@@ -43,6 +43,7 @@ import sqlite3
 from pathlib import Path
 
 from ..proposals import advance, expire_overdue, scan
+from ..snapshots import capture, finalize, gc, hash_bytes
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 from ..vault.orchestration.file_ops import apply_change
 from ..write_registry import register_write
@@ -118,8 +119,15 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         out.append((key, value))
 
     fp.parent.mkdir(parents=True, exist_ok=True)
+    new_bytes = _render_entities(out).encode("utf-8")
+    # 可逆层（P1）：执行器落地 = LLM 独一产出，强制 pre-image（不变量 10）。
+    # capture 失败返回 None（degraded）：写照常进行，仅记日志。
+    snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
+                   run_id=str(p.get("run_id") or ""))
     register_write(rel, "executor")
-    atomic_write_bytes(fp, _render_entities(out).encode("utf-8"))
+    atomic_write_bytes(fp, new_bytes)
+    if snap is not None:
+        finalize(conn, snap, hash_bytes(new_bytes))
     apply_change(conn, vault, rel, "update" if existed else "create",
                  source="executor", batch_id=str(p.get("run_id") or ""))
 
@@ -161,8 +169,14 @@ def _merge_link(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
             text += "\n"
         text += f"\n<!-- related -->\n{line}\n<!-- /related -->\n"
 
+    # 可逆层（P1）：link 落地写用户源文档（spec 实证 4），全文 pre-image 兜底。
+    snap = capture(conn, vault, rel, "update", "executor",
+                   run_id=str(p.get("run_id") or ""))
     register_write(rel, "executor")
-    atomic_write_bytes(fp, text.encode("utf-8"))
+    new_bytes = text.encode("utf-8")
+    atomic_write_bytes(fp, new_bytes)
+    if snap is not None:
+        finalize(conn, snap, hash_bytes(new_bytes))
     apply_change(conn, vault, rel, "update", source="executor",
                  batch_id=str(p.get("run_id") or ""))
 
@@ -190,8 +204,15 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     text = f"# {title}\n\n{body}\n" if body else f"# {title}\n"
 
     out_fp.parent.mkdir(parents=True, exist_ok=True)
+    new_bytes = text.encode("utf-8")
+    # 可逆层（P1）：summary 缓存型 = LLM 独一产出，槽覆盖强制 pre-image
+    # （不变量 10：旧 summary 全文即此 pre-image，重跑不必然复现）。
+    snap = capture(conn, vault, out_rel, "update" if existed else "create", "executor",
+                   run_id=str(p.get("run_id") or ""))
     register_write(out_rel, "executor")
-    atomic_write_bytes(out_fp, text.encode("utf-8"))
+    atomic_write_bytes(out_fp, new_bytes)
+    if snap is not None:
+        finalize(conn, snap, hash_bytes(new_bytes))
     apply_change(conn, vault, out_rel, "update" if existed else "create",
                  source="executor", batch_id=str(p.get("run_id") or ""))
 
@@ -228,8 +249,14 @@ def _merge_correction(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
             f"{count} occurrences — refine the snippet"
         )
 
+    new_bytes = text.replace(old, new, 1).encode("utf-8")
+    # 可逆层（P1）：correction 落地写用户源文档，全文 pre-image 兜底。
+    snap = capture(conn, vault, f, "update", "executor",
+                   run_id=str(p.get("run_id") or ""))
     register_write(f, "executor")
-    atomic_write_bytes(fp, text.replace(old, new, 1).encode("utf-8"))
+    atomic_write_bytes(fp, new_bytes)
+    if snap is not None:
+        finalize(conn, snap, hash_bytes(new_bytes))
     apply_change(conn, vault, f, "update", source="executor",
                  batch_id=str(p.get("run_id") or ""))
 
@@ -278,10 +305,16 @@ def _merge_archive(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         raise _MergeFailed(f"archive target not found: {rel}")
 
     # src exists, dest missing: perform the move.
+    # 可逆层（P1）：archive = 移动用户区文件（v2 冷存储通道），
+    # 对源路径捕获全文 pre-image（op=move，new_path = 目的地）。
+    snap = capture(conn, vault, rel, "move", "executor",
+                   run_id=str(p.get("run_id") or ""), new_path=dest_rel)
     dest_fp.parent.mkdir(parents=True, exist_ok=True)
     register_write(dest_rel, "executor")
     register_write(rel, "executor")  # source deletion attribution (prune pattern)
     src_fp.rename(dest_fp)
+    if snap is not None:
+        finalize(conn, snap, hash_bytes(dest_fp.read_bytes()))
     apply_change(conn, vault, dest_rel, "move", from_path=rel, source="executor",
                  batch_id=str(p.get("run_id") or ""))
 
@@ -333,4 +366,14 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
                 errors.append(f"{rel}: {type(e).__name__}: {e}")
 
     expired = expire_overdue(conn, vault)
+
+    # Retention sweep (P1, spec D18): reclaim superseded pre-images (and
+    # delete-class rows past the 30-day window); never the live slot of a
+    # file (spec invariant 2). Best-effort: a GC failure must not break the
+    # merge cycle — gc() itself guards, this keeps the belt on the braces.
+    try:
+        gc(conn, vault)
+    except Exception:
+        logger.warning("[executor] snapshot gc failed", exc_info=True)
+
     return {"merged": merged, "expired": expired, "errors": errors}

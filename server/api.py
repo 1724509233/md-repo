@@ -375,21 +375,69 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             from .write_registry import register_write
 
             if target.is_file():
+                # 可逆层（P1，工作项 6）：人在 Web UI 删文件 = 全文快照兜底
+                # （删除类快照单独保留 30 天，回滚端点可恢复）。
+                from .snapshots import capture, finalize, gc_after_capture
+
+                snap = capture(db_conn, vault_dir, rel.as_posix(), "delete", actor="web")
                 register_write(rel.as_posix(), "web")
                 try:
                     target.unlink()
                 except OSError as e:
+                    if snap is not None:
+                        from .snapshots import discard
+
+                        discard(db_conn, vault_dir, snap)
                     raise HTTPException(status_code=500, detail=f"failed to delete: {e}")
+                if snap is not None:
+                    finalize(db_conn, snap, "")  # post-state: file absent
+                    gc_after_capture(db_conn, vault_dir)
                 apply_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
                 return {"ok": True, "path": rel.as_posix(), "deleted_count": 1}
             # Folder: delete .md files one by one, clean up empty dirs bottom-up
+            from .snapshots import capture, discard, finalize, gc_after_capture, new_call_id
+
             md_files = sorted(p for p in target.rglob("*.md") if p.is_file())
+            # One human action, many files → one call_id rollback group:
+            # capture every member's full pre-image before any unlink.
+            call_id = new_call_id()
+            snaps = [
+                (p.relative_to(vault_dir).as_posix(),
+                 capture(db_conn, vault_dir, p.relative_to(vault_dir).as_posix(),
+                         "delete", actor="web", call_id=call_id))
+                for p in md_files
+            ]
             rels = []
+            failed = None
             for p in md_files:
                 r = p.relative_to(vault_dir).as_posix()
                 register_write(r, "web")
-                p.unlink()
+                try:
+                    p.unlink()
+                except OSError as e:
+                    failed = (r, str(e))
+                    break
                 rels.append(r)
+            # Reconcile the capture group with what actually happened
+            # (partial failure leaves the call rollback-able for exactly
+            # the files that were deleted; the rest are discarded, oracle
+            # gate P1-B1):
+            done = set(rels)
+            for r, snap in snaps:
+                if snap is None:
+                    continue
+                if r in done:
+                    finalize(db_conn, snap, "")  # post-state: file absent
+                else:
+                    discard(db_conn, vault_dir, snap)
+            if any(s is not None for _, s in snaps):
+                gc_after_capture(db_conn, vault_dir)
+            if failed:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"partial delete: {failed[0]}: {failed[1]}; "
+                           f"{len(rels)} file(s) already deleted "
+                           f"(recoverable via /api/memory/rollback)")
             for d in sorted(
                 [target] + list(target.rglob("*")),
                 key=lambda x: len(x.parts),
@@ -677,6 +725,57 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         sql += " ORDER BY seq DESC LIMIT 12"
         rows = db_conn.execute(sql, params).fetchall()
         return {"relpath": rel, "trail": [dict(r) for r in rows]}
+
+    @app.post("/api/memory/rollback")
+    async def memory_rollback(request: Request) -> JSONResponse:
+        """Roll one tool call back — human-triggered only (spec §3.1, D2).
+
+        Verify-all-then-write-all: every file in the call batch must still
+        match the call's post-state on disk (hash == post_hash; absent for
+        deletes). Any mismatch = a later write overwrote the call → the
+        whole batch is refused (no blind writes) and the conflicting files
+        are surfaced for the human to decide. Only when every file verifies
+        are the pre-image bytes restored, one file at a time.
+
+        Deliberately NOT an agent tool and NOT exposed to bgagent: rollback
+        and rebase are human-exclusive verbs (spec §四 unmerge 行).
+        """
+        from . import snapshots as snap_mod
+
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON body")
+        call_id = body.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            raise HTTPException(status_code=400, detail="call_id is required")
+        result = snap_mod.rollback(db_conn, vault_dir, call_id)
+        if not result["ok"]:
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "conflicts": result["conflicts"]},
+            )
+        # Attribute the restored writes to the watcher ("web" = human via UI).
+        from .write_registry import register_write as _rw
+
+        for path in result["restored"]:
+            _rw(path, "web")
+        return {"ok": True, "restored": result["restored"]}
+
+    @app.get("/api/memory/rollback-calls")
+    async def memory_rollback_calls(limit: int = 50) -> dict:
+        """The human's rollback entry (spec §3.1): recent call groups.
+
+        The rollback unit is the tool call; this list is how a human finds
+        the call_id to POST to /api/memory/rollback. Human-readable surface
+        only — not an agent tool (rollback stays human-exclusive).
+        """
+        from . import snapshots as snap_mod
+
+        calls = snap_mod.recent_calls(db_conn, limit=limit)
+        for c in calls:
+            c["files"] = c["files"].split("\n") if c["files"] else []
+        return {"calls": calls}
 
     @app.get("/api/memory/status")
     async def memory_status() -> dict:
