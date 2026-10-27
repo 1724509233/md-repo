@@ -710,6 +710,34 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             raise HTTPException(status_code=404, detail="proposal not found")
         return {"relpath": rel, "status": "adopted"}
 
+    @app.post("/api/memory/proposals/{relpath:path}/revive")
+    async def memory_proposal_revive(relpath: str) -> dict:
+        """Revive an expired proposal back into the review queue (invariant
+        12: expired → awaiting_review is human-only — the agent tool surface
+        has no revive entry; proposals.revive seals it at the state layer).
+
+        The TTL window re-arms on revive (Q5): ``created_at`` is the expiry
+        window base and ``proposals.revive`` sets it to now — the original
+        creation moment stays in the state ledger (no audit loss).
+        """
+        from . import proposals
+
+        rel = _guard_proposal_relpath(relpath)
+        rec = proposals.record_by_relpath(db_conn, rel)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        if rec["status"] != "expired":
+            raise HTTPException(
+                status_code=400,
+                detail=f"status is {rec['status']!r}, must be expired")
+        try:
+            proposals.revive(db_conn, vault_dir, rec["id"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        return {"relpath": rel, "status": "awaiting_review"}
+
     @app.post("/api/memory/proposals/{relpath:path}/reject")
     async def memory_proposal_reject(relpath: str, request: Request) -> dict:
         """Move an awaiting_review proposal to rejected, threading the reason

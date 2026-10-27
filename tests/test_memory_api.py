@@ -182,6 +182,50 @@ def test_reject_wrong_status(client, vault_dir, db_conn):
     assert "pending" in resp.json()["detail"]
 
 
+# ── POST .../revive (invariant 12: expired → awaiting_review, human-only) ──
+
+def test_revive_expired_returns_awaiting_review(client, vault_dir, db_conn):
+    """expired 记录 → POST revive → 200 + status awaiting_review；TTL 窗口
+    重新计时（Q5：created_at = 窗口基准，回读 > now-60）。"""
+    rec = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec)
+    proposals.advance(db_conn, vault_dir, rec["id"], "expired", actor="system")
+    rel = rec["relpath"]
+
+    resp = client.post(f"/api/memory/proposals/{rel}/revive")
+    assert resp.status_code == 200
+    assert resp.json() == {"relpath": rel, "status": "awaiting_review"}
+    rec_now = proposals.record_by_relpath(db_conn, rel)
+    assert rec_now["status"] == "awaiting_review"
+    assert rec_now["created_at"] > time.time() - 60  # TTL 重新计时（Q5）
+    # 状态账本：expired → awaiting_review 行带 actor=human（人裁决）
+    row = db_conn.execute(
+        "SELECT actor, to_status FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'awaiting_review' "
+        "ORDER BY ts DESC, id DESC LIMIT 1",
+        (rec["id"],)).fetchone()
+    assert (row["actor"], row["to_status"]) == ("human", "awaiting_review")
+
+
+def test_revive_wrong_status_and_bad_paths(client, vault_dir, db_conn):
+    """非 expired → 400（detail 含当前状态）；missing → 404；坏路径 → 400/404。"""
+    rec = _create(vault_dir, db_conn, type="entity_index")  # pending
+    resp = client.post(f"/api/memory/proposals/{rec['relpath']}/revive")
+    assert resp.status_code == 400
+    assert "pending" in resp.json()["detail"]
+    # status unchanged after the failed revive.
+    assert proposals.record_by_relpath(db_conn, rec["relpath"])["status"] == "pending"
+
+    assert client.post(
+        "/api/memory/proposals/suggestions/nope.md/revive").status_code == 404
+    assert client.post(
+        "/api/memory/proposals/../x/revive").status_code in (400, 404)
+    assert client.post(
+        "/api/memory/proposals/notes/test.md/revive").status_code in (400, 404)
+    assert client.post(
+        "/api/memory/proposals/suggestions/sub/x.md/revive").status_code in (400, 404)
+
+
 # ── GET /api/memory/status ─────────────────────────────────────────────────
 
 def test_status_shape_and_counts(client, vault_dir, db_conn):
