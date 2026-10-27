@@ -559,6 +559,61 @@ def test_run_report_no_proposal_writes_empty(tmp_path: Path):
     assert seen[0].kind == "batch"
 
 
+def test_report_paths_filters_report_channel():
+    """v2a 报告渠道深链（debt #8）：files_changed 过滤 index/reports/** → report_paths（排序）。
+
+    普通路径（notes/… 等）不进 report_paths；空集 → 空列表（落库为 ''）。
+    """
+    from server.bgagent.runner import _report_paths
+
+    assert _report_paths({
+        "notes/b.md",
+        "index/reports/sentinel/2026-10-26.md",
+        "index/reports/narrator/2026-10-28.md",
+    }) == [
+        "index/reports/narrator/2026-10-28.md",
+        "index/reports/sentinel/2026-10-26.md",
+    ]
+    assert _report_paths(set()) == []
+
+
+def test_run_report_folds_report_paths(tmp_path: Path):
+    """write_doc 落 index/reports/** → RunReport.report_paths（控制台深链数据）。
+
+    普通路径照常计 files_changed；report_paths 只含报告渠道路径（排序）。
+    """
+    seen = []
+
+    class Hook(NotificationHook):
+        def notify(self, r: RunReport) -> None:
+            seen.append(r)
+
+    events = [
+        Event("round", {"n": 1}),
+        Event("tool_call", {"id": "c1", "name": "write_doc",
+                            "args": {"path": "index/reports/sentinel/2026-10-26.md",
+                                     "content": "x"}}),
+        Event("tool_result", {"id": "c1",
+                              "result": "Saved: index/reports/sentinel/2026-10-26.md (1 chars)"}),
+        Event("tool_call", {"id": "c2", "name": "write_doc",
+                            "args": {"path": "notes/b.md", "content": "x"}}),
+        Event("tool_result", {"id": "c2", "result": "Saved: notes/b.md (1 chars)"}),
+        Event("token", {"text": "done"}),
+        Event("done", {"reason": "final"}),
+    ]
+
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(events)
+
+    async def go():
+        return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
+
+    report = asyncio.run(go())
+    assert seen[0].report_paths == ["index/reports/sentinel/2026-10-26.md"]
+    assert report.files_changed == 2  # 普通路径照常计数（deep links 只是分流）
+
+
 def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
     """inv-8: a run's failures are visible in the NEXT run's context —
     the readback block (open counts + failed proposals with their

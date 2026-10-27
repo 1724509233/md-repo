@@ -36,6 +36,7 @@ const state = reactive({
   unreadCount: 0,
   memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
   memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
+  memoryReport: null,     // 报告深链 relpath（index/reports/**，通知 report_paths[0]；null = 未开；渲染归 L5）
   memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回）
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   monitoring: false       // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
@@ -519,6 +520,17 @@ export function createApp() {
         if (Array.isArray(paths) && paths.length) {
           state.memoryOpen = true
           state.memoryDetail = paths[0]
+          return
+        }
+        // 深链：本次 run 写出的报告渠道文件（index/reports/**，JSON 字符串）→ 控制台报告面
+        // （proposal_paths 为空时才走到这里，由上方 return 保证；渲染归 L5）
+        let rpaths = []
+        try {
+          rpaths = n.report_paths ? JSON.parse(n.report_paths) : []
+        } catch (e) { /* 非 JSON → 退回报告路径 */ }
+        if (Array.isArray(rpaths) && rpaths.length) {
+          state.memoryOpen = true
+          state.memoryReport = rpaths[0]
           return
         }
         if (n.report_path) openDoc(n.report_path)

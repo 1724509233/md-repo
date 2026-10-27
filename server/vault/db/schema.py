@@ -36,6 +36,9 @@ def _ensure_notification_cols(conn: sqlite3.Connection) -> None:
         # JSON array string of vault-relative proposal paths the run produced
         # ('' when none) — lets the console UI deep-link without parsing summary.
         ("proposal_paths", "ALTER TABLE notifications ADD COLUMN proposal_paths TEXT DEFAULT ''"),
+        # JSON array string of report-channel files (index/reports/**) the run
+        # wrote ('' when none) — console report-view deep links (debt #8).
+        ("report_paths", "ALTER TABLE notifications ADD COLUMN report_paths TEXT DEFAULT ''"),
     ):
         if col not in cols:
             conn.execute(ddl)
@@ -213,7 +216,8 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             ops_total INTEGER NOT NULL DEFAULT 0,
             files_changed INTEGER NOT NULL DEFAULT 0,
             kind TEXT NOT NULL DEFAULT 'batch',
-            proposal_paths TEXT DEFAULT ''
+            proposal_paths TEXT DEFAULT '',
+            report_paths TEXT DEFAULT ''
         )
         """
     )

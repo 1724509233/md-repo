@@ -509,7 +509,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
     @app.get("/api/notifications")
     async def list_notifications(unread: int = 0) -> list[dict]:
         query = ("SELECT id, ts, alias, name, status, report_path, summary, read, "
-                 "ops_total, files_changed, proposal_paths FROM notifications")
+                 "ops_total, files_changed, proposal_paths, report_paths FROM notifications")
         params: list = []
         if unread:
             query += " WHERE read = 0"
@@ -574,7 +574,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
             # Background agent notifications since the client's last sync (cap 50).
             rows = db_conn.execute(
-                "SELECT ts, alias, name, status, report_path, summary, proposal_paths "
+                "SELECT ts, alias, name, status, report_path, summary, "
+                "proposal_paths, report_paths "
                 "FROM notifications WHERE read = 0 AND ts > ? ORDER BY ts DESC LIMIT 50",
                 (float(last_sync),)).fetchall()
             result["notifications"] = [dict(r) for r in rows]

@@ -27,6 +27,7 @@ class RunReport:
     summary: str           # agent's final text, truncated
     kind: str = "batch"    # "batch" (report-only) | "review" (needs human attention)
     proposal_paths: list[str] = ()  # card relpaths this run produced (v2a: synthetic identifiers — the records have no backing file; deep links address the console cards)
+    report_paths: list[str] = ()    # index/reports/** files this run wrote (v2a report channel — real files; deep links open the console report view)
 
 
 class NotificationHook:
@@ -53,12 +54,13 @@ class InAppHook(NotificationHook):
         with _db_lock:
             self._conn.execute(
                 "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
-                "ops_total, files_changed, kind, proposal_paths) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "ops_total, files_changed, kind, proposal_paths, report_paths) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (time.time(), report.alias, report.name, report.status,
                  report.report_path, report.summary,
                  report.ops_total, report.files_changed, report.kind,
-                 json.dumps(report.proposal_paths) if report.proposal_paths else ""),
+                 json.dumps(report.proposal_paths) if report.proposal_paths else "",
+                 json.dumps(report.report_paths) if report.report_paths else ""),
             )
             self._conn.commit()
         logger = logging.getLogger("md-vault.bgagent")

@@ -176,6 +176,19 @@ export const api = {
   async getProposal(relpath) {
     const res = await fetch(_proposalUrl(relpath))
     return _jsonOrDetail(res)
+  },
+
+  /** GET /api/memory/reports — 报告渠道列表（index/reports/<alias>/*.md，mtime 降序；{relpath, alias, date, title, size, mtime}） */
+  async getMemoryReports() {
+    const res = await fetch('/api/memory/reports')
+    if (!res.ok) throw new Error(`memory/reports → ${res.status}`)
+    return res.json()
+  },
+
+  /** GET /api/memory/reports/{relpath} — 单份报告读取（{relpath, content}；越界 400 文案透传） */
+  async getMemoryReport(relpath) {
+    const res = await fetch('/api/memory/reports/' + relpath.split('/').map(encodeURIComponent).join('/'))
+    return _jsonOrDetail(res)
   }
 }
 

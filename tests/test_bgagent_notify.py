@@ -58,6 +58,24 @@ def test_inapp_hook_writes_proposal_paths(db_conn):
     assert row["proposal_paths"] == ""
 
 
+def test_inapp_hook_writes_report_paths(db_conn):
+    """report_paths 列表 → JSON 数组字符串；缺省（无报告）→ ''（v2a 报告深链）。"""
+    InAppHook(db_conn).notify(
+        _report(report_paths=["index/reports/sentinel/2026-10-26.md",
+                              "index/reports/narrator/2026-10-28.md"]))
+    row = db_conn.execute(
+        "SELECT report_paths FROM notifications").fetchone()
+    assert json.loads(row["report_paths"]) == [
+        "index/reports/sentinel/2026-10-26.md",
+        "index/reports/narrator/2026-10-28.md"]
+
+    InAppHook(db_conn).notify(_report(alias="no-reports"))
+    row = db_conn.execute(
+        "SELECT report_paths FROM notifications WHERE alias = 'no-reports'"
+    ).fetchone()
+    assert row["report_paths"] == ""
+
+
 def test_notifications_migration_is_idempotent(tmp_path: Path, db_conn):
     """连调两次 schema 迁移不报错（PRAGMA 检查缺列才 ALTER）。"""
     from server.vault.db import schema
@@ -132,6 +150,66 @@ def test_notifications_proposal_paths_migration(tmp_path: Path):
         conn.close()
 
 
+def test_notifications_report_paths_migration(tmp_path: Path):
+    """旧 notifications 库（无 report_paths 列）经 init_db 补列（幂等，'' 缺省）。
+
+    存量行保持 ''（不得要求非空）；idempotent ALTER 口径同 proposal_paths。
+    notifications 为 30 天易失铃数据，schema 演进走 _ensure_notification_cols
+    的 PRAGMA+ALTER（非全库 rebuild），无需丢弃存量。
+    """
+    import sqlite3
+
+    from server.vault import init_db
+
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            alias TEXT NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_path TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            read INTEGER NOT NULL DEFAULT 0,
+            ops_total INTEGER NOT NULL DEFAULT 0,
+            files_changed INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'batch',
+            proposal_paths TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path) "
+        "VALUES (100.0, 'old', 'old', 'ok', 'x.md')"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(notifications)")}
+        assert "report_paths" in cols
+        row = conn.execute(
+            "SELECT report_paths FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row[0] == ""
+    finally:
+        conn.close()
+
+    # 幂等：迁移后的库再 init_db 一次是 no-op。
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT report_paths FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row[0] == ""
+    finally:
+        conn.close()
+
+
 def test_inapp_hook_holds_db_lock(db_conn):
     """INSERT 必须持 _db_lock（代码库写路径约定）。"""
     from server.vault.db.schema import _db_lock
@@ -167,6 +245,20 @@ def test_notifications_api_roundtrip(app, db_conn):
 
     r = client.get("/api/notifications", params={"unread": 1})
     assert r.json() == []
+
+
+def test_notifications_api_exposes_report_paths(app, db_conn):
+    """/api/notifications 透传 report_paths（JSON 字符串 → UI 深链数据层）。"""
+    from fastapi.testclient import TestClient
+
+    InAppHook(db_conn).notify(
+        _report(report_paths=["index/reports/sentinel/2026-10-26.md"]))
+    client = TestClient(app)
+    items = client.get("/api/notifications", params={"unread": 1}).json()
+    assert len(items) == 1
+    # 深链数据层消费 JSON 字符串（口径同 proposal_paths）。
+    assert json.loads(items[0]["report_paths"]) == [
+        "index/reports/sentinel/2026-10-26.md"]
 
 
 def test_notifications_api_cap_50(app, db_conn):

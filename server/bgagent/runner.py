@@ -167,6 +167,17 @@ def _run_records(run_id: str, started_at: float) -> list[dict]:
         return []
 
 
+def _report_paths(files_changed: set[str]) -> list[str]:
+    """The run's report-channel files (v2a debt #8 deep links): the subset of
+    ``files_changed`` under the report channel root ``index/reports/``
+    (``index/reports/<alias>/YYYY-MM-DD.md``), sorted.
+
+    Real files (unlike the synthetic proposal relpaths) — the console opens
+    them read-only. Empty when the run wrote no report files.
+    """
+    return sorted(p for p in files_changed if str(p).startswith("index/reports/"))
+
+
 READBACK_TOP_N = 5  # readback failure entries are bounded (top N + marker)
 
 
@@ -492,6 +503,9 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # Card identifiers for the notification deep links (v2a: synthetic
         # relpaths — the records have no backing file).
         proposal_paths=sorted(r["relpath"] for r in records),
+        # Report-channel files this run wrote (real files under
+        # index/reports/) — the console deep links open them read-only.
+        report_paths=_report_paths(stats.files_changed),
     )
     for hook in hooks or []:
         hook.notify(report)
