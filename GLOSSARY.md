@@ -45,7 +45,7 @@ change_log.source 的取值：非项目内修改的统一兜底来源——服�
 _Avoid_: 「watchdog 库写的」、local write（裸词）
 
 **write registry**：
-服务端进程内的写归因注册表（模块级 dict，TTL 10s）：项目写通道落盘前 `register_write(path, source)` 登记；snapshot watcher 观察到变更后 `pop_source(path)` 取走并记入 change_log；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
+服务端进程内的写归因注册表（模块级 dict，TTL 10s）：项目写通道落盘前 `register_write(path, source[, batch_id, consumer_skip])` 登记（batch_id = 执行批次标识，executor / run 透传）；snapshot watcher 观察到变更后 `pop_source(path)` 取走 `(source, batch_id, consumer_skip)` 元组记入 change_log；`consumer_skip=True` 专用于 web 直写路径（端点同步落账，watcher 不重复记账，防双行）；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
 _Avoid_: write_registry（模块名，不是术语）、归因表
 
 **reconcile**：
@@ -73,18 +73,74 @@ _Avoid_: recall telemetry（代码对用途的自称，不是术语）、recall�
 ### 记忆运行时
 
 **sentinel**（记忆哨兵）：
-bgagent，负责召回质量与文档生命周期的治理：读 recall log、对文档分桶处置、产出 archive 提案到 suggestions/；每周心跳 + recall arming 提前唤醒。
+bgagent，无落地动词角色（报告通道，ADR-0004）：读 recall log、对文档分桶、产只读报告（机器区文件 + 控制台 API）；archive 提案已退役（v2.1 D5，实际搬动 = 人 / 交互 agent）；无 propose、不写用户区；每周心跳 + recall arming 提前唤醒。
 _Avoid_: 哨兵（裸词，中文须带「记忆」）、sentinel agent
 
 **recall arming**：
 sentinel 专属的武装信号源：`scan_recall_arming` 用双游标扫 recall log（零命中查询数 + 低分命中数）累计，达 arm_count 且过冷却/日预算后触发一次运行。
 _Avoid_: recall trigger、recall source（事件名）
 
+### 记忆运行时 · v2 提案与写通道
+
+**propose 工具**：
+bgagent 提案通道唯一写入口（v2.1 D25）：`propose(type, payload, source_refs, justification)`——调用时三段校验（信封 + per-verb payload schema + 越权拒绝），报错零落盘（错误串返回 agent，无任何文件/账本写入）；成功 = 提案记录进账本；runner 盖章 actor/run_id/verbs（模型不可自报身份）；零文件落，`suggestions/` 由禁写守卫双保险。
+_Avoid_: 提案（裸动词）、写提案
+
+**提案记录**：
+v2a 提案本体 = 账本库 `proposals` 表一行（payload JSON / source_refs / justification / reject_reason + `proposal_transitions` 变迁历史表）；状态以账本记录为唯一状态源（v1 文件 frontmatter 状态源退役）；`relpath` = 合成寻址标识（确定性命名，背后无文件）；存量 4 条 v1 投影 = 惰性遗留物，不导入、不重投影、不删除。
+_Avoid_: 提案文件、suggestion 文件（v1 残留词）
+
+**decide_record**（代码名 `advance`）：
+提案状态迁移单路径（`proposals.advance`）：全 server 唯一一处 `UPDATE proposals SET status`；调用方 = 控制台 API / 协同终审四工具 / 执行器 / expire_overdue；读侧前置态校验 + （v2.2 债单 #1：`WHERE status=?` 条件 UPDATE 待实现，非法前置态 → 错误返回，不变量 11/12 测试锚点）。
+_Avoid_: 决策、状态迁移（裸词）
+
+**越权拒绝**：
+propose 工具第三段校验：提案 `type` ∉ 角色 `verbs:` 声明 → 拒绝并列出允许动词（操作化 reject_reason 返回 agent 供自我纠正）；bgagent `verbs:` 必须显式声明，未声明 → 启动 fail-fast 报错（v2.2 债单 #7，Q7/Q9）。
+_Avoid_: verb check、privilege check（裸词）
+
+**身份带外**：
+合法性判定原则：读工具面/进程面绑定（进程入口 → 允许目标路径集合；runner 盖章 actor/run_id），不读任何 agent 自报的身份字段；提案通道（propose 盖章）与人执笔直写通道（user-ask / rebase 落地）同规（v2.1 §7.5.8）。
+_Avoid_: actor 盖章（裸词）、身份校验（裸词）
+
+**人执笔写路径**（v2.1 §1.3）：
+机器执行写调用、但每次写入由人逐次、事前、显式确认的写路径；目前仅两种：user-ask（交互 agent 逐次请示）/ rebase（人发起的 fact 改写，执行器持人确认凭据落地）。成立要件四条，缺一即违宪自动化写：逐次确认、事前确认、独立快照、身份带外。法律拟制：机器为笔、人为作者——宪法上归类为人的写入，不是自动化的第三类写者。
+_Avoid_: 人确认写、交互写（裸词）
+
+**报告通道**（v2.2，ADR-0004）：
+bgagent 无落地动词角色（sentinel / 叙事者）专属写通道：读工具 + `write_doc`（写边界 = 机器区 `index/`），无 propose、用户区零写；**分界线：提案角色（固化者）= propose 唯一写入口、无直写**（防终审闸门被绕过）；人面 = 控制台报告 API + 推送，主 agent 用既有 `read_doc` 读（index/ 可读、不进搜索图谱，不新增读工具）。
+_Avoid_: 报告路径、bgagent 直写（裸词，与用户区直写歧义）
+
+**回读注入**：
+runner 每次 run 在上下文头部注入本角色的：未决 N 条 / 失败 M 条（含 reject_reason）/ 被忽略的 relatedness 配对（遥测）；有界 top-5；框架级反馈环（硬约束，非提示词自律——run N 的失败必然在 run N+1 的上下文里）。
+_Avoid_: readback、反馈注入（裸词）
+
+### 记忆运行时 · v2 机器区产出
+
+**relatedness**：
+机器建议层的文档级关系边：账本库 `relatedness` 表一行（源, 目标, 依据, run_id, ignored）；零文件落、不进图谱、不进搜索、不进用户文件；两层呈现（用户 wikilink 层与机器建议层分列，机器边 = 可一键忽略的建议，忽略 = DB 标记 + 回读遥测）；排序接线 + ignored 配对机械过滤归 v2b。与 related edge（用户 frontmatter 图谱层）是两物。
+_Avoid_: related edge（用户层图谱边，另一物）、机器边（裸词）
+
+**errata**（v2.1，替代 correction）：
+加法式勘误卡：`index/errata/<stem>.md` 单槽（v2a；唯一文件名 `<stem>-p<record-id>.md` 归 v2b）；合规形态 = 只许 surface 矛盾 + 候选值（标注出处、人可改写）+ 单闸门（物化 = 确权，物化后系统只读、所有权归人）；覆盖保护 = 目标槽已有已物化卡时执行器拒收 + surface（D23/#C1，v2a 债单 #2）；消费 = 召回时原文 + 勘误并列呈现（v2b 接线），永不静默替换。
+_Avoid_: correction（退役 v1 动词）、勘误卡（裸词，用 errata）
+
+**记忆化**：
+人把报告 / summary 复制进主区的动作 = 机器区派生转用户区记忆（派生 → 用户区的唯一合法路径）；人的书写动作（交互 agent 可代劳，经人执笔写路径）。
+_Avoid_: 转正、复制到主区（描述性，不是术语）
+
+**单活快照**：
+快照库保留语义：每文件至多一个活 pre-image（新调用覆盖旧）；GC 只允许删「被更新快照取代」的旧 pre-image，永不删活的；in-flight 行（已捕捉、写未确认的崩溃残留）GC 永不回收；删除类单列保留 30 天。回滚 = 回到上一次调用前；同文件多次调用仅支持逆序回滚序列（乱序 = 撞车守卫预期拒绝，是预期行为非故障）。
+_Avoid_: 最新快照（描述性）、live pre-image（英文裸词）
+
+**degraded 模式**：
+快照捕捉失败（I/O 失败）后的状态：写照常、快照跳过、记日志——fail-open（主路径可用性 > 审计完整性）；LLM 独一产出暂失 pre-image；v2a 失败计数必须进控制台待确认面板（降级可见、不静默；v2a 债单 #5）。
+_Avoid_: degraded（裸词）、快照失败（裸词）
+
 ### 图谱
 
 **related edge**：
-图谱边的一种类型，唯一从 frontmatter 的 `related:` 字段解析（每项经 wikilink 解析后写入；解析不出的静默丢弃）——另两类边 wikilink/tag 来自 body 原文解析。端点 `/api/graph/related` 与工具 `get_related_docs` 名中的 "related" 是泛义「相关文档」（1 跳/N 跳邻域，混合三种边），不等于 related edge。
-_Avoid_: 用 related edge 指代端点/工具的邻域结果（那是 N-hop neighborhood）
+图谱边的一种类型，唯一从 frontmatter 的 `related:` 字段解析（每项经 wikilink 解析后写入；解析不出的静默丢弃）——另两类边 wikilink/tag 来自 body 原文解析。端点 `/api/graph/related` 与工具 `get_related_docs` 名中的 "related" 是泛义「相关文档」（1 跳/N 跳邻域，混合三种边），不等于 related edge。v2.1 spec 的 `relatedness` 是本词条的另一物（机器建议层 DB 行，见 relatedness 词条），勿混用。
+_Avoid_: 用 related edge 指代端点/工具的邻域结果（那是 N-hop neighborhood）、relatedness（v2 机器层，另一物）
 
 **reference maintenance**：
 文档移动/删除后的引用改写，写方向流程（`refs.py`，拿 referrer lookup 的结果落盘）：move 多移动单遍处理——引用方集合取各 move 的并集、排除目的地自身、每个文件读一次/内存替换/写一次，全路径与唯一短名 wikilink 都替换；delete 移除指向已删文档的死链（全路径 / 去 `.md` / 唯一短名三类模式）。
@@ -109,7 +165,7 @@ _Avoid_: ask/allow（取值词）、权限（裸词）
 _Avoid_: 与 permission 混用、自动批准（裸词）
 
 **write gate**（`WriteGate`）：
-channel policy 的第三层：域名/通道写规则，read 工具一律 no-op；`VAULT_GATES` + 通道专属 gates 按序执行，首个非 None 即拒。`VAULT_GATES` = vault 不变量，任何通道不可关闭（现为 `SuggestionsGate`：suggestions/ 是状态机领地——write/edit 走提案校验，move/delete 等 ask 工具对子树任意深度一律拒绝，默认分支 fail-closed，meta-test 钉住 CI）；通道专属 gate 定义在通道模块、经 `ChannelPolicy.gates` 注入（如 MCP 的 `McpExternalGate`：主区只读，返回协议指引文案）。
+channel policy 的第三层：域名/通道写规则，read 工具一律 no-op；`VAULT_GATES` + 通道专属 gates 按序执行，首个非 None 即拒。`VAULT_GATES` = vault 不变量，任何通道不可关闭（现为 `SuggestionsGate`：v2.1 D25 禁写守卫——对 `suggestions/` 子树（任意深度）的一切 ask 工具调用（write/edit/move/delete 任意 op）结构性拒绝，fail-closed；v1 文件级校验钩子 `validate_suggestions_write` 已退役，测试钉住其缺席）；通道专属 gate 定义在通道模块、经 `ChannelPolicy.gates` 注入（如 MCP 的 `McpExternalGate`：主区只读，返回协议指引文案）。
 _Avoid_: gate（裸词）、check、门禁（裸词）
 
 **write_source**：
