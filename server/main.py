@@ -11,8 +11,8 @@ import uvicorn
 from . import events
 from .api import create_app
 from .bgagent import InAppHook, start_background_agents
-from .bgagent.notify import cleanup_old_notifications
-from .config import load_background_agents, load_server_config
+from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
+from .config import load_background_agents, load_notifications, load_server_config
 from .vault.service import apply_change, consume_file_event, ensure_indexed, init_db
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
@@ -41,6 +41,10 @@ def main(argv: list[str] | None = None) -> None:
     config = load_server_config(config_path)
     vault_dir = config.vault_dir
     vault_dir.mkdir(parents=True, exist_ok=True)
+
+    # Notification volume guard (debt #6, D33): the daily cap is law from
+    # config.yaml's top-level notifications: section (default 20).
+    notifications_cfg = load_notifications(config_path)
 
     bg_agents = load_background_agents(config_path, vault_dir)
     if bg_agents:
@@ -122,7 +126,10 @@ def main(argv: list[str] | None = None) -> None:
         if bg_agents:
             cleanup_old_notifications(conn)
             start_background_agents(
-                bg_agents, vault_dir, hooks=[InAppHook(conn)], db_conn=conn)
+                bg_agents, vault_dir,
+                hooks=[GuardedNotificationHook(
+                    InAppHook(conn), conn, daily_cap=notifications_cfg.daily_cap)],
+                db_conn=conn)
             await asyncio.sleep(0)  # let the bgagent tasks start
 
     config_obj = uvicorn.Config(
