@@ -5,7 +5,9 @@ records are the source; the response shape stays stable vs the v1
 frontmatter list: ``reversible`` derives from the authorization tier,
 ``title`` from source_refs/type), the adopt/reject one-click review
 endpoints (record-level state-machine transitions ledgered with actor
-"human", path guards, reason threading), and the /api/memory/status
+"human", path guards, reason threading), the single-record read
+endpoint (field roundtrip, 404 on a record-less relpath, 400 on bad
+shapes), and the /api/memory/status
 pulse (proposal counts, trigger_state agent panel incl. the
 config-derived arm caps, the executor activity block, recall demand).
 """
@@ -18,8 +20,7 @@ from fastapi.testclient import TestClient
 
 from server import proposals
 from server.api import create_app
-from server.vault.db.changes import get_changes, log_change
-from tests.conftest import simulate_consumer
+from server.vault.db.changes import log_change
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -97,13 +98,16 @@ def test_adopt_success_and_ledger(client, vault_dir, db_conn):
     assert resp.status_code == 200
     assert resp.json() == {"relpath": rel, "status": "adopted"}
     assert proposals.record_by_relpath(db_conn, rel)["status"] == "adopted"
-
-    # The adoption's ledger row lands via the watcher consumer.
-    simulate_consumer(db_conn, vault_dir, rel, "modified")
-    # Ledgered with the human actor (source="human", op="update").
-    rows = get_changes(db_conn, since=0, path=rel, source="human")
-    assert rows
-    assert all(r["op"] == "update" for r in rows)
+    # v2a (D25): the adoption lands in the state ledger (actor="human") and
+    # books no change_log file row — the channel is zero-file.
+    rows = db_conn.execute(
+        "SELECT actor, to_status FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'adopted'",
+        (rec["id"],)).fetchall()
+    assert [(r["actor"], r["to_status"]) for r in rows] == [("human", "adopted")]
+    assert db_conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path LIKE 'suggestions/%'"
+    ).fetchone()[0] == 0
 
 
 def test_adopt_wrong_status_and_bad_paths(client, vault_dir, db_conn):
@@ -146,8 +150,14 @@ def test_reject_threads_reason(client, vault_dir, db_conn):
     p = proposals.record_by_relpath(db_conn, rel)
     assert p["status"] == "rejected"
     assert p["reject_reason"] == "summary is wrong"
-    # And the projection file was re-rendered with the new state.
-    assert "status: rejected" in (vault_dir / rel).read_text(encoding="utf-8")
+    # v2a (D25): the rejection lands in the state ledger (no file re-render
+    # — the channel is zero-file).
+    row = db_conn.execute(
+        "SELECT actor, to_status, reason FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'rejected'",
+        (rec["id"],)).fetchone()
+    assert (row["actor"], row["to_status"], row["reason"]) == (
+        "human", "rejected", "summary is wrong")
 
 
 def test_reject_reason_required(client, vault_dir, db_conn):
@@ -369,20 +379,15 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     # Record A (run_id "batch-test", the _create helper's batch): 5
     # state-machine transitions (one proposal_transitions row per advance,
     # creation included) + one executor file merge carrying the batch id
-    # but a different path. Each re-projection registers its write; the
-    # watcher consumer books one row per watched write (those file rows are
-    # the coalesced shadow of the transitions — the trail no longer sources
-    # them), so each advance is followed by one consumer pass.
+    # but a different path. v2a (D25): the channel books no change_log
+    # rows of its own — the trail sources the state ledger + other-path
+    # batch rows only.
     rec_a = _create(vault_dir, db_conn, type="summary")
     proposals.advance(db_conn, vault_dir, rec_a["id"], "processing", actor="tester")
-    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     proposals.advance(db_conn, vault_dir, rec_a["id"], "awaiting_review", actor="tester")
-    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     resp = client.post(f"/api/memory/proposals/{rec_a['relpath']}/adopt")
     assert resp.status_code == 200  # +adopted row (source=human)
-    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     proposals.advance(db_conn, vault_dir, rec_a["id"], "merged", actor="executor")
-    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     # +the executor's file merge (same batch, other path) — what the
     # 30-minute loop ledgered via apply_change.
     log_change(db_conn, "index/entities.md", "update", source="executor",
@@ -401,13 +406,15 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     a = items[rec_a["relpath"]]
     # 6 = 5 state-machine transitions (proposal_transitions: created,
     # →processing, →awaiting_review, →adopted, →merged) + 1 executor file
-    # merge row (batch_id = run_id, other path). The 4 re-projection
-    # change_log rows the old tail counted are the coalesced shadow of the
-    # transitions — no longer a source.
+    # merge row (batch_id = run_id, other path). v2a (D25): the channel
+    # books no change_log rows of its own — the state ledger is the whole
+    # state trail source.
     assert a["trail_count"] == 6
     assert len(a["trail"]) == 3   # truncated to the newest 3
-    assert [t["seq"] for t in a["trail"]] == sorted(
-        (t["seq"] for t in a["trail"]), reverse=True)
+    # Newest-first by ts (seq spans two id spaces — change_log.seq and
+    # proposal_transitions.id — so ts is the ordering invariant).
+    assert [t["ts"] for t in a["trail"]] == sorted(
+        (t["ts"] for t in a["trail"]), reverse=True)
     # /trail-endpoint row shape (no batch_id) — the batch file row is the
     # newest; then the two newest transitions (→merged by the executor,
     # →adopted by the human); the human adopt the oldest of the three.
@@ -436,3 +443,62 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     assert b["trail"][0]["op"] == "pending"
     assert b["trail"][0]["source"] == "consolidator"
     assert b["trail"][0]["path"] == rec_b["relpath"]
+
+
+# ── GET /api/memory/proposals/{relpath} (record read) ─────────────────────
+
+def test_record_read_roundtrip(client, vault_dir, db_conn):
+    """200 on a created record; fields roundtrip — justification is the
+    detail-pane excerpt body, payload passes through its JSON (empty
+    column → None), created/updated are ISO dates."""
+    rec = _create(vault_dir, db_conn, type="summary")
+    rec2 = proposals.create(
+        db_conn, vault_dir, "entity_index", actor="consolidator",
+        run_id="batch-test", source_refs=["notes/a.md"],
+        justification="explore more", payload={"entity": "x"},
+    )
+
+    resp = client.get(f"/api/memory/proposals/{rec['relpath']}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["relpath"] == rec["relpath"]
+    assert body["type"] == "summary"
+    assert body["status"] == "pending"
+    assert body["actor"] == "consolidator"
+    assert body["run_id"] == "batch-test"
+    assert body["justification"] == "proposal body"
+    assert body["payload"] is None  # empty payload column → None
+    assert body["source_refs"] == ["notes/test.md"]
+    assert body["reject_reason"] == ""
+    assert body["merged_at"] == ""
+    assert body["created"] == datetime.fromtimestamp(
+        rec["created_at"]).strftime("%Y-%m-%d")
+    assert body["updated"] == datetime.fromtimestamp(
+        rec["updated_at"]).strftime("%Y-%m-%d")
+
+    # Non-null payload roundtrips as the parsed object.
+    resp = client.get(f"/api/memory/proposals/{rec2['relpath']}")
+    assert resp.status_code == 200
+    body2 = resp.json()
+    assert body2["justification"] == "explore more"
+    assert body2["payload"] == {"entity": "x"}
+    assert body2["source_refs"] == ["notes/a.md"]
+
+
+def test_record_read_missing_record_404(client, vault_dir, db_conn):
+    # Well-formed relpath, no record → 404 (v2a: the row IS the record;
+    # there is no file fallback).
+    assert client.get(
+        "/api/memory/proposals/suggestions/nope.md").status_code == 404
+
+
+def test_record_read_bad_shape_400(client, vault_dir, db_conn):
+    # Not under suggestions/ → 400 (never 500).
+    assert client.get("/api/memory/proposals/index/x.md").status_code == 400
+    # Nested (not a top-level proposal) → 400.
+    assert client.get(
+        "/api/memory/proposals/suggestions/sub/x.md").status_code == 400
+    # .. / absolute → 400/404 (same tolerant assertion as the adopt tests:
+    # the client may normalize .. before the request).
+    assert client.get("/api/memory/proposals/../x").status_code in (400, 404)
+    assert client.get("/api/memory/proposals//abs.md").status_code in (400, 404)

@@ -92,9 +92,9 @@ def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
 
     Same match as the /trail endpoint: each record's state-machine
     transitions (the ``proposal_transitions`` rows — the authoritative
-    per-record state history; the change_log tail of the projection file
-    under-reports them, back-to-back re-projections coalesce into one
-    file row) plus executor changes carrying the record's run_id as
+    per-record state ledger; pre-D25 the change_log tail of the projection
+    file under-reported them, back-to-back re-projections coalescing into
+    one file row) plus executor changes carrying the record's run_id as
     batch_id on other paths. One query per source for the whole list —
     a per-item query would be N round-trips; a batch row matching several
     items (a shared run_id) is repeated for each of them.
@@ -136,8 +136,8 @@ def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
         rel = it["relpath"]
         merged = list(tr_map.get(rel, []))
         if it.get("run_id"):
-            # The item's own projection-file rows are the coalesced shadow
-            # of its transitions (no longer a source); keep the other paths.
+            # Legacy (pre-D25) projection-file rows are the coalesced shadow
+            # of the record's transitions (never a source); keep other paths.
             merged += [d for d in batch_map.get(it["run_id"], [])
                        if d["path"] != rel]
         out.append(sorted(merged, key=lambda x: x["ts"], reverse=True))
@@ -631,7 +631,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
     @app.get("/api/memory/proposals")
     async def memory_proposals() -> dict:
         """List every proposal record (DB = the state source of truth; the
-        suggestions/ files are projections, never scanned). Response shape
+        suggestions/ files are inert legacy projections, never scanned). Response shape
         is stable vs the v1 frontmatter list: ``reversible`` derives from
         the authorization tier, ``title`` from source_refs/type."""
         from . import proposals
@@ -723,8 +723,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
         The transition segment is the record's state-machine history from
         ``proposal_transitions`` (the authoritative per-record state ledger
-        — the change_log tail of the projection file under-reports it:
-        back-to-back re-projections coalesce into one file row), plus
+        — pre-D25 the change_log tail of the projection file under-reported
+        it: back-to-back re-projections coalesced into one file row), plus
         executor changes that carry the record's run_id as batch_id on
         other paths (the API only moves state; the executor lands the
         change). Record-less (legacy) projection files fall back to the
@@ -758,6 +758,35 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 rows.append(dict(r))
         rows.sort(key=lambda d: d["ts"], reverse=True)
         return {"relpath": rel, "trail": rows[:12]}
+
+    @app.get("/api/memory/proposals/{relpath:path}")
+    async def memory_proposal_detail(relpath: str) -> dict:
+        """Read one proposal record — the console detail pane's content
+        excerpt data source (D25: the projections/ files are gone; the
+        excerpt body is the record's ``justification`` — byte-identical
+        to the v1 projection's body paragraph).
+
+        ``payload`` is the JSON-parsed object (empty column → None);
+        ``created`` / ``updated`` are ISO dates (the list endpoint's
+        style); ``merged_at`` passes the ledger's ISO timestamp through.
+        """
+        from . import proposals
+
+        rel = _guard_proposal_relpath(relpath)
+        rec = proposals.record_by_relpath(db_conn, rel)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="proposal not found")
+        return {
+            "relpath": rec["relpath"], "type": rec["type"],
+            "status": rec["status"], "actor": rec["actor"],
+            "run_id": rec["run_id"], "payload": rec["payload"],
+            "justification": rec["justification"],
+            "source_refs": rec["source_refs"],
+            "reject_reason": rec["reject_reason"],
+            "merged_at": rec["merged_at"],
+            "created": datetime.fromtimestamp(rec["created_at"]).strftime("%Y-%m-%d"),
+            "updated": datetime.fromtimestamp(rec["updated_at"]).strftime("%Y-%m-%d"),
+        }
 
     @app.post("/api/memory/rollback")
     async def memory_rollback(request: Request) -> JSONResponse:
@@ -818,7 +847,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         from .vault.db import recall as recall_db
 
         # proposals: by_status counts + the awaiting_review review queue.
-        # DB records are the source (suggestions/ files are projections).
+        # DB records are the source (suggestions/ files are inert legacy projections).
         items = []
         now = time.time()
         for p in proposals.scan(db_conn):

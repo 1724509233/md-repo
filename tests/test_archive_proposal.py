@@ -160,8 +160,9 @@ def test_legacy_archive_adopted_parked_no_moves(vault_dir, db_conn):
 
     assert (vault_dir / "notes" / "test.md").read_bytes() == user_before
     assert not (vault_dir / "archive").is_dir()
-    # The projection was re-rendered on the transition (system zone).
-    assert (vault_dir / p["relpath"]).is_file()
+    # v2a (D25): the transition books no projection file — the state ledger
+    # row is the whole state (the relpath is a synthetic card identifier).
+    assert not (vault_dir / p["relpath"]).is_file()
 
 
 def test_retired_park_reasons_name_replacements(vault_dir, db_conn):

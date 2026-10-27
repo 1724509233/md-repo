@@ -39,8 +39,8 @@ class McpExternalGate(WriteGate):
     ``ChannelPolicy(gates=...)``. The protocol-guidance error wording is the
     contract with external LLMs — it points at the propose tool as the
     proposal channel (v2: direct suggestions/ writes are rejected by the
-    VAULT_GATES SuggestionsGate, which sees the projection files as
-    system-owned). Read tools are no-ops (validate_tool_call invokes gates
+    VAULT_GATES SuggestionsGate; v2a zero file-landing per D25 — any
+    existing suggestions/ file is inert). Read tools are no-ops (validate_tool_call invokes gates
     for every tool). Unconditional by constitution — no config flag.
     """
 
@@ -58,8 +58,8 @@ class McpExternalGate(WriteGate):
                     "propose tool (e.g. type 'errata' with payload {contradiction, "
                     "excerpts, candidate, rationale} to surface a contradiction, or "
                     "type 'relatedness' with payload {target} to suggest a relation); "
-                    "direct writes into suggestions/ are also rejected — it holds "
-                    "system-owned projections of proposal records (see "
+                    "direct writes into suggestions/ are also rejected — proposal "
+                    "records live in the ledger only (no file; see "
                     "server/proposals.py)."
                 )
         return None
@@ -151,9 +151,8 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
                  justification: str) -> str:
     """The MCP channel's propose entry (oracle gate P0-Q6a).
 
-    Restores the external proposal channel after the P0 cutover made
-    suggestions/ a system-owned projection zone: the external agent
-    proposes through the same record pipeline as every other channel —
+    Restores the external proposal channel after the P0 cutover: the external
+    agent proposes through the same record pipeline as every other channel —
     trusted stamps (write_source="mcp" is the ledger's source convention),
     no run stamp (stdio has no bgagent run), unrestricted verbs, full
     envelope + per-verb validation. Returns the tool's result string.

@@ -471,11 +471,11 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     finished_at = time.time()
 
     # Proposal records this run produced (the propose tool emits no path
-    # args): fold their projection paths into the run's changed-files
-    # accounting (report 变更文件 + notification deep links).
+    # args). v2a (D25): proposals are ledger records, not file changes —
+    # their relpaths stay OUT of files_changed (no backing file exists;
+    # listing one in the report's 变更文件 would be a ghost path). They
+    # feed the notification deep links + kind below.
     records = _run_records(run_id, started_at)
-    if records:
-        stats.files_changed.update(r["relpath"] for r in records)
 
     _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
 
@@ -489,6 +489,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         report_path=report_path, ops_total=len(stats.ops),
         files_changed=len(stats.files_changed), summary=stats.summary[:200],
         kind=kind,
+        # Card identifiers for the notification deep links (v2a: synthetic
+        # relpaths — the records have no backing file).
         proposal_paths=sorted(r["relpath"] for r in records),
     )
     for hook in hooks or []:

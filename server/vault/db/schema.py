@@ -224,11 +224,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     )
 
     # Proposal records (reversible-automation v2, P0): the DB row is the
-    # single source of truth for proposal state. The markdown file under
-    # suggestions/ is a system-exclusive idempotent projection of the row
-    # (frontmatter carries projection: true + source_record: <id>). State
-    # transitions update the row and append a proposal_transitions row; the
-    # projection file is re-rendered on every transition.
+    # single source of truth for proposal state — and its only carrier
+    # (D25: v2a is zero file-landing; the suggestions/ projection file is
+    # gone, existing files are inert, the channel books no file row).
+    # relpath is the synthetic card addressing key (no file behind it).
+    # State transitions update the row and append a proposal_transitions
+    # row — the sole ledger of the proposal channel.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS proposals (

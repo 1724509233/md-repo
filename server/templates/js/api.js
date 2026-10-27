@@ -170,12 +170,19 @@ export const api = {
   async getProposalTrail(relpath) {
     const res = await fetch(_proposalUrl(relpath, 'trail'))
     return _jsonOrDetail(res)
+  },
+
+  /** GET /api/memory/proposals/{relpath} — 记录读取（详情面摘录 body = justification；D25 无投影文件） */
+  async getProposal(relpath) {
+    const res = await fetch(_proposalUrl(relpath))
+    return _jsonOrDetail(res)
   }
 }
 
-/** 提案 URL：relpath 形如 suggestions/2026-10-21_x.md，逐段编码 */
+/** 提案 URL：relpath 形如 suggestions/2026-10-21_x.md，逐段编码；suffix 省略 = 记录读取端点 */
 function _proposalUrl(relpath, suffix) {
-  return '/api/memory/proposals/' + relpath.split('/').map(encodeURIComponent).join('/') + '/' + suffix
+  const base = '/api/memory/proposals/' + relpath.split('/').map(encodeURIComponent).join('/')
+  return suffix ? base + '/' + suffix : base
 }
 
 /** 非 2xx 时抛出带服务端 detail 的 Error（FastAPI 的 400/404 文案直接进 UI） */

@@ -1,4 +1,4 @@
-"""propose tool: the agent's only write path into suggestions/ (v2).
+"""propose tool: the agent's only write path into the proposal channel (v2a).
 
 The LLM supplies exactly four parameters (type, payload, source_refs,
 justification). ``actor`` and ``run_id`` are *trusted stamps* injected via
@@ -19,8 +19,9 @@ Validation (every failure returns an error to the agent — ZERO disk writes):
    at the write entry point, §五.1)
 
 Success: insert the record (pending) → process (processing →
-adopted/awaiting_review per the authorization tier). The projection file
-under suggestions/ is rendered on each step (system-exclusive, idempotent).
+adopted/awaiting_review per the authorization tier). v2a (D25): the
+proposal channel lands no file — the DB record + proposal_transitions
+rows are the whole state (suggestions/ gets zero writes).
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ from .tool import Tool, ToolContext
 
 
 class ProposeArgs(BaseModel):
-    """Create a proposal (state + projection). Use instead of writing into suggestions/."""
+    """Create a proposal (state). Use instead of writing into suggestions/."""
     type: str = Field(
         description="Proposal type: entity_index | relatedness | summary | errata | reminder"
     )
@@ -48,7 +49,7 @@ class ProposeArgs(BaseModel):
         description="Vault-relative paths of the notes this proposal is based on",
     )
     justification: str = Field(
-        default="", description="Why this proposal is warranted (projection body; human-readable)"
+        default="", description="Why this proposal is warranted (card body; human-readable)"
     )
 
 

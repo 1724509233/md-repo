@@ -87,13 +87,14 @@ class SuggestionsGate(WriteGate):
     """suggestions/ 不变量的单接线（vault 不变量，任何通道绕不过）。
 
     v2 (reversible-automation): the DB record is the single source of truth
-    for proposal state; the file under suggestions/ is a *system-exclusive
-    idempotent projection* of that record. Consequently EVERY ask-tool
-    write/move/delete touching the suggestions/ subtree (any depth) is
-    rejected — the LLM creates proposals via the ``propose`` tool, and state
-    transitions go through the record state machine (proposals.advance;
-    human adopt/reject via the memory console). There is no longer any
-    legitimate direct-write shape, so no content-semantic branching.
+    for proposal state; v2a is zero file-landing (D25) — no projection file
+    is ever written, and any existing suggestions/ file is inert.
+    Consequently EVERY ask-tool write/move/delete touching the suggestions/
+    subtree (any depth) is rejected — the LLM creates proposals via the
+    ``propose`` tool, and state transitions go through the record state
+    machine (proposals.advance; human adopt/reject via the memory console).
+    There is no legitimate direct-write shape, so no content-semantic
+    branching.
 
     "Is this a write tool" is determined structurally via
     ``TOOL_REGISTRY[tool_name].permission == "ask"``.

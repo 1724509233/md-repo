@@ -2,8 +2,8 @@
 
 Kind is derived from the run's proposal RECORDS — the propose tool stamps
 them with the run_id (trusted, ctx-injected), and the DB row is the state
-source of truth (the suggestions/ files are projections, never scanned).
-No prompt-matching logic — just the record statuses.
+source of truth (v2a: no suggestions/ files — the records are never
+scanned). No prompt-matching logic — just the record statuses.
 """
 from __future__ import annotations
 

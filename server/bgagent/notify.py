@@ -26,7 +26,7 @@ class RunReport:
     files_changed: int
     summary: str           # agent's final text, truncated
     kind: str = "batch"    # "batch" (report-only) | "review" (needs human attention)
-    proposal_paths: list[str] = ()  # vault-relative proposal paths this run produced
+    proposal_paths: list[str] = ()  # card relpaths this run produced (v2a: synthetic identifiers — the records have no backing file; deep links address the console cards)
 
 
 class NotificationHook:

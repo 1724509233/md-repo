@@ -5,7 +5,7 @@
  * 宪法：console 只移状态（adopt/reject 走状态机，actor = human）；文件由确定性执行器落地。
  * 数据：state.memoryStatus / state.memoryProposals 由 app 30s 轮询注入，本组件不自建轮询；
  *       L0 与 feed 全部消费这两个 ref（awaiting 5 字段按 relpath join proposals 富化 source_refs / run_id / created）；
- *       内容摘录经 GET /api/docs/{relpath} 按需读取（frontmatter 剥离后取 body）。
+ *       内容摘录经 GET /api/memory/proposals/{relpath} 按需读取（记录 body = justification；D25 无投影文件）。
  * 入口纪律：「后台 →」= 唯一 L0→L1 入口（window.openMonitorPage()，Phase A 挂载）；
  *       v3 九格脉搏 / 触发行 / 召回块整体移除——九态由监控页①九格承担，面板内彻底消失。
  */
@@ -267,7 +267,7 @@ export const MemoryConsole = {
     // 提案列表是否已到达（null = 尚未轮询；[] 轮询过但无提案 → 详情区分「加载 / 未找到」）
     const proposalsLoaded = computed(() => state.memoryProposals !== null)
 
-    // 内容摘录（proposal 文件 body；frontmatter 剥离）
+    // 内容摘录（记录 body = justification；D25 无投影文件，读记录端点）
     const bodyText = ref(null)      // null = 加载中 / 无
     const bodyError = ref(null)
     let bodyLoadToken = 0
@@ -276,10 +276,9 @@ export const MemoryConsole = {
       bodyText.value = null
       bodyError.value = null
       try {
-        const raw = await api.getDoc(relpath)
+        const rec = await api.getProposal(relpath)
         if (token !== bodyLoadToken) return
-        const m = raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/)
-        bodyText.value = (m ? raw.slice(m[0].length) : raw).trim()
+        bodyText.value = (rec.justification || "").trim()
       } catch (e) {
         if (token === bodyLoadToken) bodyError.value = e.message
       }

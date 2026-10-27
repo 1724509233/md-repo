@@ -6,8 +6,8 @@ vault changes (constitution iron rule 1). Pure determinism — no LLM.
 One cycle (:func:`run_executor`):
 
 1. Read ``status: adopted`` proposal records from the vault index DB and
-   merge them through the per-type handlers (the suggestions/ files are
-   projections, never scanned — the record IS the state).
+   merge them through the per-type handlers (v2a: the suggestions/ files
+   no longer exist — the record IS the state, never scanned).
 2. Retired-type records (v1 ``link`` / ``correction`` / ``archive``) are
    parked in ``failed`` with an actionable reason — there is no v2 handler
    (the verbs were retired, spec §四 退役三件); human processes them
@@ -41,9 +41,9 @@ has nothing to capture.
 Merge handlers register the write as source="executor" with the run's
 batch_id (write_registry); the watcher consumer then ledgeres the file row
 via ``apply_change`` (exactly one row, correctly attributed — the writer
-never calls ``apply_change`` itself). Relatedness writes no file: the
-advance() re-projection registers its write, and the consumer's row on the
-projection path is this handler's state record.
+never calls ``apply_change`` itself). Relatedness lands zero files (D9 +
+D25): no file write, no file ledger row — the advance() state-ledger row
+(proposal_transitions) is this handler's state record.
 
 Failure taxonomy:
 
@@ -187,10 +187,10 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         finalize(conn, snap, hash_bytes(new_bytes))
 
 
-# ── relatedness: one DB edge row, zero file landing (D9) ──────────────────
-# No file write → no file ledger row; the advance() re-projection registers
-# its write, and the consumer's row on the projection path is this
-# handler's state record. Nothing to snapshot (no file).
+# ── relatedness: one DB edge row, zero file landing (D9 + D25) ────────────
+# No file write → no file ledger row; the advance() state-ledger row
+# (proposal_transitions) is this handler's state record. Nothing to
+# snapshot (no file).
 
 def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     """Insert/refresh one (source, target) edge in the ``relatedness`` table.

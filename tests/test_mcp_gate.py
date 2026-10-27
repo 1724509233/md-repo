@@ -1,8 +1,9 @@
 """MCP external-write gate tests (memory-runtime v2, MCP 外写收口).
 
 Constitution (v2): the main memory area is read-only for external agents,
-AND suggestions/ is a system-owned projection zone (the propose tool is the
-only write path into it). So EVERY external write is rejected: the channel
+AND suggestions/ is a no-write zone (v2a, D25: the proposal channel lands
+no file — the propose tool is the only write path into it, into the ledger
+record). So EVERY external write is rejected: the channel
 gate (:class:`McpExternalGate`) refuses the main area with protocol
 guidance pointing at the propose tool, and the vault-level SuggestionsGate
 (refuse-any-write into suggestions/) refuses the rest — applied

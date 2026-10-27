@@ -72,8 +72,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = asyncio.run(run_once(cfg, vault, hooks=[InAppHook(conn)]))
 
-    # v2: report.proposal_paths are the run's proposal RECORD relpaths
-    # (DB = state source; the suggestions/ files are projections).
+    # v2a: report.proposal_paths are the run's proposal RECORD relpaths
+    # (DB = state source; the records have no backing file).
     recs = []
     for rel in report.proposal_paths:
         p = proposals.record_by_relpath(conn, rel)

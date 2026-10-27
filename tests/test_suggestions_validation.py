@@ -1,9 +1,10 @@
 """Write-path guard for the suggestions/ subtree (v2: the propose channel).
 
-The DB record is the single source of truth for proposal state; the file
-under suggestions/ is a *system-exclusive idempotent projection* of that
-record. Consequently EVERY direct tool write/move/delete touching the
-suggestions/ subtree (any depth) is rejected by the vault-level
+The DB record is the single source of truth for proposal state; v2a (D25)
+the channel lands NO file (the suggestions/ dir stays zero-change —
+legacy projection files are inert artifacts). Consequently EVERY direct
+tool write/move/delete touching the suggestions/ subtree (any depth) is
+rejected by the vault-level
 :class:`SuggestionsGate` — unconditional across channels, no per-tool
 branching — and the error points at the propose tool.
 
@@ -130,7 +131,8 @@ def test_move_outside_suggestions_not_rejected(vault_dir):
 
 
 def test_read_tools_noop(vault_dir):
-    """Reads into suggestions/ are fine (the projection is readable)."""
+    """Reads into suggestions/ are fine (legacy projection files are
+    inert but readable; the guard is write-only)."""
     assert validate_tool_call(
         "read_doc", {"path": PATH}, ChannelPolicy(vault_dir)) is None
     assert validate_tool_call(

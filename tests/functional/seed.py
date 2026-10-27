@@ -16,13 +16,14 @@ Usage:
 
 Design notes (verified against the code this mirrors):
 
-- Proposal records follow ``server/proposals.py`` (v2): the state source is
-  the ``proposals`` table in ``<vault>/.sync/index.db``; the files under
-  ``suggestions/`` are read-only projections named
-  ``YYYY-MM-DD_<type>_p<id>.md`` (date = creation date, backfilled by
-  --days-ago; ``id`` = the record PK). The seed inserts the record via
-  ``create()`` then drives it to --status through legal ``advance()``
-  transitions only (see ``_DRIVE_PATHS``); each step re-projects the file.
+- Proposal records follow ``server/proposals.py`` (v2a): the state source is
+  the ``proposals`` table in ``<vault>/.sync/index.db``; the card relpath
+  ``suggestions/YYYY-MM-DD_<type>_p<id>.md`` (date = creation date,
+  backfilled by --days-ago; ``id`` = the record PK) is a synthetic card
+  identifier — D25: the channel lands no file. The seed inserts the record
+  via ``create()`` then drives it to --status through legal ``advance()``
+  transitions only (see ``_DRIVE_PATHS``); every step books a
+  proposal_transitions row.
 - recall rows mirror ``server/vault/db/recall.py::log_query``: one
   ``recall_queries`` row per search (zero-hit included) plus one
   ``recall_log`` row per hit. ``--days-ago`` backdates ``ts`` (log_query
@@ -167,7 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--vault", required=True, help="scratch vault absolute path")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("proposals", help="write a proposal file under suggestions/")
+    p = sub.add_parser("proposals", help="insert a proposal record (v2a: no file)")
     p.add_argument("--type", required=True,
                    help="one of: " + ", ".join(sorted(P.VALID_TYPES)))
     p.add_argument("--status", required=True,
@@ -183,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                         "reminder: {body})")
     p.add_argument("--source-ref", action="append", default=[],
                    help="source_refs entry (repeatable)")
-    p.add_argument("--run-id", default=None, help="frontmatter run_id (default seed-<ts>)")
+    p.add_argument("--run-id", default=None, help="record run_id stamp (default seed-<ts>)")
 
     r = sub.add_parser("recall", help="insert recall_queries + recall_log rows")
     r.add_argument("--source", required=True,

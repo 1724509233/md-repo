@@ -105,10 +105,11 @@ def test_machine_zone_absent_from_segments_after_flow(vault_dir, db_conn):
     proposals.advance(db_conn, vault_dir, summary_rec["id"], "adopted", actor="human")
     assert run_executor(vault_dir, db_conn)["merged"] == 2
 
-    # Landings exist on disk:
+    # Machine-zone landings exist on disk; v2a (D25) the proposal channel
+    # landed no file (the relpath is a synthetic card identifier).
     assert (vault_dir / "index" / "entities.md").is_file()
     assert (vault_dir / "index" / "summaries" / "test-summary.md").is_file()
-    assert (vault_dir / rec["relpath"]).is_file()  # suggestions/ projection
+    assert not (vault_dir / rec["relpath"]).is_file()
 
     ensure_indexed(db_conn, vault_dir)
     paths = {r[0] for r in db_conn.execute("SELECT DISTINCT path FROM segments")}

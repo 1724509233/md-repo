@@ -46,7 +46,7 @@ TODAY = datetime.now().strftime("%Y-%m-%d")
 COLD_DOC = "notes/cold-doc.md"                # 观测对象：哨兵判冷报告对象（scratch vault 须已 seed）
 CONSOL_SOURCE = "notes/cold-doc.md"           # consolidator summary 的 source_ref
 
-# v2 投影命名：YYYY-MM-DD_<type>_p<id>.md（id = 记录主键；canned 响应用 p1）。
+# v2a card naming: YYYY-MM-DD_<type>_p<id>.md (id = 记录主键; 合成标识, 无文件).
 _CONSOL_PROPOSAL_PATH = f"suggestions/{TODAY}_summary_p1.md"
 
 

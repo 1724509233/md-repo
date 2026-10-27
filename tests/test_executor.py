@@ -8,7 +8,8 @@ changelog source="executor", merged back-fill, path-traversal guard,
 atomic vault writes.
 
 The executor reads ``status: adopted`` proposal RECORDS from the vault index
-DB (the suggestions/ files are projections, never scanned).
+DB (v2a: the suggestions/ files no longer exist — the record IS the state,
+never scanned).
 """
 from __future__ import annotations
 
@@ -448,15 +449,20 @@ def test_merge_ledgered_with_executor_source(vault_dir, db_conn):
     rec = _adopted(vault_dir, db_conn, "entity_index",
                    payload={"entity": "e1", "attrs": {"f": "v1"}})
     run_executor(vault_dir, db_conn)
-    # The merge registered both writes (artifact file + the merged
-    # re-projection); the watcher consumer books the rows.
+    # The merge registered the artifact write; the watcher consumer books
+    # the row. v2a (D25): the merged transition books no file row of its
+    # own (no projection) — the state ledger carries it.
     simulate_consumer(db_conn, vault_dir, "index/entities.md", "created")
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     rows = [r for r in get_changes(db_conn, since=0) if r["source"] == "executor"]
     assert rows
-    # Both the target file change and the proposal state transition are ledgered.
+    # The artifact file change is ledgered…
     assert any(r["path"] == "index/entities.md" for r in rows)
-    assert any(r["path"] == rec["relpath"] and r["op"] == "update" for r in rows)
+    assert all(r["path"] != rec["relpath"] for r in rows)
+    # …and the merge is ledgered in the state ledger.
+    assert db_conn.execute(
+        "SELECT COUNT(*) FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'merged'",
+        (rec["id"],)).fetchone()[0] == 1
 
 
 def test_merge_books_exactly_one_file_row(vault_dir, db_conn):
@@ -476,24 +482,29 @@ def test_merge_books_exactly_one_file_row(vault_dir, db_conn):
 
 
 def test_relatedness_merge_ledgered_without_file_row(vault_dir, db_conn):
-    # D9: relatedness writes no file — the advance() re-projection
-    # registers its write; the consumer's row on the projection relpath
-    # is this handler's only ledger entry.
+    # D9 + D25: relatedness writes no file and v2a books no projection row
+    # either — the merge produces ZERO change_log rows; the state ledger
+    # row (proposal_transitions: →merged) is this handler's only ledger
+    # entry.
     (vault_dir / "notes" / "other.md").write_bytes(b"# Other\n")
     rec = _adopted(vault_dir, db_conn, "relatedness",
                    source_refs=["notes/test.md"],
                    payload={"target": "notes/other.md"})
     run_executor(vault_dir, db_conn)
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
-    rows = [r for r in get_changes(db_conn, since=0) if r["source"] == "executor"]
-    assert rows
-    assert all(r["path"] == rec["relpath"] for r in rows)  # no file rows
+    assert db_conn.execute("SELECT COUNT(*) FROM change_log").fetchone()[0] == 0
+    assert db_conn.execute(
+        "SELECT actor, to_status FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'merged'",
+        (rec["id"],)).fetchone() is not None
+    assert db_conn.execute(
+        "SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
 
 
 def test_merge_artifact_rows_carry_batch_id(vault_dir, db_conn):
     # _adopted creates both records with run_id="batch-test"; after the
-    # merge, the artifact file rows and the proposal state rows all carry it.
-    # The consumer books each registered write (one pass per path).
+    # merge, the artifact file rows carry the batch id. v2a (D25): the
+    # proposal channel books no file rows — the batch id on state-ledger
+    # rows lives in proposal_transitions via the record's run_id.
     rec_e = _adopted(vault_dir, db_conn, "entity_index",
                      payload={"entity": "batch-e", "attrs": {"f": "v1"}})
     rec_s = _adopted(vault_dir, db_conn, "summary",
@@ -502,14 +513,16 @@ def test_merge_artifact_rows_carry_batch_id(vault_dir, db_conn):
     assert summary["merged"] == 2
     simulate_consumer(db_conn, vault_dir, "index/entities.md", "created")
     simulate_consumer(db_conn, vault_dir, "index/summaries/test-summary.md", "created")
-    simulate_consumer(db_conn, vault_dir, rec_e["relpath"], "modified")
-    simulate_consumer(db_conn, vault_dir, rec_s["relpath"], "modified")
-    for path in ("index/entities.md", "index/summaries/test-summary.md",
-                 rec_e["relpath"], rec_s["relpath"]):
+    for path in ("index/entities.md", "index/summaries/test-summary.md"):
         rows = [r[0] for r in db_conn.execute(
             "SELECT batch_id FROM change_log WHERE path = ?", (path,))]
         assert rows
         assert all(b == "batch-test" for b in rows)
+    # No change_log row exists on the (synthetic) proposal relpaths.
+    for rec in (rec_e, rec_s):
+        assert db_conn.execute(
+            "SELECT COUNT(*) FROM change_log WHERE path = ?",
+            (rec["relpath"],)).fetchone()[0] == 0
 
 
 # ── path traversal guard ─────────────────────────────────────────────────

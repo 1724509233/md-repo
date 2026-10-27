@@ -1,15 +1,19 @@
-"""Proposal records (reversible-automation v2, P0).
+"""Proposal records (reversible-automation v2a, P0).
 
 The DB row in the ``proposals`` table is the single source of truth for
-proposal state. The markdown file under ``suggestions/`` is a
-system-exclusive, *idempotent projection* of that row: the same record
-always renders to byte-identical bytes, and every status transition
-re-renders the projection. State moves happen only at record level
-(:func:`advance`); hand-edits of the projection file are overwritten on the
-next transition and never drive state.
+proposal state. v2a (D25): the proposal channel lands **no file** — no
+projection under ``suggestions/``, no change_log row. The record plus the
+``proposal_transitions`` state ledger are the whole state (the console is
+the sole human face; the channel produces zero file rows).
 
-File name: ``suggestions/YYYY-MM-DD_<type>_p<id>.md`` (date = creation
-date, ``id`` = the record primary key — deterministic and collision-free).
+Card address: ``relpath`` = ``suggestions/YYYY-MM-DD_<type>_p<id>.md``
+(date = creation date, ``id`` = the record primary key — deterministic and
+collision-free). The relpath is the card's addressing identifier (console
+URLs, notification deep links); it is a *synthetic* value — v2a records
+have no backing file and the directory stays zero-change end to end.
+Legacy projection files from pre-v2a runs are inert artifacts: never
+re-rendered, never imported, and direct writes into ``suggestions/`` are
+refused by the vault gate.
 
 State machine (illegal transitions raise ``ValueError``):
 
@@ -44,14 +48,9 @@ from __future__ import annotations
 import json
 import time
 from datetime import datetime
-from pathlib import Path
-
-import yaml
 
 from . import events
 from .vault.db.schema import _db_lock
-from .vault.fs.vault_ops import atomic_write_bytes
-from .write_registry import register_write
 
 PROPOSALS_DIR = "suggestions"
 
@@ -71,15 +70,11 @@ REVIEW_TYPES = frozenset({"summary", "errata", "reminder"})
 # reject a row's type on read).
 RETIRED_TYPES = frozenset({"link", "correction", "archive"})
 
-# No function here calls ``apply_change``. The projection file's ledger row
-# is written by the watcher consumer (server/main.py) after the projection
-# write lands: the consumer pops the write registration set by
-# :func:`project` — exactly ONE file row per write, with source = the acting
-# role (creator or transitioning actor) and batch_id = the record's run_id,
-# so the console trail and notifications keep working. Creation therefore
-# produces exactly one row (source = the proposing actor, not "watchdog");
-# every transition/move produces one row per re-projection. The state
-# machine itself is recorded in the ``proposal_transitions`` table.
+# No function here touches the file ledger: v2a (D25) the proposal channel
+# lands no file — create/advance write only the record row and its
+# proposal_transitions rows (the sole state ledger; zero change_log rows).
+# The file channel's writer-side convention (register_write → watcher
+# consumer → exactly ONE apply_change row) is untouched.
 # ``events.publish("proposal")`` fires only on ``adopted`` — the executor's
 # sole actionable state.
 
@@ -140,10 +135,11 @@ def record(conn, record_id: int) -> dict | None:
 
 
 def record_by_relpath(conn, relpath: str) -> dict | None:
-    """Fetch the proposal record owning a projection relpath, or None.
+    """Fetch the proposal record owning a card relpath, or None.
 
     The console URLs stay relpath-based; this is the record lookup behind
-    them (v2: the row, not the file, is the state).
+    them (v2a: the row is the state; the relpath is a synthetic card
+    identifier with no backing file).
     """
     row = conn.execute(
         "SELECT * FROM proposals WHERE relpath = ?", (relpath,)
@@ -175,46 +171,6 @@ def records_by_run(conn, run_id: str, since_ts: float) -> list[dict]:
     return [_row_to_record(r) for r in rows]
 
 
-# ── Projection (record → suggestions/<file>.md) ───────────────────────────
-
-def render_projection(record: dict) -> str:
-    """Render the projection file content for a record.
-
-    Deterministic: the same record always renders to identical bytes
-    (fixed key order, no timestamps beyond the record's own fields), so
-    re-projection is idempotent and hand-edits are detectable/overwritten.
-    """
-    fm = {
-        "projection": True,
-        "source_record": record["id"],
-        "type": record["type"],
-        "actor": record["actor"],
-        "run_id": record["run_id"],
-        "status": record["status"],
-        "source_refs": record["source_refs"],
-        "reject_reason": record["reject_reason"],
-        "merged_at": record["merged_at"],
-    }
-    if record.get("payload") is not None:
-        fm["payload"] = record["payload"]
-    body = (record.get("justification") or "").strip()
-    return "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False) + "---\n" + body + "\n"
-
-
-def project(vault_dir, record: dict, source: str) -> None:
-    """Write (or re-write) the record's projection file. Idempotent.
-
-    Registers the write (source, batch_id = the record's run_id) BEFORE the
-    bytes land: the watcher consumer ledgeres the file row with that
-    attribution (writer-side convention — no direct apply_change here).
-    """
-    register_write(record["relpath"], source,
-                   batch_id=str(record.get("run_id") or ""))
-    fp = Path(vault_dir) / record["relpath"]
-    fp.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_bytes(fp, render_projection(record).encode("utf-8"))
-
-
 # ── Policy (authorization initial split) ─────────────────────────────────
 
 def authorization(type_: str) -> str:
@@ -243,13 +199,12 @@ def create(
     payload: dict | None = None,
     now: float | None = None,
 ) -> dict:
-    """Insert a new proposal record with ``status: pending`` and project it.
+    """Insert a new proposal record with ``status: pending``.
 
-    Returns the created record dict. The projection registers its write
-    (source = ``actor``, batch_id = ``run_id``); the file row lands via the
-    watcher consumer — no row exists synchronously after this call.
-    ``now`` is injectable (tests) and fixes both created_at and the
-    filename date.
+    Returns the created record dict. v2a (D25): no file is written — the
+    channel books no change_log row; the record + the creation transition
+    row are the whole state. ``now`` is injectable (tests) and fixes both
+    created_at and the card relpath's date.
     """
     if type not in VALID_TYPES:
         raise ValueError(f"unknown proposal type: {type!r}")
@@ -260,9 +215,7 @@ def create(
     date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
 
     # Row-write section under the shared DB lock (the connection is shared
-    # across the event-loop thread and executor worker threads). The
-    # projection file write stays OUTSIDE the lock: project() is plain file
-    # I/O (no DB access), so no nesting on the non-reentrant _db_lock.
+    # across the event-loop thread and executor worker threads).
     with _db_lock:
         cur = conn.execute(
             """
@@ -293,7 +246,6 @@ def create(
             """,
             (record_id, actor, now),
         )
-    project(vault_dir, rec, source=actor)
     return rec
 
 
@@ -309,15 +261,12 @@ def advance(
 ) -> dict:
     """Transition a proposal record to ``new_status`` (legal moves only).
 
-    Updates the row, appends a proposal_transitions row (the state ledger),
-    and re-projects the file (system-exclusive write; hand-edits are
-    overwritten). The re-projection registers its write (source = actor,
-    batch_id = the record's run_id); the file's change_log row lands via
-    the watcher consumer — no apply_change here.
-    ``events.publish("proposal")`` fires only on ``adopted``. Returns the
-    updated record. Raises ``ValueError`` on illegal transitions
-    (including unknown ``new_status``) and ``FileNotFoundError`` if the
-    record is missing.
+    Updates the row and appends a proposal_transitions row (the state
+    ledger). v2a (D25): no file write, no change_log row — state moves in
+    the record only. ``events.publish("proposal")`` fires only on
+    ``adopted``. Returns the updated record. Raises ``ValueError`` on
+    illegal transitions (including unknown ``new_status``) and
+    ``FileNotFoundError`` if the record is missing.
     """
     rec = record(conn, record_id)
     if rec is None:
@@ -337,9 +286,7 @@ def advance(
         new_reason = reject_reason
 
     now = time.time()
-    # Row-write section under the shared DB lock (see create()). The
-    # re-read and the projection file write stay outside — no
-    # nested/non-reentrant lock holds (project() is plain file I/O).
+    # Row-write section under the shared DB lock (see create()).
     with _db_lock:
         conn.execute(
             "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
@@ -355,7 +302,6 @@ def advance(
         )
 
     updated = record(conn, record_id)
-    project(vault_dir, updated, source=actor)
 
     # Event wakeup: only adopted (executor's sole actionable state).
     if new_status == "adopted":
@@ -369,8 +315,8 @@ def process_proposal(conn, vault_dir, record_id: int, actor: str) -> dict:
 
     Applies the authorization policy for the proposal's type (auto →
     adopted, review → awaiting_review). Convenience for the two-transition
-    sequence; each transition records a proposal_transitions row and its
-    re-projection registers a write for the watcher consumer.
+    sequence; each transition records a proposal_transitions row (v2a:
+    zero file landing — the state ledger is the whole state).
     """
     rec = record(conn, record_id)
     if rec is None:
@@ -390,8 +336,7 @@ def expire_overdue(conn, vault_dir, now_ts: float | None = None) -> int:
     """Expire ``awaiting_review`` records older than 14 days (created_at).
 
     Returns the number expired. Each expiry records a proposal_transitions
-    row (actor = "system") and its re-projection registers a write for the
-    watcher consumer.
+    row (actor = "system"); v2a: no file write.
     """
     now = now_ts if now_ts is not None else time.time()
     count = 0

@@ -352,11 +352,11 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         dupes = sorted({x for x in aliases if aliases.count(x) > 1})
         raise ValueError(f"duplicate background agent alias: {', '.join(dupes)}")
 
-    # Shared proposal drop zone: proposal records are one-shot, uniquely
-    # named (suggestions/YYYY-MM-DD_<type>_p<id>.md), state-machine
-    # protected and consumed by the executor — two scopes inside the zone
-    # cannot overwrite each other, so their overlap is exempt (memory-runtime
-    # spec assigns suggestions/ to both consolidator and sentinel).
+    # Shared proposal zone: v2a (D25) drops no files into it — proposals are
+    # zero-file DB records — but the exemption stays because consolidator /
+    # sentinel target_dir configs may still declare the zone; any write into
+    # it is refused by the vault gate (the memory-runtime spec assigns
+    # suggestions/ to both agents).
     proposals_zone = vault_resolved / PROPOSALS_DIR
 
     for i in range(len(agents)):

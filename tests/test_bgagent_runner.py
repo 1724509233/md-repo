@@ -476,9 +476,11 @@ def test_hooks_receive_run_report(tmp_path: Path):
 
 def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
     """The run's proposal records (created via the propose tool with the
-    run_id stamp; the DB is the state source, the suggestions/ files are
-    projections) fold into files_changed + proposal_paths (sorted), and
-    kind='review' when any record is awaiting_review."""
+    run_id stamp; the DB is the state source; v2a (D25): no suggestions/
+    file — the relpaths are synthetic card identifiers) feed
+    proposal_paths (sorted) + kind='review' when any record is
+    awaiting_review — but NOT files_changed (no backing file: listing
+    one in the report's 变更文件 would be a ghost path)."""
     from server.bgagent import runner
 
     seen = []
@@ -503,8 +505,9 @@ def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
         return await run_once(cfg, vault, hooks=[Hook()], runtime_cls=lambda: rt)
 
     report = asyncio.run(go())
-    # _events() writes notes/b.md (1 file) + the 2 folded record paths.
-    assert report.files_changed == 3
+    # _events() writes notes/b.md (1 file). v2a (D25): the 2 proposal
+    # relpaths are NOT folded into files_changed (no backing file).
+    assert report.files_changed == 1
     assert seen[0].proposal_paths == [
         "suggestions/2026-10-21_relatedness_a.md", "suggestions/2026-10-21_summary_b.md"]
     assert seen[0].kind == "review"  # a review-channel record is pending

@@ -1,27 +1,28 @@
-"""Tests for proposal records (reversible-automation v2, P0).
+"""Tests for proposal records (reversible-automation v2a, P0).
 
 Covers: create/advance/process record semantics, legal/illegal
 transitions, authorization dispatch (auto vs review), expire_overdue
 (created_at-based), the record queries (scan/record/records_by_run),
-projection idempotency + hand-edit overwrite (invariant 5), and the
+invariant 5 (v2a, D25): the proposal channel lands zero files (create +
+the full advance sequence → suggestions/ zero-change + zero change_log
+rows — the record + proposal_transitions are the whole state), and the
 propose tool validation (invariant 4: malformed payload → zero disk
 writes; privileged verb → rejection; direct suggestions/ writes are
 rejected by the vault gate).
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from pathlib import Path
 
 import pytest
-import yaml
 
 from server import proposals
 from server.agent.policy import ChannelPolicy, validate_tool_call
 from server.agent.tools.propose import ProposeTool
 from server.agent.tools.tool import ToolContext
 from server.vault.db.changes import get_changes
-from tests.conftest import simulate_consumer
 
 
 def _create(vault_dir, conn, type="entity_index", source_refs=None,
@@ -42,13 +43,6 @@ def _drive(vault_dir, conn, rec_id, target, actor="tester"):
     raise ValueError(f"test helper: unknown target {target}")
 
 
-def _fm_and_body(text: str) -> tuple[dict, str]:
-    """Split a projection into (frontmatter dict, body)."""
-    assert text.startswith("---\n")
-    end = text.index("\n---\n", 4)
-    return yaml.safe_load(text[4:end]), text[end + len("\n---\n"):]
-
-
 def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None):
     return ToolContext(vault_dir=vault_dir, write_source="consolidator",
                        run_id=run_id, verbs=verbs)
@@ -56,7 +50,7 @@ def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None):
 
 # ── create ──────────────────────────────────────────────────────────────
 
-def test_create_record_and_projection(vault_dir, db_conn):
+def test_create_record(vault_dir, db_conn):
     now = time.time()
     rec = _create(vault_dir, db_conn, type="entity_index",
                   payload={"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}, now=now)
@@ -71,21 +65,10 @@ def test_create_record_and_projection(vault_dir, db_conn):
     assert rec["merged_at"] == ""
     assert rec["created_at"] > 0
     # relpath shape: suggestions/YYYY-MM-DD_<type>_p<id>.md (id-derived).
+    # v2a (D25): a synthetic card identifier — no backing file exists.
     date = time.strftime("%Y-%m-%d", time.localtime(now))
     assert rec["relpath"] == f"suggestions/{date}_entity_index_p{rec['id']}.md"
-
-    # The projection file exists, is parseable, and stamps the record.
-    fp = vault_dir / rec["relpath"]
-    assert fp.is_file()
-    fm, body = _fm_and_body(fp.read_text(encoding="utf-8"))
-    assert fm["projection"] is True
-    assert fm["source_record"] == rec["id"]
-    assert fm["status"] == "pending"
-    assert fm["type"] == "entity_index"
-    assert fm["actor"] == "consolidator"
-    assert fm["run_id"] == "batch-test"
-    assert fm["payload"] == {"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}
-    assert "proposal body text" in body
+    assert not (vault_dir / rec["relpath"]).is_file()
 
 
 def test_create_unknown_type_rejected_zero_writes(vault_dir, db_conn):
@@ -257,13 +240,14 @@ def test_expire_overdue(vault_dir, db_conn):
     assert n == 1
     assert proposals.record(db_conn, old["id"])["status"] == "expired"
     assert proposals.record(db_conn, recent["id"])["status"] == "awaiting_review"
-
-    # The expiry re-projection's ledger row lands via the watcher consumer.
-    simulate_consumer(db_conn, vault_dir, old["relpath"], "modified")
-    # The expiry is ledgered with the system actor.
-    rows = [r for r in get_changes(db_conn, since=0, path=old["relpath"])
-            if r["source"] == "system"]
-    assert rows
+    # v2a (D25): the expiry transitions are ledgered in proposal_transitions
+    # only (actor = "system"); the channel books no file row.
+    rows = db_conn.execute(
+        "SELECT actor, to_status FROM proposal_transitions "
+        "WHERE proposal_id = ? AND to_status = 'expired'",
+        (old["id"],)).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["actor"] == "system"
 
 
 def test_expire_overdue_now_ts_param(vault_dir, db_conn):
@@ -275,69 +259,18 @@ def test_expire_overdue_now_ts_param(vault_dir, db_conn):
     assert n == 1
 
 
-# ── ledger: source distinguishes the actor ───────────────────────────────
-
-def test_transitions_ledgered_with_actor_source(vault_dir, db_conn):
-    # Each re-projection registers its write (source = the acting role);
-    # the consumer books the row.
-    rec = _create(vault_dir, db_conn, type="entity_index")
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="role-a")
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
-    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="role-b")
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
-    rows = get_changes(db_conn, since=0, path=rec["relpath"])
-    by_actor = {r["source"] for r in rows}
-    assert "role-a" in by_actor and "role-b" in by_actor
-    assert all(r["op"] == "update" for r in rows)
-
-
-def test_transitions_ledgered_with_batch_id(vault_dir, db_conn):
-    # run_id "batch-test" (set by _create) must reach every transition row,
-    # whether the transition comes from process_proposal or a direct
-    # advance — the consumer books each row with the registration's batch.
-    rec = _create(vault_dir, db_conn, type="summary")
-    proposals.process_proposal(db_conn, vault_dir, rec["id"], actor="consolidator")
-    # process_proposal makes two transitions; one consumer pass books the
-    # latest registration (the watcher debounces per path).
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
-    proposals.advance(db_conn, vault_dir, rec["id"], "rejected", actor="human",
-                      reject_reason="no")
-    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
-    rows = [r[0] for r in db_conn.execute(
-        "SELECT batch_id FROM change_log WHERE path = ?", (rec["relpath"],))]
-    # NOTE (2026-10-27 ledger convention): previously advance() ledgered
-    # 3 rows synchronously (processing, awaiting_review, rejected); the
-    # consumer books one row per watched write, and the per-path registry
-    # entry is overwritten by each re-projection, so a single consumer pass
-    # per distinct watched write books one row.
-    assert rows == ["batch-test"] * len(rows)
-    assert len(rows) >= 1
-
+# ── v2a (D25): the channel books no file rows ─────────────────────────────
 
 def test_creation_writes_no_change_log_row(vault_dir, db_conn):
-    """v1 parity: creation is quiet.
-
-    create() registers the projection's write (source = actor) but books no
-    row synchronously — the row lands only when the watcher consumer runs
-    (see test_create_row_lands_via_consumer).
-    """
+    """v2a: creation is quiet — no file written, no change_log row at all
+    (the pre-v2a "row lands via the watcher consumer" half is gone: there
+    is no projection write for the consumer to book)."""
     rec = _create(vault_dir, db_conn, type="entity_index")
     rows = get_changes(db_conn, since=0, path=rec["relpath"])
     assert rows == []
-
-
-def test_create_row_lands_via_consumer(vault_dir, db_conn):
-    """Regression: the watcher consumer books exactly ONE row for the
-    creation write, attributed to the proposing actor with the run's
-    batch_id — never the "watchdog" fallback."""
-    rec = _create(vault_dir, db_conn, type="entity_index")
-    attribution = simulate_consumer(db_conn, vault_dir, rec["relpath"], "created")
-    assert attribution == ("consolidator", "batch-test", False)
-    rows = [tuple(r) for r in db_conn.execute(
-        "SELECT source, batch_id FROM change_log WHERE path = ?",
-        (rec["relpath"],)).fetchall()]
-    assert rows == [("consolidator", "batch-test")]
-    assert all(r[0] != "watchdog" for r in rows)
+    assert db_conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path LIKE 'suggestions/%'"
+    ).fetchone()[0] == 0
 
 
 def test_proposal_transitions_table(vault_dir, db_conn):
@@ -355,57 +288,59 @@ def test_proposal_transitions_table(vault_dir, db_conn):
     assert rows[0][3] == "created"
 
 
-# ── invariant 5: the projection is an idempotent mirror of the record ────
+# ── invariant 5 (v2a, D25): the proposal channel lands zero files ─────────
 
-def test_projection_is_byte_identical_on_reprojection(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary",
-                  payload={"body": "decision draft"},
-                  justification="why this matters")
-    fp = vault_dir / rec["relpath"]
-    first = fp.read_bytes()
-    proposals.project(vault_dir, rec, source="reproject")  # explicit double projection
-    assert fp.read_bytes() == first
-    # render_projection is stable for the same record (no hidden timestamps).
-    assert proposals.render_projection(rec) == proposals.render_projection(
-        proposals.record(db_conn, rec["id"]))
-
-
-def test_projection_re_renders_on_every_transition(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    fp = vault_dir / rec["relpath"]
-    _drive(vault_dir, db_conn, rec["id"], "awaiting_review")
-    fm, _ = _fm_and_body(fp.read_text(encoding="utf-8"))
-    assert fm["status"] == "awaiting_review"
-    proposals.advance(db_conn, vault_dir, rec["id"], "rejected", actor="human",
-                      reject_reason="no")
-    fm, _ = _fm_and_body(fp.read_text(encoding="utf-8"))
-    assert fm["status"] == "rejected"
-    assert fm["reject_reason"] == "no"
+def _suggestions_snapshot(vault_dir: Path):
+    """Snapshot of suggestions/: (dir exists, (relpath, sha256) of each file)."""
+    d = vault_dir / "suggestions"
+    if not d.is_dir():
+        return (False, ())
+    return (True, tuple(
+        (p.relative_to(vault_dir).as_posix(),
+         hashlib.sha256(p.read_bytes()).hexdigest())
+        for p in sorted(d.rglob("*")) if p.is_file()
+    ))
 
 
-def test_hand_edit_overwritten_on_next_transition(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    fp = vault_dir / rec["relpath"]
-    # A human (or the LLM) tampered with the projection file.
-    fp.write_bytes(b"---\nstatus: merged\n---\nhand-edited\n")
-    cur = proposals.record(db_conn, rec["id"])
-    assert cur["status"] == "pending"  # state only trusts the record
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="t")
-    # The tamper is overwritten by the re-projection.
-    fm, body = _fm_and_body(fp.read_text(encoding="utf-8"))
-    assert fm["status"] == "processing"
-    assert "hand-edited" not in body
+def test_proposal_channel_zero_file_landing(vault_dir, db_conn):
+    """inv-5 (v2a, D25): create + the full advance sequence land NO file and
+    book NO change_log row — both authorization channels (auto: processing
+    → adopted; review: processing → awaiting_review), each driven to
+    merged. The record + proposal_transitions rows are the whole state:
+    after the flow, suggestions/ is zero-change and the channel has booked
+    zero file rows."""
+    before = _suggestions_snapshot(vault_dir)
 
+    auto = _create(vault_dir, db_conn, type="entity_index",
+                   payload={"entity": "e", "attrs": {"f": "v"}})
+    proposals.advance(db_conn, vault_dir, auto["id"], "processing", actor="t")
+    proposals.advance(db_conn, vault_dir, auto["id"], "adopted", actor="t")
+    proposals.advance(db_conn, vault_dir, auto["id"], "merged", actor="executor")
 
-def test_hand_edit_cannot_drive_state(vault_dir, db_conn):
-    """The file's frontmatter is decoration: state moves via the record only."""
-    rec = _create(vault_dir, db_conn, type="summary")
-    fp = vault_dir / rec["relpath"]
-    fp.write_bytes(b"---\nstatus: merged\n---\nfake\n")
-    out = proposals.scan(db_conn, status="pending")
-    assert [p["id"] for p in out] == [rec["id"]]
-    with pytest.raises(ValueError):  # still pending → merged is illegal
-        proposals.advance(db_conn, vault_dir, rec["id"], "merged", actor="t")
+    review = _create(vault_dir, db_conn, type="summary",
+                     payload={"form": "cache", "body": "b"})
+    proposals.advance(db_conn, vault_dir, review["id"], "processing", actor="t")
+    proposals.advance(db_conn, vault_dir, review["id"], "awaiting_review", actor="t")
+    proposals.advance(db_conn, vault_dir, review["id"], "adopted", actor="human")
+    proposals.advance(db_conn, vault_dir, review["id"], "merged", actor="executor")
+
+    # The directory is zero-change end to end (no file created, no file
+    # re-rendered) and no record has a backing file.
+    assert _suggestions_snapshot(vault_dir) == before
+    for rec in (auto, review):
+        assert not (vault_dir / rec["relpath"]).is_file()
+    # The proposal channel books no file ledger row.
+    assert db_conn.execute(
+        "SELECT COUNT(*) FROM change_log WHERE path LIKE 'suggestions/%'"
+    ).fetchone()[0] == 0
+    # The state ledger is the whole state: auto = 4 transition rows
+    # (created, →processing, →adopted, →merged); review = 5 (… →
+    # awaiting_review inserted).
+    for rec, n in ((auto, 4), (review, 5)):
+        got = db_conn.execute(
+            "SELECT COUNT(*) FROM proposal_transitions WHERE proposal_id = ?",
+            (rec["id"],)).fetchone()[0]
+        assert got == n
 
 
 # ── invariant 4: the propose tool is the only write path ─────────────────
@@ -472,7 +407,8 @@ def test_propose_success_auto_and_review(vault_dir, db_conn):
     assert rec["status"] == "adopted"  # auto channel
     assert rec["actor"] == "consolidator"  # stamped from ctx.write_source
     assert rec["run_id"] == "consolidator-20261026T000000"
-    assert (vault_dir / rec["relpath"]).is_file()
+    # v2a (D25): the propose channel lands no projection file.
+    assert not (vault_dir / rec["relpath"]).is_file()
 
     out2 = tool.call(
         {"type": "summary", "payload": {"form": "cache", "body": "decision draft"},
