@@ -275,6 +275,10 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
             elif status == "failed":
                 proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
                 proposals.advance(db_conn, vault_dir, rid, "failed", actor="test")
+            elif status == "expired":
+                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "awaiting_review", actor="test")
+                proposals.advance(db_conn, vault_dir, rid, "expired", actor="test")
             return rec
 
         def prop_events():
@@ -290,7 +294,9 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
             rec.clear()
             crec = rec_at(src)  # setup may emit (e.g. adopted passes through)
             rec.clear()
-            proposals.advance(db_conn, vault_dir, crec["id"], dst, actor="test")
+            # The expired→awaiting_review revive pair is human-only (invariant 12).
+            act = "human" if (src == "expired" and dst == "awaiting_review") else "test"
+            proposals.advance(db_conn, vault_dir, crec["id"], dst, actor=act)
             if dst == "adopted":
                 assert prop_events() == [
                     {"relpath": crec["relpath"], "status": "adopted"}], (src, dst, rec)

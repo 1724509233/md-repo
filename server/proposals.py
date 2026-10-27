@@ -21,6 +21,7 @@ State machine (illegal transitions raise ``ValueError``):
     adopted → merged | failed    (merge failure → failed: read-only archive;
                                   remedy = the agent re-proposes a new record, v2.2 Q6)
     awaiting_review → adopted | rejected | expired
+    expired → awaiting_review    (revive — human-only, invariant 12)
 
 Authorization tiers (spec §四 verb catalog — the full-table replacement of
 constitution v0.1 §5, "授权初分表"):
@@ -86,7 +87,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "failed": frozenset(),
     "merged": frozenset(),
     "rejected": frozenset(),
-    "expired": frozenset(),
+    "expired": frozenset({"awaiting_review"}),
 }
 
 # Awaiting-review proposals older than this are expired (待审队列也要遗忘).
@@ -306,6 +307,13 @@ def advance(
             f"illegal transition: {cur_status or '<empty>'} → {new_status}"
         )
 
+    # Invariant 12: the expired → awaiting_review revive route is
+    # human-only — the agent tool surface has no revive entry, and any
+    # non-human actor on this edge is refused before any write.
+    if (cur_status == "expired" and new_status == "awaiting_review"
+            and actor != "human"):
+        raise ValueError("revive is human-only (invariant 12)")
+
     merged_at = rec["merged_at"]
     if new_status == "merged":
         merged_at = datetime.now().isoformat(timespec="seconds")
@@ -369,3 +377,34 @@ def expire_overdue(conn, vault_dir, now_ts: float | None = None) -> int:
         advance(conn, vault_dir, rec["id"], "expired", actor="system")
         count += 1
     return count
+
+
+def revive(conn, vault_dir, record_id: int) -> dict:
+    """Human-only expired → awaiting_review (invariant 12): the sole route
+    back into the review queue after expiry.
+
+    The advance carries ``actor="human"`` (the decision's actor). The TTL
+    window re-arms (Q5): ``created_at`` is ``expire_overdue``'s window base,
+    so it is set to now — the original creation moment stays in the
+    ``proposal_transitions`` created row (no audit loss). Raises
+    ``FileNotFoundError`` when the record is absent and ``ValueError`` when
+    its status is not ``expired`` (same parity as ``advance`` / the
+    adopt endpoint's 404/400). Returns the updated record dict with
+    ``actor`` = the decision's actor.
+    """
+    rec = record(conn, record_id)
+    if rec is None:
+        raise FileNotFoundError(f"proposal not found: {record_id}")
+    if rec["status"] != "expired":
+        raise ValueError(f"revive requires status expired, got {rec['status']!r}")
+    advance(conn, vault_dir, record_id, "awaiting_review", actor="human")
+    # TTL re-arm under the shared DB lock (see create()).
+    with _db_lock:
+        conn.execute(
+            "UPDATE proposals SET created_at = ? "
+            "WHERE id = ? AND status = 'awaiting_review'",
+            (time.time(), record_id),
+        )
+    out = record(conn, record_id)
+    out["actor"] = "human"  # the decision's actor (revive is human-only)
+    return out
