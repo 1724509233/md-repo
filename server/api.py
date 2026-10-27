@@ -919,6 +919,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         """The 30-second scan target: proposal counts + review queue, the
         background-agent trigger state, and recall demand over 7/30 days."""
         from . import proposals
+        from . import snapshots
         from .vault.db import recall as recall_db
 
         # proposals: by_status counts + the awaiting_review review queue.
@@ -1009,7 +1010,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             }
 
         return {"proposals": {"by_status": by_status, "awaiting_review": awaiting},
-                "agents": agents, "executor": executor_out, "recall": recall_out}
+                "agents": agents, "executor": executor_out, "recall": recall_out,
+                "snapshot": {"degraded": snapshots.degraded_count()}}
 
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):

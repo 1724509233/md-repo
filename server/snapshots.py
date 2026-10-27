@@ -40,11 +40,18 @@ batch is refused (no blind writes) and the conflicting paths are surfaced.
 Only when every file verifies are the pre-image bytes restored, one file at
 a time, stopping at the first restore failure (half state surfaced, never
 silently half-completed).
+
+Degraded capture telemetry (v2a, D19/#C2): capture failures are counted in a
+process-local counter (``degraded_count``) that resets to zero on restart.
+The v2a stance: degradation within a v2a run must not be silent — the count
+lands on the console-visible surface (/api/memory/status). The cross-restart
+cumulative is a v2b human-notification-channel upgrade item (spec §八 v2b⑨).
 """
 from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -56,6 +63,32 @@ logger = logging.getLogger(__name__)
 
 # Delete-class snapshots are retained this long (spec §3.1: default 30 days).
 DELETION_RETENTION_S = 30 * 86400
+
+
+# ── Degraded telemetry (v2a, D19/#C2) ──────────────────────────────────────
+
+_degraded_lock = threading.Lock()
+_degraded_count = 0
+
+
+def _note_degraded() -> None:
+    """Count one capture failure (the write proceeds; see module docstring)."""
+    global _degraded_count
+    with _degraded_lock:
+        _degraded_count += 1
+
+
+def degraded_count() -> int:
+    """Failed captures since process start (0 = healthy)."""
+    with _degraded_lock:
+        return _degraded_count
+
+
+def degraded_reset() -> None:
+    """Clear the counter (test hook)."""
+    global _degraded_count
+    with _degraded_lock:
+        _degraded_count = 0
 
 
 def snapshots_dir(vault_dir) -> Path:
@@ -112,6 +145,7 @@ def capture(
                 "snapshot capture failed for %s (%s): %s — write proceeds without snapshot",
                 path, op, e,
             )
+            _note_degraded()
             return None
         pre_hash = hash_bytes(pre_bytes)
         blob_name = uuid.uuid4().hex
@@ -122,6 +156,7 @@ def capture(
                 "snapshot blob write failed for %s (%s): %s — write proceeds without snapshot",
                 path, op, e,
             )
+            _note_degraded()
             return None
 
     try:
@@ -141,6 +176,7 @@ def capture(
             (snapshots_dir(vault_dir) / blob_name).unlink(missing_ok=True)
         logger.warning("snapshot insert failed for %s: %s — write proceeds without snapshot",
                        path, e)
+        _note_degraded()
         return None
 
     return {
