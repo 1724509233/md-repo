@@ -100,11 +100,14 @@ def test_legal_review_reject_path(vault_dir, db_conn):
     assert p["reject_reason"] == "summary is wrong"
 
 
-def test_legal_failed_retry_path(vault_dir, db_conn):
+def test_failed_retry_edge_removed(vault_dir, db_conn):
+    """v2.2 Q6: failed = read-only archive — the old failed→pending retry
+    edge is gone (dead edge, debt #10); remedy = the agent re-proposes a
+    new record. The transition now raises ValueError."""
     rec = _create(vault_dir, db_conn, type="relatedness")
     _drive(vault_dir, db_conn, rec["id"], "failed", actor="executor")
-    p = proposals.advance(db_conn, vault_dir, rec["id"], "pending", actor="t")
-    assert p["status"] == "pending"
+    with pytest.raises(ValueError):
+        proposals.advance(db_conn, vault_dir, rec["id"], "pending", actor="t")
 
 
 @pytest.mark.parametrize(
@@ -115,7 +118,7 @@ def test_legal_failed_retry_path(vault_dir, db_conn):
         ("processing", "pending"), ("processing", "merged"),
         ("adopted", "awaiting_review"), ("adopted", "rejected"),
         ("awaiting_review", "merged"), ("awaiting_review", "pending"),
-        ("failed", "adopted"), ("failed", "rejected"),
+        ("failed", "adopted"), ("failed", "rejected"), ("failed", "pending"),
         ("merged", "pending"), ("rejected", "pending"), ("expired", "pending"),
     ],
 )

@@ -18,9 +18,9 @@ refused by the vault gate.
 State machine (illegal transitions raise ``ValueError``):
 
     pending → processing → adopted | awaiting_review | failed
-    adopted → merged | failed    (merge failure is retryable: failed → pending)
+    adopted → merged | failed    (merge failure → failed: read-only archive;
+                                  remedy = the agent re-proposes a new record, v2.2 Q6)
     awaiting_review → adopted | rejected | expired
-    failed → pending
 
 Authorization tiers (spec §四 verb catalog — the full-table replacement of
 constitution v0.1 §5, "授权初分表"):
@@ -83,7 +83,7 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "processing": frozenset({"adopted", "awaiting_review", "failed"}),
     "adopted": frozenset({"merged", "failed"}),
     "awaiting_review": frozenset({"adopted", "rejected", "expired"}),
-    "failed": frozenset({"pending"}),
+    "failed": frozenset(),
     "merged": frozenset(),
     "rejected": frozenset(),
     "expired": frozenset(),
