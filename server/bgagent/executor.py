@@ -351,12 +351,27 @@ def _merge_errata(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     rel = f"index/errata/{stem}.md"
     fp = vault / rel
-    existed = fp.is_file()
+    # D23/#C1 (debt #2, invariant 7 — 生成类动词合规): a materialized errata
+    # card is confirmed content (adopted = 确权) — system read-only after
+    # materialization. Re-adopting into the occupied slot would silently
+    # destroy confirmed content; reject instead. The raise goes BEFORE
+    # capture(): no pre-image slot consumed, no file write, no snapshots
+    # row (the occupied card's pre-image stays the recovery credential).
+    # run_executor's ValueError branch then parks the record in failed with
+    # reject_reason = this message; it stays ≤200 chars so the human exit
+    # (delete the old card → re-materialize) survives str(e)[:200].
+    if fp.is_file():
+        raise ValueError(
+            f"errata slot occupied: {rel} is a materialized card "
+            "(read-only after adoption). Exit: delete the old card, "
+            "then re-adopt to re-materialize. v2b unique names "
+            "auto-resolve (D23)."
+        )
     fp.parent.mkdir(parents=True, exist_ok=True)
     new_bytes = "\n".join(lines).encode("utf-8")
     # 可逆层（P1）：勘误卡 = LLM 独一产出（矛盾措辞/候选读法），强制
-    # pre-image（不变量 10）。
-    snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
+    # pre-image（不变量 10）。槽位空由上面的 pre-check 保证 → op "create"。
+    snap = capture(conn, vault, rel, "create", "executor",
                    run_id=str(p.get("run_id") or ""))
     register_write(rel, "executor", batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(fp, new_bytes)
