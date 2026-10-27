@@ -46,7 +46,7 @@ class DeleteDocTool(DocTool):
         # The deleted row is ledgered by the watcher consumer (pop_source →
         # apply_change) with this registration — no direct apply_change here
         # (writer-side convention: exactly one row per write).
-        register_write(args.path, ctx.write_source)
+        register_write(args.path, ctx.write_source, batch_id=ctx.run_id)
         fp.unlink()
         if snap is not None:
             finalize(conn, snap, "")  # post-state: file absent

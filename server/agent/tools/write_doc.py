@@ -41,7 +41,7 @@ class WriteDocTool(Tool):
             snap = capture(conn, ctx.vault_dir, args.path,
                            "update" if existed else "create",
                            ctx.write_source, run_id=ctx.run_id)
-        register_write(args.path, ctx.write_source)
+        register_write(args.path, ctx.write_source, batch_id=ctx.run_id)
         try:
             fp.write_bytes(new_bytes)
         except OSError as e:

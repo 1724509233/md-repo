@@ -10,12 +10,14 @@ from fastapi.testclient import TestClient
 from server.api import create_app
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
+from server.vault.service import consume_file_event
 
 
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
                       from_path: str = ""):
     """Drive the production watcher-consumer path
-    (``consume_file_event`` in server/main.py; the same one its four
+    (``consume_file_event`` in server.vault.orchestration.file_ops,
+    exposed via server.vault.service; the same one server/main.py's four
     _on_* callbacks call) once for ``path``. Returns the popped
     ``(source, batch_id, consumer_skip)`` attribution.
 
@@ -25,8 +27,6 @@ def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
     be the watcher event that would have fired ("created" for a first
     write, "modified" for a rewrite, "deleted", "moved" with from_path).
     """
-    from server.main import consume_file_event
-
     return consume_file_event(conn, vault_dir, path, action, from_path=from_path)
 
 

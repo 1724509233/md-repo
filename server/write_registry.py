@@ -38,7 +38,8 @@ def register_write(
     seconds if no corresponding filesystem event arrives (e.g. write failed).
 
     ``batch_id`` is the run_id that produced the write ('' when the channel
-    has no batch — web, interactive agent). ``consumer_skip=True`` when the
+    has no batch — web, interactive agent; bgagent agent runs carry their
+    run_id). ``consumer_skip=True`` when the
     writer logs the change synchronously itself (web UI): the consumer must
     then book no row and no files-table update.
     """

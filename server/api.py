@@ -88,14 +88,16 @@ def _proposal_sort_key(item: dict) -> tuple:
 
 
 def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
-    """Per-item change_log tails (newest first) for the proposals list.
+    """Per-item trails (newest first) for the proposals list.
 
-    Same match as the /trail endpoint: ``path = <proposal file>`` plus
-    ``batch_id = <run_id>`` for items carrying a run_id (malformed items
-    have run_id '' → path rows only, mirroring the endpoint's
-    parse-failure fallback). One query for the whole list — a per-item
-    query would be N round-trips; a row matching several items (a shared
-    run_id batch) is repeated for each of them.
+    Same match as the /trail endpoint: each record's state-machine
+    transitions (the ``proposal_transitions`` rows — the authoritative
+    per-record state history; the change_log tail of the projection file
+    under-reports them, back-to-back re-projections coalesce into one
+    file row) plus executor changes carrying the record's run_id as
+    batch_id on other paths. One query per source for the whole list —
+    a per-item query would be N round-trips; a batch row matching several
+    items (a shared run_id) is repeated for each of them.
 
     Returns a list of row lists parallel to ``items``; each row dict is
     shaped like the /trail endpoint's (seq/ts/source/op/path, no
@@ -104,43 +106,41 @@ def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
     if not items:
         return []
     paths = [it["relpath"] for it in items]
-    run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
-    clauses = ["path = ?" for _ in paths]
-    params: list = list(paths)
-    if run_ids:
-        clauses.append(f"batch_id IN ({','.join('?' * len(run_ids))})")
-        params.extend(run_ids)
-    rows = conn.execute(
-        "SELECT seq, ts, source, op, path, batch_id FROM change_log "
-        f"WHERE {' OR '.join(clauses)} ORDER BY seq DESC",
-        params,
-    ).fetchall()
+    marks = ",".join("?" * len(paths))
+    tr_map: dict[str, list[dict]] = {}
+    for t in conn.execute(
+        "SELECT t.id, t.ts, t.actor, t.to_status, p.relpath "
+        "FROM proposal_transitions t JOIN proposals p ON p.id = t.proposal_id "
+        f"WHERE p.relpath IN ({marks}) ORDER BY t.ts",
+        paths,
+    ).fetchall():
+        tr_map.setdefault(t["relpath"], []).append(
+            {"seq": t["id"], "ts": t["ts"], "source": t["actor"],
+             "op": t["to_status"], "path": t["relpath"]})
 
-    item_paths = set(paths)
-    path_map: dict[str, list[dict]] = {}
+    run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
     batch_map: dict[str, list[dict]] = {}
-    for r in rows:
-        d = dict(r)
-        bid = d.pop("batch_id")
-        if d["path"] in item_paths:
-            path_map.setdefault(d["path"], []).append(d)
-        if bid:
+    if run_ids:
+        rows = conn.execute(
+            "SELECT seq, ts, source, op, path, batch_id FROM change_log "
+            f"WHERE batch_id IN ({','.join('?' * len(run_ids))})",
+            run_ids,
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            bid = d.pop("batch_id")
             batch_map.setdefault(bid, []).append(d)
 
     out: list[list[dict]] = []
     for it in items:
-        merged = list(path_map.get(it["relpath"], []))
+        rel = it["relpath"]
+        merged = list(tr_map.get(rel, []))
         if it.get("run_id"):
-            merged += batch_map.get(it["run_id"], [])
-        # Dedup by seq (a state row of the proposal file itself matches both
-        # the path and the batch condition) and keep newest-first.
-        seen: set[int] = set()
-        trail: list[dict] = []
-        for d in sorted(merged, key=lambda x: -x["seq"]):
-            if d["seq"] not in seen:
-                seen.add(d["seq"])
-                trail.append(d)
-        out.append(trail)
+            # The item's own projection-file rows are the coalesced shadow
+            # of its transitions (no longer a source); keep the other paths.
+            merged += [d for d in batch_map.get(it["run_id"], [])
+                       if d["path"] != rel]
+        out.append(sorted(merged, key=lambda x: x["ts"], reverse=True))
     return out
 
 
@@ -653,8 +653,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
         items.sort(key=_proposal_sort_key)
         # Trail summary on each row (the design's anomaly card shows a one-line
-        # trail without a drill): latest 3 change_log rows per proposal, same
-        # match as the /trail endpoint; one change_log query for the whole list.
+        # trail without a drill): latest 3 trail rows per proposal (state
+        # transitions + executor rows), same match as the /trail endpoint;
+        # one query per source for the whole list.
         trails = _proposal_trails(db_conn, items)
         for it, tr in zip(items, trails):
             it["trail"] = tr[:3]
@@ -718,23 +719,45 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
     @app.get("/api/memory/proposals/{relpath:path}/trail")
     async def memory_proposal_trail(relpath: str) -> dict:
-        """Read-only change_log tail for one proposal: its state-machine
-        transitions (path = the proposal file) plus executor merges that
-        carry its run_id as batch_id (the API only moves state; the
-        executor lands the change). Newest first."""
+        """Read-only trail for one proposal (newest first, max 12 rows).
+
+        The transition segment is the record's state-machine history from
+        ``proposal_transitions`` (the authoritative per-record state ledger
+        — the change_log tail of the projection file under-reports it:
+        back-to-back re-projections coalesce into one file row), plus
+        executor changes that carry the record's run_id as batch_id on
+        other paths (the API only moves state; the executor lands the
+        change). Record-less (legacy) projection files fall back to the
+        change_log tail on the file itself."""
         from . import proposals
 
         rel = _guard_proposal_relpath(relpath)
         rec = proposals.record_by_relpath(db_conn, rel)
-        batch = rec["run_id"] if rec is not None else ""
-        sql = "SELECT seq, ts, source, op, path FROM change_log WHERE path = ?"
-        params: list = [rel]
-        if batch:
-            sql += " OR batch_id = ?"
-            params.append(batch)
-        sql += " ORDER BY seq DESC LIMIT 12"
-        rows = db_conn.execute(sql, params).fetchall()
-        return {"relpath": rel, "trail": [dict(r) for r in rows]}
+        rows: list[dict] = []
+        if rec is not None:
+            for t in db_conn.execute(
+                "SELECT id, ts, actor, to_status FROM proposal_transitions "
+                "WHERE proposal_id = ? ORDER BY ts",
+                (rec["id"],),
+            ).fetchall():
+                rows.append({"seq": t["id"], "ts": t["ts"],
+                             "source": t["actor"], "op": t["to_status"],
+                             "path": rel})
+            if rec["run_id"]:
+                for r in db_conn.execute(
+                    "SELECT seq, ts, source, op, path FROM change_log "
+                    "WHERE batch_id = ? AND path != ? ORDER BY ts",
+                    (rec["run_id"], rel),
+                ).fetchall():
+                    rows.append(dict(r))
+        else:
+            for r in db_conn.execute(
+                "SELECT seq, ts, source, op, path FROM change_log "
+                "WHERE path = ? ORDER BY ts", (rel,),
+            ).fetchall():
+                rows.append(dict(r))
+        rows.sort(key=lambda d: d["ts"], reverse=True)
+        return {"relpath": rel, "trail": rows[:12]}
 
     @app.post("/api/memory/rollback")
     async def memory_rollback(request: Request) -> JSONResponse:

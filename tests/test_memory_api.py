@@ -361,13 +361,18 @@ def test_status_executor_block_empty(vault_dir, db_conn):
 # ── /api/memory/proposals: trail summary ──────────────────────────────────
 
 def test_list_trail_fields(client, vault_dir, db_conn):
-    """List items carry a trail summary: the newest 3 change_log rows
-    matching the /trail endpoint's match (path = the projection file OR
-    batch_id = run_id) + the total match count. Records without ledger
-    entries get []/0."""
-    # Record A (run_id "batch-test", the _create helper's batch): 4
-    # ledgered state transitions on the projection file + one executor
-    # file merge carrying the batch id but a different path.
+    """List items carry a trail summary: the newest 3 rows matching the
+    /trail endpoint's match (the record's proposal_transitions rows +
+    change_log rows carrying batch_id = run_id on other paths) + the total
+    match count. Every record carries at least its creation transition;
+    no other record's batch rows may leak in."""
+    # Record A (run_id "batch-test", the _create helper's batch): 5
+    # state-machine transitions (one proposal_transitions row per advance,
+    # creation included) + one executor file merge carrying the batch id
+    # but a different path. Each re-projection registers its write; the
+    # watcher consumer books one row per watched write (those file rows are
+    # the coalesced shadow of the transitions — the trail no longer sources
+    # them), so each advance is followed by one consumer pass.
     rec_a = _create(vault_dir, db_conn, type="summary")
     proposals.advance(db_conn, vault_dir, rec_a["id"], "processing", actor="tester")
     simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
@@ -384,8 +389,9 @@ def test_list_trail_fields(client, vault_dir, db_conn):
                batch_id="batch-test")
     db_conn.commit()
 
-    # Record B: a run of its own with no ledger rows → []/0 (the shared
-    # "batch-test" batch must not leak into it).
+    # Record B: a run of its own — under the new source it carries its own
+    # creation transition only (the shared "batch-test" batch must not leak
+    # into it: no other-path batch rows in "batch-quiet").
     rec_b = _create(vault_dir, db_conn, type="entity_index", run_id="batch-quiet")
 
     resp = client.get("/api/memory/proposals")
@@ -393,24 +399,40 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     items = {i["relpath"]: i for i in resp.json()["proposals"]}
 
     a = items[rec_a["relpath"]]
-    assert a["trail_count"] == 5  # 4 state rows + 1 batch file row
+    # 6 = 5 state-machine transitions (proposal_transitions: created,
+    # →processing, →awaiting_review, →adopted, →merged) + 1 executor file
+    # merge row (batch_id = run_id, other path). The 4 re-projection
+    # change_log rows the old tail counted are the coalesced shadow of the
+    # transitions — no longer a source.
+    assert a["trail_count"] == 6
     assert len(a["trail"]) == 3   # truncated to the newest 3
     assert [t["seq"] for t in a["trail"]] == sorted(
         (t["seq"] for t in a["trail"]), reverse=True)
     # /trail-endpoint row shape (no batch_id) — the batch file row is the
-    # newest, the human adopt the oldest of the three.
+    # newest; then the two newest transitions (→merged by the executor,
+    # →adopted by the human); the human adopt the oldest of the three.
     assert all(set(t) == {"seq", "ts", "source", "op", "path"} for t in a["trail"])
     assert a["trail"][0]["path"] == "index/entities.md"
     assert a["trail"][0]["source"] == "executor"
+    assert a["trail"][1]["op"] == "merged"
+    assert a["trail"][1]["source"] == "executor"
+    assert a["trail"][1]["path"] == rec_a["relpath"]
+    assert a["trail"][2]["op"] == "adopted"
     assert a["trail"][2]["path"] == rec_a["relpath"]
     assert a["trail"][2]["source"] == "human"
 
     # Same basis as the drill endpoint: the list trail is its first rows.
     full = client.get(
         f"/api/memory/proposals/{rec_a['relpath']}/trail").json()["trail"]
-    assert len(full) == 5
+    assert len(full) == 6
     assert [t["seq"] for t in a["trail"]] == [t["seq"] for t in full[:3]]
 
+    # 1 = the creation transition (NULL → pending, recorded at create);
+    # the run's own batch rows on other paths are absent, so nothing of
+    # record A's "batch-test" batch leaks in.
     b = items[rec_b["relpath"]]
-    assert b["trail"] == []
-    assert b["trail_count"] == 0
+    assert b["trail_count"] == 1
+    assert len(b["trail"]) == 1
+    assert b["trail"][0]["op"] == "pending"
+    assert b["trail"][0]["source"] == "consolidator"
+    assert b["trail"][0]["path"] == rec_b["relpath"]

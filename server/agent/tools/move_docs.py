@@ -98,7 +98,7 @@ class MoveDocsTool(DocTool):
                 src = ctx.vault_dir / from_path
                 dst = ctx.vault_dir / to_path
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                register_write(to_path, ctx.write_source)
+                register_write(to_path, ctx.write_source, batch_id=ctx.run_id)
                 src.rename(dst)
         except OSError:
             if conn is not None:

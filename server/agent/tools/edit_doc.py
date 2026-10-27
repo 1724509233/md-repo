@@ -49,7 +49,7 @@ class EditDocTool(DocTool):
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path, "update",
                            ctx.write_source, run_id=ctx.run_id)
-        register_write(args.path, ctx.write_source)
+        register_write(args.path, ctx.write_source, batch_id=ctx.run_id)
         result = edit_file(ctx.vault_dir, args.path, args.old_string, args.new_string)
         if conn is not None:
             if result.startswith("Error"):

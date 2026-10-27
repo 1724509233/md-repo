@@ -2,8 +2,8 @@
 
 The registry is the writer-side half of the ledger convention: writers
 register BEFORE writing; the watcher consumer (``consume_file_event`` in
-server/main.py, driven by its four _on_* callbacks) pops the registration
-and books exactly ONE change_log
+server.vault.orchestration.file_ops, driven by the four _on_* callbacks
+in server/main.py) pops the registration and books exactly ONE change_log
 row — unless consumer_skip says the writer already logged the row
 synchronously (web UI: the console feed must respond instantly while the
 user watches).
@@ -19,7 +19,7 @@ from __future__ import annotations
 import time
 
 from server import write_registry
-from server.main import consume_file_event
+from server.vault.service import consume_file_event
 from tests.conftest import simulate_consumer
 
 

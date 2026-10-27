@@ -1277,9 +1277,16 @@ def test_write_source_attribution(tmp_path: Path):
     with patch("server.write_registry.register_write") as m:
         execute_tool("write_doc", {"path": "a.md", "content": "x"},
                      ToolContext(vault_dir=vault, write_source="notes-organizer"))
-    m.assert_called_once_with("a.md", "notes-organizer")
+    # Interactive run: run_id "" → batch_id stays empty (behavior unchanged).
+    m.assert_called_once_with("a.md", "notes-organizer", batch_id="")
 
     with patch("server.write_registry.register_write") as m:
         execute_tool("write_doc", {"path": "b.md", "content": "x"},
                      ToolContext(vault_dir=vault))
-    m.assert_called_once_with("b.md", "agent")
+    m.assert_called_once_with("b.md", "agent", batch_id="")
+
+    with patch("server.write_registry.register_write") as m:
+        execute_tool("write_doc", {"path": "c.md", "content": "x"},
+                     ToolContext(vault_dir=vault, run_id="run-9"))
+    # Bgagent run: the run_id is stamped as batch_id (ledger run attribution).
+    m.assert_called_once_with("c.md", "agent", batch_id="run-9")

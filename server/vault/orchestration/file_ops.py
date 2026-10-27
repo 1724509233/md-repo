@@ -28,6 +28,27 @@ from .indexer import (
 )
 from .refs import _remove_dead_links, _update_references
 from ... import events
+from ...write_registry import pop_source
+
+
+def consume_file_event(conn, vault_dir, path: str, action: str,
+                       from_path: str = "") -> tuple[str, str, bool]:
+    """One watcher file event → the ledger (the writer-side convention).
+
+    Pops the write registration for ``path`` and calls apply_change with
+    the attributed source/batch_id — the SOLE regular entry to the ledger.
+    ``consumer_skip`` registrations (web UI: the endpoint logged the row
+    synchronously for the console feed) book nothing here — no row, no
+    files-table work. Returns the popped ``(source, batch_id, consumer_skip)``.
+    """
+    source, batch_id, skip = pop_source(path)
+    if skip:
+        return source, batch_id, skip
+    kwargs = {"source": source, "batch_id": batch_id}
+    if from_path:
+        kwargs["from_path"] = from_path
+    apply_change(conn, vault_dir, path, action, **kwargs)
+    return source, batch_id, skip
 
 
 def _is_index_excluded(path: str) -> bool:
