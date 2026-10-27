@@ -23,7 +23,9 @@ ai:
 
 # 后台定时 agent（可选）— 各自独立 cron / provider / prompt
 # 启动时 fail-fast 校验：alias 唯一、cron 合法、prompt 文件存在、
-# target_dir 在 vault 内且各 agent 互不重叠
+# target_dir 在 vault 内且各 agent 互不重叠（共享面豁免：suggestions/ 提案区、index/ 机器区）
+# v2 法律层（LLM 角色）：tools 必须显式声明（无 fail-open 默认）；tools 含 propose
+# 必须配 verbs；propose 与 write_doc 不得同持（ADR-0004 分界线）。executor 角色豁免。
 background_agents:
   - name: "笔记整理"
     alias: notes-organizer
@@ -34,6 +36,8 @@ background_agents:
     report_dir: ""                    # 空 = <target_dir>/.reports/<alias>/
     max_rounds: 30
     timeout_s: 1800
+    tools: [read_doc, search_docs, list_files, recent_changes,
+            get_related_docs, recall_stats, write_doc]   # v2 法律层：必须显式声明
     model:                            # 独立 provider 配置（必填，不复用 ai 段）
       provider: openai
       model_id: qwen2.5:14b
@@ -43,8 +47,9 @@ background_agents:
       max_tokens: 4096
       temperature: 0.7
 
-  # ── 记忆运行时 v1：固化者（示例，取消注释启用）─────────────────────────
-  # 夜巡消化近期人类通道的碎片，只产出 suggestions/ 提案，不碰主记忆区。
+  # ── 记忆运行时 v2.2：固化者（示例，取消注释启用）─────────────────────────
+  # 夜巡消化近期人类通道的碎片；唯一写动作 = propose 工具（零文件落：
+  # suggestions/ 无投影文件、无账本行，v2a D25）。分界线：提案角色不持直写（ADR-0004）。
   # 预算是法律（这里），消耗记账在 .sync/index.db 的 trigger_state 表。
   # trigger：events ⊆ {create,update,delete,move}；arm_count/min_interval_h
   # 可缺省（默认 3 / 1.0h）。cron 保留为 deadline floor（无活则空转不烧 LLM）。
@@ -52,14 +57,16 @@ background_agents:
   #   alias: consolidator
   #   enabled: true
   #   cron: "0 2 * * *"
-  #   target_dir: suggestions
+  #   target_dir: index              # 写边界 = 机器区（propose 无文件落，此值为名义 scope）
   #   prompt: server/prompts/consolidator.md
   #   report_dir: .reports/consolidator
   #   max_rounds: 30
   #   timeout_s: 1800
   #   budget_runs_per_day: 3
   #   budget_max_proposals: 5
-  #   verbs: [entity_index, relatedness, summary]   # propose 动词白名单（v2 动词表；缺省 = 不限）
+  #   tools: [read_doc, search_docs, list_files, recent_changes,
+  #           get_related_docs, recall_stats, propose]   # 读×6 + propose；不持 write_doc（分界线）
+  #   verbs: [entity_index, relatedness, summary, errata]   # propose 动词白名单（v2.2：v2a 配入 errata）
   #   trigger:
   #     events: [create]
   #     arm_count: 3
@@ -91,18 +98,19 @@ background_agents:
   #     base_url: "http://localhost:11434/v1"
   #     api_key: ""
 
-# ── 记忆运行时 v2：哨兵（示例，取消注释启用）─────────────────────────────
-# 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶判断、产出**只读报告**
+# ── 记忆运行时 v2.2：哨兵（示例，取消注释启用）─────────────────────────────
+# 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶判断，产**只读报告**
 # （「N 篇 90 天未动，建议归档」——v2：archive 动词退役，自动化不搬用户区文件，
-# 搬动 = 人在 Obsidian 拖）。哨兵无提案动词：tools 里不放 propose（无写动作）。
+# 搬动 = 人在 Obsidian 拖）。报告通道（ADR-0004）：write_doc 写机器区
+# index/reports/sentinel/YYYY-MM-DD.md；不产提案、不持 propose（分界线）。
 # trigger.source: recall = 从召回账本武装（metric: failed_or_low = 失败查询
 # + 低分命中计数，合成流量不计入）；cron 保留为每周心跳（复盘不靠自觉）。
-# tools 白名单 = 行为维度授权（缺省 = 全部工具）。
+# tools 白名单 = 行为维度授权（v2 法律层：必须显式声明，无 fail-open 默认）。
 # - name: "记忆哨兵"
 #   alias: sentinel
 #   enabled: true
 #   cron: "0 9 * * 1"                 # 周一 09:00 每周心跳
-#   target_dir: suggestions
+#   target_dir: index                 # 报告通道写边界 = 机器区（ADR-0004）
 #   prompt: server/prompts/sentinel.md
 #   report_dir: .reports/sentinel
 #   max_rounds: 30
@@ -115,30 +123,37 @@ background_agents:
 #     arm_count: 10
 #     min_interval_h: 24
 #   tools: [read_doc, search_docs, list_files, recent_changes,
-#           get_related_docs, recall_stats]   # 只读：无 propose、无写工具
+#           get_related_docs, recall_stats, write_doc]   # 报告通道：write_doc 仅写 index/ 只读报告；不持 propose
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b
 #     base_url: "http://localhost:11434/v1"
 #     api_key: ""
 #
-# ── 记忆运行时 v3：叙事者（示例，取消注释启用）──────────────────────────
-# 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，产出周报到 weekly/；
-# 另可产 reminder 提案（终审通道，控制台提醒人）。
+# ── 记忆运行时 v2.2：叙事者（示例，取消注释启用）──────────────────────────
+# 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，write_doc 产只读周报
+# index/reports/narrator/YYYY-MM-DD.md（daily slot 幂等覆盖）。报告通道（ADR-0004）：
+# 不产提案、不持 propose（reminder 动词退役；周期性问题 = 进周报待人处理）。
 # - name: "叙事者"
 #   alias: narrator
 #   enabled: true
 #   cron: "0 10 * * 0"                # 周日 10:00 周报
-#   target_dir: weekly
+#   target_dir: index                 # 报告通道写边界 = 机器区（ADR-0004）
 #   prompt: server/prompts/narrator.md
 #   report_dir: .reports/narrator
 #   max_rounds: 30
 #   timeout_s: 1800
 #   budget_runs_per_day: 1
-#   budget_max_proposals: 2
-#   verbs: [reminder]   # 叙事者只产提醒提案（v2 propose 通道）
+#   budget_max_proposals: 0
+#   tools: [read_doc, search_docs, list_files, recent_changes,
+#           get_related_docs, recall_stats, write_doc]   # 读×6 + write_doc（报告通道）；不持 propose
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b
 #     base_url: "http://localhost:11434/v1"
 #     api_key: ""
+
+# 通知量级守卫（v2.2 债单 #6 / D33）：当日通知行数上限，超出折叠为单日摘要行。
+# 同 alias 的 review 类通知（proposal_paths 相交）自动合并。
+notifications:
+  daily_cap: 20

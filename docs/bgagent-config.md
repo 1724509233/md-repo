@@ -15,7 +15,7 @@
 |---|---|---|
 | 每 agent 一个 cron 任务 | 各自 `cron` | 到点触发，语义随 trigger 源不同：**纯 cron** → 直接跑；**change 源** → 先 idle 检查（上次 run 以来无非自排除的 create 事件 → 空转 `RunReport(status=idle)`，不烧 LLM；从未跑过 = 有活；注意 floor 硬编码只数 create，不看 `trigger.events`）；**recall 源** → **无条件跑**（周复盘心跳，「复盘不靠自觉」）。任何情况下上次 run 未结束 → WARNING + 跳过（不排队） |
 | 武装检查 `_armed_check` | 30 min（`ARMED_CHECK_INTERVAL_S=1800`） | 只针对配了 `trigger` 的 agent：扫描信号源、累加 `armed` 计数，达标且过门控 → **立即释放一次 run**（不用等 cron） |
-| 执行器循环（框架角色） | 30 min | 确定性合并：`suggestions/` 里 `status: adopted` 的提案落地主记忆区 + 超期 `awaiting_review` 过期。无活 no-op。无 LLM |
+| 执行器循环（框架角色） | 30 min | 确定性合并：proposals 账本（DB）里 `status: adopted` 的提案落地机器区 `index/`（summaries/errata/entities 槽）+ 超期 `awaiting_review` 过期。无活 no-op。无 LLM（v2a D25：提案零文件落，账本是唯一状态源） |
 | 通知/报告 | 每次 run 后 | 写 `.reports/<alias>/` 报告；在应用通知（未读徽标） |
 
 「arm ≠ run」：武装只是**资格**，释放还要连过三道门（`scheduler.py:257-284`）：
@@ -136,7 +136,7 @@ v2 现状：框架**不**按它驱动 agent 行为——执行走通知 kind 分
       model_id: ...               # 必填，仅格式校验，永远不会被调用
 ```
 
-- 它**不启动 LLM cron 任务**；框架跑确定性 30min 执行器循环（`bgagent/executor.py`：扫 `suggestions/`，adopted → 落地，超期 awaiting_review → 过期，无活 no-op）。
+- 它**不启动 LLM cron 任务**；框架跑确定性 30min 执行器循环（`bgagent/executor.py`：读 proposals 账本（DB），adopted → 落地机器区，超期 awaiting_review → 过期，无活 no-op）。
 - `is_executor` 全配置 **≤ 1 个**（fail-fast）。
 - 注册它的 alias 有实际意义：change_log 里 source=`executor` 的写会被所有 trigger agent 的武装排除（防自我武装，§3.3）。
 
@@ -161,13 +161,16 @@ v2 现状：框架**不**按它驱动 agent 行为——执行走通知 kind 分
 | change 源 events 非空且 ⊆ {create,update,delete,move} | `trigger.events contains invalid ops` |
 | recall 源 metric 必填 | `trigger.metric is required when source=recall` |
 | tools 非空列表 + 名字在 TOOL_REGISTRY | `tools contains unknown tool name(s)` |
+| **LLM 角色 tools 必须显式声明**（v2 法律层：无 fail-open 默认；`is_executor` 条目豁免） | `...: tools is required (v2 legal layer: undeclared tool whitelist = fail-open is forbidden)` |
+| **tools 含 `propose` 必须配 `verbs`**（未声明 = 不限动词 = 禁止） | `...: verbs is required when tools contains 'propose'` |
+| **同角色不得同持 `propose` + `write_doc`**（ADR-0004 分界线：提案角色无直写，终审闸门不可绕） | `...: a role may not hold both 'propose' and 'write_doc' (ADR-0004 boundary line)` |
 | escalation 键/动作合法 | `escalation contains unknown condition key(s)` |
 | **alias 全配置唯一** | `duplicate background agent alias: ...` |
 | **is_executor ≤ 1 个** | `at most one is_executor background agent, got: ...` |
-| **非 executor agent 两两 target_dir 互叠**（`Path.is_relative_to` 双向，**相等也算**；**例外：两 scope 都落在提案区 `suggestions/` 内 → 豁免**——提案是 immutable drop zone，唯一命名 + 状态机保护 + 执行器消费，共享无互覆盖风险，记忆运行时 spec 给 consolidator/sentinel 同时分配该目录） | `background agents 'a' and 'b' have overlapping target_dir` |
+| **非 executor agent 两两 target_dir 互叠**（`Path.is_relative_to` 双向，**相等也算**；**例外：两 scope 都落在共享写者面内 → 豁免**——`suggestions/`（提案区：v2a 零文件落，immutable drop zone）与 `index/`（机器区：执行器 + 报告通道共享，ADR-0004）；共享无互覆盖风险，记忆运行时 spec 给 consolidator/sentinel/narrator 同时分配该目录） | `background agents 'a' and 'b' have overlapping target_dir` |
 | **非 executor agent 两两 report_dir 互叠** | `... have overlapping report_dir` |
 
-⚠️ 互叠用的是 `a.is_relative_to(b) or b.is_relative_to(a)`——**Python 的 `is_relative_to` 对自身返回 True，所以两个 agent 用同一个可变写目录（如都 `notes`）直接拒启**。这是故意设计：两个 LLM agent 共享可变写 scope 会互覆盖。**例外**：两个 scope 都落在提案区 `suggestions/` 内时豁免（提案一次性 + 唯一命名 + 状态机保护，共享安全）——`config.example.yaml` 里 consolidator/sentinel 都写 `suggestions` 的示例**可以**同时启用。
+⚠️ 互叠用的是 `a.is_relative_to(b) or b.is_relative_to(a)`——**Python 的 `is_relative_to` 对自身返回 True，所以两个 agent 用同一个可变写目录（如都 `notes`）直接拒启**。这是故意设计：两个 LLM agent 共享可变写 scope 会互覆盖。**例外**：两个 scope 都落在共享写者面内时豁免——`suggestions/`（提案一次性 + 唯一命名 + 状态机保护 + v2a 零文件落）或 `index/`（机器区：执行器 + 报告通道共享，ADR-0004）——`config.example.yaml` 里 consolidator/sentinel/narrator 都写 `index` 的示例**可以**同时启用。
 
 ---
 
@@ -233,28 +236,31 @@ INSERT OR IGNORE INTO trigger_state
 
 ```yaml
 background_agents:
-  # consolidator（v1 固化者）：夜巡消化人类通道碎片，只产 suggestions/ 提案
+  # consolidator（v2.2 固化者）：夜巡消化人类通道碎片，只产提案（零文件落，v2a D25）
   - alias: consolidator
     cron: "0 2 * * *"            # 每天 02:00 deadline floor（无活空转不烧 LLM）
-    target_dir: suggestions      # 唯一写动作 = write_doc 到 suggestions/
+    target_dir: index            # 写边界 = 机器区（propose 无文件落，名义 scope；ADR-0004）
     prompt: server/prompts/consolidator.md
     budget_runs_per_day: 3
     budget_max_proposals: 5
     trigger: {events: [create], arm_count: 3, min_interval_h: 6}
+    tools: [read_doc, search_docs, list_files, recent_changes,
+            get_related_docs, recall_stats, propose]   # 法律层必须显式；不持 write_doc
+    verbs: [entity_index, relatedness, summary, errata]   # propose 动词白名单（v2a 配入 errata）
     # + model 块（独立 provider）
 
-  # sentinel（v2 哨兵）：旁路读召回遥测，产 archive 提案
+  # sentinel（v2.2 哨兵）：旁路读召回遥测，产机器区只读报告（报告通道，ADR-0004）
   # 注意：recall 源的 cron tick 无条件运行 → 每周一 09:00 必跑一次（耗当日预算 1/2），
   # recall 武装只是提前加速，不是唯一触发器。
   - alias: sentinel
     cron: "0 9 * * 1"            # 周一 09:00 周心跳
-    target_dir: suggestions      # 与 consolidator 共享提案区（§5 提案区豁免，2026-10-24）
+    target_dir: index            # 报告通道写边界 = 机器区；与 consolidator/narrator 共享（共享写者面豁免，ADR-0004）
     prompt: server/prompts/sentinel.md
     budget_runs_per_day: 2
-    budget_max_proposals: 3
+    budget_max_proposals: 0
     trigger: {source: recall, metric: failed_or_low, arm_count: 10, min_interval_h: 24}
     tools: [read_doc, search_docs, list_files, recent_changes,
-            get_related_docs, recall_stats, write_doc]
+            get_related_docs, recall_stats, write_doc]   # write_doc 仅写 index/reports/sentinel/；不持 propose
 
   # executor（框架角色）：确定性合并，无 LLM
   - alias: executor
@@ -264,19 +270,21 @@ background_agents:
     # + model 块（仅格式校验）
 ```
 
-**互叠约束现状（2026-10-24 定稿）**：`config.py` fail-fast 禁止两个非 executor agent 的 target_dir 互叠（相等也算），**唯一例外：两 scope 都落在提案区 `suggestions/` 内**（提案一次性 + 唯一命名 + 状态机保护 + 执行器消费，共享无互覆盖风险）。因此 consolidator 与 sentinel **都写 `suggestions` 是合法配置**，且 `write_doc=ask` 强制 scope 时该 scope 即其真实写边界。历史背景：功能测试模板（`tests/functional/config.example.fun.yaml`）出于 mock 剧本的权限回退考量仍把 consolidator 放 `weekly/`，其注释保留了这段权衡。
+**互叠约束现状（2026-10-28 v2.2 更新）**：`config.py` fail-fast 禁止两个非 executor agent 的 target_dir 互叠（相等也算），**例外：两 scope 都落在共享写者面内**——`suggestions/`（提案区：v2a 零文件落，immutable drop zone）或 `index/`（机器区：执行器 + 报告通道共享，ADR-0004）。因此 consolidator 与 sentinel/narrator **都写 `index` 是合法配置**，且 `write_doc=ask` 强制 scope 时该 scope 即其真实写边界。历史背景：功能测试模板（`tests/functional/config.example.fun.yaml`）出于 mock 剧本的权限回退考量仍把 consolidator 放 `weekly/`（v1 形态残留，未随 v2.2 迁移），其注释保留了这段权衡。
 
 ### 6.2 纯 cron 周报（narrator 式）
 
-无 trigger，`budget_max_proposals: 0`（不产提案，直接写 `weekly/` 周报）：
+无 trigger，`budget_max_proposals: 0`（不产提案，write_doc 产只读周报到 `index/reports/narrator/`，报告通道 ADR-0004）：
 
 ```yaml
   - alias: narrator
     cron: "0 10 * * 0"           # 周日 10:00
-    target_dir: weekly
+    target_dir: index
     prompt: server/prompts/narrator.md
     budget_runs_per_day: 1
     budget_max_proposals: 0
+    tools: [read_doc, search_docs, list_files, recent_changes,
+            get_related_docs, recall_stats, write_doc]   # 不持 propose（reminder 动词退役）
 ```
 
 ### 6.3 功能测试模板
@@ -287,7 +295,7 @@ background_agents:
 
 ## 7. 坑清单（本仓库实跑踩过）
 
-1. **`is_relative_to` 相等即互叠**（2026-10-24 放宽）：两个 agent 不能共享*可变*写目录；共享提案区 `suggestions/` 现已允许（§5 提案区豁免）。放宽前 config.example.yaml 的 consolidator/sentinel 不能同时启用。
+1. **`is_relative_to` 相等即互叠**（2026-10-24 放宽、2026-10-28 v2.2 扩展）：两个 agent 不能共享*可变*写目录；共享写者面 `suggestions/`（提案区）与 `index/`（机器区）现已允许（§5 共享面豁免，ADR-0004）。放宽前 config.example.yaml 的 consolidator/sentinel 不能同时启用。
 2. **首次回填**：游标 0 → 全量历史计入（492 条实测），首次 run 就是积压消化。大 vault 部署前想清楚要不要吃这个 backlog（§5.3 预置行可跳过）。
 3. **`trigger_state` 行启动 30min 后才出现**：监控页 ③ 前 30min 看不到 agent；预置行可立即可见。
 4. **禁用的 agent 也全量校验**：`enabled: false` 只停排程，prompt 存在/互叠/cron 合法性一个不少地查。
