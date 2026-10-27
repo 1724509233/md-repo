@@ -9,15 +9,19 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from .tool import Tool, _check_md_path, _check_optional_path, _tool
+from .adopt_proposal import AdoptProposalArgs, AdoptProposalTool
 from .delete_doc import DeleteDocArgs, DeleteDocTool
 from .edit_doc import EditDocArgs, EditDocTool
+from .get_proposal import GetProposalArgs, GetProposalTool
 from .get_related_docs import GetRelatedDocsArgs, GetRelatedDocsTool
 from .list_files import ListFilesArgs, ListFilesTool
+from .list_proposals import ListProposalsArgs, ListProposalsTool
 from .move_docs import MoveDocItem, MoveDocsArgs, MoveDocsTool
 from .propose import ProposeArgs, ProposeTool
 from .read_doc import ReadDocArgs, ReadDocTool
 from .recall_stats import RecallStatsArgs, RecallStatsTool
 from .recent_changes import RecentChangesArgs, RecentChangesTool
+from .reject_proposal import RejectProposalArgs, RejectProposalTool
 from .search_docs import SearchDocsArgs, SearchDocsTool
 from .write_doc import WriteDocArgs, WriteDocTool
 
@@ -34,6 +38,10 @@ _ALL_TOOLS: list[Tool] = [
     RecentChangesTool(),
     RecallStatsTool(),
     ProposeTool(),
+    ListProposalsTool(),
+    GetProposalTool(),
+    AdoptProposalTool(),
+    RejectProposalTool(),
 ]
 
 TOOL_REGISTRY: dict[str, Tool] = {t.name: t for t in _ALL_TOOLS}
@@ -58,6 +66,10 @@ __all__ = [
     "RecentChangesArgs",
     "ProposeArgs",
     "RecallStatsArgs",
+    "ListProposalsArgs",
+    "GetProposalArgs",
+    "AdoptProposalArgs",
+    "RejectProposalArgs",
     "_check_md_path",
     "_check_optional_path",
     "_tool",
