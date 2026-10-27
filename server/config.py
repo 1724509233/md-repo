@@ -382,12 +382,10 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         dupes = sorted({x for x in aliases if aliases.count(x) > 1})
         raise ValueError(f"duplicate background agent alias: {', '.join(dupes)}")
 
-    # Shared proposal zone: v2a (D25) drops no files into it — proposals are
-    # zero-file DB records — but the exemption stays because consolidator /
-    # sentinel target_dir configs may still declare the zone; any write into
-    # it is refused by the vault gate (the memory-runtime spec assigns
-    # suggestions/ to both agents).
+    # 共享写者面：suggestions/（提案区，零文件落）与 index/（机器区：执行器 +
+    # 报告通道共享，ADR-0004）— 双 scope 均在其中 = 豁免互叠检查
     proposals_zone = vault_resolved / PROPOSALS_DIR
+    shared_zones = (proposals_zone, vault_resolved / "index")
 
     for i in range(len(agents)):
         for j in range(i + 1, len(agents)):
@@ -399,6 +397,8 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
             a, b = agents[i].target_dir, agents[j].target_dir
             if a.is_relative_to(b) or b.is_relative_to(a):
                 if a.is_relative_to(proposals_zone) and b.is_relative_to(proposals_zone):
+                    continue
+                if any(a.is_relative_to(z) and b.is_relative_to(z) for z in shared_zones):
                     continue
                 raise ValueError(
                     f"background agents '{agents[i].alias}' and '{agents[j].alias}' "
@@ -412,6 +412,46 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
                     f"have overlapping report_dir")
 
     return agents
+
+
+@dataclass
+class NotificationsConfig:
+    """In-app notification volume guards (debt #6, D33).
+
+    Read from the top-level ``notifications:`` section of config.yaml.
+    The cap is law — configurable in YAML, not hardcoded in the framework.
+    Consumed by the GuardedNotificationHook wiring in server/main.py.
+    """
+
+    daily_cap: int = 20  # max normal notification rows inserted per local day
+
+
+def load_notifications(config_path: str) -> NotificationsConfig:
+    """Read the optional top-level 'notifications' section.
+
+    Absent section (or missing daily_cap) → defaults (daily_cap=20).
+    Fail-fast: a non-mapping section or a daily_cap < 1 raises ValueError
+    (a zero/negative cap would collapse every notification into the
+    folded summary row — never the intended configuration).
+    """
+    path = Path(config_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    raw = data.get("notifications")
+    if raw is None:
+        return NotificationsConfig()
+    if not isinstance(raw, dict):
+        raise ValueError(f"Config file {config_path}: 'notifications' must be a mapping")
+    daily_cap = int(raw.get("daily_cap", 20))
+    if daily_cap < 1:
+        raise ValueError(
+            f"Config file {config_path}: notifications.daily_cap must be >= 1, "
+            f"got {daily_cap}")
+    return NotificationsConfig(daily_cap=daily_cap)
 
 
 @dataclass

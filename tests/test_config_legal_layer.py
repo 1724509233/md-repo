@@ -110,3 +110,43 @@ def test_legal_reads_plus_write_doc_allowed(tmp_path: Path):
                        "recent_changes", "get_related_docs", "recall_stats",
                        "write_doc")
     assert a.verbs is None
+
+
+# ── Task 6: real config.yaml migration (integration) ───────────────────────
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_real_config_yaml_v2_migration(tmp_path: Path):
+    """Task 6 integration: the repo's real config.yaml loads under the v2
+    legal layer — consolidator = reads + propose with the 4 verbs
+    (D31/B5 incl. errata); sentinel/narrator = report channel writing
+    under index/ (ADR-0004); the triple index/ overlap is exempt
+    (shared writer face); executor present and exempt.
+
+    Vault = a temp dir: load_background_agents is pure path resolution
+    (no vault filesystem access), so the real vault is not required.
+    """
+    cfg = REPO_ROOT / "config.yaml"
+    if not cfg.is_file():
+        pytest.skip("config.yaml not present in this checkout")
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    agents = load_background_agents(str(cfg), vault)
+    by_alias = {a.alias: a for a in agents}
+    assert set(by_alias) == {"consolidator", "sentinel", "narrator", "executor"}
+
+    index = (vault / "index").resolve()
+    cons = by_alias["consolidator"]
+    assert cons.target_dir == index
+    assert "propose" in cons.tools
+    assert "write_doc" not in cons.tools
+    assert cons.verbs == ("entity_index", "relatedness", "summary", "errata")
+
+    for alias in ("sentinel", "narrator"):
+        a = by_alias[alias]
+        assert a.target_dir == index
+        assert "write_doc" in a.tools
+        assert "propose" not in a.tools
+
+    assert by_alias["executor"].is_executor is True
