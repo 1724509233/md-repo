@@ -493,9 +493,10 @@ def test_runner_no_whitelist_uses_full_registry(tmp_path):
 
     asyncio.run(go())
     names = [t.name for t in rt.agent.spec.tools]
-    # 10 = full registry minus delete_doc (bgagent channel hard-removal,
+    # 14 = full registry minus delete_doc (bgagent channel hard-removal,
     # spec §3.2/D3: the registry, not the config whitelist, is the mechanism).
-    assert len(names) == 10
+    # 2026-10-28: registry grew 11→15 (final-review four tools, v2a debt #4).
+    assert len(names) == 14
     assert "delete_doc" not in names
 
 
