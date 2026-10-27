@@ -278,8 +278,9 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
             return rec
 
         def prop_events():
-            # apply_change emits 'change' on every transition; only the
-            # 'proposal' topic is under test.
+            # The transition's 'change' event fires when the watcher
+            # consumer books the row (apply_change); this test does not
+            # drive the consumer. Only the 'proposal' topic is under test.
             return [pl for t, pl in rec if t == "proposal"]
 
         pairs = [(s, d) for s, ds in proposals.TRANSITIONS.items()

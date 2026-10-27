@@ -11,6 +11,25 @@ from server.api import create_app
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
 
+
+def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
+                      from_path: str = ""):
+    """Drive the production watcher-consumer path
+    (``consume_file_event`` in server/main.py; the same one its four
+    _on_* callbacks call) once for ``path``. Returns the popped
+    ``(source, batch_id, consumer_skip)`` attribution.
+
+    Writers register before writing and never call apply_change themselves
+    (AGENTS.md "Change ledger discipline"); unit tests that assert on the
+    ledger rows must drive this consumer path explicitly. ``action`` must
+    be the watcher event that would have fired ("created" for a first
+    write, "modified" for a rewrite, "deleted", "moved" with from_path).
+    """
+    from server.main import consume_file_event
+
+    return consume_file_event(conn, vault_dir, path, action, from_path=from_path)
+
+
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
 

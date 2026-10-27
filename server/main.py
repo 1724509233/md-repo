@@ -21,6 +21,26 @@ from .write_registry import pop_source
 # Logging is configured in main() with console + file handlers.
 
 
+def consume_file_event(conn, vault_dir, path: str, action: str,
+                       from_path: str = "") -> tuple[str, str, bool]:
+    """One watcher file event → the ledger (the writer-side convention).
+
+    Pops the write registration for ``path`` and calls apply_change with
+    the attributed source/batch_id — the SOLE regular entry to the ledger.
+    ``consumer_skip`` registrations (web UI: the endpoint logged the row
+    synchronously for the console feed) book nothing here — no row, no
+    files-table work. Returns the popped ``(source, batch_id, consumer_skip)``.
+    """
+    source, batch_id, skip = pop_source(path)
+    if skip:
+        return source, batch_id, skip
+    kwargs = {"source": source, "batch_id": batch_id}
+    if from_path:
+        kwargs["from_path"] = from_path
+    apply_change(conn, vault_dir, path, action, **kwargs)
+    return source, batch_id, skip
+
+
 def _agent_caps(agents: list) -> dict[str, dict]:
     """Per-alias config-derived caps for the console status endpoint, keyed
     by alias: armed_target = trigger.arm_count (None when the agent has no
@@ -98,20 +118,16 @@ def main(argv: list[str] | None = None) -> None:
             p.get("traffic") == "synthetic" and p.get("hits", 0) > 0))
 
         def _on_created(path: str) -> None:
-            source = pop_source(path)
-            apply_change(conn, vault_dir, path, "created", source=source)
+            consume_file_event(conn, vault_dir, path, "created")
 
         def _on_modified(path: str) -> None:
-            source = pop_source(path)
-            apply_change(conn, vault_dir, path, "modified", source=source)
+            consume_file_event(conn, vault_dir, path, "modified")
 
         def _on_moved(old: str, new: str) -> None:
-            source = pop_source(new)
-            apply_change(conn, vault_dir, new, "moved", source=source, from_path=old)
+            consume_file_event(conn, vault_dir, new, "moved", from_path=old)
 
         def _on_deleted(path: str) -> None:
-            source = pop_source(path)
-            apply_change(conn, vault_dir, path, "deleted", source=source)
+            consume_file_event(conn, vault_dir, path, "deleted")
 
         watcher = SnapshotWatcher(
             vault_dir,

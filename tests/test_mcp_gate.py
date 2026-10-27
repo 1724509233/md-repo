@@ -6,23 +6,22 @@ only write path into it). So EVERY external write is rejected: the channel
 gate (:class:`McpExternalGate`) refuses the main area with protocol
 guidance pointing at the propose tool, and the vault-level SuggestionsGate
 (refuse-any-write into suggestions/) refuses the rest — applied
-unconditionally by ``validate_tool_call``. Telemetry (``_ledger_mcp_write``)
-must never break the tool response (same pattern as test_recall_telemetry);
-the ledger helpers are exercised directly below.
+unconditionally by ``validate_tool_call``.
 
 The channel rule lives in :class:`McpExternalGate` (mcp_server.py),
 injected via ``ChannelPolicy(gates=...)`` — the gate is exercised directly
 below exactly as validate_tool_call invokes it (write_doc surface).
+
+Ledger note: the MCP channel writes NO change_log rows directly (the stdio
+process cannot register with the server's write registry) — the watchdog
+fallback convention is pinned in tests/test_mcp_writes.py.
 """
 from __future__ import annotations
-
-import hashlib
-import sqlite3
 
 import pytest
 
 from server.agent.policy import ChannelPolicy, validate_tool_call
-from server.mcp_server import McpExternalGate, _ledger_mcp_write
+from server.mcp_server import McpExternalGate
 
 
 # --- Gate ---------------------------------------------------------------
@@ -99,58 +98,6 @@ def test_gate_noop_for_read_tools(tmp_path):
     gate = McpExternalGate()
     assert gate.check("read_doc", {"path": "notes/x.md"}, tmp_path) is None
     assert gate.check("search_docs", {"query": "x"}, tmp_path) is None
-
-
-# --- Ledger --------------------------------------------------------------
-
-def _latest_change_row(db_conn):
-    row = db_conn.execute(
-        "SELECT seq, ts, source, op, path, old_path, new_hash "
-        "FROM change_log ORDER BY seq DESC LIMIT 1"
-    ).fetchone()
-    return {
-        "seq": row[0], "ts": row[1], "source": row[2], "op": row[3],
-        "path": row[4], "old_path": row[5], "new_hash": row[6],
-    }
-
-
-def test_ledger_create_op(db_conn):
-    content = "proposal body"
-    _ledger_mcp_write(db_conn, "suggestions/2026-10-20_correction_x.md", False, content)
-    row = _latest_change_row(db_conn)
-    assert row["source"] == "mcp"
-    assert row["op"] == "create"
-    assert row["path"] == "suggestions/2026-10-20_correction_x.md"
-    assert row["new_hash"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
-    assert row["ts"] > 0
-
-
-def test_ledger_update_op(db_conn):
-    _ledger_mcp_write(db_conn, "suggestions/x.md", False, "v1")
-    _ledger_mcp_write(db_conn, "suggestions/x.md", True, "v2")
-    row = _latest_change_row(db_conn)
-    assert row["source"] == "mcp"
-    assert row["op"] == "update"
-    assert row["new_hash"] == hashlib.sha256(b"v2").hexdigest()
-
-
-@pytest.mark.parametrize("kind", ["none", "closed"])
-def test_ledger_bad_conn_never_raises(db_conn, kind):
-    """Telemetry must never break the tool response (any conn failure)."""
-    if kind == "none":
-        conn = None
-    else:
-        conn = sqlite3.connect(":memory:")
-        conn.close()
-    # Must not raise, whatever the connection is.
-    _ledger_mcp_write(conn, "suggestions/x.md", False, "content")
-
-
-def test_ledger_dropped_table_never_raises(db_conn):
-    """Drop change_log; the ledger call must still swallow the failure."""
-    db_conn.execute("DROP TABLE change_log")
-    db_conn.commit()
-    _ledger_mcp_write(db_conn, "suggestions/x.md", False, "content")
 
 
 # --- propose channel (oracle gate P0-Q6a) ----------------------------------

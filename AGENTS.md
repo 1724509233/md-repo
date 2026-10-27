@@ -42,7 +42,7 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 - **First-run indexing**: `ensure_indexed` (server/vault/orchestration/indexer.py) is a two-level check: ① segments content table empty → full rebuild of segments + graph; ② `segments_fts_docsize` row count ≠ segments row count → FTS-only rebuild (re-reads the content table, does not touch disk). `count(*) FROM segments_fts` cannot detect desync (on an external-content table it scans the content table). Not DB emptiness — the old `_self_heal` pattern is gone.
 - **No auth, no HTTPS**: LAN-only by design. Don't add authentication unless the spec changes.
 - **`server.vault` root imports are deprecated**: the shim in `server/vault/__init__.py` emits a DeprecationWarning and re-exports `server.vault.service` (plus a few test-only symbols); the public API is `from server.vault.service import ...`. The shim will be removed in a future release. Tests still import through it — don't break them.
-- **Write source tracking**: `server/write_registry.py` (pop_source) tracks which process wrote a file, used by the SnapshotWatcher to attribute change events.
+- **Change ledger discipline (apply_change / register_write)**: `apply_change` (server/vault/orchestration/file_ops.py) is the sole mutator of `change_log` + `files`. Regular callers: the SnapshotWatcher event consumer (`consume_file_event` in server/main.py; `pop_source` → `apply_change`) and the web UI endpoints in server/api.py — the web direct calls are intentional (synchronous row so the console feed responds instantly); those register with `consumer_skip=True` so the watcher does not book a duplicate row. In-process writers (agent tools, executor handlers, proposals projections) must NOT call `apply_change` directly — they call `register_write(path, source[, batch_id])` BEFORE writing and let the watcher book exactly one correctly-attributed row. Exceptions: (1) offline batch paths (startup reconcile, recovery) may call directly — no watcher runs to observe those changes; (2) external processes (MCP stdio) cannot register — the watcher falls back to `source="watchdog"` (= external modification). A writer that registers without `consumer_skip` AND calls `apply_change` directly produces a DOUBLE row (writer row + watcher row) — the drift the 2026-10-07 watchdog design eliminated; do not reintroduce it. Note: op strings are normalized to the canonical 4-set by `_ACTION_TO_OP` at the `log_change` entry — do not "fix" op vocabulary in callers.
 - **Background agents**: configured under `background_agents:` in config.yaml. Each has independent cron, model config, target_dir scope, and prompt file. Alias must be unique; target_dirs must not overlap.
 
 ## Design Spec
@@ -73,38 +73,3 @@ Web UI lives in `server/templates/index.html` + `server/templates/style.css`, se
 - Scroll position is not preserved when container height changes during a transition. If this matters, anchor an element and adjust `scrollTop` per frame via `requestAnimationFrame`.
 - Tailwind Play CDN generates styles at runtime — class names in JS `classList.add()` work, but dynamically constructed class strings must be complete (no partial matching).
 
-<!-- MDVAULT_START -->
-## MD Vault
-
-A personal knowledge base synced across devices. Use the `md-vault` MCP tools
-BEFORE web search or memory recall when you need project context, prior
-decisions, or development notes:
-
-- **search_docs**: Find relevant documents by keyword (FTS5 + Chinese support)
-- **read_doc**: Read full document content
-- **get_related_docs**: Discover related documents via wikilinks/tags
-- **write_doc**: Create or update a knowledge note
-- **edit_doc**: Precise text replacement in an existing document
-
-If the MCP server is not available, skip vault access — do not fall back to
-reading vault files directly.
-
-### MCP Server Restart
-
-The `md-vault` MCP server is a long-running stdio process launched by OpenCode
-(`command: ["md-vault-mcp"]` in `~/.config/opencode/opencode.json`). Code changes
-to `server/mcp_server.py` or `server/agent.py` do NOT take effect until the
-process is restarted. To restart:
-
-1. Run `/mcp` in OpenCode to see the server list and reconnect, OR
-2. Restart the OpenCode session entirely.
-
-After a restart, verify with a quick `write_doc` + `read_doc` round-trip.
-<!-- MDVAULT_END -->
-
-
-## Todo
-
-- [ ] 拆分 server / client 为独立发布的包（当前 `pip install md-sync` 一并安装两者，client 用户被迫带上 fastapi/openai 等 server 依赖）
-- [x] 记忆控制台 v4 监控页 UI 定稿（2026-10-23）：非对称网格 02E（1200px · 列比 1:1.6 · ≥1024px 网格 / ≤1023px 单列零重排 · D 形态终局：刻度条/状态灯/比例条/红边卡）；已并入稿 D 场景 02/04 + layouts 稿 #e（console-v4-watch.html / console-v4-watch-layouts.html，同日提交）
-- [x] 分层召回「展示更多」UI 样式优化（2026-10-15 首版已提交；预取式交互 + 按钮/空状态样式打磨完成，commit 9840857）

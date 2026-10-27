@@ -38,11 +38,12 @@ pattern (capture before write → finalize after). v2b will gate the
 switch exists in v2a (all forced on). Relatedness inserts no file, so it
 has nothing to capture.
 
-Merge handlers register the write as source="executor" (write_registry) and
-ledger file changes via ``apply_change(source="executor")`` (relatedness
-writes no file — the advance() ledger row is its state record); the state
-transition to ``merged`` is ledgered by ``advance`` and backs out
-``merged_at``.
+Merge handlers register the write as source="executor" with the run's
+batch_id (write_registry); the watcher consumer then ledgeres the file row
+via ``apply_change`` (exactly one row, correctly attributed — the writer
+never calls ``apply_change`` itself). Relatedness writes no file: the
+advance() re-projection registers its write, and the consumer's row on the
+projection path is this handler's state record.
 
 Failure taxonomy:
 
@@ -70,7 +71,6 @@ from ..snapshots import capture, finalize, gc, hash_bytes
 from ..vault.db.relatedness import upsert_edge
 from ..vault.db.schema import _db_lock
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
-from ..vault.orchestration.file_ops import apply_change
 from ..write_registry import register_write
 
 logger = logging.getLogger("md-vault.bgagent")
@@ -178,17 +178,19 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # 可逆层（P1）：执行器落地强制 pre-image（不变量 10）；v2b 才配开关（R2）。
     snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    register_write(rel, "executor")
+    # The file row is ledgered by the watcher consumer (pop_source →
+    # apply_change) with this registration: exactly one row, attributed to
+    # the run.
+    register_write(rel, "executor", batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
-    apply_change(conn, vault, rel, "update" if existed else "create",
-                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 # ── relatedness: one DB edge row, zero file landing (D9) ──────────────────
-# No file write → no apply_change file row; the advance() state-transition
-# ledger row IS this handler's state record. Nothing to snapshot (no file).
+# No file write → no file ledger row; the advance() re-projection registers
+# its write, and the consumer's row on the projection path is this
+# handler's state record. Nothing to snapshot (no file).
 
 def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     """Insert/refresh one (source, target) edge in the ``relatedness`` table.
@@ -297,12 +299,10 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # 旧全文即此 pre-image；报告型点态不可再生，pre-image 是唯一存档）。
     snap = capture(conn, vault, out_rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    register_write(out_rel, "executor")
+    register_write(out_rel, "executor", batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(out_fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
-    apply_change(conn, vault, out_rel, "update" if existed else "create",
-                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 # ── errata: additive contradiction card, machine zone (D6, spec §4.3) ─────
@@ -358,12 +358,10 @@ def _merge_errata(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # pre-image（不变量 10）。
     snap = capture(conn, vault, rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    register_write(rel, "executor")
+    register_write(rel, "executor", batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
-    apply_change(conn, vault, rel, "update" if existed else "create",
-                 source="executor", batch_id=str(p.get("run_id") or ""))
 
 
 _HANDLERS = {

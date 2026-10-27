@@ -21,6 +21,7 @@ from server import proposals
 from server.bgagent.executor import run_executor
 from server.vault.db.changes import get_changes
 from server.vault.fs.vault_ops import atomic_write_bytes, safe_rel_path, _iter_vault_md
+from tests.conftest import simulate_consumer
 
 
 def _adopted(vault_dir, conn, type, source_refs=None, payload=None, now=None):
@@ -447,6 +448,10 @@ def test_merge_ledgered_with_executor_source(vault_dir, db_conn):
     rec = _adopted(vault_dir, db_conn, "entity_index",
                    payload={"entity": "e1", "attrs": {"f": "v1"}})
     run_executor(vault_dir, db_conn)
+    # The merge registered both writes (artifact file + the merged
+    # re-projection); the watcher consumer books the rows.
+    simulate_consumer(db_conn, vault_dir, "index/entities.md", "created")
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     rows = [r for r in get_changes(db_conn, since=0) if r["source"] == "executor"]
     assert rows
     # Both the target file change and the proposal state transition are ledgered.
@@ -454,14 +459,32 @@ def test_merge_ledgered_with_executor_source(vault_dir, db_conn):
     assert any(r["path"] == rec["relpath"] and r["op"] == "update" for r in rows)
 
 
+def test_merge_books_exactly_one_file_row(vault_dir, db_conn):
+    """Regression: the merge lands exactly ONE change_log row for the
+    artifact file — the writer registers, the consumer books; the old
+    double-ledger call (direct apply_change + watcher row) is gone. The
+    row carries source="executor" and the run's batch_id."""
+    rec = _adopted(vault_dir, db_conn, "entity_index",
+                   payload={"entity": "one", "attrs": {"f": "v1"}})
+    run_executor(vault_dir, db_conn)
+    attribution = simulate_consumer(db_conn, vault_dir, "index/entities.md", "created")
+    assert attribution == ("executor", "batch-test", False)
+    rows = [tuple(r) for r in db_conn.execute(
+        "SELECT source, batch_id, op FROM change_log WHERE path = ?",
+        ("index/entities.md",)).fetchall()]
+    assert rows == [("executor", "batch-test", "create")]
+
+
 def test_relatedness_merge_ledgered_without_file_row(vault_dir, db_conn):
-    # D9: relatedness writes no file — the advance() state-transition ledger
-    # row (on the projection relpath) is its only ledger entry.
+    # D9: relatedness writes no file — the advance() re-projection
+    # registers its write; the consumer's row on the projection relpath
+    # is this handler's only ledger entry.
     (vault_dir / "notes" / "other.md").write_bytes(b"# Other\n")
     rec = _adopted(vault_dir, db_conn, "relatedness",
                    source_refs=["notes/test.md"],
                    payload={"target": "notes/other.md"})
     run_executor(vault_dir, db_conn)
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     rows = [r for r in get_changes(db_conn, since=0) if r["source"] == "executor"]
     assert rows
     assert all(r["path"] == rec["relpath"] for r in rows)  # no file rows
@@ -470,12 +493,17 @@ def test_relatedness_merge_ledgered_without_file_row(vault_dir, db_conn):
 def test_merge_artifact_rows_carry_batch_id(vault_dir, db_conn):
     # _adopted creates both records with run_id="batch-test"; after the
     # merge, the artifact file rows and the proposal state rows all carry it.
+    # The consumer books each registered write (one pass per path).
     rec_e = _adopted(vault_dir, db_conn, "entity_index",
                      payload={"entity": "batch-e", "attrs": {"f": "v1"}})
     rec_s = _adopted(vault_dir, db_conn, "summary",
                      payload={"form": "cache", "body": "body text"})
     summary = run_executor(vault_dir, db_conn)
     assert summary["merged"] == 2
+    simulate_consumer(db_conn, vault_dir, "index/entities.md", "created")
+    simulate_consumer(db_conn, vault_dir, "index/summaries/test-summary.md", "created")
+    simulate_consumer(db_conn, vault_dir, rec_e["relpath"], "modified")
+    simulate_consumer(db_conn, vault_dir, rec_s["relpath"], "modified")
     for path in ("index/entities.md", "index/summaries/test-summary.md",
                  rec_e["relpath"], rec_s["relpath"]):
         rows = [r[0] for r in db_conn.execute(

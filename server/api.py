@@ -295,7 +295,10 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             content = (body.get("content") or "").encode("utf-8")
             from .write_registry import register_write
 
-            register_write(rel.as_posix(), "web")
+            # Web op: logged synchronously (the console feed must respond
+            # instantly while the user watches); consumer_skip=True stops
+            # the watcher from booking a second row for the same write.
+            register_write(rel.as_posix(), "web", consumer_skip=True)
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_bytes(content)
@@ -340,9 +343,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                     for p in sorted(src.rglob("*.md")) if p.is_file()
                 ]
             from .write_registry import register_write
-
+            # Web op: per-file moved rows logged synchronously (console
+            # feed); consumer_skip=True stops the watcher from doubling.
+            # Reference rewriting ran in batch above — the per-file passes
+            # skip their own ref update (idempotent either way).
             for _, new in moves:
-                register_write(new, "web")
+                register_write(new, "web", consumer_skip=True)
             # pre_rename=True: update refs before rename so uniqueness check is correct
             _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
             was_dir = src.is_dir()
@@ -380,7 +386,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 from .snapshots import capture, finalize, gc_after_capture
 
                 snap = capture(db_conn, vault_dir, rel.as_posix(), "delete", actor="web")
-                register_write(rel.as_posix(), "web")
+                # Web op: logged synchronously below; consumer_skip=True
+                # stops the watcher from booking a second row.
+                register_write(rel.as_posix(), "web", consumer_skip=True)
                 try:
                     target.unlink()
                 except OSError as e:
@@ -411,7 +419,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             failed = None
             for p in md_files:
                 r = p.relative_to(vault_dir).as_posix()
-                register_write(r, "web")
+                # Web op: per-file rows logged synchronously below;
+                # consumer_skip=True stops the watcher from doubling.
+                register_write(r, "web", consumer_skip=True)
                 try:
                     p.unlink()
                 except OSError as e:

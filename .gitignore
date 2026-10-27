@@ -8,6 +8,7 @@ vault/
 !server/vault/
 .codegraph/
 config.yaml
+config.fun.yaml
 .playwright-mcp/
 .opencode/
 .openchamber/

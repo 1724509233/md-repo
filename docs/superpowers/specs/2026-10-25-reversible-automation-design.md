@@ -174,6 +174,7 @@ value 字段化 = 结构化；value 散文且与用户笔记同池竞争排序 =
 
 - **记录进库**：`index.db` 提案记录表（`id, type, actor, run_id, status, payload(JSON), source_refs, justification, reject_reason, 时间戳`）+ 状态变迁历史表。**状态以账本记录为唯一状态源**；状态机从「改文件」变「改记录行 + 记变迁」。`suggestions/` 文件 = 只读投影（§二.2）。存量 4 条 merged **不导入**（记录从切换日起；无内容 diff 可补，伪造凭据比没有更危险——承 v1 D7 口径）。
 - **创建 = 工具调用** `propose(type, payload, source_refs, justification)`：agent 写不了 SQL，提案创建从「写文件」改「调工具」。一步带走三件事：**同步校验**（工具参数即校验点：信封 + per-verb payload schema，畸形**零落盘**、当场报错返回 agent）、**可信盖章**（§三.3.1）、**越权拒绝**（§三.3.3）。`suggestions/` 进 agent 直写禁写名单；10-22 文件级校验钩子（`validate_suggestions_write`）退役，换工具级。
+- **待审队列 TTL**：`awaiting_review` 自创建起 14 天未审 → 自动转 `expired`（actor=system，变迁记账）；回读注入的未决计数不再挂僵尸条目。（10-27 联审补入：实施先行，裁决认下。）
 - 控制台从扫目录改读库。
 
 ### 5.2 协同终审（D-P3，主 agent 无缝作为终审协作者）
@@ -329,3 +330,4 @@ runner 每次 run 在上下文头部注入本角色：**未决 N 条 / 失败 M 
 | D21 | move 顺带的确定性引用重写（引用方）不在捕捉范围：重跑 reference update 即复现，与「机器区 · 确定性产出 = 重新生成」同构；捕捉对象 = 被移动文件本体（不可再生面） | P1 gate（oracle）：连引用方捕捉会把可再生文件卷入回滚批，且第二个 move 触及同一引用方时 pre-image 立即过期 |
 | D22 ★ | legacy 用户区 v1 summary 处置：自动化**不动**用户区文件（v2 零写用户区；批量迁移/删除 = 违宪）；P3 控制台呈现为 legacy 条目、人清理；召回侧降权仅当用户明确要求（名字模式降权 = 启发式误伤 + 机器替人决定旧摘要，踩「引导不替想」红线边缘） | P2 gate（oracle）：人的采纳使其成为用户文档，修正案 4 不追溯重分类；与 §十一.6「存量归人处置」同调；生产 vault 存量 4 条 merged 中 2 条为 summary → 该面真实存在，P3 票优先级上调 |
 | D23 | errata 卡与报告型 summary 的落点 = **每记录唯一文件名**（`<stem>-p<record-id>.md`；报告型同日同 stem 同构）——D6「物化 = 确权、系统只读」= 已物化卡不得被新记录覆盖（覆盖 = 静默销毁已确权内容，仅存快照且 GC 可回收）；缓存型 summary 单槽覆盖 = 设计如此（inv 10，旧全文在快照 pre-image）。v2a 按 `<stem>.md` 单槽交付（v2a 频率极低），唯一文件名落 P3/v2b 票 | P2 gate（oracle）#8.1：spec 表格字面（单槽）与 D6 只读语义的张力，裁为只读语义优先 |
+| D24 | 待审 TTL = 14 天（`awaiting_review → expired`，actor=system，变迁记账） | 10-27 联审：spec 未授权亦未禁止，实施先行；裁决认下并回写 §五.1（防僵尸计数污染回读注入） |

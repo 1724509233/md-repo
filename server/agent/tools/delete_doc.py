@@ -29,7 +29,6 @@ class DeleteDocTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture
         from ...vault.db.conn import get_conn
-        from ...vault.service import apply_change
         from ...write_registry import register_write
 
         fp = ctx.vault_dir / args.path
@@ -44,11 +43,12 @@ class DeleteDocTool(DocTool):
             snap = capture(conn, ctx.vault_dir, args.path, "delete",
                            ctx.write_source, run_id=ctx.run_id)
 
+        # The deleted row is ledgered by the watcher consumer (pop_source →
+        # apply_change) with this registration — no direct apply_change here
+        # (writer-side convention: exactly one row per write).
         register_write(args.path, ctx.write_source)
         fp.unlink()
         if snap is not None:
             finalize(conn, snap, "")  # post-state: file absent
             gc_after_capture(conn, ctx.vault_dir)
-        if conn:
-            apply_change(conn, ctx.vault_dir, args.path, "deleted", source="agent")
         return f"Deleted: {args.path}"

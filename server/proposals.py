@@ -51,7 +51,7 @@ import yaml
 from . import events
 from .vault.db.schema import _db_lock
 from .vault.fs.vault_ops import atomic_write_bytes
-from .vault.orchestration.file_ops import apply_change
+from .write_registry import register_write
 
 PROPOSALS_DIR = "suggestions"
 
@@ -71,12 +71,17 @@ REVIEW_TYPES = frozenset({"summary", "errata", "reminder"})
 # reject a row's type on read).
 RETIRED_TYPES = frozenset({"link", "correction", "archive"})
 
-# Creation writes no change_log row (matches v1 behavior: the file appeared
-# quietly; the ledger records state transitions and merges). Every status
-# transition and merge IS recorded in the change_log via ``apply_change``
-# (source = actor, batch_id = the producing run_id, so the console trail and
-# notifications keep working). ``events.publish("proposal")`` fires only on
-# ``adopted`` — the executor's sole actionable state.
+# No function here calls ``apply_change``. The projection file's ledger row
+# is written by the watcher consumer (server/main.py) after the projection
+# write lands: the consumer pops the write registration set by
+# :func:`project` — exactly ONE file row per write, with source = the acting
+# role (creator or transitioning actor) and batch_id = the record's run_id,
+# so the console trail and notifications keep working. Creation therefore
+# produces exactly one row (source = the proposing actor, not "watchdog");
+# every transition/move produces one row per re-projection. The state
+# machine itself is recorded in the ``proposal_transitions`` table.
+# ``events.publish("proposal")`` fires only on ``adopted`` — the executor's
+# sole actionable state.
 
 TRANSITIONS: dict[str, frozenset[str]] = {
     "pending": frozenset({"processing"}),
@@ -196,8 +201,15 @@ def render_projection(record: dict) -> str:
     return "---\n" + yaml.safe_dump(fm, allow_unicode=True, sort_keys=False) + "---\n" + body + "\n"
 
 
-def project(vault_dir, record: dict) -> None:
-    """Write (or re-write) the record's projection file. Idempotent."""
+def project(vault_dir, record: dict, source: str) -> None:
+    """Write (or re-write) the record's projection file. Idempotent.
+
+    Registers the write (source, batch_id = the record's run_id) BEFORE the
+    bytes land: the watcher consumer ledgeres the file row with that
+    attribution (writer-side convention — no direct apply_change here).
+    """
+    register_write(record["relpath"], source,
+                   batch_id=str(record.get("run_id") or ""))
     fp = Path(vault_dir) / record["relpath"]
     fp.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_bytes(fp, render_projection(record).encode("utf-8"))
@@ -233,8 +245,9 @@ def create(
 ) -> dict:
     """Insert a new proposal record with ``status: pending`` and project it.
 
-    Returns the created record dict. No change_log row is written (v1
-    behavior: creation is quiet; the ledger records transitions/merges).
+    Returns the created record dict. The projection registers its write
+    (source = ``actor``, batch_id = ``run_id``); the file row lands via the
+    watcher consumer — no row exists synchronously after this call.
     ``now`` is injectable (tests) and fixes both created_at and the
     filename date.
     """
@@ -249,8 +262,7 @@ def create(
     # Row-write section under the shared DB lock (the connection is shared
     # across the event-loop thread and executor worker threads). The
     # projection file write stays OUTSIDE the lock: project() is plain file
-    # I/O, and apply_change (called later by advance) takes the lock itself
-    # — nesting would deadlock on the non-reentrant _db_lock.
+    # I/O (no DB access), so no nesting on the non-reentrant _db_lock.
     with _db_lock:
         cur = conn.execute(
             """
@@ -281,7 +293,7 @@ def create(
             """,
             (record_id, actor, now),
         )
-    project(vault_dir, rec)
+    project(vault_dir, rec, source=actor)
     return rec
 
 
@@ -297,13 +309,15 @@ def advance(
 ) -> dict:
     """Transition a proposal record to ``new_status`` (legal moves only).
 
-    Updates the row, appends a proposal_transitions row, and re-projects
-    the file (system-exclusive write; hand-edits are overwritten). Every
-    transition is ledgered via ``apply_change`` (source = actor, batch_id =
-    the record's run_id); ``events.publish("proposal")`` fires only on
-    ``adopted``. Returns the updated record. Raises ``ValueError`` on
-    illegal transitions (including unknown ``new_status``) and
-    ``FileNotFoundError`` if the record is missing.
+    Updates the row, appends a proposal_transitions row (the state ledger),
+    and re-projects the file (system-exclusive write; hand-edits are
+    overwritten). The re-projection registers its write (source = actor,
+    batch_id = the record's run_id); the file's change_log row lands via
+    the watcher consumer — no apply_change here.
+    ``events.publish("proposal")`` fires only on ``adopted``. Returns the
+    updated record. Raises ``ValueError`` on illegal transitions
+    (including unknown ``new_status``) and ``FileNotFoundError`` if the
+    record is missing.
     """
     rec = record(conn, record_id)
     if rec is None:
@@ -324,8 +338,8 @@ def advance(
 
     now = time.time()
     # Row-write section under the shared DB lock (see create()). The
-    # re-read, the projection file write and apply_change (which takes the
-    # lock itself) stay outside — no nested/non-reentrant lock holds.
+    # re-read and the projection file write stay outside — no
+    # nested/non-reentrant lock holds (project() is plain file I/O).
     with _db_lock:
         conn.execute(
             "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
@@ -341,12 +355,7 @@ def advance(
         )
 
     updated = record(conn, record_id)
-    project(vault_dir, updated)
-
-    # Ledger: every transition is a change event on the projection path
-    # (source = acting role; batch_id = the producing run).
-    apply_change(conn, Path(vault_dir), updated["relpath"], "update",
-                 source=actor, batch_id=updated["run_id"])
+    project(vault_dir, updated, source=actor)
 
     # Event wakeup: only adopted (executor's sole actionable state).
     if new_status == "adopted":
@@ -360,7 +369,8 @@ def process_proposal(conn, vault_dir, record_id: int, actor: str) -> dict:
 
     Applies the authorization policy for the proposal's type (auto →
     adopted, review → awaiting_review). Convenience for the two-transition
-    sequence; each transition is ledgered separately.
+    sequence; each transition records a proposal_transitions row and its
+    re-projection registers a write for the watcher consumer.
     """
     rec = record(conn, record_id)
     if rec is None:
@@ -379,8 +389,9 @@ def process_proposal(conn, vault_dir, record_id: int, actor: str) -> dict:
 def expire_overdue(conn, vault_dir, now_ts: float | None = None) -> int:
     """Expire ``awaiting_review`` records older than 14 days (created_at).
 
-    Returns the number expired. Each expiry is a ledgered transition
-    (actor = "system").
+    Returns the number expired. Each expiry records a proposal_transitions
+    row (actor = "system") and its re-projection registers a write for the
+    watcher consumer.
     """
     now = now_ts if now_ts is not None else time.time()
     count = 0

@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from server import proposals
 from server.api import create_app
 from server.vault.db.changes import get_changes, log_change
+from tests.conftest import simulate_consumer
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -97,6 +98,8 @@ def test_adopt_success_and_ledger(client, vault_dir, db_conn):
     assert resp.json() == {"relpath": rel, "status": "adopted"}
     assert proposals.record_by_relpath(db_conn, rel)["status"] == "adopted"
 
+    # The adoption's ledger row lands via the watcher consumer.
+    simulate_consumer(db_conn, vault_dir, rel, "modified")
     # Ledgered with the human actor (source="human", op="update").
     rows = get_changes(db_conn, since=0, path=rel, source="human")
     assert rows
@@ -366,10 +369,15 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     # ledgered state transitions on the projection file + one executor
     # file merge carrying the batch id but a different path.
     rec_a = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec_a)  # processing + awaiting_review rows
+    proposals.advance(db_conn, vault_dir, rec_a["id"], "processing", actor="tester")
+    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
+    proposals.advance(db_conn, vault_dir, rec_a["id"], "awaiting_review", actor="tester")
+    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     resp = client.post(f"/api/memory/proposals/{rec_a['relpath']}/adopt")
     assert resp.status_code == 200  # +adopted row (source=human)
+    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     proposals.advance(db_conn, vault_dir, rec_a["id"], "merged", actor="executor")
+    simulate_consumer(db_conn, vault_dir, rec_a["relpath"], "modified")
     # +the executor's file merge (same batch, other path) — what the
     # 30-minute loop ledgered via apply_change.
     log_change(db_conn, "index/entities.md", "update", source="executor",

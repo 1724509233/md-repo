@@ -9,6 +9,7 @@ import pytest
 from server import api as api_module
 from server.vault import get_all_files, upsert_file
 from server.vault.db.changes import get_changes
+from tests.conftest import simulate_consumer
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
@@ -466,6 +467,31 @@ def test_manage_create_file_conflict(client) -> None:
         "/api/docs/manage", json={"action": "create_file", "path": "notes/test.md"}
     )
     assert r.status_code == 409
+
+
+def test_manage_create_file_single_row_with_consumer(client, vault_dir, db_conn) -> None:
+    """Regression: web ops log their row synchronously (the console feed
+    must respond instantly while the user watches) AND register with
+    consumer_skip, so the watcher consumer books NO second row for the
+    same write. Total: exactly one change_log row."""
+    r = client.post(
+        "/api/docs/manage", json={"action": "create_file", "path": "new/file.md"}
+    )
+    assert r.status_code == 200
+    # The synchronous row (source="web") exists immediately.
+    rows = db_conn.execute(
+        "SELECT source, op FROM change_log WHERE path = 'new/file.md'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "web"
+    # The filesystem event arrives ~1.5s later in production: the consumer
+    # must see the consumer_skip registration and book nothing.
+    attribution = simulate_consumer(db_conn, vault_dir, "new/file.md", "created")
+    assert attribution == ("web", "", True)  # skip honored
+    rows = db_conn.execute(
+        "SELECT source, op FROM change_log WHERE path = 'new/file.md'"
+    ).fetchall()
+    assert len(rows) == 1  # still exactly one row — no double row
 
 
 def test_manage_create_folder(client, vault_dir) -> None:

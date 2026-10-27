@@ -1,7 +1,6 @@
 """MCP stdio server exposing md-vault as agent memory."""
 from __future__ import annotations
 
-import hashlib
 import logging
 import sys
 import threading
@@ -23,7 +22,6 @@ from server.agent.tools.read_doc import ReadDocTool
 from server.agent.tools.edit_doc import EditDocTool
 from server.agent.tools.search_docs import SearchDocsTool
 from server.agent.tools.get_related_docs import GetRelatedDocsTool
-from server.vault.db.changes import log_change
 
 _read_doc_tool = ReadDocTool()
 _edit_doc_tool = EditDocTool()
@@ -67,31 +65,20 @@ class McpExternalGate(WriteGate):
         return None
 
 
-def _ledger_mcp_write(db_conn, path: str, existed: bool, content: str) -> None:
-    """Append a change_log row (source="mcp") for an external MCP write.
-
-    Never raises — telemetry must not break the tool response (same pattern
-    as the recall telemetry in server/api.py::ai_search). The server's
-    snapshot watcher may also record this change (source="watchdog") —
-    accepted double attribution for the external process, no dedupe here.
-    """
-    try:
-        new_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        log_change(db_conn, path, "create" if not existed else "update",
-                   source="mcp", new_hash=new_hash)
-    except Exception:
-        logging.getLogger("mcp_server").warning(
-            "change_log entry for MCP write %s failed", path, exc_info=True)
-
-
 def _mcp_write(vault_dir: Path, db_conn, path: str, content: str) -> str:
     """The MCP channel's write_doc body (R1, P2): the external write goes
     through the same reversibility layer as the agent channel — the full
     pre-image is captured BEFORE the write (create class: no pre-image
-    bytes, just the row); a failed write drops the capture (no residue);
-    the ledger row is appended afterwards. Mirrors
-    ``server/agent/tools/write_doc.py`` (actor="mcp", no run stamp — stdio
-    has no bgagent run)."""
+    bytes, just the row); a failed write drops the capture (no residue).
+    Mirrors ``server/agent/tools/write_doc.py`` (actor="mcp", no run stamp
+    — stdio has no bgagent run).
+
+    No change_log row is written here: the MCP stdio process is a separate
+    process that cannot register with the server's write registry, so the
+    change lands only via the watcher's fallback attribution
+    (source="watchdog") — the 2026-10-07 ledger convention (MCP 归入
+    watchdog 兜底).
+    """
     from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
     from server.vault.db.conn import get_conn
 
@@ -121,7 +108,6 @@ def _mcp_write(vault_dir: Path, db_conn, path: str, content: str) -> str:
                 "snapshot finalize failed after successful MCP write %s: %s "
                 "(write stands; pre-image stays rollback-able in-flight)",
                 path, e, exc_info=True)
-    _ledger_mcp_write(db_conn, path, existed, content)
     if existed:
         return f"Saved: {path} ({len(content)} chars, overwritten)"
     return f"Saved: {path} ({len(content)} chars)"
@@ -158,9 +144,6 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
                     "snapshot finalize failed after successful MCP edit %s: %s "
                     "(edit stands; pre-image stays rollback-able in-flight)",
                     path, e, exc_info=True)
-    if result.startswith("Edited"):
-        new_content = fp.read_bytes().decode("utf-8", errors="replace")
-        _ledger_mcp_write(db_conn, path, True, new_content)
     return result
 
 

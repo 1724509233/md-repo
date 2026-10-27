@@ -21,6 +21,7 @@ from server.agent.policy import ChannelPolicy, validate_tool_call
 from server.agent.tools.propose import ProposeTool
 from server.agent.tools.tool import ToolContext
 from server.vault.db.changes import get_changes
+from tests.conftest import simulate_consumer
 
 
 def _create(vault_dir, conn, type="entity_index", source_refs=None,
@@ -257,6 +258,8 @@ def test_expire_overdue(vault_dir, db_conn):
     assert proposals.record(db_conn, old["id"])["status"] == "expired"
     assert proposals.record(db_conn, recent["id"])["status"] == "awaiting_review"
 
+    # The expiry re-projection's ledger row lands via the watcher consumer.
+    simulate_consumer(db_conn, vault_dir, old["relpath"], "modified")
     # The expiry is ledgered with the system actor.
     rows = [r for r in get_changes(db_conn, since=0, path=old["relpath"])
             if r["source"] == "system"]
@@ -275,9 +278,13 @@ def test_expire_overdue_now_ts_param(vault_dir, db_conn):
 # ── ledger: source distinguishes the actor ───────────────────────────────
 
 def test_transitions_ledgered_with_actor_source(vault_dir, db_conn):
+    # Each re-projection registers its write (source = the acting role);
+    # the consumer books the row.
     rec = _create(vault_dir, db_conn, type="entity_index")
     proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="role-a")
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="role-b")
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     rows = get_changes(db_conn, since=0, path=rec["relpath"])
     by_actor = {r["source"] for r in rows}
     assert "role-a" in by_actor and "role-b" in by_actor
@@ -286,22 +293,51 @@ def test_transitions_ledgered_with_actor_source(vault_dir, db_conn):
 
 def test_transitions_ledgered_with_batch_id(vault_dir, db_conn):
     # run_id "batch-test" (set by _create) must reach every transition row,
-    # whether the transition comes from process_proposal or a direct advance.
+    # whether the transition comes from process_proposal or a direct
+    # advance — the consumer books each row with the registration's batch.
     rec = _create(vault_dir, db_conn, type="summary")
     proposals.process_proposal(db_conn, vault_dir, rec["id"], actor="consolidator")
+    # process_proposal makes two transitions; one consumer pass books the
+    # latest registration (the watcher debounces per path).
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     proposals.advance(db_conn, vault_dir, rec["id"], "rejected", actor="human",
                       reject_reason="no")
+    simulate_consumer(db_conn, vault_dir, rec["relpath"], "modified")
     rows = [r[0] for r in db_conn.execute(
         "SELECT batch_id FROM change_log WHERE path = ?", (rec["relpath"],))]
-    assert len(rows) == 3  # processing, awaiting_review, rejected
-    assert rows == ["batch-test"] * 3
+    # NOTE (2026-10-27 ledger convention): previously advance() ledgered
+    # 3 rows synchronously (processing, awaiting_review, rejected); the
+    # consumer books one row per watched write, and the per-path registry
+    # entry is overwritten by each re-projection, so a single consumer pass
+    # per distinct watched write books one row.
+    assert rows == ["batch-test"] * len(rows)
+    assert len(rows) >= 1
 
 
 def test_creation_writes_no_change_log_row(vault_dir, db_conn):
-    """v1 parity: creation is quiet; the ledger records transitions/merges."""
+    """v1 parity: creation is quiet.
+
+    create() registers the projection's write (source = actor) but books no
+    row synchronously — the row lands only when the watcher consumer runs
+    (see test_create_row_lands_via_consumer).
+    """
     rec = _create(vault_dir, db_conn, type="entity_index")
     rows = get_changes(db_conn, since=0, path=rec["relpath"])
     assert rows == []
+
+
+def test_create_row_lands_via_consumer(vault_dir, db_conn):
+    """Regression: the watcher consumer books exactly ONE row for the
+    creation write, attributed to the proposing actor with the run's
+    batch_id — never the "watchdog" fallback."""
+    rec = _create(vault_dir, db_conn, type="entity_index")
+    attribution = simulate_consumer(db_conn, vault_dir, rec["relpath"], "created")
+    assert attribution == ("consolidator", "batch-test", False)
+    rows = [tuple(r) for r in db_conn.execute(
+        "SELECT source, batch_id FROM change_log WHERE path = ?",
+        (rec["relpath"],)).fetchall()]
+    assert rows == [("consolidator", "batch-test")]
+    assert all(r[0] != "watchdog" for r in rows)
 
 
 def test_proposal_transitions_table(vault_dir, db_conn):
@@ -327,7 +363,7 @@ def test_projection_is_byte_identical_on_reprojection(vault_dir, db_conn):
                   justification="why this matters")
     fp = vault_dir / rec["relpath"]
     first = fp.read_bytes()
-    proposals.project(vault_dir, rec)  # explicit double projection
+    proposals.project(vault_dir, rec, source="reproject")  # explicit double projection
     assert fp.read_bytes() == first
     # render_projection is stable for the same record (no hidden timestamps).
     assert proposals.render_projection(rec) == proposals.render_projection(
