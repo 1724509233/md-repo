@@ -25,10 +25,10 @@ from .agent.spec import AgentSpec, ModelConfig
 from .agent.tools import TOOL_REGISTRY
 from .vault.service import (
     apply_change,
+    apply_folder_change,
     get_all_files,
     upsert_file,
 )
-from .vault.db.changes import log_change
 from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
@@ -337,7 +337,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 dir_path.mkdir(parents=True)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to create folder: {e}")
-            log_change(db_conn, rel.as_posix(), "created", source="web")
+            apply_folder_change(db_conn, vault_dir, rel.as_posix(), "created", source="web")
             return {"ok": True, "path": rel.as_posix()}
         if action in ("rename", "move"):
             src_rel = _safe_rel_path(body.get("from_path") or "")
@@ -378,7 +378,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to rename: {e}")
             if was_dir:
-                log_change(db_conn, dst_rel.as_posix(), "moved", from_path=src_rel.as_posix(), source="web")
+                apply_folder_change(
+                    db_conn, vault_dir, dst_rel.as_posix(), "moved", source="web",
+                    from_path=src_rel.as_posix())
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for old, new in moves:
                 apply_change(
@@ -480,7 +482,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 except OSError:
                     pass  # non-empty (contains non-.md files) → keep
             if not target.exists():
-                log_change(db_conn, rel.as_posix(), "deleted", source="web")
+                apply_folder_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for r in rels:
                 apply_change(db_conn, vault_dir, r, "deleted", source="web")

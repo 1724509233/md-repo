@@ -163,6 +163,23 @@ def apply_change(
                               "source": source, "path": path})
 
 
+def apply_folder_change(
+    conn: sqlite3.Connection,
+    vault_dir: Path,
+    relpath: str,
+    action: str,
+    source: str = "web",
+    from_path: str = "",
+) -> None:
+    """Folder-variant chokepoint (v2.2 Q11): folders are not files — no
+    files-table / FTS / graph work; the ledger row still flows through the
+    file_ops change surface so that EVERY change_log row passes this module
+    (the web folder paths previously called log_change bare)."""
+    with _db_lock:
+        log_change(conn, relpath, action, from_path=from_path, source=source,
+                   batch_id="")
+
+
 # ── Startup reconcile (merged from the former reconcile.py) ──
 
 SOURCE = "reconcile"
