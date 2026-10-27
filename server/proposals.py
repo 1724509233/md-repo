@@ -251,6 +251,32 @@ def create(
 
 # ── State machine ─────────────────────────────────────────────────────────
 
+def _advance_sql(conn, record_id: int, cur_status: str, new_status: str,
+                 new_reason: str, merged_at: str, actor: str,
+                 reason: str) -> int:
+    """The SOLE status UPDATE (invariant 11): conditional on the expected
+    pre-state. Returns the affected row count; 0 = the record moved
+    underneath us (concurrent decision) — the caller raises ``ValueError``
+    and the losing path writes zero side effects (no transitions row).
+    """
+    with _db_lock:
+        now = time.time()
+        cur = conn.execute(
+            "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, "
+            "updated_at = ? WHERE id = ? AND status = ?",
+            (new_status, new_reason, merged_at, now, record_id, cur_status),
+        )
+        if cur.rowcount == 0:
+            return 0
+        conn.execute(
+            "INSERT INTO proposal_transitions "
+            "(proposal_id, from_status, to_status, actor, ts, reason) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (record_id, cur_status, new_status, actor, now, reason),
+        )
+        return cur.rowcount
+
+
 def advance(
     conn,
     vault_dir,
@@ -265,7 +291,9 @@ def advance(
     ledger). v2a (D25): no file write, no change_log row — state moves in
     the record only. ``events.publish("proposal")`` fires only on
     ``adopted``. Returns the updated record. Raises ``ValueError`` on
-    illegal transitions (including unknown ``new_status``) and
+    illegal transitions (including unknown ``new_status`` and the
+    invariant-11 concurrent-decision case: the conditional UPDATE matched
+    zero rows because the record moved between our read and write) and
     ``FileNotFoundError`` if the record is missing.
     """
     rec = record(conn, record_id)
@@ -285,20 +313,15 @@ def advance(
     if reject_reason:
         new_reason = reject_reason
 
-    now = time.time()
-    # Row-write section under the shared DB lock (see create()).
-    with _db_lock:
-        conn.execute(
-            "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, updated_at = ? WHERE id = ?",
-            (new_status, new_reason, merged_at, now, record_id),
-        )
-        conn.execute(
-            """
-            INSERT INTO proposal_transitions
-                (proposal_id, from_status, to_status, actor, ts, reason)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (record_id, cur_status, new_status, actor, now, reject_reason),
+    # Row-write section: one conditional UPDATE (invariant 11 — the UPDATE
+    # is guarded on the pre-state we read, so a concurrent decision from
+    # the other channel loses with zero side effects; see _advance_sql).
+    n = _advance_sql(conn, record_id, cur_status, new_status, new_reason,
+                     merged_at, actor, reject_reason)
+    if n == 0:
+        raise ValueError(
+            f"illegal pre-state: expected {cur_status!r} but the record moved "
+            "(invariant 11 — concurrent decision)"
         )
 
     updated = record(conn, record_id)
