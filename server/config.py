@@ -57,13 +57,18 @@ class BackgroundAgentConfig:
       executor loop instead. At most one across the whole config; its
       target_dir is unrestricted (vault root allowed) and exempt from the
       target_dir overlap check (nothing writes under LLM scope control).
-    - ``tools``: optional tool whitelist — a non-empty tuple of tool names
-      that must exist in the agent tool registry. None (absent) = all tools.
-    - ``verbs``: optional proposal-verb whitelist (reversible-automation v2)
-      — a non-empty tuple of proposal types this role may ``propose``
-      (subset of proposals.VALID_TYPES). None (absent) = unrestricted
-      (the role may propose any type; the desktop channel is always
-      unrestricted). Enforced at the propose tool via ToolContext.verbs.
+    - ``tools``: tool whitelist (v2 legal layer) — a non-empty tuple of
+      tool names that must exist in the agent tool registry. LLM roles
+      must declare it explicitly: absent (None) is a load-time error,
+      because an undeclared whitelist would fail open to all tools.
+      The executor role (``is_executor``) is exempt — it has no LLM
+      tool surface (the framework runs its deterministic loop instead).
+    - ``verbs``: proposal-verb whitelist (reversible-automation v2) — a
+      non-empty tuple of proposal types this role may ``propose``
+      (subset of proposals.VALID_TYPES). Required when ``tools`` contains
+      ``propose`` (undeclared verbs = unrestricted propose is forbidden);
+      absent with no propose in tools = unused. Enforced at the propose
+      tool via ToolContext.verbs.
     - ``escalation``: optional law-layer metadata mapping condition keys
       (``zero_recall_candidate``, ``query_gap_detected``) to actions
       (``notify``, ``report``). In v2 the framework enforces escalation
@@ -86,8 +91,8 @@ class BackgroundAgentConfig:
     budget_max_proposals: int = 5
     trigger: dict | None = None
     is_executor: bool = False
-    tools: tuple[str, ...] | None = None   # None = all tools (backward compatible)
-    verbs: tuple[str, ...] | None = None   # None = unrestricted propose (v2)
+    tools: tuple[str, ...] | None = None   # LLM role: None = load error (v2 legal layer); executor exempt
+    verbs: tuple[str, ...] | None = None   # required when tools contains 'propose' (v2 legal layer)
     escalation: dict | None = None
 
 
@@ -255,8 +260,11 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
     """Load and validate the 'background_agents' section.
 
     Fail-fast: raises ValueError on duplicate alias, invalid cron, missing
-    prompt file, target_dir/report_dir outside the vault, or overlapping
-    target_dirs (scopes both contained in the proposal drop zone are exempt).
+    prompt file, target_dir/report_dir outside the vault, overlapping
+    target_dirs (scopes both in a shared writer face are exempt), or a
+    v2 legal-layer violation (LLM role without an explicit tools whitelist;
+    propose in tools without verbs; propose + write_doc in one role —
+    the executor role is exempt from the legal layer).
     Returns [] when the section is absent.
     """
     path = Path(config_path)
@@ -314,6 +322,28 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         verbs = _parse_verbs(raw.get("verbs"), i, alias)
         escalation = _parse_escalation(raw.get("escalation"), i, alias)
 
+        # v2 legal layer (Q7/Q9): fail-fast, before construction — the
+        # existing per-item validations all raise before append.
+        # The executor role has no LLM tool surface → exempt from all three.
+        is_executor = bool(raw.get("is_executor", False))
+        if not is_executor:
+            if tools is None:
+                raise ValueError(
+                    f"background_agents[{i}] ({alias}): tools is required "
+                    f"(v2 legal layer: undeclared tool whitelist = fail-open "
+                    f"is forbidden — declare the full list)")
+            if "propose" in tools and verbs is None:
+                raise ValueError(
+                    f"background_agents[{i}] ({alias}): verbs is required when "
+                    f"tools contains 'propose' (undeclared verbs = "
+                    f"unrestricted propose is forbidden)")
+            if "propose" in tools and "write_doc" in tools:
+                raise ValueError(
+                    f"background_agents[{i}] ({alias}): a role may not hold "
+                    f"both 'propose' and 'write_doc' (ADR-0004 boundary line: "
+                    f"proposal roles have no direct write — the final-review "
+                    f"gate must not be bypassable)")
+
         agents.append(BackgroundAgentConfig(
             name=str(raw.get("name", alias)),
             alias=alias,
@@ -336,7 +366,7 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
             budget_runs_per_day=int(raw.get("budget_runs_per_day", 3)),
             budget_max_proposals=int(raw.get("budget_max_proposals", 5)),
             trigger=trigger,
-            is_executor=bool(raw.get("is_executor", False)),
+            is_executor=is_executor,
             tools=tools,
             verbs=verbs,
             escalation=escalation,

@@ -55,7 +55,11 @@ def test_load_client_config_missing_file(tmp_path: Path) -> None:
 # ── background agent trigger source + escalation parsing ─────────────────
 
 def _bg_cfg_file(tmp_path: Path, extra: str = "") -> Path:
-    """Write a minimal background_agents config with ``extra`` YAML lines."""
+    """Write a minimal background_agents config with ``extra`` YAML lines.
+
+    The v2 legal layer requires an explicit tools whitelist on LLM roles —
+    the fixture declares a read-only set (no propose → verbs N/A).
+    """
     prompt = tmp_path / "prompt.md"
     prompt.write_text("p", encoding="utf-8")
     cfg_file = tmp_path / "config.yaml"
@@ -65,6 +69,7 @@ def _bg_cfg_file(tmp_path: Path, extra: str = "") -> Path:
         "    cron: '0 3 * * *'\n"
         "    target_dir: notes\n"
         "    prompt: prompt.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n"
         "      model_id: m\n"
         f"{extra}",

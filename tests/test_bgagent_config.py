@@ -16,11 +16,14 @@ def _write_config(tmp_path: Path, body: str) -> Path:
 
 def _agent_yaml(alias="notes-organizer", target="notes", prompt="prompts/p.md",
                 cron="0 3 * * *", enabled=True, extra="") -> str:
+    # v2 legal layer: LLM roles declare an explicit tools whitelist
+    # (read-only set; no propose → verbs N/A).
     return (
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         f"  - name: \"Test\"\n    alias: {alias}\n    enabled: {str(enabled).lower()}\n"
         f"    cron: \"{cron}\"\n    target_dir: {target}\n    prompt: {prompt}\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         f"{extra}"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
@@ -31,8 +34,10 @@ def _two_agents_yaml() -> str:
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         "  - alias: a\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: b\n    cron: \"0 4 * * *\"\n    target_dir: docs\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
 
@@ -89,8 +94,10 @@ def test_duplicate_alias_rejected(tmp_path: Path):
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         "  - alias: same\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: same\n    cron: \"0 4 * * *\"\n    target_dir: docs\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
     cfg = _write_config(tmp_path, body)
@@ -135,8 +142,10 @@ def test_overlapping_target_dirs_rejected(tmp_path: Path):
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         "  - alias: a\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: b\n    cron: \"0 4 * * *\"\n    target_dir: notes/sub\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
     cfg = _write_config(tmp_path, body)
@@ -159,8 +168,10 @@ def test_shared_proposal_zone_allowed(tmp_path: Path):
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         "  - alias: consolidator\n    cron: \"0 2 * * *\"\n    target_dir: suggestions\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: sentinel\n    cron: \"0 9 * * 1\"\n    target_dir: suggestions\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
     cfg = _write_config(tmp_path, body)
@@ -181,8 +192,10 @@ def test_proposal_zone_vs_write_area_containment_still_rejected(tmp_path: Path):
         "server:\n  host: 0.0.0.0\n  port: 9888\n  vault_dir: ./vault\n"
         "background_agents:\n"
         "  - alias: a\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: b\n    cron: \"0 4 * * *\"\n    target_dir: notes/suggestions\n    prompt: prompts/p.md\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
     cfg = _write_config(tmp_path, body)
@@ -211,9 +224,11 @@ def test_overlapping_report_dirs_rejected(tmp_path: Path):
         "background_agents:\n"
         "  - alias: a\n    cron: \"0 3 * * *\"\n    target_dir: notes\n    prompt: prompts/p.md\n"
         "    report_dir: shared/reports\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
         "  - alias: b\n    cron: \"0 4 * * *\"\n    target_dir: docs\n    prompt: prompts/p.md\n"
         "    report_dir: shared/reports\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes]\n"
         "    model:\n      model_id: qwen\n      base_url: http://x\n"
     )
     cfg = _write_config(tmp_path, body)

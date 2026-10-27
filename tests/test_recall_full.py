@@ -395,13 +395,19 @@ def _bg_config_file(tmp_path: Path, tools_block: str = "") -> Path:
     return cfg_file
 
 
-def test_config_tools_absent_is_none(tmp_path):
+def test_config_tools_absent_llm_role_rejected(tmp_path):
+    """v2 legal layer supersedes the old fail-open default: an LLM role
+    without an explicit tools whitelist is a start-time error (Q7); the
+    executor role is exempt (no LLM tool surface) and keeps tools=None."""
     from server.config import load_background_agents
 
     cfg_file = _bg_config_file(tmp_path)
+    with pytest.raises(ValueError, match="tools is required"):
+        load_background_agents(str(cfg_file), tmp_path)
+    cfg_file = _bg_config_file(tmp_path, "    is_executor: true\n")
     agents = load_background_agents(str(cfg_file), tmp_path)
     assert len(agents) == 1
-    assert agents[0].tools is None  # all tools, backward compatible
+    assert agents[0].tools is None
 
 
 def test_config_tools_valid_names(tmp_path):
