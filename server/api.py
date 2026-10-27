@@ -165,6 +165,26 @@ def _guard_proposal_relpath(relpath: str) -> str:
     return safe.as_posix()
 
 
+def _guard_report_relpath(relpath: str) -> str:
+    """Validate a report relpath lives under the machine-zone report channel.
+
+    The report channel is the advisory surface of the machine zone
+    (``index/reports/<alias>/YYYY-MM-DD.md``, ADR-0004); the guard mirrors
+    ``_guard_proposal_relpath`` (same defense, different root — the card
+    surface is ``suggestions/``, the report surface is ``index/reports/``).
+
+    Returns the normalized posix relpath; raises HTTPException otherwise
+    (unsafe path or outside the report channel → 400).
+    """
+    safe = _safe_rel_path(relpath)
+    if safe is None:
+        raise HTTPException(status_code=400, detail="invalid path")
+    rel = safe.as_posix()
+    if not rel.startswith("index/reports/"):
+        raise HTTPException(status_code=400, detail="not a report path")
+    return rel
+
+
 def create_app(vault_dir: Path, db_conn, ai_config=None,
                bg_targets: dict[str, dict] | None = None) -> FastAPI:
     """Create the FastAPI application.
@@ -838,6 +858,60 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         for c in calls:
             c["files"] = c["files"].split("\n") if c["files"] else []
         return {"calls": calls}
+
+    # ── memory console: report channel (read-only advisory, ADR-0004) ──────
+    # The report channel lands under the machine zone (index/reports/<alias>/
+    # YYYY-MM-DD.md); the console lists them and reads one. Advisory only —
+    # never a write path, never a proposal-state change.
+
+    @app.get("/api/memory/reports")
+    async def memory_reports() -> dict:
+        """List the report channel: index/reports/<alias>/*.md (two levels).
+
+        Directory absent → empty list (never 500). Each item carries the
+        file's first ``# `` heading as its title (absent/unreadable → ""),
+        its size and mtime (epoch int). Sorted by mtime descending (newest
+        report first).
+        """
+        reports = []
+        root = vault_dir / "index" / "reports"
+        if root.is_dir():
+            for alias_dir in root.iterdir():
+                if not alias_dir.is_dir():
+                    continue
+                for fp in alias_dir.iterdir():
+                    if not (fp.is_file() and fp.suffix == ".md"):
+                        continue
+                    title = ""
+                    try:
+                        for line in fp.read_bytes().decode("utf-8", errors="replace").splitlines():
+                            if line.startswith("# "):
+                                title = line[2:].strip()
+                                break
+                    except OSError:
+                        title = ""
+                    rel = fp.relative_to(vault_dir).as_posix()
+                    st = fp.stat()
+                    reports.append({
+                        "relpath": rel, "alias": alias_dir.name,
+                        "date": fp.stem, "title": title,
+                        "size": st.st_size, "mtime": int(st.st_mtime),
+                    })
+        reports.sort(key=lambda r: r["mtime"], reverse=True)
+        return {"reports": reports}
+
+    @app.get("/api/memory/reports/{relpath:path}")
+    async def memory_report_detail(relpath: str) -> dict:
+        """Read one report's markdown (the console detail face's content)."""
+        rel = _guard_report_relpath(relpath)
+        fp = vault_dir / rel
+        if not fp.is_file():
+            raise HTTPException(status_code=404, detail="report not found")
+        try:
+            content = fp.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            raise HTTPException(status_code=500, detail="failed to read report")
+        return {"relpath": rel, "content": content}
 
     @app.get("/api/memory/status")
     async def memory_status() -> dict:
