@@ -7,7 +7,7 @@ FastAPI 服务端，端口 9888。入口: `python -m server.main config.yaml`
 | 文件 | 职责 | 公共 API |
 |------|------|----------|
 | `main.py` | 入口: config → DB → app → watcher → bgagent → uvicorn | `main(argv)` |
-| `api.py` | FastAPI 路由工厂 (docs CRUD, sync, AI chat, agent chat, notifications) | `create_app(vault_dir, db_conn, ai_config)` |
+| `api.py` | FastAPI wiring 工厂（路由在 `server/routes/`，每 URL 前缀域一模块） | `create_app(vault_dir, db_conn, ai_config, bg_targets)` |
 | `ai.py` | RAG 搜索 + LLM 流式代理 | `rag_search()`, `chat_stream()` |
 | `config.py` | YAML 配置解析 + 验证 | `load_server_config()`, `load_background_agents()` |
 | `sync.py` | 客户端-服务端文件同步比对 | `compare_files(local, server, recent_moves)` |

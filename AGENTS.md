@@ -34,7 +34,7 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 ## Gotchas
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.
-- **Sync lock is in-memory**: `_sync_lock` in `server/api.py` is a module-level global. Tests that need to simulate a locked state set it directly (see `test_sync_lock` in `tests/test_api.py`). It resets on process restart.
+- **Sync lock is in-memory**: a `SyncLock` instance (`server/sync_lock.py`) constructed by `create_app` and exposed at `app.state.ctx.sync_lock`. Tests that need to simulate a locked state set `lock.locked_at` directly (see `test_sync_lock` in `tests/test_api.py`). It resets on process restart.
 - **Path traversal guard**: `_safe_rel_path()` in `server/api.py` rejects paths with `..` or leading `/`. Upload and download both go through it.
 - **Deletion is not synced**: if a client deletes a file, it simply won't appear in `local_files`. The server keeps it. On next sync it shows up in `to_pull` (server has it, client doesn't). This is by design.
 - **Conflict files**: saved as `{stem}.conflict-{device_name}{suffix}` (e.g. `notes/test.conflict-mac.md`). The local version is kept untouched.

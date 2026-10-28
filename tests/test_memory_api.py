@@ -617,7 +617,10 @@ def test_status_summary_shape(vault_dir, db_conn):
     """proposals.status_summary: by_status carries all 9 statuses (stable
     shape); awaiting_review elements have the documented key set; the
     queue is sorted age_days descending."""
-    # One awaiting_review record, one pending.
+    # Two awaiting_review records (distinct ages: 3d old vs now) + one pending.
+    r_ar_old = _create(vault_dir, db_conn, type="summary",
+                       now=time.time() - 3 * 86400)
+    _to_awaiting(vault_dir, db_conn, r_ar_old)
     r_ar = _create(vault_dir, db_conn, type="summary")
     _to_awaiting(vault_dir, db_conn, r_ar)
     _create(vault_dir, db_conn, type="entity_index")  # pending
@@ -627,10 +630,12 @@ def test_status_summary_shape(vault_dir, db_conn):
     assert set(out["by_status"]) == {
         "pending", "processing", "awaiting_review", "adopted",
         "rejected", "expired", "merged", "failed", "malformed"}
-    assert out["by_status"]["awaiting_review"] == 1
+    assert out["by_status"]["awaiting_review"] == 2
     assert out["by_status"]["pending"] == 1
-    # awaiting_review: key set + content.
+    # awaiting_review: key set + age_days descending (the review queue's
+    # stable-shape contract, now actually asserted with two distinct ages).
     ar = out["awaiting_review"]
-    assert len(ar) == 1
+    assert len(ar) == 2
     assert set(ar[0]) == {"relpath", "type", "actor", "age_days", "title"}
-    assert ar[0]["relpath"] == r_ar["relpath"]
+    assert [a["relpath"] for a in ar] == [r_ar_old["relpath"], r_ar["relpath"]]
+    assert [a["age_days"] for a in ar] == [3, 0]

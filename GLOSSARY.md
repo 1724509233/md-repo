@@ -27,7 +27,7 @@ vault 内一次真实文件删除，记入 change_log（op 枚举之一：create
 _Avoid_: stale copy、to_delete、删除文件（裸词）
 
 **sync lock**：
-服务端模块级内存锁（`_sync_lock`，server/api.py）：300s 超时自愈；持锁期间 `/api/sync` 竞争返回 409；进程重启即重置。409 → 客户端静默等下一个 sync cycle 重试。
+服务端内存锁（`SyncLock` 实例，server/sync_lock.py；create_app 构造、经 `app.state.ctx.sync_lock` 暴露）：300s 超时自愈；持锁期间 `/api/sync` 竞争返回 409；进程重启即重置。409 → 客户端静默等下一个 sync cycle 重试。
 _Avoid_: lock（裸词）、mutex
 
 ### 文件观察
