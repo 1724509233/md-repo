@@ -26,7 +26,7 @@ SessionManager (DB 持久化 + TTL 淘汰)
 | `agent.py` | `Agent` 类 — 对话状态机，持有 messages、pending_confirms、last_read_ts |
 | `session.py` | `SessionManager` — 按 session_id 管理消息，DB 持久化，30 分钟 TTL 淘汰 |
 | `runtime.py` | `LoopRuntime` — 流式 LLM 循环，最多 `max_rounds` 轮，yield Event |
-| `spec.py` | `AgentSpec` + `ModelConfig` — 声明式 agent 配置数据类；`policy()` 派生 `ChannelPolicy` |
+| `spec.py` | `AgentSpec` — 声明式 agent 配置数据类；`policy()` 派生 `ChannelPolicy`（`ModelConfig` 在 `server/model.py`） |
 | `prompts.py` | `SYSTEM_PROMPT` (从 `prompts/system.md` 加载)、时间块渲染、SSE 格式化 |
 | `events.py` | `Event(type, data)` — 运行时事件数据类 |
 | `execute.py` | `execute_tool(name, args, ctx)` — 工具执行门面 |

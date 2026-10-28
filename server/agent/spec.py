@@ -9,22 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..model import ModelConfig
 from .policy import ChannelPolicy
 from .reminders import SystemReminder, UserReminder
 from .tools.tool import Tool
-
-
-@dataclass
-class ModelConfig:
-    """Model + provider connection settings."""
-
-    model_id: str
-    provider: str = "openai"
-    base_url: str | None = None
-    api_key: str | None = None
-    context_window: int = 16384
-    max_tokens: int | None = None
-    temperature: float | None = None
 
 
 @dataclass
