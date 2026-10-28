@@ -1,15 +1,14 @@
-"""Server configuration loading."""
+"""Background agent config parsing (config.yaml 'background_agents' section)."""
 from __future__ import annotations
 
 import logging
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 from croniter import croniter
 
-from .proposals import PROPOSALS_DIR
+from ..proposals import PROPOSALS_DIR
 
 logger = logging.getLogger("md-vault.config")
 
@@ -220,7 +219,7 @@ def _parse_tools(tools_raw, index: int, alias: str) -> tuple[str, ...] | None:
         raise ValueError(
             f"background_agents[{index}] ({alias}): tools must be a list of "
             f"non-empty strings")
-    from .agent.tools import TOOL_REGISTRY
+    from ..agent.tools import TOOL_REGISTRY
     bad = [t for t in tools_raw if t not in TOOL_REGISTRY]
     if bad:
         raise ValueError(
@@ -247,7 +246,7 @@ def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
         raise ValueError(
             f"background_agents[{index}] ({alias}): verbs must be a list of "
             f"non-empty strings")
-    from .proposals import VALID_TYPES
+    from ..proposals import VALID_TYPES
     bad = [v for v in verbs_raw if v not in VALID_TYPES]
     if bad:
         raise ValueError(
@@ -412,103 +411,3 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
                     f"have overlapping report_dir")
 
     return agents
-
-
-@dataclass
-class NotificationsConfig:
-    """In-app notification volume guards (debt #6, D33).
-
-    Read from the top-level ``notifications:`` section of config.yaml.
-    The cap is law — configurable in YAML, not hardcoded in the framework.
-    Consumed by the GuardedNotificationHook wiring in server/main.py.
-    """
-
-    daily_cap: int = 20  # max normal notification rows inserted per local day
-
-
-def load_notifications(config_path: str) -> NotificationsConfig:
-    """Read the optional top-level 'notifications' section.
-
-    Absent section (or missing daily_cap) → defaults (daily_cap=20).
-    Fail-fast: a non-mapping section or a daily_cap < 1 raises ValueError
-    (a zero/negative cap would collapse every notification into the
-    folded summary row — never the intended configuration).
-    """
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    raw = data.get("notifications")
-    if raw is None:
-        return NotificationsConfig()
-    if not isinstance(raw, dict):
-        raise ValueError(f"Config file {config_path}: 'notifications' must be a mapping")
-    daily_cap = int(raw.get("daily_cap", 20))
-    if daily_cap < 1:
-        raise ValueError(
-            f"Config file {config_path}: notifications.daily_cap must be >= 1, "
-            f"got {daily_cap}")
-    return NotificationsConfig(daily_cap=daily_cap)
-
-
-@dataclass
-class AIConfig:
-    base_url: str
-    api_key: str = ""
-    model: str = "qwen2.5:14b"
-    max_tokens: int = 4096
-    temperature: float = 0.7
-    context_window: int = 16384
-    max_rounds: int = 15
-    read_doc_max_chars: int = 4000
-
-
-@dataclass
-class ServerConfig:
-    host: str
-    port: int
-    vault_dir: Path
-    ai: AIConfig | None = None
-    log_level: str = "INFO"
-
-
-def load_server_config(config_path: str) -> ServerConfig:
-    """Read a YAML config file and extract the 'server' section.
-
-    Raises FileNotFoundError if the config file does not exist.
-    """
-    path = Path(config_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-
-    server = data.get("server")
-    if not isinstance(server, dict):
-        raise ValueError(f"Config file {config_path} missing 'server' section")
-
-    ai_raw = data.get("ai")
-    ai_cfg = None
-    if isinstance(ai_raw, dict) and "base_url" in ai_raw:
-        ai_cfg = AIConfig(
-            base_url=ai_raw["base_url"],
-            api_key=ai_raw.get("api_key", ""),
-            model=ai_raw.get("model", "qwen2.5:14b"),
-            max_tokens=int(ai_raw.get("max_tokens", 4096)),
-            temperature=float(ai_raw.get("temperature", 0.7)),
-            context_window=int(ai_raw.get("context_window", 16384)),
-            max_rounds=int(ai_raw.get("max_rounds", 15)),
-            read_doc_max_chars=int(ai_raw.get("read_doc_max_chars", 4000)),
-        )
-
-    return ServerConfig(
-        host=server["host"],
-        port=int(server["port"]),
-        vault_dir=Path(os.path.expanduser(server["vault_dir"])).resolve(),
-        ai=ai_cfg,
-        log_level=str(server.get("log_level", "INFO")).upper(),
-    )
