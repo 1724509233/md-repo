@@ -408,3 +408,158 @@ def revive(conn, vault_dir, record_id: int) -> dict:
     out = record(conn, record_id)
     out["actor"] = "human"  # the decision's actor (revive is human-only)
     return out
+
+
+# ── Read face (console / status / trail) ───────────────────────────────────
+# The proposals / proposal_transitions / change_log tables are this module's
+# schema. The route layer calls into these functions; the DB shape stays here.
+
+# Console sort priority: actionable states first, terminal + parse failures
+# last. awaiting_review is the human's review queue, so it always comes first.
+STATUS_ORDER = {
+    "awaiting_review": 0,
+    "pending": 1,
+    "adopted": 2,
+    "processing": 3,
+    "failed": 4,
+    "rejected": 5,
+    "expired": 6,
+    "merged": 7,
+    "malformed": 8,
+}
+
+
+def title(record: dict) -> str:
+    """Console display title for a record: the first source ref (the note
+    the proposal is about), falling back to the type. Records carry no
+    free-form title (v1's body H1); this keeps the response shape stable."""
+    refs = record.get("source_refs") or []
+    return refs[0] if refs else (record.get("type") or "")
+
+
+def list_trails(conn, items: list[dict]) -> list[list[dict]]:
+    """Per-item trails (newest first) for the proposals list.
+
+    Same match as the /trail endpoint: each record's state-machine
+    transitions (the ``proposal_transitions`` rows — the authoritative
+    per-record state ledger; pre-D25 the change_log tail of the projection
+    file under-reported them, back-to-back re-projections coalescing into
+    one file row) plus executor changes carrying the record's run_id as
+    batch_id on other paths. One query per source for the whole list —
+    a per-item query would be N round-trips; a batch row matching several
+    items (a shared run_id) is repeated for each of them.
+
+    Returns a list of row lists parallel to ``items``; each row dict is
+    shaped like the /trail endpoint's (seq/ts/source/op/path, no
+    batch_id).
+    """
+    if not items:
+        return []
+    paths = [it["relpath"] for it in items]
+    marks = ",".join("?" * len(paths))
+    tr_map: dict[str, list[dict]] = {}
+    for t in conn.execute(
+        "SELECT t.id, t.ts, t.actor, t.to_status, p.relpath "
+        "FROM proposal_transitions t JOIN proposals p ON p.id = t.proposal_id "
+        f"WHERE p.relpath IN ({marks}) ORDER BY t.ts",
+        paths,
+    ).fetchall():
+        tr_map.setdefault(t["relpath"], []).append(
+            {"seq": t["id"], "ts": t["ts"], "source": t["actor"],
+             "op": t["to_status"], "path": t["relpath"]})
+
+    run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
+    batch_map: dict[str, list[dict]] = {}
+    if run_ids:
+        rows = conn.execute(
+            "SELECT seq, ts, source, op, path, batch_id FROM change_log "
+            f"WHERE batch_id IN ({','.join('?' * len(run_ids))})",
+            run_ids,
+        ).fetchall()
+        for r in rows:
+            d = dict(r)
+            bid = d.pop("batch_id")
+            batch_map.setdefault(bid, []).append(d)
+
+    out: list[list[dict]] = []
+    for it in items:
+        rel = it["relpath"]
+        merged = list(tr_map.get(rel, []))
+        if it.get("run_id"):
+            # Legacy (pre-D25) projection-file rows are the coalesced shadow
+            # of the record's transitions (never a source); keep other paths.
+            merged += [d for d in batch_map.get(it["run_id"], [])
+                       if d["path"] != rel]
+        out.append(sorted(merged, key=lambda x: x["ts"], reverse=True))
+    return out
+
+
+def trail(conn, relpath: str) -> list[dict]:
+    """The full trail for one proposal record (newest first, untruncated).
+
+    The transition segment is the record's state-machine history from
+    ``proposal_transitions`` (the authoritative per-record state ledger
+    — pre-D25 the change_log tail of the projection file under-reported
+    it: back-to-back re-projections coalesced into one file row), plus
+    executor changes that carry the record's run_id as batch_id on
+    other paths (the API only moves state; the executor lands the
+    change). Record-less (legacy) projection files fall back to the
+    change_log tail on the file itself.
+
+    Row dict keys: {seq, ts, source, op, path} — the /trail endpoint's
+    shape. The ``proposals`` / ``proposal_transitions`` / ``change_log``
+    tables are owned by this module; the route layer calls in.
+    """
+    rec = record_by_relpath(conn, relpath)
+    rows: list[dict] = []
+    if rec is not None:
+        for t in conn.execute(
+            "SELECT id, ts, actor, to_status FROM proposal_transitions "
+            "WHERE proposal_id = ? ORDER BY ts",
+            (rec["id"],),
+        ).fetchall():
+            rows.append({"seq": t["id"], "ts": t["ts"],
+                         "source": t["actor"], "op": t["to_status"],
+                         "path": relpath})
+        if rec["run_id"]:
+            for r in conn.execute(
+                "SELECT seq, ts, source, op, path FROM change_log "
+                "WHERE batch_id = ? AND path != ? ORDER BY ts",
+                (rec["run_id"], relpath),
+            ).fetchall():
+                rows.append(dict(r))
+    else:
+        for r in conn.execute(
+            "SELECT seq, ts, source, op, path FROM change_log "
+            "WHERE path = ? ORDER BY ts", (relpath,),
+        ).fetchall():
+            rows.append(dict(r))
+    rows.sort(key=lambda d: d["ts"], reverse=True)
+    return rows
+
+
+def status_summary(conn, now: float | None = None) -> dict:
+    """The ``data["proposals"]`` segment of ``/api/memory/status``:
+    ``by_status`` (all 9 statuses, zero-filled — stable shape for the
+    poller) + ``awaiting_review`` (the review queue, age_days descending).
+
+    ``now`` is injectable (tests); defaults to ``time.time()``.
+    """
+    if now is None:
+        now = time.time()
+    # by_status always carries the full status set (stable shape for the
+    # poller); awaiting holds the review queue (oldest first).
+    by_status = {
+        s: 0 for s in ("pending", "processing", "awaiting_review", "adopted",
+                       "rejected", "expired", "merged", "failed", "malformed")}
+    awaiting = []
+    for p in scan(conn):
+        age_days = int((now - p["created_at"]) // 86400)
+        by_status[p["status"]] = by_status.get(p["status"], 0) + 1
+        if p["status"] == "awaiting_review":
+            awaiting.append({
+                "relpath": p["relpath"], "type": p["type"], "actor": p["actor"],
+                "age_days": age_days, "title": title(p),
+            })
+    awaiting.sort(key=lambda x: -x["age_days"])
+    return {"by_status": by_status, "awaiting_review": awaiting}

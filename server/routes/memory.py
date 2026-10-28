@@ -13,95 +13,16 @@ from datetime import datetime
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import ledger
+from .. import ledger, proposals
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
 
 # ── memory console helpers (proposals list / adopt / reject / pulse) ──────
 
-# Console sort priority: actionable states first, terminal + parse failures
-# last. awaiting_review is the human's review queue, so it always comes first.
-_PROPOSAL_STATUS_ORDER = {
-    "awaiting_review": 0,
-    "pending": 1,
-    "adopted": 2,
-    "processing": 3,
-    "failed": 4,
-    "rejected": 5,
-    "expired": 6,
-    "merged": 7,
-    "malformed": 8,
-}
 
-
-def _proposal_title(p: dict) -> str:
-    """Console display title for a record: the first source ref (the note
-    the proposal is about), falling back to the type. Records carry no
-    free-form title (v1's body H1); this keeps the response shape stable."""
-    refs = p.get("source_refs") or []
-    return refs[0] if refs else (p.get("type") or "")
-
-
-def _proposal_sort_key(item: dict) -> tuple:
+def _sort_key(item: dict) -> tuple:
     """(status rank, -age_days): review queue first, then newest within rank."""
-    return (_PROPOSAL_STATUS_ORDER.get(item["status"], 100), -item["age_days"])
-
-
-def _proposal_trails(conn, items: list[dict]) -> list[list[dict]]:
-    """Per-item trails (newest first) for the proposals list.
-
-    Same match as the /trail endpoint: each record's state-machine
-    transitions (the ``proposal_transitions`` rows — the authoritative
-    per-record state ledger; pre-D25 the change_log tail of the projection
-    file under-reported them, back-to-back re-projections coalescing into
-    one file row) plus executor changes carrying the record's run_id as
-    batch_id on other paths. One query per source for the whole list —
-    a per-item query would be N round-trips; a batch row matching several
-    items (a shared run_id) is repeated for each of them.
-
-    Returns a list of row lists parallel to ``items``; each row dict is
-    shaped like the /trail endpoint's (seq/ts/source/op/path, no
-    batch_id).
-    """
-    if not items:
-        return []
-    paths = [it["relpath"] for it in items]
-    marks = ",".join("?" * len(paths))
-    tr_map: dict[str, list[dict]] = {}
-    for t in conn.execute(
-        "SELECT t.id, t.ts, t.actor, t.to_status, p.relpath "
-        "FROM proposal_transitions t JOIN proposals p ON p.id = t.proposal_id "
-        f"WHERE p.relpath IN ({marks}) ORDER BY t.ts",
-        paths,
-    ).fetchall():
-        tr_map.setdefault(t["relpath"], []).append(
-            {"seq": t["id"], "ts": t["ts"], "source": t["actor"],
-             "op": t["to_status"], "path": t["relpath"]})
-
-    run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
-    batch_map: dict[str, list[dict]] = {}
-    if run_ids:
-        rows = conn.execute(
-            "SELECT seq, ts, source, op, path, batch_id FROM change_log "
-            f"WHERE batch_id IN ({','.join('?' * len(run_ids))})",
-            run_ids,
-        ).fetchall()
-        for r in rows:
-            d = dict(r)
-            bid = d.pop("batch_id")
-            batch_map.setdefault(bid, []).append(d)
-
-    out: list[list[dict]] = []
-    for it in items:
-        rel = it["relpath"]
-        merged = list(tr_map.get(rel, []))
-        if it.get("run_id"):
-            # Legacy (pre-D25) projection-file rows are the coalesced shadow
-            # of the record's transitions (never a source); keep other paths.
-            merged += [d for d in batch_map.get(it["run_id"], [])
-                       if d["path"] != rel]
-        out.append(sorted(merged, key=lambda x: x["ts"], reverse=True))
-    return out
+    return (proposals.STATUS_ORDER.get(item["status"], 100), -item["age_days"])
 
 
 def _guard_proposal_relpath(relpath: str) -> str:
@@ -170,16 +91,16 @@ def register(app, ctx) -> None:
                 "reversible": p["type"] in proposals.AUTO_TYPES,
                 "source_refs": p["source_refs"],
                 "reject_reason": p["reject_reason"], "merged_at": p["merged_at"],
-                "title": _proposal_title(p), "created": created_iso,
+                "title": proposals.title(p), "created": created_iso,
                 "age_days": age_days,
             })
 
-        items.sort(key=_proposal_sort_key)
+        items.sort(key=_sort_key)
         # Trail summary on each row (the design's anomaly card shows a one-line
         # trail without a drill): latest 3 trail rows per proposal (state
         # transitions + executor rows), same match as the /trail endpoint;
         # one query per source for the whole list.
-        trails = _proposal_trails(ctx.db_conn, items)
+        trails = proposals.list_trails(ctx.db_conn, items)
         for it, tr in zip(items, trails):
             it["trail"] = tr[:3]
             it["trail_count"] = len(tr)
@@ -272,42 +193,10 @@ def register(app, ctx) -> None:
     async def memory_proposal_trail(relpath: str) -> dict:
         """Read-only trail for one proposal (newest first, max 12 rows).
 
-        The transition segment is the record's state-machine history from
-        ``proposal_transitions`` (the authoritative per-record state ledger
-        — pre-D25 the change_log tail of the projection file under-reported
-        it: back-to-back re-projections coalesced into one file row), plus
-        executor changes that carry the record's run_id as batch_id on
-        other paths (the API only moves state; the executor lands the
-        change). Record-less (legacy) projection files fall back to the
-        change_log tail on the file itself."""
-        from .. import proposals
-
+        Delegates to ``proposals.trail`` (the state ledger + batch row
+        match, D25); this route adds the path guard and the 12-row cap."""
         rel = _guard_proposal_relpath(relpath)
-        rec = proposals.record_by_relpath(ctx.db_conn, rel)
-        rows: list[dict] = []
-        if rec is not None:
-            for t in ctx.db_conn.execute(
-                "SELECT id, ts, actor, to_status FROM proposal_transitions "
-                "WHERE proposal_id = ? ORDER BY ts",
-                (rec["id"],),
-            ).fetchall():
-                rows.append({"seq": t["id"], "ts": t["ts"],
-                             "source": t["actor"], "op": t["to_status"],
-                             "path": rel})
-            if rec["run_id"]:
-                for r in ctx.db_conn.execute(
-                    "SELECT seq, ts, source, op, path FROM change_log "
-                    "WHERE batch_id = ? AND path != ? ORDER BY ts",
-                    (rec["run_id"], rel),
-                ).fetchall():
-                    rows.append(dict(r))
-        else:
-            for r in ctx.db_conn.execute(
-                "SELECT seq, ts, source, op, path FROM change_log "
-                "WHERE path = ? ORDER BY ts", (rel,),
-            ).fetchall():
-                rows.append(dict(r))
-        rows.sort(key=lambda d: d["ts"], reverse=True)
+        rows = proposals.trail(ctx.db_conn, rel)
         return {"relpath": rel, "trail": rows[:12]}
 
     @app.get("/api/memory/proposals/{relpath:path}")
@@ -452,29 +341,8 @@ def register(app, ctx) -> None:
 
         # proposals: by_status counts + the awaiting_review review queue.
         # DB records are the source (suggestions/ files are inert legacy projections).
-        items = []
         now = time.time()
-        for p in proposals.scan(ctx.db_conn):
-            age_days = int((now - p["created_at"]) // 86400)
-            items.append({
-                "relpath": p["relpath"], "type": p["type"], "actor": p["actor"],
-                "age_days": age_days, "title": _proposal_title(p), "status": p["status"],
-            })
-        # by_status always carries the full status set (stable shape for the
-        # poller); awaiting holds the review queue (oldest first).
-        by_status = {
-            s: 0 for s in ("pending", "processing", "awaiting_review", "adopted",
-                           "rejected", "expired", "merged", "failed", "malformed")}
-        awaiting = []
-        for it in items:
-            by_status[it["status"]] = by_status.get(it["status"], 0) + 1
-            if it["status"] == "awaiting_review":
-                awaiting.append({
-                    "relpath": it["relpath"], "type": it["type"], "actor": it["actor"],
-                    "age_days": it["age_days"], "title": it["title"],
-                })
-        # by_status keys are stable regardless of seed order; awaiting first.
-        awaiting.sort(key=lambda x: -x["age_days"])
+        prop = proposals.status_summary(ctx.db_conn, now)
 
         # agents: read trigger_state directly; the config-derived caps
         # (armed_target = trigger.arm_count, runs_cap = budget_runs_per_day)
@@ -537,6 +405,6 @@ def register(app, ctx) -> None:
                 "last_batch": exec_row["batch_id"] or None,
             }
 
-        return {"proposals": {"by_status": by_status, "awaiting_review": awaiting},
+        return {"proposals": prop,
                 "agents": agents, "executor": executor_out, "recall": recall_out,
                 "snapshot": {"degraded": snapshots.degraded_count()}}

@@ -546,3 +546,91 @@ def test_record_read_bad_shape_400(client, vault_dir, db_conn):
     # the client may normalize .. before the request).
     assert client.get("/api/memory/proposals/../x").status_code in (400, 404)
     assert client.get("/api/memory/proposals//abs.md").status_code in (400, 404)
+
+
+# ── proposals read face: unit tests (direct interface) ─────────────────────
+
+def test_trail_shape_and_order(vault_dir, db_conn):
+    """proposals.trail returns new-first rows with the endpoint's row dict
+    keys; a 3-state record (pending→processing→awaiting_review) yields
+    exactly 3 transition rows; the record-less fallback reads change_log."""
+    rec = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec)
+    rel = rec["relpath"]
+
+    rows = proposals.trail(db_conn, rel)
+    # 3 transition rows: created (NULL→pending), →processing, →awaiting_review.
+    assert len(rows) == 3
+    # Row dict key set matches the /trail endpoint's shape.
+    assert all(set(r) == {"seq", "ts", "source", "op", "path"} for r in rows)
+    # All rows carry the record's relpath in the path field.
+    assert all(r["path"] == rel for r in rows)
+    # Newest first by ts.
+    assert [r["ts"] for r in rows] == sorted((r["ts"] for r in rows), reverse=True)
+    # The 3 ops in newest-first order:
+    # awaiting_review, processing, pending (the creation transition).
+    assert [r["op"] for r in rows] == ["awaiting_review", "processing", "pending"]
+
+    # Record-less fallback: a change_log row on a non-record relpath.
+    log_change(db_conn, "suggestions/orphan.md", "update", source="web")
+    db_conn.commit()
+    orphan_rows = proposals.trail(db_conn, "suggestions/orphan.md")
+    assert len(orphan_rows) == 1
+    assert orphan_rows[0]["path"] == "suggestions/orphan.md"
+    assert set(orphan_rows[0]) == {"seq", "ts", "source", "op", "path"}
+
+
+def test_list_trails_parallel(vault_dir, db_conn):
+    """proposals.list_trails returns a list parallel to items; a shared
+    batch_id row is repeated for each matching item; empty items → []."""
+    rec_a = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec_a)
+    rec_b = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, rec_b)
+    # Shared run_id ("batch-test" from _create); add a batch row on another path.
+    log_change(db_conn, "index/other.md", "update", source="executor",
+               batch_id="batch-test")
+    db_conn.commit()
+
+    items = [
+        {"relpath": rec_a["relpath"], "run_id": rec_a["run_id"]},
+        {"relpath": rec_b["relpath"], "run_id": rec_b["run_id"]},
+    ]
+    result = proposals.list_trails(db_conn, items)
+    # Parallel: one trail list per item.
+    assert len(result) == 2
+    # Each item's trail is non-empty (at least the creation transition).
+    assert len(result[0]) >= 1
+    assert len(result[1]) >= 1
+    # The shared batch row (other path) appears in both items' trails.
+    assert any(r["path"] == "index/other.md" for r in result[0])
+    assert any(r["path"] == "index/other.md" for r in result[1])
+    # Row key shape.
+    assert all(set(r) == {"seq", "ts", "source", "op", "path"}
+               for tr in result for r in tr)
+
+    # Empty items → [].
+    assert proposals.list_trails(db_conn, []) == []
+
+
+def test_status_summary_shape(vault_dir, db_conn):
+    """proposals.status_summary: by_status carries all 9 statuses (stable
+    shape); awaiting_review elements have the documented key set; the
+    queue is sorted age_days descending."""
+    # One awaiting_review record, one pending.
+    r_ar = _create(vault_dir, db_conn, type="summary")
+    _to_awaiting(vault_dir, db_conn, r_ar)
+    _create(vault_dir, db_conn, type="entity_index")  # pending
+
+    out = proposals.status_summary(db_conn)
+    # by_status: all 9 keys present.
+    assert set(out["by_status"]) == {
+        "pending", "processing", "awaiting_review", "adopted",
+        "rejected", "expired", "merged", "failed", "malformed"}
+    assert out["by_status"]["awaiting_review"] == 1
+    assert out["by_status"]["pending"] == 1
+    # awaiting_review: key set + content.
+    ar = out["awaiting_review"]
+    assert len(ar) == 1
+    assert set(ar[0]) == {"relpath", "type", "actor", "age_days", "title"}
+    assert ar[0]["relpath"] == r_ar["relpath"]
