@@ -1,29 +1,11 @@
-"""Write source attribution registry.
-
-Writers (api, agent, bgagent executor, proposals) call register_write()
-BEFORE writing a file so the watcher consumer (server/main.py's four _on_*
-callbacks) can attribute the correct source AND batch id when the
-filesystem event arrives: pop_source() returns the registered
-``(source, batch_id, consumer_skip)`` tuple, which the consumer uses to
-call ``apply_change`` — exactly one ledger row per write, correctly
-attributed.
-
-``consumer_skip`` marks writes the writer already logged synchronously
-(the web UI endpoints: the console feed must respond instantly while the
-user watches). For those the consumer books no row and does no
-files-table work — the direct call already did it.
-
-Unregistered writes (external editors, MCP stdio, direct disk) and
-expired entries fall back to ``("watchdog", "", False)``.
-"""
+"""Change ledger (server/ledger.py) owns the write registry; this module is a transitional alias, removed in the migration commit."""
 from __future__ import annotations
 
-import threading
-import time
-
-_registry: dict[str, tuple[tuple[str, str, bool], float]] = {}
-_registry_lock = threading.Lock()
-_REGISTRY_TTL = 10.0  # seconds; stale entries are cleaned up
+# Mirror of server.ledger._REGISTRY_TTL (the canonical value lives there).
+# Kept so the legacy test's monkeypatch.setattr(write_registry,
+# "_REGISTRY_TTL", ...) retains its target across the delegation; the alias
+# passes it through as the TTL override. Removed in the migration commit.
+_REGISTRY_TTL = 10.0
 
 
 def register_write(
@@ -32,41 +14,26 @@ def register_write(
     batch_id: str = "",
     consumer_skip: bool = False,
 ) -> None:
-    """Register an upcoming write so the watcher can attribute it.
+    """Transitional alias for :func:`server.ledger._mark` (keep the name for
+    the last legacy callers, removed in the migration commit)."""
+    from .ledger import _mark  # function-level: avoid the ledger → file_ops → write_registry cycle
 
-    Call this BEFORE writing the file. The entry expires after _REGISTRY_TTL
-    seconds if no corresponding filesystem event arrives (e.g. write failed).
-
-    ``batch_id`` is the run_id that produced the write ('' when the channel
-    has no batch — web, interactive agent; bgagent agent runs carry their
-    run_id). ``consumer_skip=True`` when the
-    writer logs the change synchronously itself (web UI): the consumer must
-    then book no row and no files-table update.
-    """
-    with _registry_lock:
-        _cleanup_stale()
-        _registry[rel_path] = ((source, batch_id, consumer_skip), time.time())
-
-
-def _cleanup_stale() -> None:
-    """Remove registry entries older than _REGISTRY_TTL. Caller must hold lock."""
-    now = time.time()
-    stale = [p for p, (_, ts) in _registry.items() if now - ts > _REGISTRY_TTL]
-    for p in stale:
-        del _registry[p]
+    _mark(rel_path, source, batch_id, skip=consumer_skip, _ttl=_REGISTRY_TTL)
 
 
 def pop_source(rel_path: str) -> tuple[str, str, bool]:
-    """Pop and return ``(source, batch_id, consumer_skip)`` for rel_path.
+    """Transitional alias for :func:`server.ledger._pop`."""
+    from .ledger import _pop  # function-level: avoid the ledger → file_ops → write_registry cycle
 
-    Returns ``("watchdog", "", False)`` when the path has no registration
-    or its registration has expired — the fallback attribution for
-    external writers.
-    """
-    with _registry_lock:
-        entry = _registry.pop(rel_path, None)
-        if entry is not None and time.time() - entry[1] > _REGISTRY_TTL:
-            entry = None
-    if entry is not None:
-        return entry[0]
-    return ("watchdog", "", False)
+    return _pop(rel_path, _ttl=_REGISTRY_TTL)
+
+
+def __getattr__(name: str):
+    """Lazy re-export of the ledger's registry containers for legacy
+    introspection (``from server.write_registry import _registry``); the
+    canonical objects live in server/ledger.py. Removed in the migration
+    commit."""
+    if name in ("_registry", "_registry_lock"):
+        from . import ledger
+        return getattr(ledger, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
