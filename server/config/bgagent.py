@@ -8,22 +8,10 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
+from ..model import ModelConfig
 from ..proposals import PROPOSALS_DIR
 
 logger = logging.getLogger("md-vault.config")
-
-
-@dataclass
-class ModelConfig:
-    """Model + provider connection settings (shared with agent.spec)."""
-
-    model_id: str
-    provider: str = "openai"
-    base_url: str | None = None
-    api_key: str | None = None
-    context_window: int = 16384
-    max_tokens: int | None = None
-    temperature: float | None = None
 
 
 # Valid ops for trigger events (change_log op names).
