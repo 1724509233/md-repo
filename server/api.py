@@ -27,26 +27,9 @@ from .agent.tools import TOOL_REGISTRY
 from .vault.service import get_all_files, upsert_file
 from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 from .sync import compare_files
+from .routes import WebContext
+from .sync_lock import SyncLock
 logger = logging.getLogger("md-vault.api")
-
-# In-memory sync lock: {"locked_at": float} or None
-_sync_lock: dict | None = None
-_SYNC_LOCK_TIMEOUT = 300  # 5 minutes
-
-
-def _acquire_lock() -> bool:
-    """Try to acquire the sync lock. Returns True if acquired."""
-    global _sync_lock
-    now = time.time()
-    if _sync_lock is not None and (now - _sync_lock["locked_at"]) < _SYNC_LOCK_TIMEOUT:
-        return False
-    _sync_lock = {"locked_at": now}
-    return True
-
-
-def _release_lock() -> None:
-    global _sync_lock
-    _sync_lock = None
 
 
 def _hash_bytes(content: bytes) -> str:
@@ -195,6 +178,14 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
     app = FastAPI(title="md-sync server")
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
+    ctx = WebContext(
+        db_conn=db_conn,
+        vault_dir=vault_dir,
+        ai_config=ai_config,
+        sync_lock=SyncLock(),
+        bg_targets=bg_targets,
+    )
+    app.state.ctx = ctx
 
     session_mgr = SessionManager(db_conn, vault_dir)
 
@@ -536,7 +527,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
         if not isinstance(local_files, dict):
             raise HTTPException(status_code=400, detail="local_files must be an object")
 
-        if not _acquire_lock():
+        if not ctx.sync_lock.try_acquire():
             return JSONResponse(
                 status_code=409, content={"error": "sync in progress"}
             )
@@ -584,7 +575,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
 
             return JSONResponse(content=result)
         finally:
-            _release_lock()
+            ctx.sync_lock.release()
 
     @app.post("/api/ai/search")
     async def ai_search(request: Request) -> dict:

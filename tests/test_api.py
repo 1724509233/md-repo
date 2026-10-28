@@ -147,8 +147,10 @@ def test_sync_conflict(client) -> None:
 
 
 def test_sync_lock(client) -> None:
-    # Simulate another client holding the lock (fresh timestamp).
-    api_module._sync_lock = {"locked_at": time.time()}
+    # Simulate another client holding the lock (fresh timestamp), via the
+    # injected lock (app.state.ctx) — no module-global poking.
+    lock = client.app.state.ctx.sync_lock
+    lock.locked_at = time.time()
     try:
         r = client.post(
             "/api/sync",
@@ -161,7 +163,7 @@ def test_sync_lock(client) -> None:
         assert r.status_code == 409
         assert r.json() == {"error": "sync in progress"}
     finally:
-        api_module._sync_lock = None
+        lock.locked_at = None
 
 
 def test_ai_search_endpoint(client, vault_dir):
