@@ -1087,6 +1087,57 @@ pre code.hljs { background: transparent; padding: 0; }
   .l0-go, .l0-go svg { transition: none; }
 }
 
+/* ============ 记忆控制台 · 报告面 + 快照降级（v2a 债单 #5/#8 UI 半，2026-10-28）
+   纯追加：既有类零改动。
+   新增件 = .rpt-sec 报告区（队列面 feed 之后常驻区：首载后才渲染；分区头复用 .c-sec-h/.cnt；
+   卡片行与待审卡同壳 .f-card；空态 = 常驻淡显一行 .zline，监控页「无异常」设计语言）
+   / .f-date 卡片行尾日期相对标签（今天/昨天/MM-DD，mono 静稳数字，同 .f-time 权重）
+   / .l0-deg L0 降级 chip（>0 才渲染、0 不占位；红边 = 告警家族；.fresh = 计数增长时一次 envPulse，
+   克制节奏同「新告警强调」alertFresh 家族，JS 1.3s 自清，不常驻闪烁）
+   / .rpt-md 报告正文版式（markdown 全文，renderMarkdown = 既有 marked+DOMPurify 助手）。
+   动效仅 box-shadow/transform/opacity 路径。 ============ */
+/* 报告区：feed 流水之后的常驻区（报告 = 只读 advisory 通道，index/reports/<alias>/） */
+.rpt-sec { padding: 2px 12px 14px; }
+.rpt-sec .zline { margin-top: 8px; }
+.rpt-h .rpt-ln { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+.rpt-card { margin-top: 8px; }
+/* 卡片行尾日期（今天/昨天/MM-DD）：与行内 .f-time 同权重，右对齐静稳 */
+.f-date { flex-shrink: 0; font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent); font-variant-numeric: tabular-nums; }
+/* L0 快照降级 chip（D19/#C2：v2a 运行期内降级不可静默；进程内计数，重启归零） */
+.l0-deg { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: var(--st-error); border: 1px solid color-mix(in srgb, var(--st-error) 45%, var(--line)); background: color-mix(in srgb, var(--st-error) 7%, transparent); border-radius: 999px; padding: 1px 7px; white-space: nowrap; }
+.l0-deg::before { content: ''; width: 5px; height: 5px; border-radius: 999px; background: var(--st-error); flex-shrink: 0; }
+.l0-deg.fresh { animation: envPulse .65s ease-out 2; }
+@keyframes envPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--st-error) 40%, transparent); } 100% { box-shadow: 0 0 0 6px transparent; } }
+/* 报告正文（.d-md 容器内的 markdown 全文；代码块/表格复用既有 .code-block + overflow-x-auto） */
+.rpt-md h1, .rpt-md h2, .rpt-md h3 { font-family: var(--serif); font-weight: 700; line-height: 1.5; margin: 14px 0 6px; color: var(--ink); }
+.rpt-md h1 { font-size: 15.5px; }
+.rpt-md h2 { font-size: 14px; }
+.rpt-md h3 { font-size: 13px; }
+.rpt-md h1:first-child, .rpt-md h2:first-child, .rpt-md h3:first-child { margin-top: 2px; }
+.rpt-md ul, .rpt-md ol { margin: 6px 0; padding-left: 18px; }
+.rpt-md li { margin: 3px 0; }
+.rpt-md blockquote { margin: 8px 0; padding: 4px 10px; border-left: 2px solid color-mix(in srgb, var(--brass) 55%, var(--line)); background: color-mix(in srgb, var(--brass) 5%, transparent); border-radius: 0 6px 6px 0; color: var(--ink-soft); }
+.rpt-md a { color: var(--brass); text-decoration: none; border-bottom: 1px dashed color-mix(in srgb, var(--brass) 40%, var(--line)); }
+.rpt-md table { border-collapse: collapse; font-size: 11px; }
+.rpt-md th, .rpt-md td { border: 1px solid var(--line); padding: 3px 7px; }
+.rpt-md hr { border: none; border-top: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); margin: 12px 0; }
+.rpt-md .code-block { margin: 8px 0; }
+.rpt-md .code-block pre { font-size: 11px; padding: 9px 10px; }
+/* 报告面深链 sweep：JS 同详情面口径在 [data-face="report"] 上挂 .mp-deep（MemoryConsole rptDeepT），
+   既有规则（动效层 ⑤）作用域仅 detail → 报告面标题（同构 .d-title）在此补齐同一 sweep */
+#memory-console-shell [data-face="report"].mp-deep .d-title { position: relative; }
+#memory-console-shell [data-face="report"].mp-deep .d-title::after {
+  content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
+  background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
+  border-radius: 2px; transform-origin: left center;
+  animation: marker-sweep .4s var(--ease) 120ms both;
+}
+/* 动效降级（本分节新增件：L0 降级 chip 增长脉冲 + 报告面深链 sweep） */
+@media (prefers-reduced-motion: reduce) {
+  .l0-deg.fresh { animation: none; }
+  #memory-console-shell [data-face="report"].mp-deep .d-title::after { animation: none; }
+}
+
 /* ============ 动效层（2026-10-24）：后台监控页 L1 进入/返回 + 页内微动效 + 通知下拉出入 + 深链接力
    纯追加：只加新 keyframes/类，既有规则零改动。沿用既有 token：.15/.18/.2/.25s · var(--ease)=cubic-bezier(.32,.72,0,1)
    · softPulse 2.2s · badge-pop · marker-sweep。仅 GPU 路径（transform/opacity），

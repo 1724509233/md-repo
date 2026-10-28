@@ -1,16 +1,20 @@
 /* MemoryConsole 组件：300px 记忆控制台面板（v4 L0 主态 = 定稿 design/console-v4-watch.html 场景 01）
- * 两个面：L0 主态（.l0bar 纯状态行「N 待审 · N 待落地 · N 失败 · 轮询 30s」+ 行尾「后台 →」唯一入口
- *         + .feed 流水：agent 事件细行 / 待审卡（钻入详情）/ 终态卡淡显痕迹）
+ * 三个面：L0 主态（.l0bar 纯状态行「N 待审 · N 待落地 · N 失败[· N 快照降级] · 轮询 30s」+ 行尾「后台 →」唯一入口
+ *         + .feed 流水：agent 事件细行 / 待审卡（钻入详情）/ 终态卡淡显痕迹
+ *         + 报告区：只读 advisory 通道卡片行（alias chip + title + 日期；点卡 → 报告详情面））
  *         终审详情（五段材料按判断顺序 + 粘性动作行 + 拒绝理由 + 确认之后子视图）
+ *         报告详情（第三面：只读 markdown 全文 + 文件路径行；深链 state.memoryReport 直达）
  * 宪法：console 只移状态（adopt/reject 走状态机，actor = human）；文件由确定性执行器落地。
- * 数据：state.memoryStatus / state.memoryProposals 由 app 30s 轮询注入，本组件不自建轮询；
- *       L0 与 feed 全部消费这两个 ref（awaiting 5 字段按 relpath join proposals 富化 source_refs / run_id / created）；
- *       内容摘录经 GET /api/memory/proposals/{relpath} 按需读取（记录 body = justification；D25 无投影文件）。
+ * 数据：state.memoryStatus / state.memoryProposals / state.memoryReports 由 app 30s 轮询注入，本组件不自建轮询；
+ *       L0 与 feed 全部消费这些 ref（awaiting 5 字段按 relpath join proposals 富化 source_refs / run_id / created）；
+ *       内容摘录经 GET /api/memory/proposals/{relpath} 按需读取（记录 body = justification；D25 无投影文件）；
+ *       报告全文经 GET /api/memory/reports/{relpath} 按需读取（renderMarkdown = 既有 marked+DOMPurify 助手，无新依赖）。
  * 入口纪律：「后台 →」= 唯一 L0→L1 入口（window.openMonitorPage()，Phase A 挂载）；
  *       v3 九格脉搏 / 触发行 / 召回块整体移除——九态由监控页①九格承担，面板内彻底消失。
  */
 const { ref, computed, watch, inject, nextTick } = Vue
 import { api } from '../api.js'
+import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
 
 /* 类型 chip 图标（单色线条，stroke: currentColor；未知/存量退役类型回退时钟） */
 const TYPE_ICONS = {
@@ -48,9 +52,10 @@ export const MemoryConsole = {
   name: 'MemoryConsole',
   props: {
     open: { type: Boolean, default: false },      // 面板开合（app 控制；关闭态 width 0）
-    detail: { type: String, default: null }       // 详情面的提案 relpath（null = 队列面）
+    detail: { type: String, default: null },      // 详情面的提案 relpath（null = 队列面）
+    report: { type: String, default: null }       // 报告详情面的 relpath（index/reports/**；null = 非报告面；深链直达）
   },
-  emits: ['pick', 'back', 'close', 'actioned', 'open-doc'],
+  emits: ['pick', 'back', 'close', 'actioned', 'open-doc', 'report-pick', 'report-back'],
   setup(props, { emit }) {
     const state = inject('state')
 
@@ -108,6 +113,46 @@ export const MemoryConsole = {
       return null
     })
 
+    // ─── 报告渠道（只读 advisory：index/reports/<alias>/YYYY-MM-DD.md；app 轮询注入 state.memoryReports）───
+    // 脉冲口径同 freshSet：首次轮询只建基线不闪；新报告出现 / mtime 跨轮询增长 → 脉冲，
+    // 脉冲常驻该卡直到它离开列表（文件被删；slot 覆写 = 同 relpath mtime 增长 → 重新入脉冲集）
+    let firstReportsSeen = false
+    let prevReportMtimes = null
+    const reportFreshSet = ref(new Set())
+    watch(
+      () => state.memoryReports,
+      (list) => {
+        if (!Array.isArray(list)) return
+        const curMap = new Map(list.map(r => [r.relpath, r.mtime]))
+        if (!firstReportsSeen) {
+          firstReportsSeen = true
+          prevReportMtimes = curMap
+          return
+        }
+        if (prevReportMtimes) {
+          for (const [rel, mt] of curMap) {
+            const prev = prevReportMtimes.get(rel)
+            if (prev === undefined || mt > prev) reportFreshSet.value.add(rel)
+          }
+          for (const rel of [...reportFreshSet.value]) if (!curMap.has(rel)) reportFreshSet.value.delete(rel)
+        }
+        prevReportMtimes = curMap
+      }
+    )
+    const reports = computed(() => state.memoryReports || [])
+    const reportsLen = computed(() => reports.value.length)
+    const reportsLoaded = computed(() => state.memoryReports !== null)
+    // 卡片行（feed 卡片同壳）：alias chip + title（无 # 标题回退 alias）+ 日期相对标签（今天/昨天/MM-DD，同 feed keyOf 口径）
+    const reportCards = computed(() => {
+      const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
+      const shortOf = k => k === dayKey(now) ? '今天' : k === dayKey(yest) ? '昨天' : k.slice(5)
+      return reports.value.map(r => {
+        const m = String(r.date || '').match(/(\d{4})-(\d{2})-(\d{2})/)
+        const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
+        return { ...r, dateShort: d ? shortOf(dayKey(d)) : (r.date || '—'), fresh: reportFreshSet.value.has(r.relpath) }
+      })
+    })
+
     // ─── L0 状态行 + feed 事件行数据（v3 的触发条 / 召回块整体移除 → 监控页「系统」组；
     //     recall 仅保留：详情面「相似记忆」的 source_refs ∩ 召回榜消费）───
     const byStatus = computed(() =>
@@ -118,6 +163,29 @@ export const MemoryConsole = {
       adopted: byStatus.value.adopted || 0,
       failed: byStatus.value.failed || 0
     }))
+    // 快照降级计数（D19/#C2：v2a 运行期内降级不可静默）：进程内计数，重启归零；
+    // >0 时 L0 行内显「N 快照降级」红边 chip，= 0 不占位。脉冲 = 仅计数增长时一次 envPulse（~1.2s 自清，
+    // 克制节奏同「新告警强调」alertFresh 家族），不常驻闪烁；首次观察 = 基线（首载不闪，freshSet 同口径）——
+    // 观察状态对象而非 derived 值，保证页内 0→1 增长（首载 0、后续轮询到 1）仍能触发
+    const degraded = computed(() =>
+      ((state.memoryStatus && state.memoryStatus.snapshot && state.memoryStatus.snapshot.degraded) || 0))
+    let prevDeg = null
+    const degradedFresh = ref(false)
+    let degT = null
+    watch(
+      () => state.memoryStatus,
+      (st) => {
+        if (!st) return
+        const n = ((st.snapshot && st.snapshot.degraded) || 0)
+        if (prevDeg === null) { prevDeg = n; return }   // 首次观察 = 基线，不闪
+        if (n > prevDeg) {
+          degradedFresh.value = true
+          clearTimeout(degT)
+          degT = setTimeout(() => { degradedFresh.value = false }, 1300)
+        }
+        prevDeg = n
+      }
+    )
     const agents = computed(() => (state.memoryStatus && state.memoryStatus.agents) || [])
     const recall = computed(() => (state.memoryStatus && state.memoryStatus.recall) || {})
     const recall_error = computed(() => !!recall.value.recall_error)
@@ -496,19 +564,97 @@ export const MemoryConsole = {
       }
     )
 
+    // ─── 报告详情面（第三面：只读；内容 = markdown 全文，renderMarkdown 助手渲染，无新依赖）───
+    const reportItem = computed(() =>
+      props.report ? (reports.value.find(r => r.relpath === props.report) || null) : null)
+    const reportContent = ref(null)      // null = 加载中 / 无
+    const reportError = ref(null)
+    let reportLoadToken = 0
+    async function loadReport(relpath) {
+      const token = ++reportLoadToken
+      reportContent.value = null
+      reportError.value = null
+      try {
+        const rec = await api.getMemoryReport(relpath)
+        if (token !== reportLoadToken) return
+        reportContent.value = (rec && typeof rec.content === 'string') ? rec.content : ''
+        await nextTick()
+        if (reportBodyEl.value) postProcessPreview(reportBodyEl.value)   // hljs 高亮 + mermaid（助手既有后处理）
+      } catch (e) {
+        if (token === reportLoadToken) reportError.value = e.message    // 404 = 深链指向已删报告 → 服务端文案直显
+      }
+    }
+    watch(
+      () => props.report,
+      async (rel) => {
+        if (!rel) { reportContent.value = null; reportError.value = null; return }
+        await loadReport(rel)
+      }
+    )
+    const reportBodyEl = ref(null)
+    // 深链接力：bell 深链 null→relpath 时标题一次黄铜下划线 sweep（与详情面同口径）；面内切换同重放
+    let rptDeepT = null
+    watch(
+      () => props.report,
+      async (rel) => {
+        if (!rel) return
+        await nextTick()
+        const el = document.querySelector('#memory-console-shell .c-scroll')
+        if (el) el.scrollTop = 0
+        const face = document.querySelector('#memory-console-shell [data-face="report"]')
+        if (face) {
+          face.classList.add('mp-deep')
+          clearTimeout(rptDeepT)
+          rptDeepT = setTimeout(() => face.classList.remove('mp-deep'), 900)
+        }
+      }
+    )
+    // 代码块复制按钮（事件委托，EditorPane 同口径：剪贴板 → execCommand 回退）
+    function onReportCopyClick(e) {
+      const btn = e.target.closest('.code-copy-btn')
+      if (!btn) return
+      const block = btn.closest('.code-block')
+      const pre = block && block.querySelector('pre code')
+      if (!pre) return
+      const text = pre.textContent
+      const done = () => { btn.textContent = '✓'; setTimeout(() => { btn.textContent = '复制' }, 1500) }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done))
+      } else {
+        fallbackCopy(text, done)
+      }
+    }
+    function fallbackCopy(text, done) {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try { document.execCommand('copy') } catch (e) { }
+      document.body.removeChild(ta)
+      done()
+    }
+
+    function pickReport(r) { emit('report-pick', r.relpath) }
+    function backReport() { emit('report-back') }
+
     return {
-      l0, feedGroups, feedLen, openMonitor, trailMsg,
+      l0, degraded, degradedFresh, feedGroups, feedLen, openMonitor, trailMsg,
+      reportCards, reportsLen, reportsLoaded,
       pillText, pillCls, formatAge, recall_error,
       detailItem, queueIndex, queueCount, proposalsLoaded, bodyText, bodyParas, bodyTotal, bodyClamped, bodyError, similar,
       canAct, acting, actionError, rsnOpen, rejectReason, doneView, trailRows,
       pillStatus, reasonOk, landedFile, doneMeta, doneLabel,
-      adopt, reject, pick, back, close, openSrc, toggleRsn,
+      reportItem, reportContent, reportError, reportBodyEl, onReportCopyClick,
+      adopt, reject, pick, back, close, openSrc, toggleRsn, pickReport, backReport,
+      renderMarkdown,
       TYPE_ICONS, TYPE_ICON_DEFAULT
     }
   },
   template: `
     <!-- L0 主态：纯状态行 + 流水（:key 变化 → 面入场动画重放：opacity + 8px 位移） -->
-    <div v-if="!detail" :key="'queue'" data-face="queue" class="c-face anim">
+    <div v-if="!detail && !report" :key="'queue'" data-face="queue" class="c-face anim">
       <div class="p-head">
         <span class="picon"><svg viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg></span>
         <span class="ptitle">记忆控制台</span>
@@ -517,7 +663,7 @@ export const MemoryConsole = {
       <!-- L0 行动数 = 纯状态行（整行不可点；「轮询 30s」并入单行）；行尾「后台 →」= 唯一 L0→L1 入口；
            failed > 0 → 失败数告警红 + 入口小红点（0 时不渲染 dot） -->
       <div class="l0bar">
-        <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span class="ld">·</span><span class="dim">轮询 30s</span></span>
+        <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span v-if="degraded > 0" class="l0-deg" :class="{ fresh: degradedFresh }" title="运行期内快照捕捉降级计数（进程内，重启归零）">{{ degraded }} 快照降级</span><span class="ld">·</span><span class="dim">轮询 30s</span></span>
         <button class="l0-go" type="button" title="后台监控页 L1（面板收起，监控页接管主区域）" @click="openMonitor"><span v-if="l0.failed > 0" class="dot" aria-hidden="true"></span>后台<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
       <div class="c-scroll">
@@ -564,17 +710,62 @@ export const MemoryConsole = {
             </template>
             <div v-if="feedGroups.more > 0" class="f-more">{{ feedGroups.more }} 条更老 —— 终态全貌见「后台 →」· 最近终态</div>
           </template>
-          <div v-else class="q-empty">
+          <div v-else-if="!reportsLen" class="q-empty">
             <div class="ring"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/><path d="M4 13h5l1.5 2.5h3L15 13h5"/></svg></div>
             <div class="t1">无待审提案</div>
             <div class="t2">系统运行正常 · 后台活动见「后台 →」</div>
           </div>
         </div>
+        <!-- 报告区：只读 advisory 通道（index/reports/<alias>/，机器区命名 L2 钉死）；首载前不渲染（未知态 ≠ 空态）。
+             卡片行与待审卡同壳（.f-card）：alias chip + title + 日期相对标签；fresh = mtime 跨轮询增长（freshSet 口径）；
+             点卡 → 报告详情面（第三面）；空态 = 常驻淡显一行（监控页「无异常」zline 设计语言） -->
+        <div v-if="reportsLoaded" class="rpt-sec">
+          <div class="c-sec-h rpt-h"><span>报告</span><span class="cnt" :class="{ hot: reportsLen > 0 }">{{ reportsLen }}</span><span class="rpt-ln">只读 · 建议不执行</span></div>
+          <template v-if="reportsLen">
+            <button v-for="r in reportCards" :key="r.relpath" class="f-card rpt-card" :class="{ fresh: r.fresh }" type="button" :title="r.relpath" @click="pickReport(r)">
+              <div class="f-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ r.alias }}</span><span class="f-title">{{ r.title || r.alias }}</span><span class="f-date">{{ r.dateShort }}</span></div>
+              <div class="f-row2">{{ r.relpath }}</div>
+            </button>
+          </template>
+          <div v-else class="zline">暂无报告</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 报告详情面（第三面）：只读 advisory 全文（markdown 经 renderMarkdown 助手；无动作行——报告无状态机可移，
+         回退出口 = 返回队列；深链 state.memoryReport 直达，mp-deep 黄铜下划线 sweep 同详情面口径） -->
+    <div v-else-if="report" :key="'report-' + report" data-face="report" class="c-face anim">
+      <div class="p-head">
+        <button class="ibtn" title="返回队列" @click="backReport"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <span class="ptitle">报告</span>
+        <span class="pacts"><button class="ibtn" title="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+      </div>
+      <div class="c-scroll" @click="onReportCopyClick">
+        <div v-if="reportContent === null && !reportError" class="q-empty" style="padding-top: 40px">
+          <div class="t1">读取中…</div>
+          <div class="t2">首次读取后显示全文</div>
+        </div>
+        <template v-else>
+          <div class="d-head">
+            <div class="d-chips">
+              <span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ (reportItem && reportItem.alias) || '—' }}</span>
+              <span class="spill"><span style="font-size:9.5px">只读</span></span>
+            </div>
+            <div class="d-title">{{ (reportItem && (reportItem.title || reportItem.alias)) || '报告' }}</div>
+            <div class="d-path" :title="report">{{ report }}</div>
+          </div>
+          <div class="d-sec">
+            <div class="d-label"><span>正文</span><span class="ln">markdown 全文 · 只读</span></div>
+            <div v-if="reportError" class="d-md"><span style="color: #b91c1c">{{ reportError }}</span></div>
+            <div v-else-if="reportContent === ''" class="d-md"><span style="color: var(--ink-soft)">（无正文）</span></div>
+            <div v-else class="d-md rpt-md" ref="reportBodyEl" v-html="renderMarkdown(reportContent)"></div>
+          </div>
+        </template>
       </div>
     </div>
 
     <!-- 详情面：五段材料按判断顺序 + 粘性动作行 + 确认之后子视图 -->
-    <div v-else :key="'detail-' + detail" data-face="detail" class="c-face anim">
+    <div v-else-if="!report" :key="'detail-' + detail" data-face="detail" class="c-face anim">
       <div class="p-head">
         <button class="ibtn" title="返回队列" @click="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">终审</span>

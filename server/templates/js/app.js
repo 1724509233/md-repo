@@ -37,8 +37,9 @@ const state = reactive({
   memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
   memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
   memoryReport: null,     // 报告深链 relpath（index/reports/**，通知 report_paths[0]；null = 未开；渲染归 L5）
-  memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回）
+  memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回 + snapshot 降级计数）
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
+  memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false       // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
 })
 
@@ -241,6 +242,10 @@ async function pollMemory() {
     const data = await api.getMemoryProposals()
     state.memoryProposals = (data && data.proposals) || []
   } catch (e) { /* silent */ }
+  try {
+    const rd = await api.getMemoryReports()
+    state.memoryReports = (rd && rd.reports) || []
+  } catch (e) { /* silent：保留旧列表 */ }
 }
 
 // ─── AI 工具调用结果 → 文档状态同步 ───
@@ -332,6 +337,7 @@ const badgeParts = computed(() => {
 
 function onMemoryRailClick() {
   state.memoryDetail = null   // 重新进入总是回队列面
+  state.memoryReport = null   // 报告深链同口径（非 null = 应开在报告详情面）
   state.memoryOpen = !state.memoryOpen
 }
 
@@ -351,6 +357,7 @@ function openMonitorPage() {
   state.monitoring = true
   state.memoryOpen = false
   state.memoryDetail = null
+  state.memoryReport = null
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
@@ -465,6 +472,7 @@ export function createApp() {
             state.filePanelOpen = false // resize 切入移动端：关闭移动端面板态（spec §3.5）
             state.memoryOpen = false    // resize 切入移动端：关闭控制台（不携 in-flow 态进 overlay 态）
             state.memoryDetail = null
+            state.memoryReport = null
           }
         }
       )
@@ -635,10 +643,12 @@ export function createApp() {
         <!-- 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html；
              关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css） -->
         <div id="memory-console-shell" class="console-shell" :class="{ open: state.memoryOpen }">
-          <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail"
+          <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail" :report="state.memoryReport"
             @pick="state.memoryDetail = $event"
             @back="state.memoryDetail = null"
-            @close="state.memoryOpen = false; state.memoryDetail = null"
+            @report-pick="state.memoryReport = $event"
+            @report-back="state.memoryReport = null"
+            @close="state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null"
             @actioned="pollMemory()"
             @open-doc="onMemoryOpenDoc($event)" />
         </div>
