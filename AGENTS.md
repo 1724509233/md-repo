@@ -22,7 +22,7 @@ md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 
 ## Architecture
 
-- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ai_config)` factory; all routes are closures inside it. `main.py` is the entry point that wires config → db → app → uvicorn.
+- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ai_config, bg_targets)` factory (wiring only); routes live in `server/routes/` (one module per URL-prefix domain: console/notifications/sync/recall/memory/agent), each registering via `register(app, ctx)` on the `WebContext` (exposed at `app.state.ctx`). Route-table order is pinned by `tests/test_routes_order.py`. `main.py` is the entry point that wires config → db → app → uvicorn.
 - **server/vault/** — Index subsystem, split into submodules: `db/` (SQLite schema, file_index, segments_sql, graph_sql, changes, sessions), `fs/` (segmenter, link_parser, vault_ops), `orchestration/` (indexer, move_detect, refs, file_ops). Public API: `from server.vault.service import ...`.
 - **server/agent/** — LLM agent system: `agent.py` (Agent class), `runtime.py` (LoopRuntime streaming loop), `session.py` (SessionManager), `tools/` (10 tools: read_doc / search_docs / list_files / get_related_docs / recent_changes / recall_stats auto; write_doc / edit_doc / delete_doc / move_docs ask), `policy.py` (channel policy), `prompts.py`, `reminders.py`.
 - **server/bgagent/** — Background agents with independent model configs: `scheduler.py` (cron + event arming), `runner.py` (run_once), `notify.py` (in-app notifications), `executor.py` (framework role, not an LLM agent).

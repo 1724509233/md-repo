@@ -90,6 +90,6 @@ config.yaml → load_background_agents()
 
 - **`server.vault` 已废弃**: 新代码必须从 `server.vault.service` 导入。`__init__.py` 是兼容 shim，会 emit DeprecationWarning。Tests 仍使用 shim — 不要破坏它。
 - **`db.py` / `watcher.py` 已删除**: 旧版中的独立文件，功能已迁移到 `vault/` 和 `snapshot_watcher.py`。
-- **`_sync_lock` 是内存全局变量**: 进程重启后重置，测试中可直接设置模拟锁定状态。
+- **sync 锁是注入的**: `SyncLock` 实例由 create_app 构造并注入 `WebContext`（`app.state.ctx.sync_lock`），测试经该 seam 直设模拟锁定；进程重启后重置。
 - **`_db_lock` 保护共享 SQLite 连接**: Watchdog 线程和 async 事件循环都通过它写入 DB。
 - **MCP server 是独立进程**: 不通过 main.py 启动，有自己的 config 自动发现和 DB 初始化逻辑。

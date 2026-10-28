@@ -6,7 +6,6 @@ import time
 
 import pytest
 
-from server import api as api_module
 from server.vault import get_all_files, upsert_file
 from server.vault.db.changes import get_changes
 from tests.conftest import simulate_consumer
@@ -22,10 +21,11 @@ def test_health(client) -> None:
 
 def test_safe_rel_path_alias_is_shared_vault_guard() -> None:
     # _safe_rel_path moved to server.vault.fs.vault_ops (shared by the
-    # executor and the API); api.py keeps the private alias.
+    # executor and the API); the console route module keeps the private alias.
+    from server.routes import console
     from server.vault.fs.vault_ops import safe_rel_path
 
-    assert api_module._safe_rel_path is safe_rel_path
+    assert console._safe_rel_path is safe_rel_path
 
 
 def test_index_page(client) -> None:
