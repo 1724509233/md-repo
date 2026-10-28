@@ -29,6 +29,70 @@ def test_load_server_config_missing_file(tmp_path: Path) -> None:
         load_server_config(str(tmp_path / "nope.yaml"))
 
 
+def _server_cfg_file(tmp_path: Path, extra: str = "") -> Path:
+    """Write a minimal server config with ``extra`` YAML lines appended."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "server:\n"
+        "  host: 0.0.0.0\n"
+        "  port: 9888\n"
+        "  vault_dir: ./vault\n"
+        f"{extra}",
+        encoding="utf-8",
+    )
+    return cfg_file
+
+
+def test_server_config_log_defaults(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path)))
+    assert cfg.log.level == "INFO"
+    assert cfg.log.dir == ".sync/logs"
+    assert cfg.log.retention_days == 30
+
+
+def test_server_config_log_values_parse(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "  log_level: debug\n"
+        "  log_dir: /var/log/md-vault\n"
+        "  log_retention_days: 7\n")))
+    assert cfg.log.level == "DEBUG"
+    assert cfg.log.dir == "/var/log/md-vault"
+    assert cfg.log.retention_days == 7
+
+
+def test_server_config_log_dir_relative(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "  log_dir: logs/sub\n")))
+    assert cfg.log.dir == "logs/sub"
+
+
+@pytest.mark.parametrize("level", ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+def test_server_config_log_level_valid(tmp_path: Path, level: str) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        f"  log_level: {level}\n")))
+    assert cfg.log.level == level
+
+
+@pytest.mark.parametrize("level", ["VERBOSE", "WARN", "TRACE", ""])
+def test_server_config_log_level_invalid(tmp_path: Path, level: str) -> None:
+    with pytest.raises(ValueError, match="log_level"):
+        load_server_config(str(_server_cfg_file(tmp_path,
+            f"  log_level: {level}\n")))
+
+
+@pytest.mark.parametrize("days", [0, -1])
+def test_server_config_retention_days_too_small(tmp_path: Path, days: int) -> None:
+    with pytest.raises(ValueError, match="log_retention_days"):
+        load_server_config(str(_server_cfg_file(tmp_path,
+            f"  log_retention_days: {days}\n")))
+
+
+def test_server_config_retention_days_non_numeric(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="log_retention_days"):
+        load_server_config(str(_server_cfg_file(tmp_path,
+            "  log_retention_days: a lot\n")))
+
+
 def test_load_client_config(tmp_path: Path) -> None:
     cfg_file = tmp_path / "config.yaml"
     cfg_file.write_text(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 import uvicorn
@@ -52,8 +53,10 @@ def main(argv: list[str] | None = None) -> None:
             "background agents: %s", [a.alias for a in bg_agents])
 
     # Log to both console and file
-    log_level = getattr(logging, config.log_level, logging.INFO)
-    logs_dir = vault_dir / ".sync" / "logs"
+    log_level = logging.getLevelName(config.log.level)
+    logs_dir = Path(config.log.dir)
+    if not logs_dir.is_absolute():
+        logs_dir = vault_dir / logs_dir
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_file = logs_dir / "server.log"
 
@@ -65,7 +68,10 @@ def main(argv: list[str] | None = None) -> None:
     console_handler.setFormatter(fmt)
     root_logger.addHandler(console_handler)
 
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    # Daily rotation: backupCount keeps `days` of history (server.log.YYYY-MM-DD);
+    # the 3am sweeper in logrotate.py is second-line cleanup for orphaned files.
+    file_handler = TimedRotatingFileHandler(
+        log_file, when="D", backupCount=config.log.retention_days, encoding="utf-8")
     file_handler.setFormatter(fmt)
     root_logger.addHandler(file_handler)
 
@@ -85,9 +91,7 @@ def main(argv: list[str] | None = None) -> None:
                      bg_targets=_agent_caps(bg_agents))
 
     async def _run() -> None:
-        logs_dir = vault_dir / ".sync" / "logs"
-        logs_dir.mkdir(parents=True, exist_ok=True)
-        start_logrotate(None, logs_dir)
+        start_logrotate(None, logs_dir, config.log.retention_days)
 
         # Event bus: wake signals for the arming/executor loops
         # (spec 2026-10-24). Publisher-side filters drop events that
@@ -133,7 +137,7 @@ def main(argv: list[str] | None = None) -> None:
             await asyncio.sleep(0)  # let the bgagent tasks start
 
     config_obj = uvicorn.Config(
-        app, host=config.host, port=config.port, log_level="info"
+        app, host=config.host, port=config.port, log_level=config.log.level.lower()
     )
     server = uvicorn.Server(config_obj)
 

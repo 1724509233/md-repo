@@ -3,7 +3,9 @@ server:
   host: 0.0.0.0
   port: 9888
   vault_dir: ./vault
-  log_level: INFO  # DEBUG for verbose watcher event/IO logging
+  log_level: INFO  # 可选: DEBUG / INFO / WARNING / ERROR / CRITICAL（非法值启动报错）；DEBUG 含 watcher 事件/IO 细节
+  log_dir: .sync/logs  # 日志目录，相对 vault_dir 或绝对路径，默认 .sync/logs
+  log_retention_days: 30  # 清理超过 N 天的 .log（每日 3am）
 
 # 客户端配置 (Mac)
 client:

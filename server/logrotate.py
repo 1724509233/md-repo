@@ -1,4 +1,4 @@
-"""Log rotation: periodic cleanup of old client log files."""
+"""Log rotation: periodic cleanup of old server log files."""
 from __future__ import annotations
 
 import asyncio
@@ -7,12 +7,18 @@ from pathlib import Path
 
 
 def clean_old_logs(logs_dir: Path, days: int = 30) -> int:
-    """Delete .log files older than `days` days. Returns count deleted."""
+    """Delete log files (live or rolled) older than `days` days.
+
+    Sweeps orphaned and rolled files (server.log.YYYY-MM-DD, left by
+    TimedRotatingFileHandler when its backupCount prunes them or the
+    server is restarted). The mtime check protects the live file, whose
+    mtime is always fresh. Returns count deleted.
+    """
     if not logs_dir.is_dir():
         return 0
     cutoff = time.time() - days * 86400
     deleted = 0
-    for f in logs_dir.glob("*.log"):
+    for f in logs_dir.glob("*.log*"):
         try:
             if f.stat().st_mtime < cutoff:
                 f.unlink()
