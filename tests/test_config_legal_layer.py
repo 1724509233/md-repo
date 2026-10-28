@@ -130,6 +130,10 @@ def test_real_config_yaml_v2_migration(tmp_path: Path):
     cfg = REPO_ROOT / "config.yaml"
     if not cfg.is_file():
         pytest.skip("config.yaml not present in this checkout")
+    if not any(line.startswith("background_agents:")
+               for line in cfg.read_text(encoding="utf-8").splitlines()):
+        pytest.skip("local config.yaml has no active background_agents "
+                    "section (config.yaml is untracked user-local state)")
     vault = tmp_path / "vault"
     vault.mkdir()
     agents = load_background_agents(str(cfg), vault)
