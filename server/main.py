@@ -9,12 +9,12 @@ from pathlib import Path
 
 import uvicorn
 
-from . import events
+from . import events, ledger
 from .api import create_app
 from .bgagent import InAppHook, start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .config import load_background_agents, load_notifications, load_server_config
-from .vault.service import apply_change, consume_file_event, ensure_indexed, init_db
+from .vault.service import ensure_indexed, init_db
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 
@@ -105,16 +105,16 @@ def main(argv: list[str] | None = None) -> None:
             p.get("traffic") == "synthetic" and p.get("hits", 0) > 0))
 
         def _on_created(path: str) -> None:
-            consume_file_event(conn, vault_dir, path, "created")
+            ledger.consume(conn, vault_dir, path, "created")
 
         def _on_modified(path: str) -> None:
-            consume_file_event(conn, vault_dir, path, "modified")
+            ledger.consume(conn, vault_dir, path, "modified")
 
         def _on_moved(old: str, new: str) -> None:
-            consume_file_event(conn, vault_dir, new, "moved", from_path=old)
+            ledger.consume(conn, vault_dir, new, "moved", from_path=old)
 
         def _on_deleted(path: str) -> None:
-            consume_file_event(conn, vault_dir, path, "deleted")
+            ledger.consume(conn, vault_dir, path, "deleted")
 
         watcher = SnapshotWatcher(
             vault_dir,

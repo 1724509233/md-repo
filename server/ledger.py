@@ -45,8 +45,8 @@ def _mark(
     has no batch — web, interactive agent; bgagent agent runs carry their
     run_id). ``skip=True`` when the writer logs the change synchronously
     itself (web UI): the consumer must then book no row and no
-    files-table update. ``_ttl`` overrides _REGISTRY_TTL (the legacy
-    write_registry alias passes its mirror); None = module TTL.
+    files-table update. ``_ttl`` overrides _REGISTRY_TTL (the transitional alias
+    (removed in the migration commit) passes its mirror); None = module TTL.
     """
     with _registry_lock:
         _cleanup_stale(_ttl)

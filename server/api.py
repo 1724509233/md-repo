@@ -17,18 +17,14 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Res
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from . import ledger
 from .agent import SessionManager
 from .agent.agent import Agent
 from .agent.prompts import SYSTEM_PROMPT, sse
 from .agent.reminders import DocPathUserReminder, TimeSystemReminder
 from .agent.spec import AgentSpec, ModelConfig
 from .agent.tools import TOOL_REGISTRY
-from .vault.service import (
-    apply_change,
-    apply_folder_change,
-    get_all_files,
-    upsert_file,
-)
+from .vault.service import get_all_files, upsert_file
 from .vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 from .sync import compare_files
 logger = logging.getLogger("md-vault.api")
@@ -313,18 +309,15 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             if file_path.exists():
                 raise HTTPException(status_code=409, detail="already exists")
             content = (body.get("content") or "").encode("utf-8")
-            from .write_registry import register_write
-
-            # Web op: logged synchronously (the console feed must respond
-            # instantly while the user watches); consumer_skip=True stops
-            # the watcher from booking a second row for the same write.
-            register_write(rel.as_posix(), "web", consumer_skip=True)
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
                 file_path.write_bytes(content)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to create file: {e}")
-            apply_change(db_conn, vault_dir, rel.as_posix(), "created", source="web")
+            # Web op: logged synchronously (the console feed must respond
+            # instantly while the user watches); record() marks skip —
+            # consumer books nothing.
+            ledger.record(db_conn, vault_dir, rel.as_posix(), "created", "web")
             return {"ok": True, "path": rel.as_posix()}
         if action == "create_folder":
             rel = _safe_rel_path(body.get("path") or "")
@@ -337,7 +330,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 dir_path.mkdir(parents=True)
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to create folder: {e}")
-            apply_folder_change(db_conn, vault_dir, rel.as_posix(), "created", source="web")
+            ledger.record_folder(db_conn, vault_dir, rel.as_posix(), "created", "web")
             return {"ok": True, "path": rel.as_posix()}
         if action in ("rename", "move"):
             src_rel = _safe_rel_path(body.get("from_path") or "")
@@ -362,13 +355,10 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                     (p.relative_to(vault_dir).as_posix(), (dst_rel / p.relative_to(src)).as_posix())
                     for p in sorted(src.rglob("*.md")) if p.is_file()
                 ]
-            from .write_registry import register_write
             # Web op: per-file moved rows logged synchronously (console
-            # feed); consumer_skip=True stops the watcher from doubling.
+            # feed); record() marks skip — consumer books nothing.
             # Reference rewriting ran in batch above — the per-file passes
             # skip their own ref update (idempotent either way).
-            for _, new in moves:
-                register_write(new, "web", consumer_skip=True)
             # pre_rename=True: update refs before rename so uniqueness check is correct
             _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
             was_dir = src.is_dir()
@@ -378,17 +368,17 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             except OSError as e:
                 raise HTTPException(status_code=500, detail=f"failed to rename: {e}")
             if was_dir:
-                apply_folder_change(
-                    db_conn, vault_dir, dst_rel.as_posix(), "moved", source="web",
+                ledger.record_folder(
+                    db_conn, vault_dir, dst_rel.as_posix(), "moved", "web",
                     from_path=src_rel.as_posix())
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for old, new in moves:
-                apply_change(
+                ledger.record(
                     db_conn,
                     vault_dir,
                     new,
                     "moved",
-                    source="web",
+                    "web",
                     from_path=old,
                     update_refs=False,
                 )
@@ -400,7 +390,6 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             target = vault_dir / rel
             if not target.exists():
                 raise HTTPException(status_code=404, detail="not found")
-            from .write_registry import register_write
 
             if target.is_file():
                 # 可逆层（P1，工作项 6）：人在 Web UI 删文件 = 全文快照兜底
@@ -408,9 +397,6 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 from .snapshots import capture, finalize, gc_after_capture
 
                 snap = capture(db_conn, vault_dir, rel.as_posix(), "delete", actor="web")
-                # Web op: logged synchronously below; consumer_skip=True
-                # stops the watcher from booking a second row.
-                register_write(rel.as_posix(), "web", consumer_skip=True)
                 try:
                     target.unlink()
                 except OSError as e:
@@ -422,7 +408,9 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 if snap is not None:
                     finalize(db_conn, snap, "")  # post-state: file absent
                     gc_after_capture(db_conn, vault_dir)
-                apply_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
+                # Web op: logged synchronously; record() marks skip —
+                # consumer books nothing.
+                ledger.record(db_conn, vault_dir, rel.as_posix(), "deleted", "web")
                 return {"ok": True, "path": rel.as_posix(), "deleted_count": 1}
             # Folder: delete .md files one by one, clean up empty dirs bottom-up
             from .snapshots import capture, discard, finalize, gc_after_capture, new_call_id
@@ -441,9 +429,6 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             failed = None
             for p in md_files:
                 r = p.relative_to(vault_dir).as_posix()
-                # Web op: per-file rows logged synchronously below;
-                # consumer_skip=True stops the watcher from doubling.
-                register_write(r, "web", consumer_skip=True)
                 try:
                     p.unlink()
                 except OSError as e:
@@ -482,10 +467,12 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 except OSError:
                     pass  # non-empty (contains non-.md files) → keep
             if not target.exists():
-                apply_folder_change(db_conn, vault_dir, rel.as_posix(), "deleted", source="web")
+                ledger.record_folder(db_conn, vault_dir, rel.as_posix(), "deleted", "web")
+            # Web op: per-file rows logged synchronously; record() marks
+            # skip — consumer books nothing.
             # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
             for r in rels:
-                apply_change(db_conn, vault_dir, r, "deleted", source="web")
+                ledger.record(db_conn, vault_dir, r, "deleted", "web")
             return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels)}
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
@@ -503,9 +490,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
         rel_str = rel.as_posix()
-        from .write_registry import register_write
-
-        register_write(rel_str, "web")
+        ledger.register(rel_str, "web")
         return {"path": rel_str, "hash": digest}
 
     @app.get("/api/notifications")
@@ -869,10 +854,8 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
                 content={"ok": False, "conflicts": result["conflicts"]},
             )
         # Attribute the restored writes to the watcher ("web" = human via UI).
-        from .write_registry import register_write as _rw
-
         for path in result["restored"]:
-            _rw(path, "web")
+            ledger.register(path, "web")
         return {"ok": True, "restored": result["restored"]}
 
     @app.get("/api/memory/rollback-calls")
@@ -1186,9 +1169,7 @@ def create_app(vault_dir: Path, db_conn, ai_config=None,
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        from .write_registry import register_write
-
-        register_write(rel.as_posix(), "web")
+        ledger.register(rel.as_posix(), "web")
         return {"ok": True}
 
     return app

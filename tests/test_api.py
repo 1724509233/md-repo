@@ -107,8 +107,8 @@ def test_upload_doc(client, vault_dir, db_conn) -> None:
     assert on_disk.read_bytes() == content
 
     # DB update is handled asynchronously by the watcher; verify file on disk
-    # and that register_write was called (source attribution).
-    from server.write_registry import _registry, _registry_lock
+    # and that ledger.register was called (source attribution).
+    from server.ledger import _registry, _registry_lock
     with _registry_lock:
         assert "new/file.md" in _registry
 
@@ -470,9 +470,9 @@ def test_manage_create_file_conflict(client) -> None:
 
 
 def test_manage_create_file_single_row_with_consumer(client, vault_dir, db_conn) -> None:
-    """Regression: web ops log their row synchronously (the console feed
-    must respond instantly while the user watches) AND register with
-    consumer_skip, so the watcher consumer books NO second row for the
+    """Regression: web ops book their row synchronously (the console feed
+    must respond instantly while the user watches) AND mark skip
+    (ledger.record), so the watcher consumer books NO second row for the
     same write. Total: exactly one change_log row."""
     r = client.post(
         "/api/docs/manage", json={"action": "create_file", "path": "new/file.md"}
@@ -485,7 +485,7 @@ def test_manage_create_file_single_row_with_consumer(client, vault_dir, db_conn)
     assert len(rows) == 1
     assert rows[0][0] == "web"
     # The filesystem event arrives ~1.5s later in production: the consumer
-    # must see the consumer_skip registration and book nothing.
+    # must see the skip mark and book nothing.
     attribution = simulate_consumer(db_conn, vault_dir, "new/file.md", "created")
     assert attribution == ("web", "", True)  # skip honored
     rows = db_conn.execute(

@@ -35,7 +35,7 @@ class EditDocTool(DocTool):
         from ...snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
         from ...vault.db.conn import get_conn
         from ...vault.service import edit_file
-        from ...write_registry import register_write
+        from ... import ledger
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
@@ -49,7 +49,7 @@ class EditDocTool(DocTool):
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path, "update",
                            ctx.write_source, run_id=ctx.run_id)
-        register_write(args.path, ctx.write_source, batch_id=ctx.run_id)
+        ledger.register(args.path, ctx.write_source, batch_id=ctx.run_id)
         result = edit_file(ctx.vault_dir, args.path, args.old_string, args.new_string)
         if conn is not None:
             if result.startswith("Error"):

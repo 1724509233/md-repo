@@ -74,8 +74,8 @@ RETIRED_TYPES = frozenset({"link", "correction", "archive"})
 # No function here touches the file ledger: v2a (D25) the proposal channel
 # lands no file — create/advance write only the record row and its
 # proposal_transitions rows (the sole state ledger; zero change_log rows).
-# The file channel's writer-side convention (register_write → watcher
-# consumer → exactly ONE apply_change row) is untouched.
+# The file channel's writer-side convention (ledger.register → watcher
+# consumer → ledger.consume → exactly ONE apply_change row) is untouched.
 # ``events.publish("proposal")`` fires only on ``adopted`` — the executor's
 # sole actionable state.
 

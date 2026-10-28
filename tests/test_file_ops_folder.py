@@ -8,7 +8,7 @@ the chokepoint funnels them through the same module/guard as apply_change.
 from __future__ import annotations
 
 from server.vault.db.changes import get_changes
-from server.vault.service import apply_folder_change
+from server.vault.orchestration.file_ops import apply_folder_change
 
 
 def test_folder_change_books_ledger_row(db_conn, vault_dir):
@@ -53,11 +53,14 @@ def test_folder_delete_books_ledger_row(db_conn, vault_dir):
     assert row[0] == 0
 
 
-def test_service_shim_reexports_same_object():
-    """api.py's import path = the service shim; it must be the file_ops
-    function itself (one chokepoint, not a copy)."""
-    from server.vault.orchestration.file_ops import apply_folder_change as via_ops
-    from server.vault.service import apply_folder_change as via_service
-    assert via_service is via_ops
-    assert "apply_folder_change" in __import__(
-        "server.vault.service", fromlist=["__all__"]).__all__
+def test_facade_no_longer_reexports_mutators():
+    """Hard-forcing invariant (change ledger, AGENTS.md "Change ledger"):
+    the service facade must NOT re-export the row mutators — the only
+    external importer of apply_change / apply_folder_change is
+    server/ledger.py. (The old test pinned the opposite: the facade
+    re-exporting apply_folder_change for api.py's import path.)"""
+    import server.vault.service as service
+
+    assert "apply_change" not in service.__all__
+    assert "apply_folder_change" not in service.__all__
+    assert not hasattr(service, "apply_folder_change")

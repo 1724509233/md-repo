@@ -35,7 +35,7 @@ class AgentSpec:
     report_dir: Path | None = None
     vault_dir: Path | None = None
     read_doc_max_chars: int = 4000
-    # Write attribution for the change_log (write_registry source). Default
+    # Write attribution for the change_log (ledger source). Default
     # "agent" = desktop agent channel; bgagent runs set this to their alias so
     # the ledger distinguishes roles (memory-runtime v1).
     write_source: str = "agent"

@@ -61,7 +61,7 @@ class MoveDocsTool(DocTool):
                                   hash_bytes, new_call_id)
         from ...vault.db.conn import get_conn
         from ...vault.orchestration.refs import _update_references_batch
-        from ...write_registry import register_write
+        from ... import ledger
 
         moves = [(m.from_path, m.to_path) for m in args.moves]
 
@@ -92,13 +92,13 @@ class MoveDocsTool(DocTool):
                     run_id=ctx.run_id, call_id=call_id, new_path=to_path)))
         try:
             # DB update (files, change_log, FTS, graph) is handled by the snapshot
-            # watcher via _on_moved → apply_change. We only register the write so
-            # the watcher attributes the change to "agent" instead of "watchdog".
+            # watcher via ledger.consume → apply_change. We only register the write
+            # so the watcher attributes the change to "agent" instead of "watchdog".
             for from_path, to_path in moves:
                 src = ctx.vault_dir / from_path
                 dst = ctx.vault_dir / to_path
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                register_write(to_path, ctx.write_source, batch_id=ctx.run_id)
+                ledger.register(to_path, ctx.write_source, batch_id=ctx.run_id)
                 src.rename(dst)
         except OSError:
             if conn is not None:

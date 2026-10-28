@@ -24,7 +24,7 @@ class WriteDocTool(Tool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture, hash_bytes
         from ...vault.db.conn import get_conn
-        from ...write_registry import register_write
+        from ... import ledger
 
         fp = ctx.vault_dir / args.path
         existed = fp.is_file()
@@ -41,7 +41,7 @@ class WriteDocTool(Tool):
             snap = capture(conn, ctx.vault_dir, args.path,
                            "update" if existed else "create",
                            ctx.write_source, run_id=ctx.run_id)
-        register_write(args.path, ctx.write_source, batch_id=ctx.run_id)
+        ledger.register(args.path, ctx.write_source, batch_id=ctx.run_id)
         try:
             fp.write_bytes(new_bytes)
         except OSError as e:

@@ -2,7 +2,7 @@
 
 The orchestration layer (this module) writes the report, not the agent:
 deterministic path, run metadata in frontmatter, agent's final text embedded
-in the summary section. Write attribution goes through ``register_write`` so
+in the summary section. Write attribution goes through ``ledger.register`` so
 the snapshot watcher logs ``source=<alias>``.
 """
 from __future__ import annotations
@@ -16,10 +16,10 @@ from pathlib import Path
 
 import yaml
 
+from .. import ledger
 from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
-from ..write_registry import register_write
 from .notify import NotificationHook, RunReport
 
 logger = logging.getLogger("md-vault.bgagent")
@@ -293,7 +293,7 @@ def _prune_reports(report_dir: Path, vault: Path, alias: str) -> None:
     files = sorted(report_dir.glob("*.md"))
     to_delete = files[:-RETENTION] if len(files) > RETENTION else []
     for fp in to_delete:
-        register_write(fp.relative_to(vault).as_posix(), alias)
+        ledger.register(fp.relative_to(vault).as_posix(), alias)
         fp.unlink()
     if to_delete:
         logger.info("[bg:%s] pruned %d old reports (kept %d)", alias, len(to_delete), RETENTION)
@@ -445,7 +445,7 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         auto_approve=True,
         write_scope=cfg.target_dir,
         report_dir=cfg.report_dir,
-        # 写归因精确到角色（memory-runtime v1）：工具层 register_write 读
+        # 写归因精确到角色（memory-runtime v1）：工具层 ledger.register 读
         # ctx.write_source，落库 changelog source=<alias> 而非笼统 "agent"。
         write_source=cfg.alias,
         # Proposal channel (v2): trusted run stamp + role verb whitelist.
@@ -516,13 +516,13 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
 
 def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
                   status: str, stats: _RunStats, error_msg: str) -> None:
-    """Write the report file (mkdir + register_write + write_bytes)."""
+    """Write the report file (mkdir + ledger.register + write_bytes)."""
     finished_at = time.time()
     body, _ = _render_report(cfg, vault, started_at, finished_at, status,
                              stats, error_msg)
     fp = cfg.report_dir / _report_name(started_at, cfg.alias)
     fp.parent.mkdir(parents=True, exist_ok=True)
-    register_write(fp.relative_to(vault).as_posix(), cfg.alias)
+    ledger.register(fp.relative_to(vault).as_posix(), cfg.alias)
     fp.write_bytes(body.encode("utf-8"))
     logger.info("[bg:%s] report written: %s", cfg.alias, fp.relative_to(vault).as_posix())
 

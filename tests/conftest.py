@@ -8,26 +8,26 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.api import create_app
+from server.ledger import consume
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
-from server.vault.service import consume_file_event
 
 
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
                       from_path: str = ""):
     """Drive the production watcher-consumer path
-    (``consume_file_event`` in server.vault.orchestration.file_ops,
-    exposed via server.vault.service; the same one server/main.py's four
+    (``consume`` in server/ledger.py — the same one server/main.py's four
     _on_* callbacks call) once for ``path``. Returns the popped
-    ``(source, batch_id, consumer_skip)`` attribution.
+    ``(source, batch_id, skip)`` attribution.
 
-    Writers register before writing and never call apply_change themselves
-    (AGENTS.md "Change ledger discipline"); unit tests that assert on the
-    ledger rows must drive this consumer path explicitly. ``action`` must
-    be the watcher event that would have fired ("created" for a first
-    write, "modified" for a rewrite, "deleted", "moved" with from_path).
+    Writers register before writing and never call the row mutators
+    themselves (AGENTS.md "Change ledger discipline"); unit tests that
+    assert on the ledger rows must drive this consumer path explicitly.
+    ``action`` must be the watcher event that would have fired ("created"
+    for a first write, "modified" for a rewrite, "deleted", "moved" with
+    from_path).
     """
-    return consume_file_event(conn, vault_dir, path, action, from_path=from_path)
+    return consume(conn, vault_dir, path, action, from_path=from_path)
 
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"

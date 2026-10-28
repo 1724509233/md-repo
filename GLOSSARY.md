@@ -23,7 +23,7 @@ _Avoid_: local_files（线格式名，不是术语）、文件清单（裸词）
 _Avoid_: to_delete（字段名，不是术语）、delete、旧文件
 
 **delete**：
-vault 内一次真实文件删除，记入 change_log（op 枚举之一：created / modified / deleted / moved），经 `apply_change` 唯一变更入口落账。与 stale copy 分属两层：op enum（文件 changelog）vs actionType（同步协议）。
+vault 内一次真实文件删除，记入 change_log（op 枚举之一：created / modified / deleted / moved），经变更账本（`server/ledger.py`）落账。与 stale copy 分属两层：op enum（文件 changelog）vs actionType（同步协议）。
 _Avoid_: stale copy、to_delete、删除文件（裸词）
 
 **sync lock**：
@@ -44,8 +44,12 @@ _Avoid_: per-path 队列（规格文档口径，与实现不符）、dirty queue
 change_log.source 的取值：非项目内修改的统一兜底来源——服务端本机直接落盘的写入（如 Obsidian 桌面端），write registry 查不到登记时兜底。指写入方，不是 watchdog library。
 _Avoid_: 「watchdog 库写的」、local write（裸词）
 
+**变更账本**：
+change_log + files 表的唯一写面（module `server/ledger.py`）：`register`（watcher 记账，恰好一行）/ `record`（web 直写同步落账）/ `record_folder`（folder 行，不碰 registry）；row mutator `apply_change` 住 ledger 内部，无其他 module import。write registry 是其内部登记状态。
+_Avoid_: ledger module（模块名）、write registry（内部状态，不是写面）
+
 **write registry**：
-服务端进程内的写归因注册表（模块级 dict，TTL 10s）：项目写通道落盘前 `register_write(path, source[, batch_id, consumer_skip])` 登记（batch_id = 执行批次标识，executor / run 透传）；snapshot watcher 观察到变更后 `pop_source(path)` 取走 `(source, batch_id, consumer_skip)` 元组记入 change_log；`consumer_skip=True` 专用于 web 直写路径（端点同步落账，watcher 不重复记账，防双行）；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
+变更账本内部登记（server/ledger.py 模块级 dict，TTL 10s）：writer 落盘前 `register(path, source[, batch_id])` 登记（batch_id = 执行批次标识，executor / run 透传）；snapshot watcher 观察到变更后 pop 取走 `(source, batch_id)` 记入 change_log；`record()` 路径标记 skip，watcher 不重复记账（防双行 = 方法选择，不是布尔）；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
 _Avoid_: write_registry（模块名，不是术语）、归因表
 
 **reconcile**：
@@ -169,7 +173,7 @@ channel policy 的第三层：域名/通道写规则，read 工具一律 no-op�
 _Avoid_: gate（裸词）、check、门禁（裸词）
 
 **write_source**：
-`AgentSpec` 携带的整实例来源归因通道：主 agent 默认 `"agent"`，bgagent 用配置 alias（change_log 与 recall log 均记 alias，而非笼统 "agent"）；4 个 ask 工具经 `register_write` 走 write registry（→ change_log.source），search_docs 记 recall log（→ recall_queries.source）。是 agent 实例进入 source 值域的入口。
+`AgentSpec` 携带的整实例来源归因通道：主 agent 默认 `"agent"`，bgagent 用配置 alias（change_log 与 recall log 均记 alias，而非笼统 "agent"）；4 个 ask 工具经 `ledger.register` 走 write registry（→ change_log.source），search_docs 记 recall log（→ recall_queries.source）。是 agent 实例进入 source 值域的入口。
 _Avoid_: source（裸词）、agent source、写来源（裸词）
 
 **agent session**：
