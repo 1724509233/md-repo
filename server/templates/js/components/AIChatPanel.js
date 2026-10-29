@@ -201,7 +201,10 @@ export const AIChatPanel = {
                   if (tool) {
                     tool.status = evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done')
                     tool.result = evt.result
-                    emit('toolResult', evt)
+                    // 服务端 SSE tool_result 只带 {id, result, rejected?, error?}——没有 name/args；
+                    // emit 前必须合并 tool_call 块的 name/args（等价旧 HTML UI 从 dataset.toolName/
+                    // args 恢复的做法），否则 app.js 快速路径整体失效（回归史见其 handleToolResult 注）
+                    emit('toolResult', { ...evt, name: tool.name, args: tool.args })
                   } else {
                     console.warn('[ai-chat] tool_result: no matching tool for id', evt.id)
                   }

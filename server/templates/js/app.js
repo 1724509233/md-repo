@@ -184,6 +184,9 @@ async function _applyChangeToCurrentDoc(changes) {
     state.currentPath = null
   } else {
     if (moved) state.currentPath = moved.path
+    // 脏缓冲保护：用户正在编辑时不替换未保存内容（快速路径另有 conflict 横幅；
+    // 兜底/轮询路径保留缓冲，避免静默吞掉未保存编辑）
+    if (state.dirty) return
     try {
       state.docContent = await api.getDoc(state.currentPath)
     } catch (e) { }
@@ -220,8 +223,9 @@ async function pollChanges() {
     if (!all.length) return
     lastChangeTs = all[0].ts
 
-    // 过滤：跳过 agent（由 toolResult 处理）和 web（用户刚保存）
-    const changes = all.filter(c => c.source !== 'agent' && c.source !== 'web')
+    // 过滤：跳过 web（用户刚保存，UI 已同步）；agent 变更走 SSE 快速路径，
+    // 但轮询是兜底——SSE 断连时仍需处理 agent 行
+    const changes = all.filter(c => c.source !== 'web')
     if (!changes.length) return
 
     // 树结构变化？
@@ -248,9 +252,25 @@ async function pollMemory() {
   } catch (e) { /* silent：保留旧列表 */ }
 }
 
-// ─── AI 工具调用结果 → 文档状态同步 ───
+// ─── AI 工具调用结果 → 文档状态同步（SSE 快速路径）───
+// 契约：AIChatPanel 在 emit('toolResult') 前必须把 tool_call 块的 name/args 合并进
+//   payload——服务端 SSE tool_result 只带 {id, result, rejected?, error?}，没有 name/args。
+// 回归史：Vue 重写（2dbbd17，10-08）曾直接 emit 原始 evt，name/args 恒 undefined，本快速
+//   路径静默失效；叠加 pollChanges 过滤 agent 行，agent 的文档更新完全到不了 UI
+//   （2026-10-29 修复）。勿改回 emit 原始 evt。
+// 游标推进：仅限成功的写类工具（rejected/error 没写盘，推进会白跳过窗口内其他来源的行）；
+//   +3s 余量覆盖 watcher 1.5s debounce——agent 行的 ts 打在消费时刻、晚于 tool_result
+//   到达时刻，不留余量则推进无效，轮询会重复拉取。
 function handleToolResult(evt) {
   const { name, args, result } = evt
+  // rejected/error 无写盘（旧 UI 只在 status==='done' 时同步）：直接返回，也不推进
+  // 游标——白推进会跳过窗口内其他来源（watchdog/bgagent）的行
+  if (evt.rejected || evt.error) return
+  // 成功写类工具：游标推进到 当前时刻+3s（watcher 1.5s debounce 记账余量），轮询
+  // 不再重复拉取本行
+  if (name === 'write_doc' || name === 'edit_doc' || name === 'delete_doc' || name === 'move_docs') {
+    lastChangeTs = Date.now() / 1000 + 3
+  }
   if (name === 'delete_doc') {
     if (args.path === state.currentPath) {
       state.docContent = ''
@@ -261,7 +281,8 @@ function handleToolResult(evt) {
     for (const m of moves) {
       if (m.from_path === state.currentPath) {
         state.currentPath = m.to_path
-        api.getDoc(m.to_path).then(text => { state.docContent = text }).catch(() => { })
+        // 脏缓冲只重指路径、不替换未保存内容（与 _applyChangeToCurrentDoc 的脏保护同策）
+        if (!state.dirty) api.getDoc(m.to_path).then(text => { state.docContent = text }).catch(() => { })
         break
       }
     }
