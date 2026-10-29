@@ -210,14 +210,21 @@ def test_notifications_report_paths_migration(tmp_path: Path):
         conn.close()
 
 
-def test_inapp_hook_holds_db_lock(db_conn):
-    """INSERT 必须持 _db_lock（代码库写路径约定）。"""
-    from server.vault.db.schema import _db_lock
+def test_inapp_hook_inserts_via_vault_notifications(db_conn):
+    """notify → exactly one notifications row with correct attribution.
 
-    assert _db_lock.acquire(blocking=False) is True  # 测试线程可拿到锁
-    _db_lock.release()
-    InAppHook(db_conn).notify(_report())  # 不抛异常即通过（持锁写入）
-    assert db_conn.execute("SELECT count(*) FROM notifications").fetchone()[0] == 1
+    Card 5: the shared mutation lock is held inside
+    ``vault.db.notifications.insert_run`` (no longer importable outside
+    server/vault) — the lock-probe the old version of this test did is
+    gone; behavior is the assertion.
+    """
+    InAppHook(db_conn).notify(_report())
+    rows = db_conn.execute(
+        "SELECT alias, status, report_path FROM notifications").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["alias"] == "notes-organizer"
+    assert rows[0]["status"] == "ok"
+    assert rows[0]["report_path"].endswith("2026-10-11_0300.md")
 
 
 def test_notifications_api_roundtrip(app, db_conn):

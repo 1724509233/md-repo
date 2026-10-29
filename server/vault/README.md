@@ -6,18 +6,24 @@ Vault 索引子系统负责 SQLite FTS5 全文检索、知识图谱 (wikilink/ta
 
 ```
 server/vault/
-├── service.py          ← 公共 API (上层模块从此导入)
 ├── file_entry.py       ← FileEntry 数据类 (hash/size/mtime)
-├── __init__.py         ← 废弃兼容层 (tests 仍使用，将移除)
+├── __init__.py         ← 废弃兼容层 (re-export 38 个旧名, tests 仍使用，将移除)
 │
-├── db/                 ← 数据库层 (纯 SQL，无磁盘 I/O)
+├── db/                 ← 数据库层 (纯 SQL，无磁盘 I/O；复合写操作在函数内持锁)
 │   ├── schema.py       ← init_db, _db_lock, 建表 + 迁移
 │   ├── conn.py         ← db_handle 单例 (agent tools 懒加载)
 │   ├── file_index.py   ← files 表 CRUD
 │   ├── changes.py      ← change_log 追加日志
 │   ├── sessions.py     ← agent 会话持久化
 │   ├── segments_sql.py ← FTS5 搜索 (BM25, AND→OR fallback)
-│   └── graph_sql.py    ← 知识图谱实体/边 + backlinks/related
+│   ├── fts_query.py    ← FTS5 表达式白名单组合器
+│   ├── graph_sql.py    ← 知识图谱实体/边 + backlinks/related
+│   ├── recall.py       ← recall_log 遥测 (web/agent/synthetic)
+│   ├── relatedness.py  ← related 边写面 (upsert_edge 无锁 / merge_edge 持锁)
+│   ├── trigger_state.py ← bgagent 触发状态 (record_run/arm_* 持锁)
+│   ├── notifications.py ← bgagent 通知 (guarded_insert 持锁, 硬 cap)
+│   ├── proposal_records.py ← proposals 写面 (create/advance/revive_rearm 持锁)
+│   └── snapshot_records.py ← snapshots 写面 (gc_sweep 复合持锁)
 │
 ├── fs/                 ← 文件系统操作 (无 DB)
 │   ├── segmenter.py    ← Markdown 分段 + jieba 分词
@@ -31,24 +37,23 @@ server/vault/
     └── file_ops.py     ← apply_change, reconcile (变更应用入口)
 ```
 
-## 公共 API (`server.vault.service`)
+## 公共 API (直接从真实模块导入)
 
-上层模块 (agent, webapi, mcp_server) 从此导入:
+`service.py` facade 已删除（card 5）。上层模块 (agent, webapi, mcp_server) 直接从下表真实模块导入:
 
-| 函数 | 说明 |
-|------|------|
-| `init_db(db_path)` → Connection | 创建 SQLite 连接，建表，WAL 模式 |
-| `apply_change(conn, vault_dir, path, action, ...)` | 变更应用入口 (create/update/delete/move) |
-| `reconcile(disk, conn, vault_dir)` → dict | 启动时/定期全量比对，返回 created/modified/deleted/moved/unchanged/duplicates |
-| `edit_file(vault_dir, path, old_string, new_string)` → str | 精确文本替换 |
-| `segments_search(conn, query, top_k, expand)` → list[dict] | FTS5 BM25 搜索 |
-| `graph_get_backlinks(conn, path)` → list[dict] | 反向链接 (谁引用了这篇) |
-| `graph_get_related(conn, path, hops)` → list[dict] | 关联文档 (N-hop BFS) |
-| `rebuild_segments_all(conn, vault_dir)` → int | 全量重建 segments FTS 索引 |
-| `graph_rebuild_all(conn, vault_dir)` → int | 全量重建知识图谱 |
-| `ensure_indexed(conn, vault_dir)` → None | 启动索引检查: 首跑全量重建 (segments+graph)；FTS 失步时从内容表修复 |
-| `get_all_files(conn)` → list[dict] | 获取 files 表所有记录 |
-| `upsert_file(conn, path, hash, mtime)` → None | 文件索引写入 |
+| 函数 | 模块 | 说明 |
+|------|------|------|
+| `init_db(db_path)` → Connection | `db.schema` | 创建 SQLite 连接，建表，WAL 模式 |
+| `reconcile(disk, conn, vault_dir)` → dict | `orchestration.file_ops` | 启动时/定期全量比对，返回 created/modified/deleted/moved/unchanged/duplicates |
+| `edit_file(vault_dir, path, old_string, new_string)` → str | `fs.vault_ops` | 精确文本替换 |
+| `segments_search(conn, query, top_k, expand)` → list[dict] | `db.segments_sql` | FTS5 BM25 搜索 |
+| `graph_get_backlinks(conn, path)` → list[dict] | `db.graph_sql` | 反向链接 (谁引用了这篇) |
+| `graph_get_related(conn, path, hops)` → list[dict] | `db.graph_sql` | 关联文档 (N-hop BFS) |
+| `rebuild_segments_all(conn, vault_dir)` → int | `orchestration.indexer` | 全量重建 segments FTS 索引 |
+| `graph_rebuild_all(conn, vault_dir)` → int | `orchestration.indexer` | 全量重建知识图谱 |
+| `ensure_indexed(conn, vault_dir)` → None | `orchestration.indexer` | 启动索引检查: 首跑全量重建 (segments+graph)；FTS 失步时从内容表修复 |
+| `get_all_files(conn)` → list[dict] | `db.file_index` | 获取 files 表所有记录 |
+| `upsert_file(conn, path, hash, mtime)` → None | `db.file_index` | 文件索引写入 |
 
 ## 数据库表结构
 
@@ -87,7 +92,7 @@ server/vault/
 - **死链清理**: 删除文件后移除指向它的 wikilink (全路径/无扩展名/短名称)
 
 ### 线程安全
-- `_db_lock` (threading.Lock): 保护共享 SQLite 连接的所有写操作 (watchdog 线程 + async 事件循环)
+- `_db_lock` (threading.Lock, `db/schema.py`): card 5 起只由 vault.db 的 mutation functions 在函数内部持有（复合临界区锁内原子）；**server/vault 之外不可 import**；纯读 helper 无锁（单把非重入锁，读持锁会同线程死锁）
 
 ## 依赖的 server/ 模块
 

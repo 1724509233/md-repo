@@ -56,7 +56,7 @@ import time
 import uuid
 from pathlib import Path
 
-from .vault.db.schema import _db_lock
+from .vault.db import snapshot_records
 from .vault.fs.vault_ops import atomic_write_bytes
 
 logger = logging.getLogger(__name__)
@@ -160,17 +160,12 @@ def capture(
             return None
 
     try:
-        with _db_lock:
-            cur = conn.execute(
-                """
-                INSERT INTO snapshots
-                    (ts, call_id, path, old_path, new_path, op,
-                     pre_hash, post_hash, actor, run_id, blob_name, live)
-                VALUES (?, ?, ?, '', ?, ?, ?, '', ?, ?, ?, 0)
-                """,
-                (ts, call_id, path, new_path, op, pre_hash, actor, run_id, blob_name),
-            )
-            sid = cur.lastrowid
+        # The DB half runs under the shared lock inside
+        # snapshot_records.insert_capture (card 5: the vault.db write face
+        # holds the lock internally; the blob read above stays outside it).
+        sid = snapshot_records.insert_capture(
+            conn, ts, call_id, path, new_path, op, pre_hash, actor, run_id,
+            blob_name)
     except Exception as e:  # DB degraded: never break the write path
         if blob_name:
             (snapshots_dir(vault_dir) / blob_name).unlink(missing_ok=True)
@@ -201,20 +196,10 @@ def finalize(conn, snapshot: dict, post_hash: str) -> None:
     where ``with conn:`` opens no transaction — P2 gate verified
     empirically.) Semantics, per branch: other live rows for the path are
     demoted; this row is claimed even while still in-flight (``live=0``);
-    every other row is untouched.
+    every other row is untouched. The single UPDATE runs under the shared
+    lock inside ``snapshot_records.finalize`` (card 5).
     """
-    with _db_lock:
-        conn.execute(
-            """
-            UPDATE snapshots SET
-                live      = CASE WHEN id = ? THEN 1 ELSE 0 END,
-                post_hash = CASE WHEN id = ? THEN ? ELSE post_hash END,
-                finalized = CASE WHEN id = ? THEN 1 ELSE finalized END
-            WHERE path = ? AND (live = 1 OR id = ?)
-            """,
-            (snapshot["id"], snapshot["id"], post_hash, snapshot["id"],
-             snapshot["path"], snapshot["id"]),
-        )
+    snapshot_records.finalize(conn, snapshot["id"], post_hash, snapshot["path"])
 
 
 def discard(conn, vault_dir, snapshot: dict) -> None:
@@ -222,8 +207,7 @@ def discard(conn, vault_dir, snapshot: dict) -> None:
     live slot: the row was inserted with ``live=0`` and never finalized)."""
     if not snapshot:
         return
-    with _db_lock:
-        conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot["id"],))
+    snapshot_records.discard(conn, snapshot["id"])
     if snapshot.get("blob_name"):
         (snapshots_dir(vault_dir) / snapshot["blob_name"]).unlink(missing_ok=True)
 
@@ -294,25 +278,16 @@ def gc(conn, vault_dir, now: float | None = None) -> int:
     via by_call, which does not filter on live/finalized). Residue is
     bounded: at most one per crashed write.
 
+    The SELECT+DELETE compound runs under the shared lock inside
+    ``snapshot_records.gc_sweep`` (card 5 — the row set and its deletion
+    must be one atomic unit); the blob file deletion stays here, outside
+    the lock.
+
     Returns the number of rows (and blobs) reclaimed.
     """
     ts = time.time() if now is None else now
     cutoff = ts - DELETION_RETENTION_S
-    with _db_lock:
-        rows = conn.execute(
-            """
-            SELECT id, blob_name FROM snapshots
-            WHERE (live = 0 AND finalized = 1)
-               OR (live = 1 AND op = 'delete' AND finalized = 1 AND ts < ?)
-            """,
-            (cutoff,),
-        ).fetchall()
-        ids = [r["id"] for r in rows]
-        if ids:
-            placeholders = ",".join("?" for _ in ids)
-            conn.execute(
-                f"DELETE FROM snapshots WHERE id IN ({placeholders})", ids
-            )
+    rows = snapshot_records.gc_sweep(conn, cutoff)
     sd = snapshots_dir(vault_dir)
     for r in rows:
         if r["blob_name"]:

@@ -48,7 +48,7 @@ delete 后从引用方文档中**删除**指向已删文件的 wikilink（全路
 
 ### `apply_change()` — 唯一变更入口
 
-持有模块级 `_db_lock`（见 `db/README.md`），一次调用完成 文件索引 + change_log + FTS + 图谱 四件事：
+持有共享 `_db_lock`（定义于 `db/schema.py`；card 5 规则：vault.db mutation functions 函数内持锁，包内 orchestration 持锁为 recall 先例），一次调用完成 文件索引 + change_log + FTS + 图谱 四件事：
 
 | action | 动作 |
 | --- | --- |

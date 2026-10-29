@@ -69,8 +69,7 @@ from pathlib import Path
 from .. import ledger
 from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..snapshots import capture, finalize, gc, hash_bytes
-from ..vault.db.relatedness import upsert_edge
-from ..vault.db.schema import _db_lock
+from ..vault.db.relatedness import merge_edge
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 
 logger = logging.getLogger("md-vault.bgagent")
@@ -197,7 +196,8 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     source = source_refs[0], target = payload['target'], basis = the record
     justification. Both files must exist (spec §5.2 v2a 结构校验: drift →
-    surface, 不盲落). Idempotent per pair (upsert_edge); a pair the human
+    surface, 不盲落). Idempotent per pair (merge_edge — the lock-holding
+    write surface, card 5); a pair the human
     dismissed (ignored rows) gets a fresh live row when re-proposed — the
     readback's ignored grouping then shows the repeat.
     """
@@ -215,13 +215,15 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         if not fp.is_file():
             raise ValueError(f"relatedness file not found: {rel}")
 
-    with _db_lock:
-        upsert_edge(
-            conn, source, target,
-            basis=str(p.get("justification") or ""),
-            actor=str(p.get("actor") or ""),
-            run_id=str(p.get("run_id") or ""),
-        )
+    # The DB half of this compound op runs under the shared lock inside
+    # merge_edge (card 5: outside server/vault the lock is no longer
+    # importable — the named function is the interface).
+    merge_edge(
+        conn, source, target,
+        basis=str(p.get("justification") or ""),
+        actor=str(p.get("actor") or ""),
+        run_id=str(p.get("run_id") or ""),
+    )
 
 
 # ── summary: dual form, machine zone (D8, spec §4.2) ──────────────────────

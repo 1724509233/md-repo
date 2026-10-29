@@ -32,7 +32,7 @@ main.py
  │    ├── agent.* (SessionManager, Agent, prompts, etc.)  │
  │    ├── ai.py (rag_search, chat_stream)                │
  │    ├── sync.py (compare_files)                        │
- │    ├── vault.service (get_all_files, graph_*)         │
+ │    ├── vault.db (file_index, graph_sql, changes, …)    │
  │    ├── write_registry (register_write)                │
  │    └── vault.db.changes, vault.db.conn                │
  │                                                        │
@@ -43,12 +43,12 @@ main.py
  ├── logrotate.py (start_logrotate)                       │
  │                                                        │
  ├── snapshot_watcher.py (SnapshotWatcher)                │
- │    └── vault.orchestration.move_detect, vault.service  │
+ │    └── vault.orchestration.*, vault.file_entry          │
  │                                                        │
  └── write_registry.py (register_write, pop_source)       │
 
 mcp_server.py (独立入口，不依赖其他 server/ 模块)
- └── config, vault.service, ai, agent.tools, agent.validate
+ └── config, vault.db.*, vault.fs.vault_ops, ai, agent.tools, agent.validate
 ```
 
 ## 关键运行时模式
@@ -88,8 +88,8 @@ config.yaml → load_background_agents()
 
 ## 注意事项
 
-- **`server.vault` 已废弃**: 新代码必须从 `server.vault.service` 导入。`__init__.py` 是兼容 shim，会 emit DeprecationWarning。Tests 仍使用 shim — 不要破坏它。
+- **`server.vault` 根 shim 已废弃**: `service.py` facade 已删除（card 5）；新代码直接从 `server.vault.db` / `.fs` / `.orchestration` 导入。`__init__.py` 是兼容 shim（re-export 38 个旧名），会 emit DeprecationWarning，面由 `tests/test_vault_shim.py` 钉住。Tests 仍使用 shim — 不要破坏它。
 - **`db.py` / `watcher.py` 已删除**: 旧版中的独立文件，功能已迁移到 `vault/` 和 `snapshot_watcher.py`。
 - **sync 锁是注入的**: `SyncLock` 实例由 create_app 构造并注入 `WebContext`（`app.state.ctx.sync_lock`），测试经该 seam 直设模拟锁定；进程重启后重置。
-- **`_db_lock` 保护共享 SQLite 连接**: Watchdog 线程和 async 事件循环都通过它写入 DB。
+- **`_db_lock` 保护共享 SQLite 连接**: 定义在 `vault/db/schema.py`，card 5 起只由 vault.db 的 mutation functions 在函数内部持锁——server/vault 之外不可 import（纯读 helper 无锁，见 vault/db/README.md）。
 - **MCP server 是独立进程**: 不通过 main.py 启动，有自己的 config 自动发现和 DB 初始化逻辑。

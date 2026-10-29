@@ -6,7 +6,7 @@ import re
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ..vault.service import get_all_files
+from ..vault.db.file_index import get_all_files
 from ..sync import compare_files
 
 

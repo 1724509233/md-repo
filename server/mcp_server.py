@@ -120,7 +120,7 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
     ``server/agent/tools/edit_doc.py`` (actor="mcp")."""
     from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
     from server.vault.db.conn import get_conn
-    from server.vault.service import edit_file
+    from server.vault.fs.vault_ops import edit_file
 
     fp = vault_dir / path
     if not fp.is_file():
@@ -168,7 +168,8 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
 
 def main():
     from server.config import load_server_config
-    from server.vault.service import init_db, ensure_indexed
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import ensure_indexed
     from server.ai import rag_search
     from server.agent import ChannelPolicy, validate_tool_call
     
@@ -230,7 +231,7 @@ def main():
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:
         """Get documents related to the given document via wikilinks, tags, or frontmatter related field."""
-        from server.vault.service import graph_get_related
+        from server.vault.db.graph_sql import graph_get_related
         fp = vault_dir / path
         if not fp.is_file():
             return related_no_file(path)

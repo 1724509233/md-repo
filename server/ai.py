@@ -89,7 +89,8 @@ def rag_search(
     Falls back to TF-overlap if the index is unavailable.
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
-    from .vault.service import segments_search, rebuild_segments_all
+    from .vault.db.segments_sql import segments_search
+    from .vault.orchestration.indexer import rebuild_segments_all
 
     vault = Path(vault_dir)
 

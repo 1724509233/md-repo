@@ -3,15 +3,20 @@
 A hook is invoked once per finished run with a :class:`RunReport`.
 First batch: InAppHook (DB row for the Web UI bell). The sync-protocol
 delivery lives in the API layer (/api/sync reads the same table).
+
+DB writes go through the ``vault.db.notifications`` named functions (card
+5: outside ``server/vault`` the shared mutation lock is no longer
+importable — the named functions are the interface). The UI wording of
+the folded summary row stays here, handed to the guard as a callable.
 """
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import re
-import time
 from dataclasses import dataclass
-from datetime import datetime
+
+from ..vault.db import notifications as notify_db
 
 
 @dataclass
@@ -32,6 +37,24 @@ class RunReport:
     report_paths: list[str] = ()    # index/reports/** files this run wrote (v2a report channel — real files; deep links open the console report view)
 
 
+def _report_fields(report: RunReport) -> dict:
+    """The notifications-row fields of one run (UI shaping stays here;
+    the two path lists are JSON array strings, '' when the run produced
+    none)."""
+    return {
+        "alias": report.alias,
+        "name": report.name,
+        "status": report.status,
+        "report_path": report.report_path,
+        "summary": report.summary,
+        "ops_total": report.ops_total,
+        "files_changed": report.files_changed,
+        "kind": report.kind,
+        "proposal_paths": json.dumps(report.proposal_paths) if report.proposal_paths else "",
+        "report_paths": json.dumps(report.report_paths) if report.report_paths else "",
+    }
+
+
 class NotificationHook:
     """Pluggable notification sink."""
 
@@ -42,29 +65,18 @@ class NotificationHook:
 class InAppHook(NotificationHook):
     """Insert a row into the notifications table (Web UI bell).
 
-    Holds the shared ``_db_lock`` per codebase convention: every write
-    path on the shared connection must hold it (the watcher thread is a
-    concurrent writer).
+    The write goes through ``vault.db.notifications.insert_run``, which
+    holds the shared mutation lock internally (card 5: outside
+    ``server/vault`` the lock is no longer importable — the named
+    function is the interface; the watcher thread is a concurrent
+    writer).
     """
 
     def __init__(self, db_conn) -> None:
         self._conn = db_conn
 
     def notify(self, report: RunReport) -> None:
-        from ..vault.db.schema import _db_lock
-
-        with _db_lock:
-            self._conn.execute(
-                "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
-                "ops_total, files_changed, kind, proposal_paths, report_paths) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (time.time(), report.alias, report.name, report.status,
-                 report.report_path, report.summary,
-                 report.ops_total, report.files_changed, report.kind,
-                 json.dumps(report.proposal_paths) if report.proposal_paths else "",
-                 json.dumps(report.report_paths) if report.report_paths else ""),
-            )
-            self._conn.commit()
+        notify_db.insert_run(self._conn, _report_fields(report))
         logger = logging.getLogger("md-vault.bgagent")
         logger.debug("[bg:%s] notification inserted: status=%s", report.alias, report.status)
 
@@ -72,8 +84,24 @@ class InAppHook(NotificationHook):
 _COLLAPSED_COUNT_RE = re.compile(r"其余 (\d+) 条已折叠")
 
 
+def _collapsed_msg(existing: str | None, daily_cap: int) -> str:
+    """Render the day's folded summary row: wording + counter increment.
+
+    ``existing`` is the current row's summary (None on first overflow).
+    The counter is embedded in the wording (「其余 N 条已折叠」), so the
+    increment lives with the wording — the UI text stays in bgagent, the
+    DB mechanics in ``vault.db.notifications.guarded_insert``.
+    """
+    if existing is None:
+        n = 1
+    else:
+        m = _COLLAPSED_COUNT_RE.search(existing)
+        n = int(m.group(1)) + 1 if m else 1
+    return f"今日通知超上限（{daily_cap}），其余 {n} 条已折叠 — 控制台查看"
+
+
 class GuardedNotificationHook(NotificationHook):
-    """Volume guard (v2a debt #6, D33) wrapping another hook (InAppHook).
+    """Volume guard (v2a debt #6, D33).
 
     Two guards, in order:
 
@@ -90,93 +118,29 @@ class GuardedNotificationHook(NotificationHook):
 
     ``daily_cap`` is law (config.yaml ``notifications.daily_cap``, default
     20 — the value the wiring passes in), never hardcoded here beyond the
-    signature default. The guard's own DB work holds ``_db_lock`` per the
-    shared-connection convention; the normal insert delegates to ``inner``
-    (which takes the lock itself) after the checks release it — the cap is
-    a volume control, not an exact ledger.
+    signature default. The guard's DB work — the count-then-act decision
+    AND the write in ONE lock — is ``vault.db.notifications.guarded_insert``
+    (card 5: the cap is a HARD cap — the previous guarded hook released
+    the lock between the count and the delegated insert, so concurrent
+    notifies could both pass; at most ``daily_cap`` normal rows per local
+    day is now guaranteed, not best-effort).
     """
 
-    def __init__(self, inner: NotificationHook, db_conn, daily_cap: int = 20) -> None:
-        self._inner = inner
+    def __init__(self, db_conn, daily_cap: int = 20) -> None:
         self._conn = db_conn
         self._daily_cap = daily_cap
 
-    def _midnight(self) -> float:
-        """Local-day window start (same basis as memory_status ops_today)."""
-        return datetime.now().replace(
-            hour=0, minute=0, second=0, microsecond=0).timestamp()
-
-    def _upsert_collapsed(self) -> None:
-        """Create/update the day's folded summary row (caller holds _db_lock)."""
-        midnight = self._midnight()
-        row = self._conn.execute(
-            "SELECT id, summary FROM notifications "
-            "WHERE kind = 'collapsed' AND ts >= ?", (midnight,)).fetchone()
-        if row is None:
-            n = 1
-            self._conn.execute(
-                "INSERT INTO notifications "
-                "(ts, alias, name, status, report_path, summary, kind, proposal_paths) "
-                "VALUES (?, '*', '通知汇总', 'ok', '', ?, 'collapsed', '')",
-                (time.time(),
-                 f"今日通知超上限（{self._daily_cap}），其余 {n} 条已折叠 — 控制台查看"))
-        else:
-            m = _COLLAPSED_COUNT_RE.search(row["summary"])
-            n = int(m.group(1)) + 1 if m else 1
-            self._conn.execute(
-                "UPDATE notifications SET summary = ? WHERE id = ?",
-                (f"今日通知超上限（{self._daily_cap}），其余 {n} 条已折叠 — 控制台查看",
-                 row["id"]))
-        self._conn.commit()
-
-    def _merged_today(self, report: RunReport) -> bool:
-        """True when a same-alias same-day row already covers this review's
-        proposals (non-empty proposal_paths intersection). Caller holds
-        _db_lock."""
-        if report.kind != "review" or not report.proposal_paths:
-            return False
-        mine = set(report.proposal_paths)
-        rows = self._conn.execute(
-            "SELECT proposal_paths FROM notifications "
-            "WHERE alias = ? AND kind = 'review' AND ts >= ?",
-            (report.alias, self._midnight())).fetchall()
-        for r in rows:
-            try:
-                existing = set(json.loads(r["proposal_paths"])) if r["proposal_paths"] else set()
-            except (ValueError, TypeError):
-                continue
-            if existing & mine:
-                return True
-        return False
-
     def notify(self, report: RunReport) -> None:
-        from ..vault.db.schema import _db_lock
-
-        with _db_lock:
-            midnight = self._midnight()
-            count = self._conn.execute(
-                "SELECT count(*) FROM notifications WHERE ts >= ?",
-                (midnight,)).fetchone()[0]
-            if count >= self._daily_cap:
-                self._upsert_collapsed()
-                return
-            if self._merged_today(report):
-                logger = logging.getLogger("md-vault.bgagent")
-                logger.info("[bg:%s] duplicate review row skipped (merged)", report.alias)
-                return
-        self._inner.notify(report)
+        action = notify_db.guarded_insert(
+            self._conn, _report_fields(report), self._daily_cap, _collapsed_msg)
+        if action == "merged":
+            logger = logging.getLogger("md-vault.bgagent")
+            logger.info("[bg:%s] duplicate review row skipped (merged)", report.alias)
 
 
 def cleanup_old_notifications(db_conn, max_age_s: float = 30 * 86400) -> None:
     """Delete notification rows older than max_age_s (startup housekeeping)."""
-    from ..vault.db.schema import _db_lock
-
-    cutoff = time.time() - max_age_s
-    with _db_lock:
-        cursor = db_conn.execute("SELECT count(*) FROM notifications WHERE ts < ?", (cutoff,))
-        count = cursor.fetchone()[0]
-        db_conn.execute("DELETE FROM notifications WHERE ts < ?", (cutoff,))
-        db_conn.commit()
+    count = notify_db.cleanup_old(db_conn, max_age_s)
     logger = logging.getLogger("md-vault.bgagent")
     if count:
         logger.info("[bg] cleaned %d old notifications (age>30d)", count)

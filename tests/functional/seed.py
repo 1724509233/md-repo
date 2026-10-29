@@ -34,7 +34,8 @@ Design notes (verified against the code this mirrors):
   canonical writer; op names pass through unchanged).
 - DB init is the production startup path:
   ``server.vault.db.schema.init_db(<vault>/.sync/index.db)`` (same call
-  ``server/main.py`` makes, re-exported via ``server.vault.service``).
+  ``server/main.py`` makes; card 5 deleted the ``server.vault.service``
+  facade — production imports the real modules directly).
   An existing DB is simply opened/migrated idempotently.
 """
 from __future__ import annotations

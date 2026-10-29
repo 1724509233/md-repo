@@ -36,8 +36,8 @@ from ..config import BackgroundAgentConfig
 from ..proposals import EXPIRE_AFTER_S, scan as scan_proposals
 from .. import events
 from ..vault.db import recall as recall_db
-from ..vault.db.changes import count_changes_sources, get_changes_sources
-from ..vault.db.schema import _db_lock
+from ..vault.db import trigger_state as trigger_db
+from ..vault.db.changes import count_changes_sources
 from .executor import run_executor
 from .notify import NotificationHook, RunReport
 from .runner import run_once
@@ -54,63 +54,7 @@ def _next_fire(cron: str, now: datetime | None = None) -> datetime:
     return croniter(cron, now).get_next(datetime)
 
 
-# ── trigger_state helpers (ledgered checkpoints) ─────────────────────────
-
-def _ensure_trigger_row(conn, alias: str) -> None:
-    with _db_lock:
-        conn.execute(
-            "INSERT OR IGNORE INTO trigger_state "
-            "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
-            "last_recall_query_seq, last_recall_hit_seq, runs_date, runs_count) "
-            "VALUES (?, 0.0, 0, 0.0, 0, 0, 0, '', 0)",
-            (alias,),
-        )
-        conn.commit()
-
-
-def _get_trigger_state(conn, alias: str) -> dict:
-    row = conn.execute(
-        "SELECT last_run_ts, armed, last_armed_scan, last_armed_seq, "
-        "last_recall_query_seq, last_recall_hit_seq, "
-        "runs_date, runs_count "
-        "FROM trigger_state WHERE agent = ?", (alias,)
-    ).fetchone()
-    if row is None:
-        return {"last_run_ts": 0.0, "armed": 0, "last_armed_scan": 0.0,
-                "last_armed_seq": 0, "last_recall_query_seq": 0,
-                "last_recall_hit_seq": 0, "runs_date": "", "runs_count": 0}
-    return {"last_run_ts": row[0] or 0.0, "armed": row[1] or 0,
-            "last_armed_scan": row[2] or 0.0, "last_armed_seq": row[3] or 0,
-            "last_recall_query_seq": row[4] or 0, "last_recall_hit_seq": row[5] or 0,
-            "runs_date": row[6] or "", "runs_count": row[7] or 0}
-
-
-def _budget_left(conn, alias: str, budget: int) -> bool:
-    """True if the agent's same-day run count is below the budget cap."""
-    today = datetime.now().strftime("%Y-%m-%d")
-    row = conn.execute(
-        "SELECT runs_date, runs_count FROM trigger_state WHERE agent = ?", (alias,)
-    ).fetchone()
-    count = row[1] or 0 if row and row[0] == today else 0
-    return count < budget
-
-
-def _record_run(conn, alias: str) -> None:
-    """After any run (cron, idle-aware or triggered): last_run_ts anchor,
-    armed reset, same-day run counter (rolled over on date change)."""
-    now = time.time()
-    today = datetime.now().strftime("%Y-%m-%d")
-    with _db_lock:
-        row = conn.execute(
-            "SELECT runs_date, runs_count FROM trigger_state WHERE agent = ?", (alias,)
-        ).fetchone()
-        count = (row[1] or 0) + 1 if row and row[0] == today else 1
-        conn.execute(
-            "UPDATE trigger_state SET last_run_ts = ?, armed = 0, "
-            "runs_date = ?, runs_count = ? WHERE agent = ?",
-            (now, today, count, alias),
-        )
-        conn.commit()
+# ── policy / idle floor ───────────────────────────────────────────────────
 
 
 def self_exclusion(aliases: set[str]) -> set[str]:
@@ -144,13 +88,14 @@ def _has_human_activity_since(conn, cfg: BackgroundAgentConfig,
 
     A never-run agent (last_run_ts == 0) counts as having work.
     """
-    state = _get_trigger_state(conn, cfg.alias)
+    state = trigger_db.get_state(conn, cfg.alias)
     if state["last_run_ts"] <= 0:
         return True
     exclude = self_exclusion(all_aliases)
-    with _db_lock:
-        n = count_changes_sources(conn, since=state["last_run_ts"],
-                                  ops=("create",), exclude_sources=exclude)
+    # Lock-free read: count_changes_sources is a pure read (card 5 — read
+    # helpers in vault.db hold no lock).
+    n = count_changes_sources(conn, since=state["last_run_ts"],
+                              ops=("create",), exclude_sources=exclude)
     return n > 0
 
 
@@ -166,7 +111,7 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
         logger.warning("[bg:%s] previous run still active, skipping tick", cfg.alias)
         return
     if cfg.trigger is not None and conn is not None:
-        _ensure_trigger_row(conn, cfg.alias)
+        trigger_db.ensure_row(conn, cfg.alias)
         source = cfg.trigger.get("source", "change")
         # change-source: deadline floor (idle check — no human work → no LLM).
         # recall-source: the cron tick is the weekly retrospective heartbeat
@@ -187,7 +132,7 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
     finally:
         lock.release()
         if ran and cfg.trigger is not None and conn is not None:
-            _record_run(conn, cfg.alias)
+            trigger_db.record_run(conn, cfg.alias)
 
 
 async def _agent_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
@@ -218,49 +163,32 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
     independent id cursors (query cursor on recall_queries, hit cursor on
     recall_log).
     """
-    _ensure_trigger_row(conn, cfg.alias)
-    state = _get_trigger_state(conn, cfg.alias)
+    trigger_db.ensure_row(conn, cfg.alias)
+    state = trigger_db.get_state(conn, cfg.alias)
     now = time.time()
     source = cfg.trigger.get("source", "change")
 
     if source == "recall":
+        # The scan stays lock-free (arming semantics preserved — the count
+        # and the new cursors are computed outside the lock); only the
+        # counter UPDATE is locked (trigger_db.arm_recall).
         count, new_qs, new_hs = recall_db.scan_recall_arming(
             conn, state["last_recall_query_seq"], state["last_recall_hit_seq"],
             cfg.trigger.get("low_score", 0.2))
-        with _db_lock:
-            conn.execute(
-                "UPDATE trigger_state SET armed = ?, last_armed_scan = ?, "
-                "last_recall_query_seq = ?, last_recall_hit_seq = ? WHERE agent = ?",
-                (state["armed"] + count, now, new_qs, new_hs, cfg.alias),
-            )
-            conn.commit()
-        armed = state["armed"] + count
+        armed = trigger_db.arm_recall(conn, cfg.alias, count, now, new_qs, new_hs)
         if count:
             logger.info("[bg:%s] recall armed check: %d signals, armed=%d/%d",
                         cfg.alias, count, armed, cfg.trigger["arm_count"])
     else:
         exclude = self_exclusion(all_aliases)
-        with _db_lock:
-            # Cursor on the monotonic seq column, not the ts float: a change
-            # logged in the same clock tick as the previous scan has
-            # ts == last_armed_scan and is silently dropped by `ts > ?`, but
-            # its seq is always greater.
-            events = get_changes_sources(
-                conn, since_seq=state["last_armed_seq"],
-                ops=tuple(cfg.trigger["events"]), exclude_sources=exclude)
-            max_seq = state["last_armed_seq"]
-            if events:
-                max_seq = max(e["seq"] for e in events)
-            conn.execute(
-                "UPDATE trigger_state SET armed = ?, last_armed_scan = ?, "
-                "last_armed_seq = ? WHERE agent = ?",
-                (state["armed"] + len(events), now, max_seq, cfg.alias),
-            )
-            conn.commit()
-        armed = state["armed"] + len(events)
-        if events:
+        # State read + change scan + counter update in ONE lock
+        # (trigger_db.arm_change): the seq cursor and the armed counter move
+        # together. Returns (new_armed, n_events).
+        armed, n_events = trigger_db.arm_change(
+            conn, cfg.alias, tuple(cfg.trigger["events"]), exclude, now)
+        if n_events:
             logger.info("[bg:%s] armed check: %d events, armed=%d/%d",
-                        cfg.alias, len(events), armed, cfg.trigger["arm_count"])
+                        cfg.alias, n_events, armed, cfg.trigger["arm_count"])
 
     # arm ≠ run: arming is qualification only — release must also pass the
     # min_interval cooldown and the daily budget. The gates run against the
@@ -273,7 +201,7 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
         logger.debug("[bg:%s] armed but in cooldown (min_interval_h=%.1f)",
                      cfg.alias, cfg.trigger["min_interval_h"])
         return
-    if not _budget_left(conn, cfg.alias, cfg.budget_runs_per_day):
+    if not trigger_db.budget_left(conn, cfg.alias, cfg.budget_runs_per_day):
         logger.debug("[bg:%s] armed but daily budget exhausted (%d runs)",
                      cfg.alias, cfg.budget_runs_per_day)
         return
@@ -289,7 +217,7 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
         logger.exception("[bg:%s] triggered run crashed", cfg.alias)
     finally:
         lock.release()
-        _record_run(conn, cfg.alias)
+        trigger_db.record_run(conn, cfg.alias)
 
 
 async def _armed_loop(cfg: BackgroundAgentConfig, vault_dir: Path,

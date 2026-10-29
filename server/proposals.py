@@ -51,7 +51,7 @@ import time
 from datetime import datetime
 
 from . import events
-from .vault.db.schema import _db_lock
+from .vault.db import proposal_records
 
 PROPOSALS_DIR = "suggestions"
 
@@ -213,70 +213,19 @@ def create(
         raise ValueError("source_refs must be a list")
 
     now = now if now is not None else time.time()
-    date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
-
-    # Row-write section under the shared DB lock (the connection is shared
-    # across the event-loop thread and executor worker threads).
-    with _db_lock:
-        cur = conn.execute(
-            """
-            INSERT INTO proposals
-                (type, actor, run_id, status, payload, source_refs, justification,
-                 reject_reason, created_at, updated_at, merged_at, relpath)
-            VALUES (?, ?, ?, 'pending', ?, ?, ?, '', ?, ?, '', '')
-            """,
-            (
-                type, actor, str(run_id or ""),
-                json.dumps(payload) if payload is not None else "",
-                json.dumps([str(r) for r in source_refs], ensure_ascii=False),
-                justification, now, now,
-            ),
-        )
-        record_id = cur.lastrowid
-        # relpath derives from the PK: deterministic, collision-free.
-        relpath = f"{PROPOSALS_DIR}/{date}_{type}_p{record_id}.md"
-        conn.execute(
-            "UPDATE proposals SET relpath = ? WHERE id = ?", (relpath, record_id)
-        )
-        rec = record(conn, record_id)
-        conn.execute(
-            """
-            INSERT INTO proposal_transitions
-                (proposal_id, from_status, to_status, actor, ts, reason)
-            VALUES (?, NULL, 'pending', ?, ?, 'created')
-            """,
-            (record_id, actor, now),
-        )
+    # The row-write section (INSERT → relpath → creation transition, ONE
+    # lock) is proposal_records.create (card 5: the vault.db write face
+    # holds the lock internally); this module keeps the policy + shaping.
+    record_id = proposal_records.create(
+        conn, type, actor, str(run_id or ""),
+        json.dumps(payload) if payload is not None else "",
+        json.dumps([str(r) for r in source_refs], ensure_ascii=False),
+        justification, now)
+    rec = record(conn, record_id)
     return rec
 
 
 # ── State machine ─────────────────────────────────────────────────────────
-
-def _advance_sql(conn, record_id: int, cur_status: str, new_status: str,
-                 new_reason: str, merged_at: str, actor: str,
-                 reason: str) -> int:
-    """The SOLE status UPDATE (invariant 11): conditional on the expected
-    pre-state. Returns the affected row count; 0 = the record moved
-    underneath us (concurrent decision) — the caller raises ``ValueError``
-    and the losing path writes zero side effects (no transitions row).
-    """
-    with _db_lock:
-        now = time.time()
-        cur = conn.execute(
-            "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, "
-            "updated_at = ? WHERE id = ? AND status = ?",
-            (new_status, new_reason, merged_at, now, record_id, cur_status),
-        )
-        if cur.rowcount == 0:
-            return 0
-        conn.execute(
-            "INSERT INTO proposal_transitions "
-            "(proposal_id, from_status, to_status, actor, ts, reason) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (record_id, cur_status, new_status, actor, now, reason),
-        )
-        return cur.rowcount
-
 
 def advance(
     conn,
@@ -323,9 +272,11 @@ def advance(
 
     # Row-write section: one conditional UPDATE (invariant 11 — the UPDATE
     # is guarded on the pre-state we read, so a concurrent decision from
-    # the other channel loses with zero side effects; see _advance_sql).
-    n = _advance_sql(conn, record_id, cur_status, new_status, new_reason,
-                     merged_at, actor, reject_reason)
+    # the other channel loses with zero side effects; see
+    # proposal_records.advance — the vault.db write face holds the lock
+    # internally, card 5).
+    n = proposal_records.advance(conn, record_id, cur_status, new_status,
+                                 new_reason, merged_at, actor, reject_reason)
     if n == 0:
         raise ValueError(
             f"illegal pre-state: expected {cur_status!r} but the record moved "
@@ -398,21 +349,22 @@ def revive(conn, vault_dir, record_id: int) -> dict:
     if rec["status"] != "expired":
         raise ValueError(f"revive requires status expired, got {rec['status']!r}")
     advance(conn, vault_dir, record_id, "awaiting_review", actor="human")
-    # TTL re-arm under the shared DB lock (see create()).
-    with _db_lock:
-        conn.execute(
-            "UPDATE proposals SET created_at = ? "
-            "WHERE id = ? AND status = 'awaiting_review'",
-            (time.time(), record_id),
-        )
+    # TTL re-arm under the shared DB lock (see create(); the vault.db write
+    # face holds the lock internally, card 5).
+    proposal_records.revive_rearm(conn, record_id)
     out = record(conn, record_id)
     out["actor"] = "human"  # the decision's actor (revive is human-only)
     return out
 
 
 # ── Read face (console / status / trail) ───────────────────────────────────
-# The proposals / proposal_transitions / change_log tables are this module's
-# schema. The route layer calls into these functions; the DB shape stays here.
+# Split along the lock boundary (card 5): this module keeps the read face
+# (record/scan/trail/status) + the state-machine orchestration (legality,
+# authorization policy, event publishing); the write SQL lives in
+# vault.db.proposal_records — lock-holding mutation functions (outside
+# server/vault the shared mutation lock is no longer importable, the named
+# functions are the interface). The route layer calls into these functions;
+# the DB shape stays in the vault.
 
 # Console sort priority: actionable states first, terminal + parse failures
 # last. awaiting_review is the human's review queue, so it always comes first.

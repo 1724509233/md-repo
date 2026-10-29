@@ -8,12 +8,20 @@ Vault 索引数据库（SQLite）持久层。负责 `index.db` 的连接创建�
 
 | 文件 | 职责 |
 | --- | --- |
-| `schema.py` | `init_db()`：建连接（WAL 模式）、建表、legacy 迁移；模块级 `_db_lock` |
-| `file_index.py` | `files` 表：path/hash/mtime 索引的增删查 |
+| `schema.py` | `init_db()`：建连接（WAL 模式）、建表、legacy 迁移；模块级 `_db_lock`（只由 vault.db mutation functions 在内持有） |
+| `conn.py` | `db_handle` 单例：main.py 注册，agent tools / mcp 懒加载 |
+| `file_index.py` | `files` 表：path/hash/mtime 索引的增删查（写函数无锁，锁由 vault 内调用方持有） |
 | `changes.py` | `change_log` 表：append-only 变更事件流（seq/ts/source/op） |
 | `sessions.py` | `sessions` 表：Agent 聊天会话持久化（messages 以 JSON 存储） |
 | `segments_sql.py` | `segments` + `segments_fts`：FTS5 分段检索（BM25 排序）+ 同步 triggers |
+| `fts_query.py` | FTS5 查询表达式白名单组合器（分层召回 spec §4） |
 | `graph_sql.py` | `entities` + `edges`：知识图谱 upsert/查询、backlinks、N-hop 关联 |
+| `recall.py` | `recall_log` 表：召回遥测（web/agent/synthetic 流量维度）+ arming 聚合 |
+| `relatedness.py` | related 边写面：`upsert_edge`（无锁）/ `merge_edge`（executor 复合操作，持锁） |
+| `trigger_state.py` | `trigger_state` 表：bgagent 触发状态；`record_run`/`arm_change`/`arm_recall` 复合临界区**函数内持锁** |
+| `notifications.py` | `notifications` 表：bgagent 通知；`guarded_insert` **函数内持锁**（硬 cap，count-then-act 一锁） |
+| `proposal_records.py` | `proposals` 表写面 SQL：`create`/`advance`/`revive_rearm`（**函数内持锁**）；不 import server/proposals.py |
+| `snapshot_records.py` | `snapshots` 表：`insert_capture`/`finalize`/`discard`/`gc_sweep`（gc 的 SELECT+DELETE 复合一锁） |
 
 ## Schema
 
@@ -37,8 +45,9 @@ edges(src_id, dst_id, type CHECK(wikilink|tag|related), path,
 ### 连接与并发
 
 - `init_db()` 以 `check_same_thread=False, isolation_level=None`（autocommit）打开连接，并启用 **WAL** 模式支持并发读。
-- 同一个连接被 watchdog 线程和 async event loop 共享，因此 `schema.py` 提供模块级 `_db_lock`（`threading.Lock`）：**所有写路径必须持有该锁**，避免事务交错。
-- 各表模块的函数本身不加锁，由调用方（`service.py` / `orchestration/`）负责。
+- 同一个连接被 watchdog 线程和 async event loop 共享，因此 `schema.py` 提供模块级 `_db_lock`（`threading.Lock`）。
+- **并发规则（card 5 起）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）；**server/vault 之外 `_db_lock` 标识符零出现**（例外两处：`init_db` 的 DDL 语境、`recovery._rebuild_files_table` 的进程启动单线程 recovery drill）。上层（bgagent、proposals、snapshots）调用具名函数，不再持锁、不再裸 SQL。
+- **纯读 helper 保持无锁**：`_db_lock` 是单把非重入锁，读函数若持锁会与写路径互斥竞争、并在锁内调用时同线程死锁——所以 `file_index`/`changes`/`relatedness.upsert_edge` 等读函数无锁，同模块的 mutation functions 负责加锁；锁内调用读 helper 是安全的。
 
 ### 变更日志与 legacy 迁移
 

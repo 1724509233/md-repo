@@ -47,10 +47,17 @@ def test_concurrent_adopt_exactly_one_wins(db_conn, vault_dir):
 
 
 def test_stale_expected_status_rowcount_zero(db_conn, vault_dir):
-    """条件 UPDATE 以过期前置态执行 → 行计数 0 → 无状态变更（分支单元测试）。"""
+    """条件 UPDATE 以过期前置态执行 → 行计数 0 → 无状态变更（分支单元测试）。
+
+    Card 5: the conditional-UPDATE half of the write SQL lives in
+    ``vault.db.proposal_records.advance`` (lock-holding); this test drives
+    that named function directly."""
+    from server.vault.db import proposal_records
+
     rid = _make_awaiting(db_conn, vault_dir)
-    n = proposals._advance_sql(db_conn, rid, cur_status="processing",  # 已非 processing
-                               new_status="adopted", new_reason="", merged_at="",
-                               actor="t", reason="")
+    n = proposal_records.advance(
+        db_conn, rid, cur_status="processing",  # 已非 processing
+        new_status="adopted", new_reason="", merged_at="",
+        actor="t", reason="")
     assert n == 0
     assert proposals.record(db_conn, rid)["status"] == "awaiting_review"

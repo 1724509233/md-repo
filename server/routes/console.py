@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from .. import ledger
-from ..vault.service import get_all_files
+from ..vault.db.file_index import get_all_files
 from ..vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 
 
@@ -252,13 +252,13 @@ def register(app, ctx) -> None:
 
     @app.get("/api/graph/backlinks")
     async def graph_backlinks(path: str) -> list[dict]:
-        from ..vault.service import graph_get_backlinks
+        from ..vault.db.graph_sql import graph_get_backlinks
 
         return graph_get_backlinks(ctx.db_conn, path)
 
     @app.get("/api/graph/related")
     async def graph_related(path: str, hops: int = 1) -> list[dict]:
-        from ..vault.service import graph_get_related
+        from ..vault.db.graph_sql import graph_get_related
 
         return graph_get_related(ctx.db_conn, path, hops=hops)
 

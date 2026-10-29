@@ -11,11 +11,12 @@ import uvicorn
 
 from . import events, ledger
 from .api import create_app
-from .bgagent import InAppHook, start_background_agents
+from .bgagent import start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import self_exclusion
 from .config import load_background_agents, load_notifications, load_server_config
-from .vault.service import ensure_indexed, init_db
+from .vault.db.schema import init_db
+from .vault.orchestration.indexer import ensure_indexed
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 
@@ -94,7 +95,7 @@ async def build_runtime(vault_dir: Path, conn, bg_agents: list,
         bg_tasks = start_background_agents(
             bg_agents, vault_dir,
             hooks=[GuardedNotificationHook(
-                InAppHook(conn), conn, daily_cap=notifications_cfg.daily_cap)],
+                conn, daily_cap=notifications_cfg.daily_cap)],
             db_conn=conn)
         await asyncio.sleep(0)  # let the bgagent tasks start
 

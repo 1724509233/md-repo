@@ -46,7 +46,7 @@ SessionManager (DB 持久化 + TTL 淘汰)
 | `write_doc` | **ask** | 创建/覆盖文件，注册 write_registry 归因 |
 | `delete_doc` | **ask** | 删除文件，precheck 验证存在性 |
 | `move_docs` | **ask** | 批量移动/重命名，pre-rename 更新引用 |
-| `edit_doc` | **ask** | 精确文本替换，调用 `vault.service.edit_file()` |
+| `edit_doc` | **ask** | 精确文本替换，调用 `vault.fs.vault_ops.edit_file()` |
 | `get_related_docs` | allow | 知识图谱关联文档 (wikilink/tag/related) |
 | `recent_changes` | allow | 变更日志查询，支持 since/source/limit 过滤 |
 
@@ -62,7 +62,7 @@ SessionManager (DB 持久化 + TTL 淘汰)
 
 | 模块 | 用途 |
 |------|------|
-| `server.vault.service` | `edit_file`, `segments_search`, `graph_get_backlinks/related` |
+| `server.vault.fs.vault_ops` / `server.vault.db` | `edit_file`, `graph_get_related` 等（按工具各自导入真实模块） |
 | `server.vault.db.conn` | `get_conn()` — agent tools 懒加载 DB 连接 |
 | `server.vault.db.changes` | `get_changes()` — 变更检测 |
 | `server.write_registry` | `register_write()` — 写操作归因 |

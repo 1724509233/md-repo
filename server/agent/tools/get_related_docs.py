@@ -30,7 +30,7 @@ class GetRelatedDocsTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db.conn import get_conn
-        from ...vault.service import graph_get_related
+        from ...vault.db.graph_sql import graph_get_related
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():

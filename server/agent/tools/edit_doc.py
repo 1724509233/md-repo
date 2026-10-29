@@ -34,7 +34,7 @@ class EditDocTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
         from ...vault.db.conn import get_conn
-        from ...vault.service import edit_file
+        from ...vault.fs.vault_ops import edit_file
         from ... import ledger
 
         fp = ctx.vault_dir / args.path

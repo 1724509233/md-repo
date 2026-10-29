@@ -15,15 +15,20 @@ Reversal mechanics (§四 table: 逆机制 = 删行 / ignored 标记):
 - Deletion of a row is the other reversal (human/executor; the console
   surface is v2b/P3).
 
-Concurrency: call sites run on the shared connection under
-``schema._db_lock`` (same idiom as proposals/snapshots); this module does
-not take the lock itself, so callers nesting inside a locked section need
-not re-enter.
+Concurrency (card 5, split along the lock boundary): ``upsert_edge`` /
+``mark_ignored`` stay lock-free for in-package callers that hold
+``schema._db_lock`` themselves (single non-reentrant lock — a reader or
+nested writer inside a locked section must not re-enter); out-of-package
+writers (the executor) call :func:`merge_edge`, which holds the lock
+itself — outside ``server/vault`` ``_db_lock`` is no longer importable,
+the named functions are the interface.
 """
 from __future__ import annotations
 
 import sqlite3
 import time
+
+from .schema import _db_lock
 
 
 def upsert_edge(
@@ -68,6 +73,26 @@ def upsert_edge(
         (source, target, basis, actor, ts, run_id),
     )
     return int(cur.lastrowid)
+
+
+def merge_edge(
+    conn: sqlite3.Connection,
+    source: str,
+    target: str,
+    basis: str,
+    actor: str,
+    *,
+    run_id: str = "",
+    now: float | None = None,
+) -> int:
+    """Out-of-package write surface (card 5): :func:`upsert_edge` under the
+    shared lock. The executor's relatedness merge is a read (file-existence
+    check) → write compound whose DB half must be one locked section —
+    callers outside ``server/vault`` no longer import ``_db_lock``, so the
+    module exposes the lock-holding entry instead. Returns the row id."""
+    with _db_lock:
+        return upsert_edge(
+            conn, source, target, basis, actor, run_id=run_id, now=now)
 
 
 def mark_ignored(conn: sqlite3.Connection, edge_id: int) -> bool:

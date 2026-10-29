@@ -15,12 +15,10 @@ from server.bgagent.notify import NotificationHook
 from server.bgagent.runner import run_once
 from server.bgagent.scheduler import (
     _armed_check,
-    _ensure_trigger_row,
-    _get_trigger_state,
     _handle_tick,
-    _record_run,
 )
 from server.config import BackgroundAgentConfig
+from server.vault.db import trigger_state as trigger_db
 from server.vault.db.changes import log_change
 
 
@@ -79,12 +77,12 @@ def test_armed_counts_until_threshold(db_conn, vault_dir, tmp_path):
     log_change(db_conn, "notes/b.md", "create", source="web")
     _armed(cfg, vault_dir, db_conn, run_fn)
     assert ran == []                      # 2 < 3 → armed but not released
-    assert _get_trigger_state(db_conn, cfg.alias)["armed"] == 2
+    assert trigger_db.get_state(db_conn, cfg.alias)["armed"] == 2
 
     log_change(db_conn, "notes/c.md", "create", source="web")
     _armed(cfg, vault_dir, db_conn, run_fn)
     assert ran == ["cons"]                # 3rd event → run triggered
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 0               # reset after run
     assert st["last_run_ts"] > 0
     assert st["runs_count"] == 1
@@ -105,7 +103,7 @@ def test_armed_seq_cursor_survives_ts_collision(db_conn, vault_dir, tmp_path):
     log_change(db_conn, "notes/b.md", "create", source="web")
     _armed(cfg, vault_dir, db_conn, run_fn)
     assert ran == []                       # 2 < 3 → armed but not released
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 2
 
     # Force the collision: a 3rd create whose ts equals the stored
@@ -118,7 +116,7 @@ def test_armed_seq_cursor_survives_ts_collision(db_conn, vault_dir, tmp_path):
 
     _armed(cfg, vault_dir, db_conn, run_fn)
     assert ran == ["cons"]                 # 3rd event → run triggered
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 0                # reset after run
     assert st["last_armed_seq"] == c_seq   # cursor advanced past the collision
 
@@ -129,7 +127,7 @@ def test_non_event_ops_do_not_arm(db_conn, vault_dir, tmp_path):
     log_change(db_conn, "notes/a.md", "update", source="web")  # op not in events
     _armed(cfg, vault_dir, db_conn, _fake_run(ran))
     assert ran == []
-    assert _get_trigger_state(db_conn, cfg.alias)["armed"] == 0
+    assert trigger_db.get_state(db_conn, cfg.alias)["armed"] == 0
 
 
 # ── self-exclusion ───────────────────────────────────────────────────────
@@ -146,7 +144,7 @@ def test_self_excluded_sources_do_not_arm(db_conn, vault_dir, tmp_path):
     log_change(db_conn, "d.md", "create", source="notes-organizer")
     _armed(cfg, vault_dir, db_conn, run_fn, all_aliases=("cons", "notes-organizer"))
     assert ran == []
-    assert _get_trigger_state(db_conn, cfg.alias)["armed"] == 0
+    assert trigger_db.get_state(db_conn, cfg.alias)["armed"] == 0
 
     # A genuine human-channel event arms it.
     log_change(db_conn, "e.md", "create", source="web")
@@ -161,12 +159,12 @@ def test_min_interval_cooldown(db_conn, vault_dir, tmp_path):
     ran = []
     run_fn = _fake_run(ran)
 
-    _ensure_trigger_row(db_conn, cfg.alias)
-    _record_run(db_conn, cfg.alias)  # just ran → inside the 24h cooldown
+    trigger_db.ensure_row(db_conn, cfg.alias)
+    trigger_db.record_run(db_conn, cfg.alias)  # just ran → inside the 24h cooldown
     log_change(db_conn, "notes/a.md", "create", source="web")
     _armed(cfg, vault_dir, db_conn, run_fn)
     assert ran == []
-    assert _get_trigger_state(db_conn, cfg.alias)["armed"] == 1  # still tracking
+    assert trigger_db.get_state(db_conn, cfg.alias)["armed"] == 1  # still tracking
 
     # Backdate the last run past the cooldown → gate opens.
     db_conn.execute(
@@ -187,7 +185,7 @@ def test_budget_caps_daily_runs(db_conn, vault_dir, tmp_path):
         log_change(db_conn, f"notes/{i}.md", "create", source="web")
         _armed(cfg, vault_dir, db_conn, run_fn)
     assert len(ran) == 2  # third triggered run blocked by the daily budget
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["runs_count"] == 2
 
 
@@ -195,8 +193,8 @@ def test_budget_caps_daily_runs(db_conn, vault_dir, tmp_path):
 
 def test_idle_tick_does_not_invoke_llm(db_conn, vault_dir, tmp_path):
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
-    _ensure_trigger_row(db_conn, cfg.alias)
-    _record_run(db_conn, cfg.alias)  # anchor = now
+    trigger_db.ensure_row(db_conn, cfg.alias)
+    trigger_db.record_run(db_conn, cfg.alias)  # anchor = now
 
     # Only self-excluded events since the last run → no human work.
     log_change(db_conn, "x.md", "create", source="cons")
@@ -227,8 +225,8 @@ def test_idle_tick_does_not_invoke_llm(db_conn, vault_dir, tmp_path):
 
 def test_trigger_tick_runs_when_human_event(db_conn, vault_dir, tmp_path):
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
-    _ensure_trigger_row(db_conn, cfg.alias)
-    _record_run(db_conn, cfg.alias)
+    trigger_db.ensure_row(db_conn, cfg.alias)
+    trigger_db.record_run(db_conn, cfg.alias)
     log_change(db_conn, "h.md", "create", source="web", ts=time.time() + 1)  # human work → real run
     # Explicit future ts: the idle gate compares ts > last_run_ts, and two
     # back-to-back time.time() calls can tie on the same Windows clock tick
@@ -246,7 +244,7 @@ def test_trigger_tick_runs_when_human_event(db_conn, vault_dir, tmp_path):
 
     assert ran == ["cons"]
     assert hook.reports == []  # a real run notifies via run_once, not the tick
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["runs_count"] == 2  # recorded run + this cron run
 
 
@@ -313,7 +311,7 @@ def test_recall_arming_counts_and_cursors(db_conn, vault_dir, tmp_path):
 
     ran = []
     _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 2          # 1 zero-hit + 1 low non-synthetic
     assert st["last_recall_query_seq"] == 2  # cursor = max id in batch 1
     assert st["last_recall_hit_seq"] == 3    # cursor = max id in batch 1
@@ -331,7 +329,7 @@ def test_recall_arming_counts_and_cursors(db_conn, vault_dir, tmp_path):
     )
 
     _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 4          # 2 + 2
     assert st["last_recall_query_seq"] == 3
     assert st["last_recall_hit_seq"] == 4
@@ -353,7 +351,7 @@ def test_recall_arming_threshold_release(db_conn, vault_dir, tmp_path):
     ran = []
     _armed(cfg, vault_dir, db_conn, _fake_run(ran), all_aliases=("sentinel",))
     assert ran == ["sentinel"]
-    st = _get_trigger_state(db_conn, cfg.alias)
+    st = trigger_db.get_state(db_conn, cfg.alias)
     assert st["armed"] == 0  # reset after run
 
 
@@ -361,8 +359,8 @@ def test_recall_tick_runs_unconditionally(db_conn, vault_dir, tmp_path):
     """A recall-source agent's cron tick runs the LLM even with zero
     change-log activity since the last run (weekly retrospective heartbeat)."""
     cfg = _cfg_recall(tmp_path, vault_dir, arm_count=10)
-    _ensure_trigger_row(db_conn, cfg.alias)
-    _record_run(db_conn, cfg.alias)  # anchor = now
+    trigger_db.ensure_row(db_conn, cfg.alias)
+    trigger_db.record_run(db_conn, cfg.alias)  # anchor = now
 
     # Only self-excluded events → no human work in change_log.
     log_change(db_conn, "x.md", "create", source="sentinel")
@@ -384,8 +382,8 @@ def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path
     """A change-source agent with no human events since the last run still
     records an idle tick (existing behavior unchanged)."""
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
-    _ensure_trigger_row(db_conn, cfg.alias)
-    _record_run(db_conn, cfg.alias)
+    trigger_db.ensure_row(db_conn, cfg.alias)
+    trigger_db.record_run(db_conn, cfg.alias)
 
     # Only self-excluded events since the last run.
     log_change(db_conn, "x.md", "create", source="cons")

@@ -8,7 +8,8 @@ from pathlib import Path
 
 from server.recovery import main as recovery_main
 from server.recovery import run_recovery_drill
-from server.vault.service import init_db, upsert_file
+from server.vault.db.schema import init_db
+from server.vault.db.file_index import upsert_file
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 SECONDARY_CONTENT = b"# Secondary note\n\nMore content here.\n"
