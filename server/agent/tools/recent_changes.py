@@ -41,10 +41,10 @@ class RecentChangesTool(Tool):
             since_raw = None
         since_ts = parse_since(since_raw) if since_raw else 0.0
         path_raw = args.path
-        if isinstance(path_raw, str) and path_raw.strip().lower() == "none":
+        if isinstance(path_raw, str) and (path_raw.strip().lower() == "none" or path_raw.strip() == ""):
             path_raw = None
         source_raw = args.source
-        if isinstance(source_raw, str) and source_raw.strip().lower() == "none":
+        if isinstance(source_raw, str) and (source_raw.strip().lower() == "none" or source_raw.strip() == ""):
             source_raw = None
         changes = get_changes(
             conn,

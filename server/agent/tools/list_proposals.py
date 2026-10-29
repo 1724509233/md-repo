@@ -45,11 +45,20 @@ class ListProposalsTool(Tool):
         if conn is None:
             return "Error: proposal database unavailable (server DB not initialized)"
 
-        recs = scan(conn, args.status)
-        if args.type is not None:
-            recs = [r for r in recs if r["type"] == args.type]
-        if args.actor is not None:
-            recs = [r for r in recs if r["actor"] == args.actor]
+        status = args.status
+        if isinstance(status, str) and (status.strip().lower() == "none" or status.strip() == ""):
+            status = None
+        recs = scan(conn, status)
+        type_ = args.type
+        if isinstance(type_, str) and (type_.strip().lower() == "none" or type_.strip() == ""):
+            type_ = None
+        actor = args.actor
+        if isinstance(actor, str) and (actor.strip().lower() == "none" or actor.strip() == ""):
+            actor = None
+        if type_ is not None:
+            recs = [r for r in recs if r["type"] == type_]
+        if actor is not None:
+            recs = [r for r in recs if r["actor"] == actor]
 
         items = [
             {
