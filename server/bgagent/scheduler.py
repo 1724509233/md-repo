@@ -113,13 +113,19 @@ def _record_run(conn, alias: str) -> None:
         conn.commit()
 
 
-def _self_exclusion(cfg: BackgroundAgentConfig, all_aliases: set[str]) -> set[str]:
-    """Sources that must never arm this agent (framework-enforced):
+def self_exclusion(aliases: set[str]) -> set[str]:
+    """The self-exclusion set: sources that must never arm the scheduler
+    (framework-enforced). "executor" (framework role), "agent" (desktop
+    agent channel) and every bgagent alias are synthetic traffic — it must
+    never arm its own scheduler. Human channels (web/watchdog/sync) stay
+    visible.
 
-    the agent's own alias, "executor", "agent" (desktop agent channel), and
-    every bgagent alias. Human channels (web/watchdog/sync) stay visible.
+    Single source of truth for that policy: the scan-side authority (arming
+    scan, idle deadline floor) and the publisher-side early-drop bus filter
+    in server/main.py (build_runtime) both use this function — they must
+    not drift.
     """
-    return {cfg.alias, "executor", "agent", *all_aliases}
+    return {"executor", "agent"} | aliases
 
 
 def _idle_report(cfg: BackgroundAgentConfig) -> RunReport:
@@ -141,7 +147,7 @@ def _has_human_activity_since(conn, cfg: BackgroundAgentConfig,
     state = _get_trigger_state(conn, cfg.alias)
     if state["last_run_ts"] <= 0:
         return True
-    exclude = _self_exclusion(cfg, all_aliases)
+    exclude = self_exclusion(all_aliases)
     with _db_lock:
         n = count_changes_sources(conn, since=state["last_run_ts"],
                                   ops=("create",), exclude_sources=exclude)
@@ -233,7 +239,7 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
             logger.info("[bg:%s] recall armed check: %d signals, armed=%d/%d",
                         cfg.alias, count, armed, cfg.trigger["arm_count"])
     else:
-        exclude = _self_exclusion(cfg, all_aliases)
+        exclude = self_exclusion(all_aliases)
         with _db_lock:
             # Cursor on the monotonic seq column, not the ts float: a change
             # logged in the same clock tick as the previous scan has

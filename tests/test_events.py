@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from server import events
-from server.bgagent.scheduler import _self_exclusion
+from server.bgagent.scheduler import self_exclusion
 from server.config import BackgroundAgentConfig
 from server.vault.db import recall as recall_db
 
@@ -161,7 +161,7 @@ def test_change_filter_differential(tmp_path, vault_dir):
     all_aliases = {"cons", "cons2"}
     excluded = {"executor", "agent"} | all_aliases
     pred = lambda p: p.get("source") not in excluded
-    real = _self_exclusion(cfg, all_aliases)
+    real = self_exclusion(all_aliases)
     for source in ["executor", "agent", "cons", "cons2", "web", "reconcile",
                     "system", "human", "unknown", "client-mac"]:
         drops = not pred({"source": source})
