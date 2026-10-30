@@ -1,6 +1,19 @@
 """Invariant 11 (v2.1 spec §十.11): conditional UPDATE makes concurrent
 adopt/reject race-safe — exactly one transition wins; the loser gets
-ValueError with zero side effects (no transitions row)."""
+ValueError with zero side effects (no transitions row).
+
+Known flake（刻意保留，2026-10-30 裁决 = L5 暂缓）：
+``test_concurrent_adopt_exactly_one_wins`` 偶发 worker 线程
+``sqlite3.InterfaceError``（PytestUnhandledThreadExceptionWarning，
+调度依赖——2026-10-29 七次运行未复现）。根因：``db_conn`` fixture 是单条
+``check_same_thread=False`` 的共享连接，而 ``proposals.advance`` 裸读
+（``record()``，无锁）与锁内条件 UPDATE 交错——同一连接对象跨线程并发使用
+本身非线程安全。这是**生产模式的金丝雀**：``db_handle.init`` 全局单例连接
+被 uvicorn/agent/executor/watcher 多线程共享，写由 ``_db_lock`` 串行化但裸读
+与读-判断-写间隙不在保护内。**不要静音此测试**（测试内改每线程连接会掩盖
+生产暴露）；正解 = L5-prod 生产每线程连接（WAL），见架构评审 backlog
+``docs/superpowers/plans/2026-10-29-arch-review-leftovers.md`` L5。
+"""
 import threading
 
 import pytest
