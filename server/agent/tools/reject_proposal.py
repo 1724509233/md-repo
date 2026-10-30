@@ -24,7 +24,7 @@ class RejectProposalArgs(BaseModel):
 class RejectProposalTool(Tool):
     name = "reject_proposal"
     args_model = RejectProposalArgs
-    permission = "allow"
+    permission = "ask"  # 同 adopt：reject 是人的决策（10-30 裁决），confirm_request 等人批准再 advance
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...proposals import advance
