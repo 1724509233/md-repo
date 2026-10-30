@@ -106,10 +106,11 @@ def test_tool_permission_declarations():
 
     ask = {name for name, t in TOOL_REGISTRY.items() if t.permission == "ask"}
     allow = {name for name, t in TOOL_REGISTRY.items() if t.permission == "allow"}
-    assert ask == {"write_doc", "edit_doc", "delete_doc", "move_docs"}
+    assert ask == {"write_doc", "edit_doc", "delete_doc", "move_docs",
+                   "adopt_proposal"}  # adopt = 人决策，红线 3 框架级 confirm 闸门（10-30 裁决）
     assert allow == {"read_doc", "search_docs", "list_files", "get_related_docs",
                      "recent_changes", "recall_stats", "propose",
-                     "list_proposals", "get_proposal", "adopt_proposal",
+                     "list_proposals", "get_proposal",
                      "reject_proposal"}
     assert ask.isdisjoint(allow)
 
