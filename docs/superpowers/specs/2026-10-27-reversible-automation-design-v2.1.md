@@ -153,7 +153,7 @@ notes/foo.md §2 与 notes/bar.md §1 记载不一致
 ---
 ## 五、提案：记录进账本 + 创建改工具调用 + 协同终审
 ### 5.1 数据结构化（D-P1 / D-P2）
-- **记录进库**：`index.db` 提案记录表（`id, type, actor, run_id, status, payload(JSON), source_refs, justification, reject_reason, 时间戳`）+ 状态变迁历史表。**状态以账本记录为唯一状态源**；状态机从「改文件」变「改记录行 + 记变迁」。**v2a 零文件落**（D25）：无投影文件，记录 + 状态账本即全部；relpath 保留为卡片寻址标识（合成，无文件）。存量 4 条 merged **不导入**（记录从切换日起；无内容 diff 可补，伪造凭据比没有更危险——承 v1 D7 口径）。
+- **记录进库**：`index.db` 提案记录表（`id, type, actor, run_id, status, payload(JSON), source_refs, justification, reject_reason, created_at, updated_at, merged_at`）+ 状态变迁历史表。**状态以账本记录为唯一状态源**；状态机从「改文件」变「改记录行 + 记变迁」。**v2a 零文件落**（D25）：无投影文件，记录 + 状态账本即全部；relpath 保留为卡片寻址标识（合成，无文件）。存量 4 条 merged **不导入**（记录从切换日起；无内容 diff 可补，伪造凭据比没有更危险——承 v1 D7 口径）。
 - **创建 = 工具调用** `propose(type, payload, source_refs, justification)`：agent 写不了 SQL，提案创建从「写文件」改「调工具」。一步带走三件事：**同步校验**（工具参数即校验点：信封 + per-verb payload schema，畸形**零落盘**、当场报错返回 agent）、**可信盖章**（§三.3.1）、**越权拒绝**（§三.3.3）。`suggestions/` 进禁写守卫（§2.1 第 2 条）；10-22 文件级校验钩子（`validate_suggestions_write`）退役，换工具级。
 - **状态机（v2.1 修订 #B6，补全出边）**：
 ```
