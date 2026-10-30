@@ -82,6 +82,18 @@ class LoopRuntime(Runtime):
                     continue
                 delta = chunk.choices[0].delta
 
+                # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
+                # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
+                # 不进 content / 消息历史（思考是草稿，不是回答正文）。
+                # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
+                # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
+                # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
+                for _key in ("reasoning_content", "reasoning", "thinking"):
+                    _val = getattr(delta, _key, None)
+                    if isinstance(_val, str) and _val:
+                        yield Event("reasoning", {"text": _val})
+                        break
+
                 if delta.content:
                     content += delta.content
                     yield Event("token", {"text": delta.content})

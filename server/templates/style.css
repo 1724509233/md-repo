@@ -267,6 +267,23 @@ pre code.hljs { background: transparent; padding: 0; }
 .tool-result-text.error { color: #c0392b; }
 .tool-path { background: color-mix(in srgb, var(--brass) 8%, transparent); padding: 1px 5px; border-radius: 4px; font-size: 11px; color: var(--ink-soft); }
 
+/* ============ 思考块（reasoning，视觉语言与工具调用一致：muted、不抢正文）============ */
+/* .thinking-entry 本身不加 margin（同 .tool-entry）：垂直节奏来自 .thinking-line 的 padding（镜像 .tool-line 的 4px 0） */
+.thinking-line { display: flex; align-items: center; gap: 8px; padding: 4px 0; cursor: pointer; font-size: 12px; font-family: 'Inter', sans-serif; color: var(--ink-soft); }
+.thinking-line:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.thinking-line .ts-icon { display: inline-flex; align-items: center; color: var(--ink-soft); }
+.thinking-label { font-weight: 500; color: var(--ink); }
+.thinking-len { margin-left: auto; font-size: 11px; font-family: 'JetBrains Mono', monospace; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+/* 详情展开/折叠：grid-template-rows 0fr→1fr（完全镜像 .tool-detail 的实现方式） */
+.thinking-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
+.thinking-detail.open { grid-template-rows: 1fr; }
+/* 折叠机制要求 grid 子项 min-height: 0；max-height 150px 内滚动（镜像 .tool-pre 的滚动约束） */
+.thinking-text { min-height: 0; overflow-x: hidden; overflow-y: auto; max-height: 150px; padding: 2px 0 6px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--ink-soft); word-break: break-word; }
+/* 收起态清零 vertical padding：grid 0fr 行收缩时 grid item 的 border-box 下限 = padding 盒，
+   min-height: 0 压不掉 padding → 2+6=8px 透明盒漏在 thinking-line 下（.tool-detail 无此问题
+   因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁 */
+.thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; }
+
 /* ============ Confirm buttons（黄铜强调）============ */
 .confirm-btns { display: flex; gap: 8px; margin-top: 6px; margin-bottom: 4px; }
 .confirm-yes { font-size: 12px; padding: 6px 14px; background: var(--brass); color: var(--paper); border: none; border-radius: 8px; cursor: pointer; font-weight: 500; font-family: 'Inter', sans-serif; transition: transform .1s ease, background-color .15s ease; }

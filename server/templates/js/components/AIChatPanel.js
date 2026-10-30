@@ -1,5 +1,5 @@
 /* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
-const { ref, reactive, watch, nextTick, onUnmounted } = Vue
+const { ref, reactive, shallowReactive, watch, nextTick, onUnmounted } = Vue
 import { ICONS } from '../utils/icons.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { api } from '../api.js'
@@ -36,9 +36,19 @@ export const AIChatPanel = {
     const inputEl = ref(null)
     const messagesEl = ref(null)
     const streamTextEl = ref(null)
+    const thinkingTextEl = ref(null)
 
     let currentTurn = null
     let sendChain = Promise.resolve()
+
+    // 流式直写文本的展示归一（仅显示用，lastBlock.text 保留原文供 finishTurn 的 markdown 渲染）：
+    // LLM 流式原文常带行首/行尾换行与多个连续空行（如 "\n" 前导 chunk、段尾 "\n\n\n"），
+    // 流式分支 white-space: pre-wrap 会把每个换行渲染成行框 → 气泡比可见文字偏高（用户报「整个气泡偏高」）；
+    // 最终 markdown 视图无空行（preflight 将 p margin 归零、空行折叠），归一后两者高度基本一致。
+    // 连续空行折叠为单个换行（而非保留空行）正是为了贴齐最终视图的紧凑排版。
+    function streamDisplayText(text) {
+      return String(text || '').replace(/\n{2,}/g, '\n').replace(/^\n+/, '').replace(/\n+$/, '')
+    }
 
     // 工具调用摘要
     function toolKeyParam(name, args) {
@@ -67,7 +77,7 @@ export const AIChatPanel = {
         case 'read_doc': {
           const chars = num(/(\d+)\s*chars/)
           if (isNaN(chars)) return fallback()
-          const lines = r.split('\n').length - 2; if (lines < 1) lines = 1
+          let lines = r.split('\n').length - 2; if (lines < 1) lines = 1
           return `读取 ${args.path || ''}，共 ${lines} 行，${chars} 字`
         }
         case 'search_docs': {
@@ -88,8 +98,13 @@ export const AIChatPanel = {
     }
 
     function addMsg(role, text) {
-      const msg = { role, blocks: [], streaming: false, rendered: false }
-      if (text) msg.blocks.push({ type: 'text', text })
+      // shallowReactive：顶层 streaming/rendered 走 proxy setter → 分支切换触发确定性 re-render；
+      // blocks 保持原始数组/对象 → token 直写 DOM 快路径不触发 re-render（deep reactive 会摧毁它）
+      // blocksLen 是 blocks.length 的镜像追踪点：块增长（首轮文本块/多轮工具块）写入一次 → 1 次 re-render，
+      // 让流式分支 v-if 可追踪到新块（原始数组 .length 读不响应式）；token 级写入永不触碰它
+      // uiTick：块内展开/折叠（block.expanded 是原始对象属性，变更本身不可追踪）的 re-render 触发器
+      const msg = shallowReactive({ role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
+      if (text) { msg.blocks.push({ type: 'text', text }); msg.blocksLen = 1 }
       messages.value.push(msg)
       scrollToBottom()
       return msg
@@ -174,18 +189,51 @@ export const AIChatPanel = {
                   if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = true }
                   let lastBlock = currentTurn.blocks[currentTurn.blocks.length - 1]
                   if (!lastBlock || lastBlock.type !== 'text') {
+                    if (lastBlock && lastBlock.type === 'thinking') lastBlock.expanded = false // 该轮首个内容块到达 → 思考块自动收起（expanded 变更随下方 blocksLen 写入触发的 1 次 re-render 生效）
+                    // 纯空白 chunk（模型调工具前的前导 '\n\n'，2026-10-30 抓包实测）：不建空块——
+                    // 否则空块是最后块 → 流式分支渲染空 cursor div（thinking 与 tool 之间的空 turn-text）；
+                    // 真实文本到达时正常建块 append（其 re-render 插值取同步更新后的 block.text，无冻结）
+                    if (!String(evt.text || '').trim()) break
                     lastBlock = { type: 'text', text: '' }
                     currentTurn.blocks.push(lastBlock)
+                    currentTurn.blocksLen = currentTurn.blocks.length // 新块 → 1 次 re-render 挂载/切换 stream div（多轮第 2 轮文本块需要）
                   }
                   lastBlock.text += evt.text
-                  // 直写 DOM，绕过 Vue diff
-                  if (streamTextEl.value) {
-                    streamTextEl.value.textContent = lastBlock.text
+                  // 直写 DOM，绕过 Vue diff。
+                  // streamTextEl 位于嵌套 v-for（messages × blocks）内 → ref_for: true，Vue setRef 收集成数组
+                  //（3.4/3.5 行为一致）；写 .textContent 到数组本身是静默 no-op——流式冻结根因，必须取 [0]
+                  const rawStreamEl = streamTextEl.value
+                  const streamEl = Array.isArray(rawStreamEl) ? rawStreamEl[0] : rawStreamEl
+                  if (streamEl) {
+                    streamEl.textContent = streamDisplayText(lastBlock.text)
+                  }
+                  break
+                case 'reasoning':
+                  // 模型思考内容（reasoning）独立 SSE 事件流，时序上先于该轮 content/tool 事件；
+                  // 规则「最后一块是 thinking → append，否则新建」天然正确：思考进行中最后块就是 thinking，
+                  // 一轮结束必然有 tool/content 块垫底，下一轮 reasoning 到达时最后块是 tool/content → 新建。
+                  // 一轮思考仅一个块，跨轮各一个。
+                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = true }
+                  let thinkingBlock = currentTurn.blocks[currentTurn.blocks.length - 1]
+                  if (!thinkingBlock || thinkingBlock.type !== 'thinking') {
+                    thinkingBlock = { type: 'thinking', text: '', expanded: true }
+                    currentTurn.blocks.push(thinkingBlock)
+                    currentTurn.blocksLen = currentTurn.blocks.length // 新块 → 1 次 re-render 挂载流式思考 div
+                  }
+                  thinkingBlock.text += evt.text
+                  {
+                    // 同 streamTextEl：嵌套 v-for 内 ref → Vue 存 Array（ref_for），归一化取 [0] 再直写 DOM
+                    const raw = thinkingTextEl.value
+                    const el = Array.isArray(raw) ? raw[0] : raw
+                    if (el) el.textContent = streamDisplayText(thinkingBlock.text)
                   }
                   break
                 case 'tool_call':
                   if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = false }
+                  { const prev = currentTurn.blocks[currentTurn.blocks.length - 1]
+                    if (prev && prev.type === 'thinking') prev.expanded = false } // 工具块垫底 → 思考块自动收起（随下方 blocksLen 写入的 re-render 生效）
                   currentTurn.blocks.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null, expanded: false })
+                  currentTurn.blocksLen = currentTurn.blocks.length // 工具块入场即 re-render（blocks 原始数组 push 本身不触发）
                   break
                 case 'confirm_request': {
                   const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
@@ -256,6 +304,13 @@ export const AIChatPanel = {
       // aiMode.value = aiMode.value === '当前文档' ? '全库搜索' : '当前文档'
     }
 
+    // 块展开/折叠：block 对象是原始非响应式对象（blocks 故意不 deep reactive），
+    // 仅改 block.expanded 不会触发 re-render → 顶层 uiTick 自增 1 次驱动 re-render（chevron/类名随之更新）
+    function toggleBlock(msg, block) {
+      block.expanded = !block.expanded
+      msg.uiTick = (msg.uiTick || 0) + 1
+    }
+
     function onKeydown(e) {
       if (e.key === 'Enter' && !e.shiftKey) {
         if (e.ctrlKey) {
@@ -311,7 +366,7 @@ export const AIChatPanel = {
 
     return {
       ICONS_LOCAL, toolNames, messages, inputText, status, aiMode, tokenUsage,
-      inputEl, messagesEl, streamTextEl, sendChat, sendConfirm, toggleMode, onKeydown, stopChat, newSession,
+      inputEl, messagesEl, streamTextEl, thinkingTextEl, streamDisplayText, sendChat, sendConfirm, toggleBlock, toggleMode, onKeydown, stopChat, newSession,
       toolKeyParam, toolResultSummary
     }
   },
@@ -347,17 +402,18 @@ export const AIChatPanel = {
           </div>
           <!-- AI 消息 -->
           <div v-else
-            class="msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm">
+            class="msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm"
+            :data-uitick="msg.uiTick">
             <template v-for="(block, bi) in msg.blocks" :key="bi">
               <!-- 文本块 -->
               <div v-if="block.type === 'text'">
-                <div v-if="msg.streaming && bi === msg.blocks.length - 1" ref="streamTextEl" class="turn-text stream-cursor" style="white-space: pre-wrap">{{ block.text }}</div>
+                <div v-if="msg.streaming && bi === msg.blocksLen - 1" ref="streamTextEl" class="turn-text stream-cursor" style="white-space: pre-wrap">{{ streamDisplayText(block.text) }}</div>
                 <div v-else-if="msg.rendered" class="turn-text" v-html="renderedHtml(msg, bi)"></div>
-                <div v-else class="turn-text" style="white-space: pre-wrap">{{ block.text }}</div>
+                <div v-else-if="block.text.trim()" class="turn-text" style="white-space: pre-wrap">{{ block.text }}</div>
               </div>
               <!-- 工具块 -->
               <div v-else-if="block.type === 'tool'" class="tool-entry">
-                <div class="tool-line" :data-tool-id="block.id" @click="toggleTool(block)">
+                <div class="tool-line" :data-tool-id="block.id" @click="toggleBlock(msg, block)">
                   <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24">
                     <path d="M9 5l7 7-7 7"/>
                   </svg>
@@ -398,6 +454,22 @@ export const AIChatPanel = {
                   </div>
                 </div>
               </div>
+              <!-- 思考块：流式中恒展开实时显示；该轮首个 content/tool 块到达时自动收起；done 后保留折叠态、可点击展开 -->
+              <div v-else-if="block.type === 'thinking'" class="thinking-entry">
+                <div class="thinking-line" @click="toggleBlock(msg, block)">
+                  <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+                  <span class="ts-icon"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
+                  <span class="thinking-label">思考</span>
+                  <span v-if="msg.streaming && bi === msg.blocksLen - 1" class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
+                  <span v-else class="thinking-len">{{ block.text.length }} 字</span>
+                </div>
+                <div v-if="msg.streaming && bi === msg.blocksLen - 1" class="thinking-detail open">
+                  <div ref="thinkingTextEl" class="thinking-text stream-cursor" style="white-space: pre-wrap">{{ streamDisplayText(block.text) }}</div>
+                </div>
+                <div v-else class="thinking-detail" :class="{ open: block.expanded }">
+                  <div class="thinking-text" style="white-space: pre-wrap">{{ streamDisplayText(block.text) }}</div>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -433,13 +505,17 @@ export const AIChatPanel = {
     </div>
   `,
   methods: {
-    toggleTool(block) {
-      block.expanded = !block.expanded
-    },
     renderedHtml(msg, bi) {
       const block = msg.blocks[bi]
       if (!block || block.type !== 'text') return ''
-      return renderMarkdown(block.text)
+      if (!msg.rendered) return block.text
+      // 按块缓存：text 在 finishTurn 后冻结，marked.parse 每 block 只执行一次；
+      // _htmlSrc 一致性校验为防御性兜底（rendered 后内容变更 → 重算而非显示脏缓存）
+      if (block._html === undefined || block._htmlSrc !== block.text) {
+        block._htmlSrc = block.text
+        block._html = renderMarkdown(block.text)
+      }
+      return block._html
     }
   }
 }
