@@ -57,6 +57,13 @@ def apply_change(
     upsert/log/fts/graph logic that previously lived in agent.py, api.py and
     watcher.py.
 
+    Lock-hold cost (quantified 2026-10-30, arch-review L3 closed): real vault
+    (302 files) median 0.4–3 ms; 10k files → median ~16 ms (max ~24 ms warm;
+    one-off ~440 ms page-cache cold start). Driver = in-lock rglob vault scans
+    in refs. Reopen the performance card if the vault exceeds 5k files or
+    writer queuing is observed — see
+    docs/benchmarks/2026-10-30-apply-change-lock-hold-benchmark.md.
+
     ``update_refs`` controls whether ``_update_references`` is called for
     moved actions. Set to False when the caller will handle reference
     updates in batch (e.g. directory rename with many files).
