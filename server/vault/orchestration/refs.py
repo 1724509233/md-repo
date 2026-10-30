@@ -26,16 +26,16 @@ def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
 def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str, new_path: str) -> int:
     """Replace references to old_path with new_path in files that link to it.
 
-    Thin wrapper around :func:`_update_references_batch` for the single-move
+    Thin wrapper around :func:`update_references_batch` for the single-move
     case. Uses edges table to find referrer files (falls back to full scan if
     empty). Handles full-path and short-name wikilinks.
 
     Returns the number of files modified.
     """
-    return _update_references_batch(conn, vault_dir, [(old_path, new_path)])
+    return update_references_batch(conn, vault_dir, [(old_path, new_path)])
 
 
-def _update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
+def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
     """Single-pass: replace references for multiple moves at once.
 
     Uses edges table to find referrer files (falls back to full scan if empty).
@@ -116,7 +116,7 @@ def _update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, m
     return modified_count
 
 
-def _remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: str) -> int:
+def remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: str) -> int:
     """Remove wikilinks pointing to a deleted file from files that link to it.
 
     Uses edges table to find referrer files (falls back to full scan if empty).

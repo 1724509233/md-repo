@@ -60,7 +60,7 @@ class MoveDocsTool(DocTool):
         from ...snapshots import (capture, discard, finalize, gc_after_capture,
                                   hash_bytes, new_call_id)
         from ...vault.db.conn import get_conn
-        from ...vault.orchestration.refs import _update_references_batch
+        from ...vault.orchestration.refs import update_references_batch
         from ... import ledger
 
         moves = [(m.from_path, m.to_path) for m in args.moves]
@@ -75,7 +75,7 @@ class MoveDocsTool(DocTool):
                 return self.move_dest_exists(to_path)
 
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
-        ref_count = _update_references_batch(get_conn(), ctx.vault_dir, moves, pre_rename=True)
+        ref_count = update_references_batch(get_conn(), ctx.vault_dir, moves, pre_rename=True)
 
         # Phase 3: perform all filesystem renames. The whole batch is ONE
         # tool call → one call_id snapshot group (rollback unit, P1): every

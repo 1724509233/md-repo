@@ -74,7 +74,7 @@ def move(db_conn, vault_dir, body) -> dict:
         raise HTTPException(
             status_code=400, detail="cannot move into own subdirectory"
         )
-    from ..vault.orchestration.refs import _update_references_batch
+    from ..vault.orchestration.refs import update_references_batch
 
     if src.is_file():
         moves = [(src_rel.as_posix(), dst_rel.as_posix())]
@@ -88,7 +88,7 @@ def move(db_conn, vault_dir, body) -> dict:
     # Reference rewriting ran in batch above — the per-file passes
     # skip their own ref update (idempotent either way).
     # pre_rename=True: update refs before rename so uniqueness check is correct
-    _update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
+    update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
     was_dir = src.is_dir()
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)

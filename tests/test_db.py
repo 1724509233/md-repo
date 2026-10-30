@@ -555,7 +555,7 @@ def test_update_references_batch_single_move(vault_dir):
     """Batch with one move works same as _update_references."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _update_references_batch
+    from server.vault.orchestration.refs import update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -565,7 +565,7 @@ def test_update_references_batch_single_move(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        count = update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
         assert count == 1
 
         content = (vault_dir / "notes" / "ref.md").read_text()
@@ -578,7 +578,7 @@ def test_update_references_batch_multiple_moves(vault_dir):
     """Batch with multiple moves updates all references in one scan."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _update_references_batch
+    from server.vault.orchestration.refs import update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -589,7 +589,7 @@ def test_update_references_batch_multiple_moves(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _update_references_batch(conn, vault_dir, [
+        count = update_references_batch(conn, vault_dir, [
             ("notes/a.md", "docs/x.md"),
             ("notes/b.md", "docs/y.md"),
         ])
@@ -607,12 +607,12 @@ def test_update_references_batch_multiple_moves(vault_dir):
 def test_update_references_batch_empty(vault_dir):
     """Empty moves list is a no-op."""
     from server.vault import init_db
-    from server.vault.orchestration.refs import _update_references_batch
+    from server.vault.orchestration.refs import update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
         (vault_dir / "a.md").write_text("# A")
-        count = _update_references_batch(conn, vault_dir, [])
+        count = update_references_batch(conn, vault_dir, [])
         assert count == 0
     finally:
         conn.close()
@@ -622,7 +622,7 @@ def test_update_references_batch_short_name(vault_dir):
     """Batch handles short-name wikilinks when filename is unique."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _update_references_batch
+    from server.vault.orchestration.refs import update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -632,7 +632,7 @@ def test_update_references_batch_short_name(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        count = update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
         assert count == 1
 
         content = (vault_dir / "notes" / "ref.md").read_text()
@@ -673,7 +673,7 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
     """Batch plain text replacement is disabled; only wikilinks are updated."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _update_references_batch
+    from server.vault.orchestration.refs import update_references_batch
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -686,7 +686,7 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
+        count = update_references_batch(conn, vault_dir, [("notes/a.md", "docs/b.md")])
         # Plain text paths are NOT wikilinks, so no replacement
         assert count == 0
 
@@ -698,7 +698,7 @@ def test_update_references_plain_text_boundary_batch(vault_dir):
 
 
 def test_move_docs_updates_references(vault_dir):
-    """move_docs renames the file; reference updates are handled inline via _update_references_batch."""
+    """move_docs renames the file; reference updates are handled inline via update_references_batch."""
     from server.agent import ToolContext, execute_tool
 
     (vault_dir / "notes").mkdir(exist_ok=True)
@@ -717,7 +717,7 @@ def test_move_docs_updates_references(vault_dir):
     assert (vault_dir / "notes" / "new.md").is_file()
     assert not (vault_dir / "notes" / "old.md").exists()
 
-    # move_docs updates references inline via _update_references_batch
+    # move_docs updates references inline via update_references_batch
     content = (vault_dir / "notes" / "ref.md").read_text()
     assert "[[notes/new.md]]" in content
 
@@ -778,10 +778,10 @@ def test_graph_extract_short_name_wikilink(vault_dir):
 
 
 def test_remove_dead_links_full_path(vault_dir):
-    """_remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
+    """remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _remove_dead_links
+    from server.vault.orchestration.refs import remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -790,7 +790,7 @@ def test_remove_dead_links_full_path(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 1
 
         content = (vault_dir / "notes" / "ref.md").read_text()
@@ -800,10 +800,10 @@ def test_remove_dead_links_full_path(vault_dir):
 
 
 def test_remove_dead_links_short_name(vault_dir):
-    """_remove_dead_links removes short-name wikilinks when target is unique."""
+    """remove_dead_links removes short-name wikilinks when target is unique."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _remove_dead_links
+    from server.vault.orchestration.refs import remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -812,7 +812,7 @@ def test_remove_dead_links_short_name(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _remove_dead_links(conn, vault_dir, "notes/unique.md")
+        count = remove_dead_links(conn, vault_dir, "notes/unique.md")
         assert count == 1
 
         content = (vault_dir / "notes" / "ref.md").read_text()
@@ -822,10 +822,10 @@ def test_remove_dead_links_short_name(vault_dir):
 
 
 def test_remove_dead_links_alias(vault_dir):
-    """_remove_dead_links removes wikilinks with aliases."""
+    """remove_dead_links removes wikilinks with aliases."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _remove_dead_links
+    from server.vault.orchestration.refs import remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -834,7 +834,7 @@ def test_remove_dead_links_alias(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 1
 
         content = (vault_dir / "notes" / "ref.md").read_text()
@@ -844,10 +844,10 @@ def test_remove_dead_links_alias(vault_dir):
 
 
 def test_remove_dead_links_no_match(vault_dir):
-    """_remove_dead_links returns 0 when no references exist."""
+    """remove_dead_links returns 0 when no references exist."""
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
-    from server.vault.orchestration.refs import _remove_dead_links
+    from server.vault.orchestration.refs import remove_dead_links
 
     conn = init_db(vault_dir / ".sync" / "index.db")
     try:
@@ -856,7 +856,7 @@ def test_remove_dead_links_no_match(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
-        count = _remove_dead_links(conn, vault_dir, "notes/target.md")
+        count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 0
     finally:
         conn.close()

@@ -26,7 +26,7 @@ from .indexer import (
     graph_extract_file,
     index_segments,
 )
-from .refs import _remove_dead_links, _update_references
+from .refs import remove_dead_links, _update_references
 from ... import events
 
 
@@ -89,7 +89,7 @@ def apply_change(
             if not _is_index_excluded(path):
                 delete_segments(conn, path)
                 graph_delete_file(conn, path)
-                _remove_dead_links(conn, vault_dir, path)
+                remove_dead_links(conn, vault_dir, path)
         elif action in ("moved", "move"):
             src = vault_dir / from_path
             dst = vault_dir / path

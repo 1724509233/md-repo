@@ -31,7 +31,7 @@
 
 ## refs.py — 引用维护
 
-### `_update_references(_batch)`
+### `_update_references` / `update_references_batch`
 
 move 后把引用方文档里的 wikilink 改写到新路径：
 
@@ -40,7 +40,7 @@ move 后把引用方文档里的 wikilink 改写到新路径：
 - 引用方集合 = 各 move 的 `_find_referrers` 并集（edges 表查询，空表回退全库扫描），排除 move 目标自身。
 - `pre_rename=True`：磁盘 rename 尚未发生时使用（目录改名批量场景），唯一性按旧路径判断。
 
-### `_remove_dead_links`
+### `remove_dead_links`
 
 delete 后从引用方文档中**删除**指向已删文件的 wikilink（全路径、去 `.md`、唯一短名三种模式）。
 
@@ -53,7 +53,7 @@ delete 后从引用方文档中**删除**指向已删文件的 wikilink（全路
 | action | 动作 |
 | --- | --- |
 | created/modified | `upsert_file`（无 new_hash 时读盘算 SHA-256）→ `log_change` → `index_segments` → `graph_extract_file` |
-| deleted | `delete_file` → `log_change` → `delete_segments` → `graph_delete_file` → `_remove_dead_links` |
+| deleted | `delete_file` → `log_change` → `delete_segments` → `graph_delete_file` → `remove_dead_links` |
 | moved | 旧路径删索引/图谱，新路径 upsert/重建，`_update_references` 改写引用；内容同时变化时（删旧记录前查得旧 hash ≠ 新 digest）补记一条 `update`，change_log 共两条（先 move 后 update），索引处理不重复 |
 
 - `new_hash` 参数：调用方已有哈希时传入，避免重复读盘。
@@ -84,7 +84,7 @@ server/api.py             ──► 仅写盘 (upload_doc/save_doc)，由 snapsh
 ```
 file_ops.py ──► db/* (changes, file_index, schema._db_lock)
             ──► indexer.py (index_segments, delete_segments, graph_*)
-            ──► refs.py (_update_references, _remove_dead_links)
+            ──► refs.py (_update_references, update_references_batch, remove_dead_links)
 refs.py   ──► db/graph_sql._find_referrers  (edges 查询，空表回退 fs 全扫)
 indexer.py──► fs/* (segment_markdown, _tokenize_for_index, _resolve_wikilink, _iter_vault_md)
 ```

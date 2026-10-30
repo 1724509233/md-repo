@@ -48,6 +48,10 @@ edges(src_id, dst_id, type CHECK(wikilink|tag|related), path,
 - 同一个连接被 watchdog 线程和 async event loop 共享，因此 `schema.py` 提供模块级 `_db_lock`（`threading.Lock`）。
 - **并发规则（card 5 起）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）；**server/vault 之外 `_db_lock` 标识符零出现**（例外两处：`init_db` 的 DDL 语境、`recovery._rebuild_files_table` 的进程启动单线程 recovery drill）。上层（bgagent、proposals、snapshots）调用具名函数，不再持锁、不再裸 SQL。
 - **纯读 helper 保持无锁**：`_db_lock` 是单把非重入锁，读函数若持锁会与写路径互斥竞争、并在锁内调用时同线程死锁——所以 `file_index`/`changes`/`relatedness.upsert_edge` 等读函数无锁，同模块的 mutation functions 负责加锁；锁内调用读 helper 是安全的。
+- **调用方惯例：读到底要不要包锁**
+  - **读不持锁**：纯读函数（如 `get_changes_sources` / `count_changes_sources`，`changes.py:74/:122`）锁外直读，调用方**不要**再包 `with _db_lock`（card 5 后 scheduler 已迁走，见 `bgagent/scheduler.py:95` 注释）。
+  - **写临界区内的读随写包锁**：复合操作（读+写+回写游标，如 `trigger_state.arm_change`，`trigger_state.py:103-121`）整体在锁内，其中的读不单独拆出。
+  - 锚点：mutation 具名函数**内部**持锁（card 5，`_db_lock` 包外不可 import）；`proposal_records.advance` 条件 UPDATE 持锁；WAL 下多读者不阻塞。
 
 ### 变更日志与 legacy 迁移
 

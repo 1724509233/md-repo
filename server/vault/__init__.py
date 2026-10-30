@@ -46,8 +46,10 @@ from .orchestration.indexer import (  # noqa: F401
 )
 from .orchestration.refs import (  # noqa: F401
     _is_filename_unique, _update_references,
-    _update_references_batch, _remove_dead_links,
+    update_references_batch, remove_dead_links,
 )
+_update_references_batch = update_references_batch  # noqa: F811 legacy 废弃面（test_vault_shim 钉住），移除 shim 时一并删
+_remove_dead_links = remove_dead_links  # noqa: F811 legacy 废弃面（test_vault_shim 钉住），移除 shim 时一并删
 
 __all__ = [
     "FileEntry",

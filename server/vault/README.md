@@ -33,7 +33,7 @@ server/vault/
 └── orchestration/      ← 协调层 (FS + DB 组合操作)
     ├── indexer.py      ← index_segments, ensure_indexed, rebuild_*
     ├── move_detect.py  ← pair_moves (两阶段级联重命名检测)
-    ├── refs.py         ← _update_references, _remove_dead_links
+    ├── refs.py         ← _update_references, update_references_batch, remove_dead_links
     └── file_ops.py     ← apply_change, reconcile (变更应用入口)
 ```
 

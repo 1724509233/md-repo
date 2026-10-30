@@ -4,7 +4,7 @@ Design intent
 -------------
 Move detection is a reference-maintenance problem: when a file is moved,
 wikilinks pointing at the old path must be *rewritten* (``_update_references``).
-A missed move falls through the delete path, where ``_remove_dead_links``
+A missed move falls through the delete path, where ``remove_dead_links``
 *deletes* those links — destroying references that should have survived the
 rename. The old strict 1:1 hash rule missed two common cases:
 
