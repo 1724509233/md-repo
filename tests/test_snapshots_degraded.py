@@ -7,28 +7,46 @@ is v2b's human-notification-channel upgrade item (spec §八 v2b⑨).
 """
 from __future__ import annotations
 
+import pytest
+
 from server import snapshots
+from server.vault.db import conn as db_handle
+from server.vault.db.schema import init_ledger_db
 
 
-def test_normal_capture_does_not_count_degraded(db_conn, vault_dir):
+@pytest.fixture
+def ledger_conn(vault_dir):
+    """A ledger.db connection (the four authoritative-state tables now live
+    there, not in index.db). Registers the pair singleton (index=None) so
+    the agent-tool paths that resolve the ledger conn via
+    ``get_ledger_conn()`` hit ledger.db; intentionally shadows the conftest
+    pair fixture — these files pin the ledger-only path (index side None)."""
+    conn = init_ledger_db(vault_dir / ".sync" / "ledger.db")
+    db_handle.init(None, conn)
+    yield conn
+    db_handle.init(None, None)
+    conn.close()
+
+
+def test_normal_capture_does_not_count_degraded(ledger_conn, vault_dir):
     """正常 capture（create 类无 pre-image）→ degraded_count 不变。"""
     before = snapshots.degraded_count()
-    snap = snapshots.capture(db_conn, vault_dir, "notes/brand-new.md", "create", "agent")
+    snap = snapshots.capture(ledger_conn, vault_dir, "notes/brand-new.md", "create", "agent")
     assert snap is not None
     assert snapshots.degraded_count() == before
 
 
-def test_read_failure_increments_degraded(db_conn, vault_dir):
+def test_read_failure_increments_degraded(ledger_conn, vault_dir):
     """读失败（文件缺失 + op=update → fp.read_bytes 的 OSError 分支）→
     capture 返回 None + 计数 +1。"""
     snapshots.degraded_reset()
     snap = snapshots.capture(
-        db_conn, vault_dir, "notes/does-not-exist.md", "update", "agent")
+        ledger_conn, vault_dir, "notes/does-not-exist.md", "update", "agent")
     assert snap is None
     assert snapshots.degraded_count() == 1
 
 
-def test_degraded_reset_clears(db_conn, vault_dir):
+def test_degraded_reset_clears(ledger_conn, vault_dir):
     """degraded_reset 清零（测试钩子）。"""
     snapshots.degraded_reset()
     snapshots._note_degraded()
@@ -37,11 +55,11 @@ def test_degraded_reset_clears(db_conn, vault_dir):
     assert snapshots.degraded_count() == 0
 
 
-def test_memory_status_exposes_degraded_count(client, vault_dir, db_conn):
+def test_memory_status_exposes_degraded_count(client, vault_dir, ledger_conn):
     """GET /api/memory/status → response["snapshot"]["degraded"] 为 int（注入计数后断言值）。"""
     snapshots.degraded_reset()
     # 注入计数：1 次真实读失败 + 1 次直接 note（计数是进程内单调增）
-    snapshots.capture(db_conn, vault_dir, "notes/missing.md", "update", "agent")
+    snapshots.capture(ledger_conn, vault_dir, "notes/missing.md", "update", "agent")
     snapshots._note_degraded()
 
     resp = client.get("/api/memory/status")

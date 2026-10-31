@@ -27,9 +27,9 @@ md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 - **server/agent/** — LLM agent system: `agent.py` (Agent class), `runtime.py` (LoopRuntime streaming loop), `session.py` (SessionManager), `tools/` (10 tools: read_doc / search_docs / list_files / get_related_docs / recent_changes / recall_stats auto; write_doc / edit_doc / delete_doc / move_docs ask), `policy.py` (channel policy), `prompts.py`, `reminders.py`.
 - **server/bgagent/** — Background agents with independent model configs: `scheduler.py` (cron + event arming), `runner.py` (run_once), `notify.py` (in-app notifications), `executor.py` (framework role, not an LLM agent).
 - **client/** — Python polling client. `sync.py` has `scan_local_files()`, `sync_once()`, `run_polling_loop()`. `main.py` is the entry point.
-- **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn`, `app`, `client`, `ai_config` fixtures.
+- **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn` (index domain), `ledger_conn` (ledger domain, 2026-10-31 split), `app`, `client`, `ai_config` fixtures.
 
-The vault directory is both the data store and the Obsidian vault. `.sync/` inside it holds `index.db` (SQLite; a rebuildable cache — see `recovery.py`) and `logs/`.
+The vault directory is both the data store and the Obsidian vault. `.sync/` inside it holds **two SQLite files** (2026-10-31 ledger-file split, L4): `index.db` (rebuildable cache — files/segments/change_log/…; freely rebuildable, see `recovery.py`) and `ledger.db` (authoritative, not rebuildable — proposals/proposal_transitions/snapshots/relatedness; **the recovery drill only ever touches index.db**). Backing up the system must include **both** files. First-boot migration of the four tables from index.db → ledger.db is in-path (`migrate_ledger`, idempotent, per-machine); `logs/` also lives in `.sync/`.
 
 ## Gotchas
 

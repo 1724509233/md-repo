@@ -103,7 +103,7 @@ def test_gate_noop_for_read_tools(tmp_path):
 
 # --- propose channel (oracle gate P0-Q6a) ----------------------------------
 
-def test_mcp_propose_creates_stamped_record(db_conn, tmp_path):
+def test_mcp_propose_creates_stamped_record(ledger_conn, tmp_path):
     """The external channel keeps a proposal path after the P0 cutover:
     _mcp_propose runs the shared record pipeline with write_source="mcp"
     (the ledger's source convention), no run stamp, unrestricted verbs.
@@ -121,14 +121,14 @@ def test_mcp_propose_creates_stamped_record(db_conn, tmp_path):
          "candidate": "reading A", "rationale": "dates conflict"},
         ["notes/a.md"], "surface the contradiction")
     assert out.startswith("proposal #")
-    rec = proposals.scan(db_conn)[0]
+    rec = proposals.scan(ledger_conn)[0]
     assert rec["actor"] == "mcp"
     assert rec["run_id"] == ""
     assert rec["status"] == "awaiting_review"
     assert rec["relpath"].startswith("suggestions/")
 
 
-def test_mcp_propose_malformed_is_zero_disk(db_conn, tmp_path):
+def test_mcp_propose_malformed_is_zero_disk(ledger_conn, tmp_path):
     """The channel entry enforces the same per-verb validation: an errata
     missing 'candidate' → error string, no record, no file."""
     from server import proposals
@@ -144,11 +144,11 @@ def test_mcp_propose_malformed_is_zero_disk(db_conn, tmp_path):
         ["notes/a.md"], "j")
     assert out.startswith("Error:")
     assert "candidate" in out
-    assert proposals.scan(db_conn) == []
+    assert proposals.scan(ledger_conn) == []
     assert not (vault / "suggestions").is_dir()
 
 
-def test_mcp_propose_retired_type_redirects(db_conn, tmp_path):
+def test_mcp_propose_retired_type_redirects(ledger_conn, tmp_path):
     """D5: a retired v1 verb through the external channel gets the
     operational redirect (names the replacement), not a record."""
     from server import proposals
@@ -161,4 +161,4 @@ def test_mcp_propose_retired_type_redirects(db_conn, tmp_path):
         ["notes/a.md"], "j")
     assert out.startswith("Error:")
     assert "retired" in out and "errata" in out
-    assert proposals.scan(db_conn) == []
+    assert proposals.scan(ledger_conn) == []

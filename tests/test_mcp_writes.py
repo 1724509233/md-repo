@@ -24,12 +24,12 @@ from tests.conftest import simulate_consumer
 SAMPLE = b"# Test note\n\nSample content.\n"
 
 
-def test_mcp_write_create_lands_preimage_row(vault_dir, db_conn):
+def test_mcp_write_create_lands_preimage_row(vault_dir, db_conn, ledger_conn):
     out = _mcp_write(vault_dir, db_conn, "notes/new.md", "# New\n\ntext\n")
     assert out.startswith("Saved:")
     assert (vault_dir / "notes" / "new.md").read_bytes() == b"# New\n\ntext\n"
 
-    live = snapshots.live_preimage(db_conn, "notes/new.md")
+    live = snapshots.live_preimage(ledger_conn, "notes/new.md")
     assert live is not None
     assert live["op"] == "create"  # first write: no pre-image bytes
     assert live["actor"] == "mcp"
@@ -44,12 +44,12 @@ def test_mcp_write_create_lands_preimage_row(vault_dir, db_conn):
     assert rows == []
 
 
-def test_mcp_write_update_captures_old_bytes(vault_dir, db_conn):
+def test_mcp_write_update_captures_old_bytes(vault_dir, db_conn, ledger_conn):
     assert (vault_dir / "notes" / "test.md").read_bytes() == SAMPLE
     out = _mcp_write(vault_dir, db_conn, "notes/test.md", "# Rewritten\n")
     assert "overwritten" in out
 
-    live = snapshots.live_preimage(db_conn, "notes/test.md")
+    live = snapshots.live_preimage(ledger_conn, "notes/test.md")
     assert live is not None
     assert live["op"] == "update"
     assert live["actor"] == "mcp"
@@ -60,12 +60,12 @@ def test_mcp_write_update_captures_old_bytes(vault_dir, db_conn):
     assert (vault_dir / "notes" / "test.md").read_bytes() == b"# Rewritten\n"
 
 
-def test_mcp_edit_lands_preimage_and_ledger(vault_dir, db_conn):
+def test_mcp_edit_lands_preimage_and_ledger(vault_dir, db_conn, ledger_conn):
     out = _mcp_edit(vault_dir, db_conn, "notes/test.md", "Sample content.",
                     "Replaced.")
     assert out.startswith("Edited")
 
-    live = snapshots.live_preimage(db_conn, "notes/test.md")
+    live = snapshots.live_preimage(ledger_conn, "notes/test.md")
     assert live is not None
     assert live["op"] == "update" and live["actor"] == "mcp"
     blob = vault_dir / ".sync" / "snapshots" / live["blob_name"]
@@ -79,20 +79,20 @@ def test_mcp_edit_lands_preimage_and_ledger(vault_dir, db_conn):
     assert rows == []
 
 
-def test_mcp_edit_error_drops_capture(vault_dir, db_conn):
+def test_mcp_edit_error_drops_capture(vault_dir, db_conn, ledger_conn):
     # A prior write claimed the live slot; a failed edit must neither claim
     # it nor leave a residue capture row.
     _mcp_write(vault_dir, db_conn, "notes/test.md", "# v2\n")
-    live_before = snapshots.live_preimage(db_conn, "notes/test.md")
+    live_before = snapshots.live_preimage(ledger_conn, "notes/test.md")
     assert live_before is not None
 
     out = _mcp_edit(vault_dir, db_conn, "notes/test.md", "absent string", "x")
     assert out.startswith("Error")
 
-    live_after = snapshots.live_preimage(db_conn, "notes/test.md")
+    live_after = snapshots.live_preimage(ledger_conn, "notes/test.md")
     assert live_after is not None
     assert live_after["id"] == live_before["id"]  # slot untouched
-    pending = db_conn.execute(
+    pending = ledger_conn.execute(
         "SELECT COUNT(*) FROM snapshots WHERE path = 'notes/test.md' "
         "AND finalized = 0").fetchone()[0]
     assert pending == 0  # the dropped capture left no row

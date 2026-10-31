@@ -59,7 +59,7 @@ class MoveDocsTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import (capture, discard, finalize, gc_after_capture,
                                   hash_bytes, new_call_id)
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.orchestration.refs import update_references_batch
         from ... import ledger
 
@@ -75,14 +75,14 @@ class MoveDocsTool(DocTool):
                 return self.move_dest_exists(to_path)
 
         # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
-        ref_count = update_references_batch(get_conn(), ctx.vault_dir, moves, pre_rename=True)
+        ref_count = update_references_batch(get_index_conn(), ctx.vault_dir, moves, pre_rename=True)
 
         # Phase 3: perform all filesystem renames. The whole batch is ONE
         # tool call → one call_id snapshot group (rollback unit, P1): every
         # source file's pre-image is captured before any rename. On a
         # partial-rename failure the captures are discarded (the live slot
         # is untouched) and the error surfaces as before.
-        conn = get_conn()
+        conn = get_ledger_conn()
         pairs = []  # (from_path, to_path, snapshot | None)
         if conn is not None:
             call_id = new_call_id()

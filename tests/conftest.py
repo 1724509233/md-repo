@@ -11,6 +11,7 @@ from server.api import create_app
 from server.ledger import consume
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
+from server.vault.db.schema import init_ledger_db
 
 
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
@@ -35,14 +36,15 @@ SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
 
 @pytest.fixture(autouse=True)
 def _db_handle_isolation():
-    """Reset the module-level DB handle around every test.
+    """Reset the module-level DB handle pair around every test.
 
-    Tools resolve the connection lazily via ``db_handle.get_conn()``; this
-    prevents one test's registered connection leaking into the next.
+    Tools resolve the connections lazily via ``db_handle.get_index_conn()``
+    / ``get_ledger_conn()`` (2026-10-31 ledger-file split, L4); this prevents
+    one test's registered connections leaking into the next.
     """
-    db_handle.init(None)
+    db_handle.init(None, None)
     yield
-    db_handle.init(None)
+    db_handle.init(None, None)
 
 
 @pytest.fixture
@@ -62,22 +64,42 @@ def vault_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def db_conn(vault_dir: Path):
-    """SQLite db at vault_dir/.sync/index.db, pre-populated with the sample file."""
+    """SQLite db at vault_dir/.sync/index.db, pre-populated with the sample file.
+
+    The index/file-ledger side of the pair (2026-10-31 ledger-file split,
+    L4): rebuildable tables + change_log.
+    """
     conn = init_db(vault_dir / ".sync" / "index.db")
     content = (vault_dir / "notes" / "test.md").read_bytes()
     digest = hashlib.sha256(content).hexdigest()
     mtime = (vault_dir / "notes" / "test.md").stat().st_mtime
     upsert_file(conn, "notes/test.md", digest, mtime)
-    db_handle.init(conn)
+    db_handle.init(conn, None)
     yield conn
-    db_handle.init(None)
     conn.close()
 
 
 @pytest.fixture
-def app(vault_dir: Path, db_conn):
-    """FastAPI app wired to the temp vault and db."""
-    return create_app(vault_dir=vault_dir, db_conn=db_conn)
+def ledger_conn(vault_dir: Path, db_conn):
+    """SQLite db at vault_dir/.sync/ledger.db — the authoritative-state
+    side of the pair (proposals / proposal_transitions / snapshots /
+    relatedness; 2026-10-31 ledger-file split, L4).
+
+    Depends on ``db_conn`` so tests requesting both get the fully wired
+    pair in the module handle.
+    """
+    conn = init_ledger_db(vault_dir / ".sync" / "ledger.db")
+    db_handle.init(db_conn, conn)
+    yield conn
+    conn.close()
+
+
+@pytest.fixture
+def app(vault_dir: Path, db_conn, ledger_conn):
+    """FastAPI app wired to the temp vault and both DB connections."""
+    return create_app(
+        vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn
+    )
 
 
 @pytest.fixture

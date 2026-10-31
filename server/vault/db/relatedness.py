@@ -17,10 +17,10 @@ Reversal mechanics (§四 table: 逆机制 = 删行 / ignored 标记):
 
 Concurrency (card 5, split along the lock boundary): ``upsert_edge`` /
 ``mark_ignored`` stay lock-free for in-package callers that hold
-``schema._db_lock`` themselves (single non-reentrant lock — a reader or
+``schema._ledger_lock`` themselves (single non-reentrant lock — a reader or
 nested writer inside a locked section must not re-enter); out-of-package
 writers (the executor) call :func:`merge_edge`, which holds the lock
-itself — outside ``server/vault`` ``_db_lock`` is no longer importable,
+itself — outside ``server/vault`` ``_ledger_lock`` is no longer importable,
 the named functions are the interface.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from .schema import _db_lock
+from .schema import _ledger_lock
 
 
 def upsert_edge(
@@ -88,9 +88,9 @@ def merge_edge(
     """Out-of-package write surface (card 5): :func:`upsert_edge` under the
     shared lock. The executor's relatedness merge is a read (file-existence
     check) → write compound whose DB half must be one locked section —
-    callers outside ``server/vault`` no longer import ``_db_lock``, so the
+    callers outside ``server/vault`` no longer import ``_ledger_lock``, so the
     module exposes the lock-holding entry instead. Returns the row id."""
-    with _db_lock:
+    with _ledger_lock:
         return upsert_edge(
             conn, source, target, basis, actor, run_id=run_id, now=now)
 

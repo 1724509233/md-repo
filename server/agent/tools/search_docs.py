@@ -31,9 +31,9 @@ def _log_recall(ctx: ToolContext, query: str, tier: str, results: list) -> None:
     change the tool result.
     """
     from ...vault.db import recall as recall_db
-    from ...vault.db.conn import get_conn
+    from ...vault.db.conn import get_index_conn
 
-    conn = get_conn()
+    conn = get_index_conn()
     if conn is None:
         return
     try:

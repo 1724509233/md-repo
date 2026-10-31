@@ -8,7 +8,7 @@ from pathlib import Path
 
 from server.recovery import main as recovery_main
 from server.recovery import run_recovery_drill
-from server.vault.db.schema import init_db
+from server.vault.db.schema import init_db, init_ledger_db
 from server.vault.db.file_index import upsert_file
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"
@@ -132,3 +132,104 @@ def test_recovery_cli_main(vault_dir: Path, capsys) -> None:
     assert report["ok"] is True
     assert report["files_rebuilt"] == _files_on_disk(vault_dir)
     assert report["change_log_rows"] == 0
+    # 2026-10-31 split: the ledger section is part of the report shape.
+    assert report["ledger"]["file"] == "ledger.db"
+    assert report["ledger"]["preserved"] is None  # no ledger.db in this vault
+    assert "ledger_backup" in report
+
+
+# ── 2026-10-31 ledger-file split: the ledger preservation criterion ──────
+
+def _seed_ledger(vault_dir: Path) -> None:
+    """ledger.db with the four authoritative-state tables pre-populated:
+    2 proposals / 2 transitions / 1 snapshot / 1 relatedness row."""
+    conn = init_ledger_db(vault_dir / ".sync" / "ledger.db")
+    now = 1700000000.0
+    conn.execute(
+        "INSERT INTO proposals (type, actor, run_id, status, payload, "
+        "source_refs, justification, reject_reason, created_at, updated_at, "
+        "merged_at, relpath) VALUES "
+        "('summary', 't', 'r', 'awaiting_review', '', '[]', 'j', '', "
+        "?, ?, '', 'suggestions/2026-10-31_summary_p1.md')",
+        (now, now),
+    )
+    conn.execute(
+        "INSERT INTO proposals (type, actor, run_id, status, payload, "
+        "source_refs, justification, reject_reason, created_at, updated_at, "
+        "merged_at, relpath) VALUES "
+        "('entity_index', 't', 'r', 'adopted', '', '[]', 'j', '', "
+        "?, ?, '', 'suggestions/2026-10-31_entity_index_p2.md')",
+        (now, now),
+    )
+    conn.execute(
+        "INSERT INTO proposal_transitions (proposal_id, from_status, "
+        "to_status, actor, ts, reason) VALUES (1, 'pending', 'processing', "
+        "'t', ?, '')",
+        (now,),
+    )
+    conn.execute(
+        "INSERT INTO proposal_transitions (proposal_id, from_status, "
+        "to_status, actor, ts, reason) VALUES (2, 'pending', 'processing', "
+        "'t', ?, '')",
+        (now,),
+    )
+    conn.execute(
+        "INSERT INTO snapshots (ts, call_id, path, old_path, new_path, op, "
+        "pre_hash, post_hash, actor, run_id, blob_name, live, finalized) "
+        "VALUES (?, 'c1', 'notes/a.md', '', '', 'update', '', '', 'agent', "
+        " '', '', 1, 1)",
+        (now,),
+    )
+    conn.execute(
+        "INSERT INTO relatedness (source, target, basis, actor, generated_at, "
+        "run_id, ignored) VALUES ('notes/a.md', 'notes/b.md', 'b', 't', ?, "
+        "'r', 0)",
+        (now,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_recovery_drill_preserves_ledger_rowwise(vault_dir: Path) -> None:
+    """Spec §3.4-6 / acceptance 1: a vault with the four tables pre-populated
+    runs the drill → the ledger survives with 100% of its rows, per table;
+    ``ledger.preserved is True``; ``ok: true``. The drill never touches it."""
+    _seed_vault(vault_dir)
+    _prepopulate_db(vault_dir)
+    _seed_ledger(vault_dir)
+
+    expected = {
+        "proposals": 2, "proposal_transitions": 2, "snapshots": 1,
+        "relatedness": 1,
+    }
+
+    report = run_recovery_drill(vault_dir)
+
+    assert report["ok"] is True
+    assert report["ledger"]["file"] == "ledger.db"
+    assert report["ledger"]["preserved"] is True
+    assert report["ledger"]["rows_before"] == expected
+    assert report["ledger"]["rows_after"] == expected
+    # the ledger backup is the operator's safety copy (dual backup)
+    assert report["ledger_backup"] is not None
+    assert Path(report["ledger_backup"]).is_file()
+    # the ledger file itself survived the wipe
+    assert (vault_dir / ".sync" / "ledger.db").is_file()
+
+
+def test_recovery_drill_ledger_absent_is_note_not_ok_flip(vault_dir: Path) -> None:
+    """Spec §3.4-6: the 'ledger.db missing' degraded path (a pre-split
+    vault's first drill) reports a NOTE — it does not flip ``ok``. The
+    criterion distinguishes 'no ledger file = nothing to preserve' from
+    'ledger file present = every row must survive'."""
+    _seed_vault(vault_dir)
+    _prepopulate_db(vault_dir)  # index.db present, ledger.db absent
+
+    report = run_recovery_drill(vault_dir)
+
+    assert report["ok"] is True
+    assert report["ledger"]["preserved"] is None
+    assert report["ledger"]["rows_before"] == {}
+    assert report["ledger"]["rows_after"] == {}
+    assert any("ledger.db absent" in n for n in report["notes"])
+    assert report["ledger_backup"] is None

@@ -6,10 +6,11 @@ same way ``server/main.py`` loads it (``load_background_agents``).
 
 Minimal invocation notes (the dependencies run_once needs, verified):
 
-1. DB: ``run_once``'s tools resolve the connection lazily via
-   ``server.vault.db.conn.get_conn()`` — in production ``main.py`` registers
-   it (``register_db_conn(conn)``). A standalone run MUST register the same
-   connection or recall_stats/recent_changes return "database not available".
+1. DB: ``run_once``'s tools resolve the connections lazily via
+   ``server.vault.db.conn.get_index_conn()`` / ``get_ledger_conn()`` — in
+   production ``main.py`` registers the pair. A standalone run MUST register
+   the same connections or recall_stats/recent_changes/proposal tools
+   return "database not available".
 2. hooks: optional — ``InAppHook(conn)`` is the production notification sink
    (notifications table row for the Web UI bell); pass [] to skip.
 3. runtime_cls: not needed — default LoopRuntime talks to the configured
@@ -38,7 +39,8 @@ from server.bgagent.runner import run_once
 from server.config import load_background_agents
 from server import proposals
 from server.vault.db import conn as db_conn
-from server.vault.db.schema import init_db
+from server.vault.db.migrate_ledger import migrate_ledger
+from server.vault.db.schema import init_db, init_ledger_db
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,10 +67,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: agent alias {args.alias!r} not in config", file=sys.stderr)
         return 2
 
-    # Production startup path: init_db(<vault>/.sync/index.db) + register it
-    # for the lazy tool-side lookup (server/main.py does both).
+    # Production startup path: init_db(index.db) + init_ledger_db(ledger.db)
+    # + first-boot migration + register the pair for the lazy tool-side
+    # lookup (server/main.py does all of it).
     conn = init_db(vault / ".sync" / "index.db")
-    db_conn.init(conn)
+    ledger_path = vault / ".sync" / "ledger.db"
+    ledger_conn = init_ledger_db(ledger_path)
+    migrate_ledger(conn, ledger_path)
+    db_conn.init(conn, ledger_conn)
 
     report = asyncio.run(run_once(cfg, vault, hooks=[InAppHook(conn)]))
 
@@ -76,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     # (DB = state source; the records have no backing file).
     recs = []
     for rel in report.proposal_paths:
-        p = proposals.record_by_relpath(conn, rel)
+        p = proposals.record_by_relpath(ledger_conn, rel)
         if p is None:
             print(f"error: no proposal record for {rel}", file=sys.stderr)
             return 1

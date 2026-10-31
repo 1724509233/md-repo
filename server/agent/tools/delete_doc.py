@@ -28,7 +28,7 @@ class DeleteDocTool(DocTool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_ledger_conn
         from ... import ledger
 
         fp = ctx.vault_dir / args.path
@@ -37,7 +37,7 @@ class DeleteDocTool(DocTool):
 
         # 可逆层（P1，spec §3.2）：交互删除 = user-ask 确认制 + 全文快照兜底
         # （删除类快照单独保留 30 天，GC 到期才回收）。
-        conn = get_conn()
+        conn = get_ledger_conn()
         snap = None
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path, "delete",

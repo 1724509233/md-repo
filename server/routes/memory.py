@@ -82,7 +82,7 @@ def register(app, ctx) -> None:
 
         now = time.time()
         items: list[dict] = []
-        for p in proposals.scan(ctx.db_conn):
+        for p in proposals.scan(ctx.ledger_conn):
             created_iso = datetime.fromtimestamp(p["created_at"]).strftime("%Y-%m-%d")
             age_days = int((now - p["created_at"]) // 86400)
             items.append({
@@ -100,7 +100,7 @@ def register(app, ctx) -> None:
         # trail without a drill): latest 3 trail rows per proposal (state
         # transitions + executor rows), same match as the /trail endpoint;
         # one query per source for the whole list.
-        trails = proposals.list_trails(ctx.db_conn, items)
+        trails = proposals.list_trails(ctx.ledger_conn, ctx.db_conn, items)
         for it, tr in zip(items, trails):
             it["trail"] = tr[:3]
             it["trail_count"] = len(tr)
@@ -116,7 +116,7 @@ def register(app, ctx) -> None:
         from .. import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        rec = proposals.record_by_relpath(ctx.db_conn, rel)
+        rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         if rec["status"] != "awaiting_review":
@@ -124,7 +124,7 @@ def register(app, ctx) -> None:
                 status_code=400,
                 detail=f"status is {rec['status']!r}, must be awaiting_review")
         try:
-            proposals.advance(ctx.db_conn, ctx.vault_dir, rec["id"], "adopted", actor="human")
+            proposals.advance(ctx.ledger_conn, ctx.vault_dir, rec["id"], "adopted", actor="human")
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except FileNotFoundError:
@@ -144,7 +144,7 @@ def register(app, ctx) -> None:
         from .. import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        rec = proposals.record_by_relpath(ctx.db_conn, rel)
+        rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         if rec["status"] != "expired":
@@ -152,7 +152,7 @@ def register(app, ctx) -> None:
                 status_code=400,
                 detail=f"status is {rec['status']!r}, must be expired")
         try:
-            proposals.revive(ctx.db_conn, ctx.vault_dir, rec["id"])
+            proposals.revive(ctx.ledger_conn, ctx.vault_dir, rec["id"])
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except FileNotFoundError:
@@ -166,7 +166,7 @@ def register(app, ctx) -> None:
         from .. import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        rec = proposals.record_by_relpath(ctx.db_conn, rel)
+        rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         try:
@@ -181,7 +181,7 @@ def register(app, ctx) -> None:
             raise HTTPException(
                 status_code=400, detail=f"status is {rec['status']!r}, must be awaiting_review")
         try:
-            proposals.advance(ctx.db_conn, ctx.vault_dir, rec["id"], "rejected",
+            proposals.advance(ctx.ledger_conn, ctx.vault_dir, rec["id"], "rejected",
                               actor="human", reject_reason=reason)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -196,7 +196,7 @@ def register(app, ctx) -> None:
         Delegates to ``proposals.trail`` (the state ledger + batch row
         match, D25); this route adds the path guard and the 12-row cap."""
         rel = _guard_proposal_relpath(relpath)
-        rows = proposals.trail(ctx.db_conn, rel)
+        rows = proposals.trail(ctx.ledger_conn, ctx.db_conn, rel)
         return {"relpath": rel, "trail": rows[:12]}
 
     @app.get("/api/memory/proposals/{relpath:path}")
@@ -213,7 +213,7 @@ def register(app, ctx) -> None:
         from .. import proposals
 
         rel = _guard_proposal_relpath(relpath)
-        rec = proposals.record_by_relpath(ctx.db_conn, rel)
+        rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
         if rec is None:
             raise HTTPException(status_code=404, detail="proposal not found")
         return {
@@ -251,7 +251,7 @@ def register(app, ctx) -> None:
         call_id = body.get("call_id")
         if not isinstance(call_id, str) or not call_id:
             raise HTTPException(status_code=400, detail="call_id is required")
-        result = snap_mod.rollback(ctx.db_conn, ctx.vault_dir, call_id)
+        result = snap_mod.rollback(ctx.ledger_conn, ctx.vault_dir, call_id)
         if not result["ok"]:
             return JSONResponse(
                 status_code=409,
@@ -272,7 +272,7 @@ def register(app, ctx) -> None:
         """
         from .. import snapshots as snap_mod
 
-        calls = snap_mod.recent_calls(ctx.db_conn, limit=limit)
+        calls = snap_mod.recent_calls(ctx.ledger_conn, limit=limit)
         for c in calls:
             c["files"] = c["files"].split("\n") if c["files"] else []
         return {"calls": calls}
@@ -342,7 +342,7 @@ def register(app, ctx) -> None:
         # proposals: by_status counts + the awaiting_review review queue.
         # DB records are the source (suggestions/ files are inert legacy projections).
         now = time.time()
-        prop = proposals.status_summary(ctx.db_conn, now)
+        prop = proposals.status_summary(ctx.ledger_conn, now)
 
         # agents: read trigger_state directly; the config-derived caps
         # (armed_target = trigger.arm_count, runs_cap = budget_runs_per_day)

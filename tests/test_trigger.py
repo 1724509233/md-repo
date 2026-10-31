@@ -404,16 +404,16 @@ def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path
 
 # ── event-driven loops (spec 2026-10-24) ──────────────────────────────────
 
-def _adopted_proposal(vault_dir, db_conn, title="wake"):
+def _adopted_proposal(vault_dir, ledger_conn, title="wake"):
     """Create a proposal record and drive it to adopted (arms the executor scan)."""
     from server import proposals
 
     rec = proposals.create(
-        db_conn, vault_dir, "summary", actor="test", run_id="wake-test",
+        ledger_conn, vault_dir, "summary", actor="test", run_id="wake-test",
         source_refs=["notes/test.md"], justification=title,
         payload={"body": "b"}, now=1760000000.0)
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="test")
-    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="test")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "processing", actor="test")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "adopted", actor="test")
     return rec
 
 
@@ -426,7 +426,7 @@ async def _poll(pred, timeout=5.0):
     return True
 
 
-def test_executor_loop_event_wake(db_conn, vault_dir):
+def test_executor_loop_event_wake(ledger_conn, vault_dir):
     """proposal event wakes the executor far before the 300s backstop."""
     from server import events
     from server.bgagent.scheduler import _executor_loop
@@ -442,10 +442,10 @@ def test_executor_loop_event_wake(db_conn, vault_dir):
         events.set_bus(b)
         try:
             task = asyncio.create_task(
-                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=300))
+                _executor_loop(vault_dir, ledger_conn, executor_fn=fake, interval_s=300))
             await asyncio.sleep(0.2)  # let the loop subscribe + enter wake_wait
             t0 = time.monotonic()
-            _adopted_proposal(vault_dir, db_conn)  # advance(adopted) → publish
+            _adopted_proposal(vault_dir, ledger_conn)  # advance(adopted) → publish
             ok = await _poll(lambda: calls)
             task.cancel()
             try:
@@ -459,7 +459,7 @@ def test_executor_loop_event_wake(db_conn, vault_dir):
     _run(go())
 
 
-def test_executor_loop_backstop_no_event(db_conn, vault_dir):
+def test_executor_loop_backstop_no_event(ledger_conn, vault_dir):
     """No event at all → the backstop tick still runs the scan (0.3s here)."""
     from server import events
     from server.bgagent.scheduler import _executor_loop
@@ -473,9 +473,9 @@ def test_executor_loop_backstop_no_event(db_conn, vault_dir):
 
     async def go():
         try:
-            _adopted_proposal(vault_dir, db_conn)  # armed BEFORE the loop starts
+            _adopted_proposal(vault_dir, ledger_conn)  # armed BEFORE the loop starts
             task = asyncio.create_task(
-                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=0.3))
+                _executor_loop(vault_dir, ledger_conn, executor_fn=fake, interval_s=0.3))
             ok = await _poll(lambda: calls)
             task.cancel()
             try:
@@ -488,7 +488,7 @@ def test_executor_loop_backstop_no_event(db_conn, vault_dir):
     _run(go())
 
 
-def test_executor_loop_spurious_event_noop(db_conn, vault_dir):
+def test_executor_loop_spurious_event_noop(ledger_conn, vault_dir):
     """A stale/foreign proposal event (e.g. merged — advance no longer
     publishes those) must be tolerated: wake → scan → no-op."""
     from server import events
@@ -505,7 +505,7 @@ def test_executor_loop_spurious_event_noop(db_conn, vault_dir):
         events.set_bus(b)
         try:
             task = asyncio.create_task(
-                _executor_loop(vault_dir, db_conn, executor_fn=fake, interval_s=300))
+                _executor_loop(vault_dir, ledger_conn, executor_fn=fake, interval_s=300))
             await asyncio.sleep(0.2)
             events.publish("proposal", {"relpath": "suggestions/x.md",
                                          "status": "merged"})

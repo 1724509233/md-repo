@@ -222,9 +222,9 @@ class ProposeTool(Tool):
 
         # Success path: DB unavailable → error, nothing on disk.
         from ...proposals import create, process_proposal
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_ledger_conn
 
-        conn = get_conn()
+        conn = get_ledger_conn()
         if conn is None:
             return "Error: proposal database unavailable (server DB not initialized)"
 

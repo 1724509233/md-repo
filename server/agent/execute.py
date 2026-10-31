@@ -3,7 +3,7 @@
 Each tool's implementation lives in its own module under ``server/agent/tools/``;
 this module only resolves the name. The runtime builds the ``ToolContext``
 (vault_dir, read_doc_max_chars, last_read_ts) — DB access is resolved by the
-tools themselves via ``server.vault.db.conn.get_conn()``.
+tools themselves via ``server.vault.db.conn.get_index_conn()`` / ``get_ledger_conn()``.
 """
 from __future__ import annotations
 

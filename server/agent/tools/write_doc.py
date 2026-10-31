@@ -23,7 +23,7 @@ class WriteDocTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture, hash_bytes
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_ledger_conn
         from ... import ledger
 
         fp = ctx.vault_dir / args.path
@@ -35,7 +35,7 @@ class WriteDocTool(Tool):
         # 可逆层（P1）：LLM 发起的写强制 pre-image（不变量 10）。新建文件
         # 无 pre-image，记 create；覆写已有文件捕获写入前的全文字节。
         # 捕捉失败不阻塞写（degraded 模式，见 server/snapshots.py）。
-        conn = get_conn()
+        conn = get_ledger_conn()
         snap = None
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path,

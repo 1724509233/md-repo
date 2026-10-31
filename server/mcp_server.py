@@ -80,13 +80,13 @@ def _mcp_write(vault_dir: Path, db_conn, path: str, content: str) -> str:
     watchdog 兜底).
     """
     from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
-    from server.vault.db.conn import get_conn
+    from server.vault.db.conn import get_ledger_conn
 
     fp = vault_dir / path
     fp.parent.mkdir(parents=True, exist_ok=True)
     existed = fp.is_file()
     new_bytes = content.encode("utf-8")
-    conn = get_conn()
+    conn = get_ledger_conn()
     snap = None
     if conn is not None:
         snap = capture(conn, vault_dir, path, "update" if existed else "create", "mcp")
@@ -119,13 +119,13 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
     the capture so it never claims the file's live slot. Mirrors
     ``server/agent/tools/edit_doc.py`` (actor="mcp")."""
     from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
-    from server.vault.db.conn import get_conn
+    from server.vault.db.conn import get_ledger_conn
     from server.vault.fs.vault_ops import edit_file
 
     fp = vault_dir / path
     if not fp.is_file():
         return _edit_doc_tool._file_not_found_hint(path)
-    conn = get_conn()
+    conn = get_ledger_conn()
     snap = None
     if conn is not None:
         snap = capture(conn, vault_dir, path, "update", "mcp")
@@ -177,10 +177,19 @@ def main():
     vault_dir = config.vault_dir
     db_conn = init_db(vault_dir / ".sync" / "index.db")
 
-    # Register the module-level DB handle for lazy access (agent tools).
+    # Ledger file split (2026-10-31, L4): same first-boot migration as
+    # server/main.py — the four authoritative-state tables move to ledger.db.
+    from server.vault.db.migrate_ledger import migrate_ledger
+    from server.vault.db.schema import init_ledger_db
+
+    ledger_path = vault_dir / ".sync" / "ledger.db"
+    ledger_conn = init_ledger_db(ledger_path)
+    migrate_ledger(db_conn, ledger_path)
+
+    # Register the module-level DB handle pair for lazy access (agent tools).
     from server.vault.db.conn import init as register_db_conn
 
-    register_db_conn(db_conn)
+    register_db_conn(db_conn, ledger_conn)
     
     # Warm up jieba in background thread
     def _warmup():

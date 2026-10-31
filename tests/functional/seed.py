@@ -17,7 +17,9 @@ Usage:
 Design notes (verified against the code this mirrors):
 
 - Proposal records follow ``server/proposals.py`` (v2a): the state source is
-  the ``proposals`` table in ``<vault>/.sync/index.db``; the card relpath
+  the ``proposals`` table in ``<vault>/.sync/ledger.db`` (the four
+  authoritative-state tables moved there in the 2026-10-31 ledger-file
+  split); the card relpath
   ``suggestions/YYYY-MM-DD_<type>_p<id>.md`` (date = creation date,
   backfilled by --days-ago; ``id`` = the record PK) is a synthetic card
   identifier — D25: the channel lands no file. The seed inserts the record
@@ -29,11 +31,13 @@ Design notes (verified against the code this mirrors):
   ``recall_log`` row per hit. ``--days-ago`` backdates ``ts`` (log_query
   has no time injection, so rows are inserted directly). Traffic class is
   derived by importing ``recall._traffic`` (web→human, agent→on_demand,
-  else synthetic) — never reimplemented here.
+  else synthetic) — never reimplemented here. recall tables live in
+  index.db (not part of the split).
 - change rows go through ``server/vault/db/changes::log_change`` (the
-  canonical writer; op names pass through unchanged).
+  canonical writer; op names pass through unchanged) — index.db.
 - DB init is the production startup path:
-  ``server.vault.db.schema.init_db(<vault>/.sync/index.db)`` (same call
+  ``server.vault.db.schema.init_db(<vault>/.sync/index.db)`` +
+  ``init_ledger_db(<vault>/.sync/ledger.db)`` (same calls
   ``server/main.py`` makes; card 5 deleted the ``server.vault.service``
   facade — production imports the real modules directly).
   An existing DB is simply opened/migrated idempotently.
@@ -49,7 +53,7 @@ from pathlib import Path
 from server import proposals as P
 from server.vault.db.changes import log_change
 from server.vault.db.recall import _traffic
-from server.vault.db.schema import init_db
+from server.vault.db.schema import init_db, init_ledger_db
 
 _CHANGE_OPS = ("create", "update", "move", "delete")
 
@@ -57,6 +61,12 @@ _CHANGE_OPS = ("create", "update", "move", "delete")
 def _open_db(vault: Path):
     """Production startup path (server/main.py): <vault>/.sync/index.db."""
     return init_db(vault / ".sync" / "index.db")
+
+
+def _open_ledger_db(vault: Path):
+    """Production startup path (server/main.py): <vault>/.sync/ledger.db
+    (the four authoritative-state tables, 2026-10-31 split)."""
+    return init_ledger_db(vault / ".sync" / "ledger.db")
 
 
 # ── proposals ─────────────────────────────────────────────────────────────
@@ -96,7 +106,7 @@ def cmd_proposals(args: argparse.Namespace, vault: Path) -> None:
     created = datetime.fromtimestamp(time.time() - args.days_ago * 86400)
     run_id = args.run_id or f"seed-{int(created.timestamp())}"
 
-    conn = _open_db(vault)
+    conn = _open_ledger_db(vault)
     rec = P.create(
         conn, vault, args.type, args.actor, run_id,
         [str(r) for r in args.source_ref], args.title, payload,

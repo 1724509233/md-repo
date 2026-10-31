@@ -44,14 +44,15 @@ edges(src_id, dst_id, type CHECK(wikilink|tag|related), path,
 
 ### 连接与并发
 
-- `init_db()` 以 `check_same_thread=False, isolation_level=None`（autocommit）打开连接，并启用 **WAL** 模式支持并发读。
-- 同一个连接被 watchdog 线程和 async event loop 共享，因此 `schema.py` 提供模块级 `_db_lock`（`threading.Lock`）。
-- **并发规则（card 5 起）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）；**server/vault 之外 `_db_lock` 标识符零出现**（例外两处：`init_db` 的 DDL 语境、`recovery._rebuild_files_table` 的进程启动单线程 recovery drill）。上层（bgagent、proposals、snapshots）调用具名函数，不再持锁、不再裸 SQL。
-- **纯读 helper 保持无锁**：`_db_lock` 是单把非重入锁，读函数若持锁会与写路径互斥竞争、并在锁内调用时同线程死锁——所以 `file_index`/`changes`/`relatedness.upsert_edge` 等读函数无锁，同模块的 mutation functions 负责加锁；锁内调用读 helper 是安全的。
+- **两文件两连接（2026-10-31 ledger-file split，L4）**：`init_db()` 开 `.sync/index.db`（可重建缓存：files / segments / edges / change_log / trigger_state / recall / …），`init_ledger_db()` 开 `.sync/ledger.db`（四张无重建来源的权威状态表：proposals / proposal_transitions / snapshots / relatedness——spec `docs/superpowers/specs/2026-10-31-ledger-file-split-design.md`）。两连接同参：`check_same_thread=False, isolation_level=None`（autocommit）+ **WAL**。conn 对注册在 `conn.py`（`init(index_conn, ledger_conn)` / `get_index_conn()` / `get_ledger_conn()`），**共享一个生命周期**（一处 init、一处注册、一处关闭；L5-prod 每线程连接的迁移单位 = 这对）。
+- **两把锁，同一纪律**：`schema.py` 提供 `_db_lock`（只守卫 index 域）与 `_ledger_lock`（只守卫四表域），均为非重入 `threading.Lock`。import 纪律照抄 card 5：**`_ledger_lock` 在 `server/vault/db` 包外零出现**（具名持锁函数 = 接口）；ledger 域三模块（proposal_records / snapshot_records / relatedness）**不得再引用 `_db_lock`**——两条都由 `tests/test_ledger_import_discipline.py` 扫源码钉住。`_db_lock` 的存量引用面（file_ops 的 apply 路径、recall、notifications）是 L4 之前形态，不在本纪律扩张范围。两域写者互不排队（L3 基准量化的跨域竞争面在跨域方向归零）。
+- **并发规则（card 5 起，L4 扩展到两域）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）；`_db_lock` 的包外例外为 `init_db`/DDL 语境、`recovery._rebuild_files_table`、`migrate_ledger` 的 ATTACH 语境。上层（bgagent、proposals、snapshots、routes、agent tools）调用具名函数，不再持锁、不再裸 SQL。
+- **纯读 helper 保持无锁**：非重入锁被读者持有会在锁内调用时同线程死锁——所以读函数无锁，同模块的 mutation functions 负责加锁；锁内调用读 helper 是安全的。
 - **调用方惯例：读到底要不要包锁**
-  - **读不持锁**：纯读函数（如 `get_changes_sources` / `count_changes_sources`，`changes.py:74/:122`）锁外直读，调用方**不要**再包 `with _db_lock`（card 5 后 scheduler 已迁走，见 `bgagent/scheduler.py:95` 注释）。
+  - **读不持锁**：纯读函数（如 `get_changes_sources` / `count_changes_sources`，`changes.py:74/:122`）锁外直读，调用方**不要**再包 `with _db_lock`（或 `with _ledger_lock`）。
   - **写临界区内的读随写包锁**：复合操作（读+写+回写游标，如 `trigger_state.arm_change`，`trigger_state.py:103-121`）整体在锁内，其中的读不单独拆出。
-  - 锚点：mutation 具名函数**内部**持锁（card 5，`_db_lock` 包外不可 import）；`proposal_records.advance` 条件 UPDATE 持锁；WAL 下多读者不阻塞。
+  - **唯一跨域查询**：`proposals.list_trails`/`trail`（同读 proposal_transitions + change_log，全库仅此一处）已显式双 conn（index + ledger 各取一侧）——「seam 从并发原语变成接口」的落点。
+  - 锚点：mutation 具名函数**内部**持锁（`_db_lock`/`_ledger_lock` 包外不可 import，见 `tests/test_ledger_import_discipline.py`）；`proposal_records.advance` 条件 UPDATE 持锁（invariant 11）；WAL 下多读者不阻塞。
 
 ### 变更日志与 legacy 迁移
 

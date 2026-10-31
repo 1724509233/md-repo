@@ -797,7 +797,7 @@ def test_execute_recent_changes(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
-    register_db_conn(conn)
+    register_db_conn(conn, None)
 
     # Create some changes
     (vault / "notes").mkdir()
@@ -823,7 +823,7 @@ def test_execute_recent_changes_filter(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
-    register_db_conn(conn)
+    register_db_conn(conn, None)
 
     (vault / "notes").mkdir()
     (vault / "notes" / "a.md").write_bytes(b"hello")
@@ -853,7 +853,7 @@ def test_execute_recent_changes_empty(tmp_path: Path):
     vault = tmp_path / "vault"
     vault.mkdir()
     conn = init_db(vault / ".sync" / "index.db")
-    register_db_conn(conn)
+    register_db_conn(conn, None)
 
     result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
     assert "No recent changes" in result

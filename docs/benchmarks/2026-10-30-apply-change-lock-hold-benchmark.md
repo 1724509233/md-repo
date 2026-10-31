@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-30
 **Question:** 架构评审 backlog L3（`docs/superpowers/plans/2026-10-29-arch-review-leftovers.md`）：
-`apply_change`（`server/vault/orchestration/file_ops.py:67`，`with _db_lock:` 包整个函数体）
+`apply_change`（`server/vault/orchestration/file_ops.py:74`，`with _db_lock:` 包整个函数体）
 在典型 vault 规模下持锁多久，其中多少是临界区内的磁盘 I/O？先量化再动——性能卡，非正确性卡。
 **Decision:** 记录并关闭（用户裁决 A，2026-10-30）。真实规模（302 文件）≤ 4 ms；
 10k 文件中位 14–17 ms、max ~24 ms（暖缓存）。**重开条件：vault > 5k 文件或观测到写者排队。**
@@ -16,7 +16,7 @@
 - Python 3.12.13（repo `.venv`）
 - 单开发机，无并发负载——写者串行化成本 = 锁持有时间本身，故直接测持锁时长
 
-## 锁内有什么（`apply_change`，`file_ops.py:67`）
+## 锁内有什么（`apply_change`，`file_ops.py:74`）
 
 | 分支 | 锁内磁盘 I/O |
 | --- | --- |

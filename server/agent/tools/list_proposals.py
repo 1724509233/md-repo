@@ -39,9 +39,9 @@ class ListProposalsTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...proposals import scan
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_ledger_conn
 
-        conn = get_conn()
+        conn = get_ledger_conn()
         if conn is None:
             return "Error: proposal database unavailable (server DB not initialized)"
 

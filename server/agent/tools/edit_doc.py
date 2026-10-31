@@ -33,7 +33,7 @@ class EditDocTool(DocTool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_ledger_conn
         from ...vault.fs.vault_ops import edit_file
         from ... import ledger
 
@@ -44,7 +44,7 @@ class EditDocTool(DocTool):
 
         # 可逆层（P1）：写入前捕获全文 pre-image；edit_file 失败（未找到/
         # 多义）时丢弃该快照，不占用/替换本文件的活 pre-image 槽位。
-        conn = get_conn()
+        conn = get_ledger_conn()
         snap = None
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path, "update",

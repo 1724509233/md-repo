@@ -34,11 +34,11 @@ def _cfg(tmp_path: Path, vault_dir: Path, alias: str = "cons") -> BackgroundAgen
     )
 
 
-def _build(vault_dir: Path, conn, bg_agents, tmp_path: Path):
+def _build(vault_dir: Path, conn, ledger_conn, bg_agents, tmp_path: Path):
     """build_runtime inside a throwaway loop (the Bus is loop-bound)."""
     async def go():
         return await build_runtime(
-            vault_dir, conn, bg_agents, NotificationsConfig(daily_cap=20))
+            vault_dir, conn, ledger_conn, bg_agents, NotificationsConfig(daily_cap=20))
     return asyncio.run(go())
 
 
@@ -66,12 +66,12 @@ def test_self_exclusion_set_and_single_source():
 
 # ── 2/3. bus filters installed by build_runtime ────────────────────────────
 
-def test_bus_change_filter_drops_synthetic_keeps_human(tmp_path, vault_dir, db_conn):
+def test_bus_change_filter_drops_synthetic_keeps_human(tmp_path, vault_dir, db_conn, ledger_conn):
     """After build_runtime the bus filter drops every self-excluded source
     (executor / agent / bgagent alias) and keeps human channels (web)."""
     async def go():
         rt = await build_runtime(
-            vault_dir, db_conn, [_cfg(tmp_path, vault_dir)],
+            vault_dir, db_conn, ledger_conn, [_cfg(tmp_path, vault_dir)],
             NotificationsConfig(daily_cap=20))
         try:
             bus = events.get_bus()
@@ -89,10 +89,10 @@ def test_bus_change_filter_drops_synthetic_keeps_human(tmp_path, vault_dir, db_c
     asyncio.run(go())
 
 
-def test_bus_recall_filter_drops_synthetic_hits(tmp_path, vault_dir, db_conn):
+def test_bus_recall_filter_drops_synthetic_hits(tmp_path, vault_dir, db_conn, ledger_conn):
     """synthetic traffic with hits > 0 is dropped; real traffic is delivered."""
     async def go():
-        rt = await build_runtime(vault_dir, db_conn, [], NotificationsConfig(daily_cap=20))
+        rt = await build_runtime(vault_dir, db_conn, ledger_conn, [], NotificationsConfig(daily_cap=20))
         try:
             bus = events.get_bus()
             q = bus.subscribe("recall")
@@ -109,12 +109,12 @@ def test_bus_recall_filter_drops_synthetic_hits(tmp_path, vault_dir, db_conn):
 
 # ── 4. the four ledger callbacks: register → write → callback = one row ───
 
-def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn):
+def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn, ledger_conn):
     """Each Runtime callback drives ledger.consume: the writer-side
     registration attributes the row (source=web), op is normalized, moved
     carries old_path. Exactly one row per callback — the consumer books
     nothing a second time."""
-    rt = _build(vault_dir, db_conn, [], tmp_path)
+    rt = _build(vault_dir, db_conn, ledger_conn, [], tmp_path)
     try:
         # created
         ledger.register("notes/created.md", "web")
@@ -145,8 +145,8 @@ def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn):
 
 # ── 5. bgagent tasks: enabled agent → tasks spawned; none → none ──────────
 
-def test_bg_tasks_spawned_for_enabled_agent(tmp_path, vault_dir, db_conn):
-    rt = _build(vault_dir, db_conn, [_cfg(tmp_path, vault_dir)], tmp_path)
+def test_bg_tasks_spawned_for_enabled_agent(tmp_path, vault_dir, db_conn, ledger_conn):
+    rt = _build(vault_dir, db_conn, ledger_conn, [_cfg(tmp_path, vault_dir)], tmp_path)
     try:
         names = {t.get_name() for t in rt.bg_tasks}
         assert "bgagent-cons" in names          # cron loop
@@ -157,8 +157,8 @@ def test_bg_tasks_spawned_for_enabled_agent(tmp_path, vault_dir, db_conn):
         events.set_bus(None)
 
 
-def test_bg_tasks_empty_without_agents(tmp_path, vault_dir, db_conn):
-    rt = _build(vault_dir, db_conn, [], tmp_path)
+def test_bg_tasks_empty_without_agents(tmp_path, vault_dir, db_conn, ledger_conn):
+    rt = _build(vault_dir, db_conn, ledger_conn, [], tmp_path)
     try:
         assert rt.bg_tasks == []
     finally:

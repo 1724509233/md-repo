@@ -17,11 +17,17 @@ from ..sync_lock import SyncLock
 class WebContext:
     """Per-app shared state for the route modules.
 
+    ``db_conn`` is the index/file-ledger connection (``.sync/index.db``);
+    ``ledger_conn`` is the authoritative-state connection (``.sync/ledger.db``)
+    — the four tables with no rebuild source (proposals / proposal_transitions
+    / snapshots / relatedness; 2026-10-31 ledger-file split, L4).
+
     ``bg_targets``: optional per-alias caps from the background-agent
     config (wired in main.py); only routes/memory reads it.
     """
 
     db_conn: object
+    ledger_conn: object
     vault_dir: Path
     ai_config: object | None
     sync_lock: SyncLock

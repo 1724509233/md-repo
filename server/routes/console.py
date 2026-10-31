@@ -113,7 +113,9 @@ def move(db_conn, vault_dir, body) -> dict:
     return {"ok": True, "path": dst_rel.as_posix()}
 
 
-def delete(db_conn, vault_dir, body) -> dict:
+def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
+    # Two-conn (2026-10-31 ledger-file split): snapshots live in ledger.db
+    # (ledger_conn); the change_log rows live in index.db (db_conn).
     rel = _safe_rel_path(body.get("path") or "")
     if rel is None:
         raise HTTPException(status_code=400, detail="invalid path")
@@ -126,18 +128,18 @@ def delete(db_conn, vault_dir, body) -> dict:
         # （删除类快照单独保留 30 天，回滚端点可恢复）。
         from ..snapshots import capture, finalize, gc_after_capture
 
-        snap = capture(db_conn, vault_dir, rel.as_posix(), "delete", actor="web")
+        snap = capture(ledger_conn, vault_dir, rel.as_posix(), "delete", actor="web")
         try:
             target.unlink()
         except OSError as e:
             if snap is not None:
                 from ..snapshots import discard
 
-                discard(db_conn, vault_dir, snap)
+                discard(ledger_conn, vault_dir, snap)
             raise HTTPException(status_code=500, detail=f"failed to delete: {e}")
         if snap is not None:
-            finalize(db_conn, snap, "")  # post-state: file absent
-            gc_after_capture(db_conn, vault_dir)
+            finalize(ledger_conn, snap, "")  # post-state: file absent
+            gc_after_capture(ledger_conn, vault_dir)
         # Web op: logged synchronously; record() marks skip —
         # consumer books nothing.
         ledger.record(db_conn, vault_dir, rel.as_posix(), "deleted", "web")
@@ -151,7 +153,7 @@ def delete(db_conn, vault_dir, body) -> dict:
     call_id = new_call_id()
     snaps = [
         (p.relative_to(vault_dir).as_posix(),
-         capture(db_conn, vault_dir, p.relative_to(vault_dir).as_posix(),
+         capture(ledger_conn, vault_dir, p.relative_to(vault_dir).as_posix(),
                  "delete", actor="web", call_id=call_id))
         for p in md_files
     ]
@@ -174,11 +176,11 @@ def delete(db_conn, vault_dir, body) -> dict:
         if snap is None:
             continue
         if r in done:
-            finalize(db_conn, snap, "")  # post-state: file absent
+            finalize(ledger_conn, snap, "")  # post-state: file absent
         else:
-            discard(db_conn, vault_dir, snap)
+            discard(ledger_conn, vault_dir, snap)
     if any(s is not None for _, s in snaps):
-        gc_after_capture(db_conn, vault_dir)
+        gc_after_capture(ledger_conn, vault_dir)
     if failed:
         raise HTTPException(
             status_code=500,
@@ -289,7 +291,7 @@ def register(app, ctx) -> None:
         if action in ("rename", "move"):
             return move(ctx.db_conn, ctx.vault_dir, body)
         if action == "delete":
-            return delete(ctx.db_conn, ctx.vault_dir, body)
+            return delete(ctx.db_conn, ctx.ledger_conn, ctx.vault_dir, body)
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
     @app.post("/api/docs/{path:path}")

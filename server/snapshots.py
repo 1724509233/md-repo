@@ -8,8 +8,10 @@ Storage (machine zone only — the user area gets zero automation writes):
 
 - Bytes: ``vault/.sync/snapshots/<blob_name>`` — non-``.md`` inside ``.sync/``,
   so indexers, the client sync scan and Obsidian walks never see them.
-- Index: the ``snapshots`` table in ``index.db`` (created by
-  ``schema.init_db``; see the table DDL there).
+- Index: the ``snapshots`` table in ``ledger.db`` (created by
+  ``schema.init_ledger_db``; see the table DDL there) — an
+  authoritative-state table with no rebuild source, so the recovery drill
+  never wipes it (2026-10-31 ledger-file split, L4).
 
 Retention (spec D18, pinned):
 

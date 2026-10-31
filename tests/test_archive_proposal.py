@@ -76,23 +76,23 @@ def test_archive_authorization_raises():
         proposals.authorization("archive")
 
 
-def test_archive_create_rejected_zero_writes(vault_dir, db_conn):
+def test_archive_create_rejected_zero_writes(vault_dir, ledger_conn):
     import pytest
     before_files = sum(1 for p in vault_dir.rglob("*") if p.is_file())
     with pytest.raises(ValueError):
         proposals.create(
-            db_conn, vault_dir, "archive", actor="sentinel", run_id="b",
+            ledger_conn, vault_dir, "archive", actor="sentinel", run_id="b",
             source_refs=["notes/test.md"], justification="archiving",
             payload={"path": "notes/test.md"},
         )
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
     assert sum(1 for p in vault_dir.rglob("*") if p.is_file()) == before_files
     assert not (vault_dir / "suggestions").is_dir()
 
 
 # ── propose tool: operational redirect (read-only sentinel) ───────────────
 
-def test_propose_archive_redirect_read_only(vault_dir, db_conn):
+def test_propose_archive_redirect_read_only(vault_dir, ledger_conn):
     """D5: archive → the model gets the operational redirect naming the
     read-only sentinel report, not a bare ban. Zero disk writes."""
     tool = ProposeTool()
@@ -103,57 +103,57 @@ def test_propose_archive_redirect_read_only(vault_dir, db_conn):
     assert out.startswith("Error:")
     assert "retired" in out
     assert "read-only" in out  # the replacement: sentinel reports, proposes nothing
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
     assert not (vault_dir / "suggestions").is_dir()
     assert not (vault_dir / "archive").is_dir()
 
 
 # ── read-path tolerance: legacy 存量 rows never crash a read ──────────────
 
-def test_legacy_rows_read_path_tolerance(vault_dir, db_conn):
+def test_legacy_rows_read_path_tolerance(vault_dir, ledger_conn):
     """The read paths (scan / record / records_by_run) never validate row
     type: the three retired v1 types are frozen 存量 and must surface in
     the console/counts exactly like any other row."""
-    rid_link = _planted_retired(db_conn, "link",
+    rid_link = _planted_retired(ledger_conn, "link",
                                 payload={"target": "notes/x.md"},
                                 source_refs=["notes/test.md"])
     rid_correction = _planted_retired(
-        db_conn, "correction",
+        ledger_conn, "correction",
         payload={"file": "notes/test.md", "old": "a", "new": "b"},
         source_refs=["notes/test.md"])
-    rid_archive = _planted_retired(db_conn, "archive",
+    rid_archive = _planted_retired(ledger_conn, "archive",
                                    payload={"path": "notes/test.md"},
                                    source_refs=["notes/test.md"])
 
-    rows = proposals.scan(db_conn)
+    rows = proposals.scan(ledger_conn)
     assert {r["id"] for r in rows} == {rid_link, rid_correction, rid_archive}
     assert {r["type"] for r in rows} == {"link", "correction", "archive"}
 
     for rid in (rid_link, rid_correction, rid_archive):
-        rec = proposals.record(db_conn, rid)
+        rec = proposals.record(ledger_conn, rid)
         assert rec is not None and rec["status"] == "adopted"
 
-    by_run = proposals.records_by_run(db_conn, "legacy-run", 0)
+    by_run = proposals.records_by_run(ledger_conn, "legacy-run", 0)
     assert {r["id"] for r in by_run} == {rid_link, rid_correction, rid_archive}
 
 
 # ── executor: stock adopted rows park in failed, nothing moves ────────────
 
-def test_legacy_archive_adopted_parked_no_moves(vault_dir, db_conn):
+def test_legacy_archive_adopted_parked_no_moves(vault_dir, ledger_conn):
     """A pre-cutover ``archive`` record stuck at ``adopted``: the v2
     executor has no archive handler — it parks the row in ``failed`` with
     an actionable reason (human move). No file moves, no archive/ dir,
     user area byte-identical."""
     user_before = (vault_dir / "notes" / "test.md").read_bytes()
-    rid = _planted_retired(db_conn, "archive",
+    rid = _planted_retired(ledger_conn, "archive",
                            payload={"path": "notes/test.md"},
                            source_refs=["notes/test.md"])
 
-    summary = run_executor(vault_dir, db_conn)
+    summary = run_executor(vault_dir, ledger_conn)
     assert summary["merged"] == 0
     assert summary["errors"] == []  # parked: the human's queue, not ours
 
-    p = proposals.record(db_conn, rid)
+    p = proposals.record(ledger_conn, rid)
     assert p["status"] == "failed"
     assert "retired" in p["reject_reason"]
     assert "human move" in p["reject_reason"]
@@ -165,18 +165,18 @@ def test_legacy_archive_adopted_parked_no_moves(vault_dir, db_conn):
     assert not (vault_dir / p["relpath"]).is_file()
 
 
-def test_retired_park_reasons_name_replacements(vault_dir, db_conn):
+def test_retired_park_reasons_name_replacements(vault_dir, ledger_conn):
     """Each retired verb's park reason names its v2 replacement path —
     the human sees what to do, not just that the verb is gone."""
-    rid_link = _planted_retired(db_conn, "link",
+    rid_link = _planted_retired(ledger_conn, "link",
                                 payload={"target": "notes/x.md"},
                                 source_refs=["notes/test.md"])
     rid_correction = _planted_retired(
-        db_conn, "correction",
+        ledger_conn, "correction",
         payload={"file": "notes/test.md", "old": "a", "new": "b"},
         source_refs=["notes/test.md"])
-    run_executor(vault_dir, db_conn)
-    reason_link = proposals.record(db_conn, rid_link)["reject_reason"]
-    reason_correction = proposals.record(db_conn, rid_correction)["reject_reason"]
+    run_executor(vault_dir, ledger_conn)
+    reason_link = proposals.record(ledger_conn, rid_link)["reject_reason"]
+    reason_correction = proposals.record(ledger_conn, rid_correction)["reject_reason"]
     assert "relatedness" in reason_link
     assert "errata" in reason_correction

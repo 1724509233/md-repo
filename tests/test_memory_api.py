@@ -42,18 +42,18 @@ def _to_awaiting(vault_dir, conn, rec, actor="tester"):
 
 # ── GET /api/memory/proposals ──────────────────────────────────────────────
 
-def test_list_shape_sort_age(client, vault_dir, db_conn):
+def test_list_shape_sort_age(client, vault_dir, ledger_conn):
     # awaiting_review (review type → summary), created now.
-    r_ar = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, r_ar)
+    r_ar = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, r_ar)
     # two pending proposals with distinct ages (tiebreak: age desc).
-    r_old = _create(vault_dir, db_conn, type="entity_index",
+    r_old = _create(vault_dir, ledger_conn, type="entity_index",
                     now=time.time() - 5 * 86400)
-    r_new = _create(vault_dir, db_conn, type="entity_index")
+    r_new = _create(vault_dir, ledger_conn, type="entity_index")
     # adopted (auto type → relatedness).
-    r_adopted = _create(vault_dir, db_conn, type="relatedness")
-    proposals.advance(db_conn, vault_dir, r_adopted["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, r_adopted["id"], "adopted", actor="t")
+    r_adopted = _create(vault_dir, ledger_conn, type="relatedness")
+    proposals.advance(ledger_conn, vault_dir, r_adopted["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, r_adopted["id"], "adopted", actor="t")
 
     resp = client.get("/api/memory/proposals")
     assert resp.status_code == 200
@@ -79,7 +79,7 @@ def test_list_shape_sort_age(client, vault_dir, db_conn):
     assert old_item["age_days"] == 5
 
 
-def test_list_empty_when_no_records(client, vault_dir, db_conn):
+def test_list_empty_when_no_records(client, vault_dir, ledger_conn):
     # Nothing in the proposals table (and no suggestions/ dir either).
     assert not (vault_dir / "suggestions").is_dir()
     resp = client.get("/api/memory/proposals")
@@ -89,18 +89,18 @@ def test_list_empty_when_no_records(client, vault_dir, db_conn):
 
 # ── POST .../adopt ─────────────────────────────────────────────────────────
 
-def test_adopt_success_and_ledger(client, vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec)
+def test_adopt_success_and_ledger(client, vault_dir, db_conn, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec)
     rel = rec["relpath"]
 
     resp = client.post(f"/api/memory/proposals/{rel}/adopt")
     assert resp.status_code == 200
     assert resp.json() == {"relpath": rel, "status": "adopted"}
-    assert proposals.record_by_relpath(db_conn, rel)["status"] == "adopted"
+    assert proposals.record_by_relpath(ledger_conn, rel)["status"] == "adopted"
     # v2a (D25): the adoption lands in the state ledger (actor="human") and
     # books no change_log file row — the channel is zero-file.
-    rows = db_conn.execute(
+    rows = ledger_conn.execute(
         "SELECT actor, to_status FROM proposal_transitions "
         "WHERE proposal_id = ? AND to_status = 'adopted'",
         (rec["id"],)).fetchall()
@@ -110,9 +110,9 @@ def test_adopt_success_and_ledger(client, vault_dir, db_conn):
     ).fetchone()[0] == 0
 
 
-def test_adopt_wrong_status_and_bad_paths(client, vault_dir, db_conn):
+def test_adopt_wrong_status_and_bad_paths(client, vault_dir, ledger_conn):
     # pending → 400 (with the current status in the detail).
-    rec = _create(vault_dir, db_conn, type="entity_index")
+    rec = _create(vault_dir, ledger_conn, type="entity_index")
     resp = client.post(f"/api/memory/proposals/{rec['relpath']}/adopt")
     assert resp.status_code == 400
     assert "pending" in resp.json()["detail"]
@@ -132,9 +132,9 @@ def test_adopt_wrong_status_and_bad_paths(client, vault_dir, db_conn):
 
 # ── POST .../reject ────────────────────────────────────────────────────────
 
-def test_reject_threads_reason(client, vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec)
+def test_reject_threads_reason(client, vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec)
     rel = rec["relpath"]
 
     resp = client.post(
@@ -147,12 +147,12 @@ def test_reject_threads_reason(client, vault_dir, db_conn):
     assert body["relpath"] == rel
     # Reason is stripped and threaded into the record.
     assert body["reject_reason"] == "summary is wrong"
-    p = proposals.record_by_relpath(db_conn, rel)
+    p = proposals.record_by_relpath(ledger_conn, rel)
     assert p["status"] == "rejected"
     assert p["reject_reason"] == "summary is wrong"
     # v2a (D25): the rejection lands in the state ledger (no file re-render
     # — the channel is zero-file).
-    row = db_conn.execute(
+    row = ledger_conn.execute(
         "SELECT actor, to_status, reason FROM proposal_transitions "
         "WHERE proposal_id = ? AND to_status = 'rejected'",
         (rec["id"],)).fetchone()
@@ -160,9 +160,9 @@ def test_reject_threads_reason(client, vault_dir, db_conn):
         "human", "rejected", "summary is wrong")
 
 
-def test_reject_reason_required(client, vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec)
+def test_reject_reason_required(client, vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec)
     rel = rec["relpath"]
 
     assert client.post(
@@ -171,11 +171,11 @@ def test_reject_reason_required(client, vault_dir, db_conn):
         f"/api/memory/proposals/{rel}/reject", json={"reason": "   "}
     ).status_code == 400
     # status unchanged after the failed rejects.
-    assert proposals.record_by_relpath(db_conn, rel)["status"] == "awaiting_review"
+    assert proposals.record_by_relpath(ledger_conn, rel)["status"] == "awaiting_review"
 
 
-def test_reject_wrong_status(client, vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="entity_index")
+def test_reject_wrong_status(client, vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="entity_index")
     resp = client.post(
         f"/api/memory/proposals/{rec['relpath']}/reject", json={"reason": "nope"})
     assert resp.status_code == 400
@@ -184,22 +184,22 @@ def test_reject_wrong_status(client, vault_dir, db_conn):
 
 # ── POST .../revive (invariant 12: expired → awaiting_review, human-only) ──
 
-def test_revive_expired_returns_awaiting_review(client, vault_dir, db_conn):
+def test_revive_expired_returns_awaiting_review(client, vault_dir, ledger_conn):
     """expired 记录 → POST revive → 200 + status awaiting_review；TTL 窗口
     重新计时（Q5：created_at = 窗口基准，回读 > now-60）。"""
-    rec = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec)
-    proposals.advance(db_conn, vault_dir, rec["id"], "expired", actor="system")
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec)
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "expired", actor="system")
     rel = rec["relpath"]
 
     resp = client.post(f"/api/memory/proposals/{rel}/revive")
     assert resp.status_code == 200
     assert resp.json() == {"relpath": rel, "status": "awaiting_review"}
-    rec_now = proposals.record_by_relpath(db_conn, rel)
+    rec_now = proposals.record_by_relpath(ledger_conn, rel)
     assert rec_now["status"] == "awaiting_review"
     assert rec_now["created_at"] > time.time() - 60  # TTL 重新计时（Q5）
     # 状态账本：expired → awaiting_review 行带 actor=human（人裁决）
-    row = db_conn.execute(
+    row = ledger_conn.execute(
         "SELECT actor, to_status FROM proposal_transitions "
         "WHERE proposal_id = ? AND to_status = 'awaiting_review' "
         "ORDER BY ts DESC, id DESC LIMIT 1",
@@ -207,14 +207,14 @@ def test_revive_expired_returns_awaiting_review(client, vault_dir, db_conn):
     assert (row["actor"], row["to_status"]) == ("human", "awaiting_review")
 
 
-def test_revive_wrong_status_and_bad_paths(client, vault_dir, db_conn):
+def test_revive_wrong_status_and_bad_paths(client, vault_dir, ledger_conn):
     """非 expired → 400（detail 含当前状态）；missing → 404；坏路径 → 400/404。"""
-    rec = _create(vault_dir, db_conn, type="entity_index")  # pending
+    rec = _create(vault_dir, ledger_conn, type="entity_index")  # pending
     resp = client.post(f"/api/memory/proposals/{rec['relpath']}/revive")
     assert resp.status_code == 400
     assert "pending" in resp.json()["detail"]
     # status unchanged after the failed revive.
-    assert proposals.record_by_relpath(db_conn, rec["relpath"])["status"] == "pending"
+    assert proposals.record_by_relpath(ledger_conn, rec["relpath"])["status"] == "pending"
 
     assert client.post(
         "/api/memory/proposals/suggestions/nope.md/revive").status_code == 404
@@ -228,11 +228,11 @@ def test_revive_wrong_status_and_bad_paths(client, vault_dir, db_conn):
 
 # ── GET /api/memory/status ─────────────────────────────────────────────────
 
-def test_status_shape_and_counts(client, vault_dir, db_conn):
+def test_status_shape_and_counts(client, vault_dir, db_conn, ledger_conn):
     # Seed records with distinct statuses.
-    r_ar = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, r_ar)
-    _create(vault_dir, db_conn, type="entity_index")
+    r_ar = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, r_ar)
+    _create(vault_dir, ledger_conn, type="entity_index")
 
     # Trigger-state row (inserted directly, as the scheduler would).
     today = datetime.now().strftime("%Y-%m-%d")
@@ -313,7 +313,7 @@ def test_status_recall_table_dropped(client, vault_dir, db_conn):
 
 # ── /api/memory/status: agents[] config-derived caps ──────────────────────
 
-def test_status_agent_caps_from_bg_targets(vault_dir, db_conn):
+def test_status_agent_caps_from_bg_targets(vault_dir, db_conn, ledger_conn):
     """bg_targets wired → armed_target/runs_cap take the config values; an
     alias absent from the config keeps null (no error, shape unchanged)."""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -332,7 +332,7 @@ def test_status_agent_caps_from_bg_targets(vault_dir, db_conn):
     db_conn.commit()
 
     app = create_app(
-        vault_dir=vault_dir, db_conn=db_conn,
+        vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn,
         bg_targets={"consolidator": {"armed_target": 3, "runs_cap": 3}},
     )
     resp = TestClient(app).get("/api/memory/status")
@@ -348,7 +348,7 @@ def test_status_agent_caps_from_bg_targets(vault_dir, db_conn):
     assert agents["narrator"]["runs_cap"] is None
 
 
-def test_status_agent_caps_null_without_bg_targets(vault_dir, db_conn):
+def test_status_agent_caps_null_without_bg_targets(vault_dir, db_conn, ledger_conn):
     """create_app without bg_targets (default None) → the caps stay null:
     the pre-memory-console shape, backward compatible for existing callers
     (conftest's app fixture exercises the same path)."""
@@ -361,7 +361,7 @@ def test_status_agent_caps_null_without_bg_targets(vault_dir, db_conn):
     )
     db_conn.commit()
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn)
     resp = TestClient(app).get("/api/memory/status")
     assert resp.status_code == 200
     agent = resp.json()["agents"][0]
@@ -403,9 +403,9 @@ def test_status_executor_block(client, vault_dir, db_conn):
     assert ex["last_batch"] == "batch-new"
 
 
-def test_status_executor_block_empty(vault_dir, db_conn):
+def test_status_executor_block_empty(vault_dir, db_conn, ledger_conn):
     """No executor rows → {last_op_ts: 0, ops_today: 0, last_batch: null}."""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn)
     resp = TestClient(app).get("/api/memory/status")
     assert resp.status_code == 200
     assert resp.json()["executor"] == {
@@ -414,7 +414,7 @@ def test_status_executor_block_empty(vault_dir, db_conn):
 
 # ── /api/memory/proposals: trail summary ──────────────────────────────────
 
-def test_list_trail_fields(client, vault_dir, db_conn):
+def test_list_trail_fields(client, vault_dir, db_conn, ledger_conn):
     """List items carry a trail summary: the newest 3 rows matching the
     /trail endpoint's match (the record's proposal_transitions rows +
     change_log rows carrying batch_id = run_id on other paths) + the total
@@ -426,12 +426,12 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     # but a different path. v2a (D25): the channel books no change_log
     # rows of its own — the trail sources the state ledger + other-path
     # batch rows only.
-    rec_a = _create(vault_dir, db_conn, type="summary")
-    proposals.advance(db_conn, vault_dir, rec_a["id"], "processing", actor="tester")
-    proposals.advance(db_conn, vault_dir, rec_a["id"], "awaiting_review", actor="tester")
+    rec_a = _create(vault_dir, ledger_conn, type="summary")
+    proposals.advance(ledger_conn, vault_dir, rec_a["id"], "processing", actor="tester")
+    proposals.advance(ledger_conn, vault_dir, rec_a["id"], "awaiting_review", actor="tester")
     resp = client.post(f"/api/memory/proposals/{rec_a['relpath']}/adopt")
     assert resp.status_code == 200  # +adopted row (source=human)
-    proposals.advance(db_conn, vault_dir, rec_a["id"], "merged", actor="executor")
+    proposals.advance(ledger_conn, vault_dir, rec_a["id"], "merged", actor="executor")
     # +the executor's file merge (same batch, other path) — what the
     # 30-minute loop ledgered via apply_change.
     log_change(db_conn, "index/entities.md", "update", source="executor",
@@ -441,7 +441,7 @@ def test_list_trail_fields(client, vault_dir, db_conn):
     # Record B: a run of its own — under the new source it carries its own
     # creation transition only (the shared "batch-test" batch must not leak
     # into it: no other-path batch rows in "batch-quiet").
-    rec_b = _create(vault_dir, db_conn, type="entity_index", run_id="batch-quiet")
+    rec_b = _create(vault_dir, ledger_conn, type="entity_index", run_id="batch-quiet")
 
     resp = client.get("/api/memory/proposals")
     assert resp.status_code == 200
@@ -491,13 +491,13 @@ def test_list_trail_fields(client, vault_dir, db_conn):
 
 # ── GET /api/memory/proposals/{relpath} (record read) ─────────────────────
 
-def test_record_read_roundtrip(client, vault_dir, db_conn):
+def test_record_read_roundtrip(client, vault_dir, ledger_conn):
     """200 on a created record; fields roundtrip — justification is the
     detail-pane excerpt body, payload passes through its JSON (empty
     column → None), created/updated are ISO dates."""
-    rec = _create(vault_dir, db_conn, type="summary")
+    rec = _create(vault_dir, ledger_conn, type="summary")
     rec2 = proposals.create(
-        db_conn, vault_dir, "entity_index", actor="consolidator",
+        ledger_conn, vault_dir, "entity_index", actor="consolidator",
         run_id="batch-test", source_refs=["notes/a.md"],
         justification="explore more", payload={"entity": "x"},
     )
@@ -529,14 +529,14 @@ def test_record_read_roundtrip(client, vault_dir, db_conn):
     assert body2["source_refs"] == ["notes/a.md"]
 
 
-def test_record_read_missing_record_404(client, vault_dir, db_conn):
+def test_record_read_missing_record_404(client, vault_dir, ledger_conn):
     # Well-formed relpath, no record → 404 (v2a: the row IS the record;
     # there is no file fallback).
     assert client.get(
         "/api/memory/proposals/suggestions/nope.md").status_code == 404
 
 
-def test_record_read_bad_shape_400(client, vault_dir, db_conn):
+def test_record_read_bad_shape_400(client, vault_dir, ledger_conn):
     # Not under suggestions/ → 400 (never 500).
     assert client.get("/api/memory/proposals/index/x.md").status_code == 400
     # Nested (not a top-level proposal) → 400.
@@ -550,15 +550,15 @@ def test_record_read_bad_shape_400(client, vault_dir, db_conn):
 
 # ── proposals read face: unit tests (direct interface) ─────────────────────
 
-def test_trail_shape_and_order(vault_dir, db_conn):
+def test_trail_shape_and_order(vault_dir, db_conn, ledger_conn):
     """proposals.trail returns new-first rows with the endpoint's row dict
     keys; a 3-state record (pending→processing→awaiting_review) yields
     exactly 3 transition rows; the record-less fallback reads change_log."""
-    rec = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec)
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec)
     rel = rec["relpath"]
 
-    rows = proposals.trail(db_conn, rel)
+    rows = proposals.trail(ledger_conn, db_conn, rel)
     # 3 transition rows: created (NULL→pending), →processing, →awaiting_review.
     assert len(rows) == 3
     # Row dict key set matches the /trail endpoint's shape.
@@ -574,19 +574,19 @@ def test_trail_shape_and_order(vault_dir, db_conn):
     # Record-less fallback: a change_log row on a non-record relpath.
     log_change(db_conn, "suggestions/orphan.md", "update", source="web")
     db_conn.commit()
-    orphan_rows = proposals.trail(db_conn, "suggestions/orphan.md")
+    orphan_rows = proposals.trail(ledger_conn, db_conn, "suggestions/orphan.md")
     assert len(orphan_rows) == 1
     assert orphan_rows[0]["path"] == "suggestions/orphan.md"
     assert set(orphan_rows[0]) == {"seq", "ts", "source", "op", "path"}
 
 
-def test_list_trails_parallel(vault_dir, db_conn):
+def test_list_trails_parallel(vault_dir, db_conn, ledger_conn):
     """proposals.list_trails returns a list parallel to items; a shared
     batch_id row is repeated for each matching item; empty items → []."""
-    rec_a = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec_a)
-    rec_b = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, rec_b)
+    rec_a = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec_a)
+    rec_b = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, rec_b)
     # Shared run_id ("batch-test" from _create); add a batch row on another path.
     log_change(db_conn, "index/other.md", "update", source="executor",
                batch_id="batch-test")
@@ -596,7 +596,7 @@ def test_list_trails_parallel(vault_dir, db_conn):
         {"relpath": rec_a["relpath"], "run_id": rec_a["run_id"]},
         {"relpath": rec_b["relpath"], "run_id": rec_b["run_id"]},
     ]
-    result = proposals.list_trails(db_conn, items)
+    result = proposals.list_trails(ledger_conn, db_conn, items)
     # Parallel: one trail list per item.
     assert len(result) == 2
     # Each item's trail is non-empty (at least the creation transition).
@@ -610,22 +610,22 @@ def test_list_trails_parallel(vault_dir, db_conn):
                for tr in result for r in tr)
 
     # Empty items → [].
-    assert proposals.list_trails(db_conn, []) == []
+    assert proposals.list_trails(ledger_conn, db_conn, []) == []
 
 
-def test_status_summary_shape(vault_dir, db_conn):
+def test_status_summary_shape(vault_dir, ledger_conn):
     """proposals.status_summary: by_status carries all 9 statuses (stable
     shape); awaiting_review elements have the documented key set; the
     queue is sorted age_days descending."""
     # Two awaiting_review records (distinct ages: 3d old vs now) + one pending.
-    r_ar_old = _create(vault_dir, db_conn, type="summary",
+    r_ar_old = _create(vault_dir, ledger_conn, type="summary",
                        now=time.time() - 3 * 86400)
-    _to_awaiting(vault_dir, db_conn, r_ar_old)
-    r_ar = _create(vault_dir, db_conn, type="summary")
-    _to_awaiting(vault_dir, db_conn, r_ar)
-    _create(vault_dir, db_conn, type="entity_index")  # pending
+    _to_awaiting(vault_dir, ledger_conn, r_ar_old)
+    r_ar = _create(vault_dir, ledger_conn, type="summary")
+    _to_awaiting(vault_dir, ledger_conn, r_ar)
+    _create(vault_dir, ledger_conn, type="entity_index")  # pending
 
-    out = proposals.status_summary(db_conn)
+    out = proposals.status_summary(ledger_conn)
     # by_status: all 9 keys present.
     assert set(out["by_status"]) == {
         "pending", "processing", "awaiting_review", "adopted",

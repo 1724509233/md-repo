@@ -155,9 +155,9 @@ def _run_records(run_id: str, started_at: float) -> list[dict]:
     deep links.
     """
     from .. import proposals
-    from ..vault.db.conn import get_conn
+    from ..vault.db.conn import get_ledger_conn
 
-    conn = get_conn()
+    conn = get_ledger_conn()
     if conn is None:
         return []
     try:
@@ -196,9 +196,9 @@ def _readback_block(alias: str) -> str:
     """
     from .. import proposals
     from ..vault.db import relatedness as rel_mod
-    from ..vault.db.conn import get_conn
+    from ..vault.db.conn import get_ledger_conn
 
-    conn = get_conn()
+    conn = get_ledger_conn()
     if conn is None:
         return ""
     try:

@@ -270,6 +270,10 @@ async def _executor_loop(vault_dir: Path, conn,
     backstop wakes the authoritative DB scan (_executor_armed); armed →
     deterministic merge in a worker thread.
 
+    ``conn`` is the LEDGER connection (``.sync/ledger.db``) — the proposals
+    records live there (2026-10-31 ledger-file split); the index DB no
+    longer holds them.
+
     The scan is the sole authority (adopted-unmerged or 14d overdue);
     the event only shortens the wait. No work → silent no-op
     (debug level only — must not spam). No bus → plain sleep loop
@@ -308,6 +312,7 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
                             hooks: list[NotificationHook] | None = None,
                             run_fn: Callable | None = None,
                             db_conn=None,
+                            ledger_conn=None,
                             executor_fn: Callable | None = None) -> list[asyncio.Task]:
     """Spawn scheduler tasks. Must be called from a running loop.
 
@@ -315,8 +320,10 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
       entries do NOT start LLM tasks).
     - One 30-min armed-check task per enabled trigger agent (requires
       ``db_conn``; without it the agent degrades to plain cron).
-    - One shared 30-min executor task (framework role) — only when
-      ``db_conn`` is provided.
+    - One shared 30-min executor task (framework role) — only when a
+      ledger connection is provided (``ledger_conn``, falling back to
+      ``db_conn`` for callers predating the 2026-10-31 ledger-file split:
+      the proposals records it scans live in ledger.db).
     """
     run_fn = run_fn or run_once
     executor_fn = executor_fn or run_executor
@@ -342,9 +349,13 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
                 _armed_loop(cfg, vault, lock, hooks, run_fn, db_conn, all_aliases),
                 name=f"bgagent-{cfg.alias}-armed"))
 
-    if db_conn is not None and not executor_started:
+    # Executor conn: the proposals/proposal_transitions tables live in
+    # ledger.db (2026-10-31 split); fall back to db_conn for callers
+    # predating the split.
+    exec_conn = ledger_conn if ledger_conn is not None else db_conn
+    if exec_conn is not None and not executor_started:
         tasks.append(asyncio.create_task(
-            _executor_loop(vault, db_conn, executor_fn),
+            _executor_loop(vault, exec_conn, executor_fn),
             name="executor"))
         executor_started = True
 

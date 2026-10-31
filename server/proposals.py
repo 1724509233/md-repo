@@ -389,7 +389,7 @@ def title(record: dict) -> str:
     return refs[0] if refs else (record.get("type") or "")
 
 
-def list_trails(conn, items: list[dict]) -> list[list[dict]]:
+def list_trails(ledger_conn, index_conn, items: list[dict]) -> list[list[dict]]:
     """Per-item trails (newest first) for the proposals list.
 
     Same match as the /trail endpoint: each record's state-machine
@@ -401,16 +401,18 @@ def list_trails(conn, items: list[dict]) -> list[list[dict]]:
     a per-item query would be N round-trips; a batch row matching several
     items (a shared run_id) is repeated for each of them.
 
-    Returns a list of row lists parallel to ``items``; each row dict is
-    shaped like the /trail endpoint's (seq/ts/source/op/path, no
-    batch_id).
+    ``proposal_transitions`` (JOIN ``proposals``) reads on ``ledger_conn``;
+    the ``change_log`` batch read on ``index_conn`` — the sole dual-domain
+    query in the codebase, now expressed as two explicit conns. Returns a
+    list of row lists parallel to ``items``; each row dict is shaped like
+    the /trail endpoint's (seq/ts/source/op/path, no batch_id).
     """
     if not items:
         return []
     paths = [it["relpath"] for it in items]
     marks = ",".join("?" * len(paths))
     tr_map: dict[str, list[dict]] = {}
-    for t in conn.execute(
+    for t in ledger_conn.execute(
         "SELECT t.id, t.ts, t.actor, t.to_status, p.relpath "
         "FROM proposal_transitions t JOIN proposals p ON p.id = t.proposal_id "
         f"WHERE p.relpath IN ({marks}) ORDER BY t.ts",
@@ -423,7 +425,7 @@ def list_trails(conn, items: list[dict]) -> list[list[dict]]:
     run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
     batch_map: dict[str, list[dict]] = {}
     if run_ids:
-        rows = conn.execute(
+        rows = index_conn.execute(
             "SELECT seq, ts, source, op, path, batch_id FROM change_log "
             f"WHERE batch_id IN ({','.join('?' * len(run_ids))})",
             run_ids,
@@ -446,7 +448,7 @@ def list_trails(conn, items: list[dict]) -> list[list[dict]]:
     return out
 
 
-def trail(conn, relpath: str) -> list[dict]:
+def trail(ledger_conn, index_conn, relpath: str) -> list[dict]:
     """The full trail for one proposal record (newest first, untruncated).
 
     The transition segment is the record's state-machine history from
@@ -459,13 +461,14 @@ def trail(conn, relpath: str) -> list[dict]:
     change_log tail on the file itself.
 
     Row dict keys: {seq, ts, source, op, path} — the /trail endpoint's
-    shape. The ``proposals`` / ``proposal_transitions`` / ``change_log``
-    tables are owned by this module; the route layer calls in.
+    shape. ``proposals`` / ``proposal_transitions`` read on ``ledger_conn``;
+    ``change_log`` reads on ``index_conn`` (the dual-domain query's seam is
+    the two-conn signature). The route layer calls in.
     """
-    rec = record_by_relpath(conn, relpath)
+    rec = record_by_relpath(ledger_conn, relpath)
     rows: list[dict] = []
     if rec is not None:
-        for t in conn.execute(
+        for t in ledger_conn.execute(
             "SELECT id, ts, actor, to_status FROM proposal_transitions "
             "WHERE proposal_id = ? ORDER BY ts",
             (rec["id"],),
@@ -474,14 +477,14 @@ def trail(conn, relpath: str) -> list[dict]:
                          "source": t["actor"], "op": t["to_status"],
                          "path": relpath})
         if rec["run_id"]:
-            for r in conn.execute(
+            for r in index_conn.execute(
                 "SELECT seq, ts, source, op, path FROM change_log "
                 "WHERE batch_id = ? AND path != ? ORDER BY ts",
                 (rec["run_id"], relpath),
             ).fetchall():
                 rows.append(dict(r))
     else:
-        for r in conn.execute(
+        for r in index_conn.execute(
             "SELECT seq, ts, source, op, path FROM change_log "
             "WHERE path = ? ORDER BY ts", (relpath,),
         ).fetchall():

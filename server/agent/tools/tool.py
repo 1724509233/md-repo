@@ -19,7 +19,7 @@ class ToolContext:
     """Runtime context passed to every tool call.
 
     DB access is not threaded here — tools fetch the connection lazily from
-    ``server.vault.db.conn.get_conn()``.
+    ``server.vault.db.conn.get_index_conn()`` / ``get_ledger_conn()``.
     """
 
     vault_dir: Path
@@ -180,9 +180,9 @@ class DocTool(Tool):
         (no db registered or lookup error) — the template maps that to a plain
         ``file_not_found`` regardless of subclass. No message logic here.
         """
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_index_conn
 
-        db_conn = get_conn()
+        db_conn = get_index_conn()
         if db_conn is None:
             return _UNAVAILABLE
         from ...vault.db.changes import get_changes

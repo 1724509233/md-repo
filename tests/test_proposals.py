@@ -50,9 +50,9 @@ def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None):
 
 # ── create ──────────────────────────────────────────────────────────────
 
-def test_create_record(vault_dir, db_conn):
+def test_create_record(vault_dir, ledger_conn):
     now = time.time()
-    rec = _create(vault_dir, db_conn, type="entity_index",
+    rec = _create(vault_dir, ledger_conn, type="entity_index",
                   payload={"entity": "mirror-x", "attrs": {"version": "v0.9.2"}}, now=now)
     assert rec["status"] == "pending"
     assert rec["type"] == "entity_index"
@@ -71,43 +71,43 @@ def test_create_record(vault_dir, db_conn):
     assert not (vault_dir / rec["relpath"]).is_file()
 
 
-def test_create_unknown_type_rejected_zero_writes(vault_dir, db_conn):
+def test_create_unknown_type_rejected_zero_writes(vault_dir, ledger_conn):
     with pytest.raises(ValueError):
-        _create(vault_dir, db_conn, type="bogus")
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+        _create(vault_dir, ledger_conn, type="bogus")
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
     assert not (vault_dir / "suggestions").is_dir()
 
 
 # ── state machine ───────────────────────────────────────────────────────
 
-def test_legal_full_path_to_merged(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="entity_index")
-    adopted = _drive(vault_dir, db_conn, rec["id"], "adopted")
+def test_legal_full_path_to_merged(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="entity_index")
+    adopted = _drive(vault_dir, ledger_conn, rec["id"], "adopted")
     assert adopted["status"] == "adopted"
-    merged = proposals.advance(db_conn, vault_dir, rec["id"], "merged",
+    merged = proposals.advance(ledger_conn, vault_dir, rec["id"], "merged",
                                actor="executor")
     assert merged["status"] == "merged"
     assert merged["merged_at"]  # merged_at back-filled
 
 
-def test_legal_review_reject_path(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, rec["id"], "awaiting_review", actor="t")
-    p = proposals.advance(db_conn, vault_dir, rec["id"], "rejected", actor="human",
+def test_legal_review_reject_path(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "awaiting_review", actor="t")
+    p = proposals.advance(ledger_conn, vault_dir, rec["id"], "rejected", actor="human",
                           reject_reason="summary is wrong")
     assert p["status"] == "rejected"
     assert p["reject_reason"] == "summary is wrong"
 
 
-def test_failed_retry_edge_removed(vault_dir, db_conn):
+def test_failed_retry_edge_removed(vault_dir, ledger_conn):
     """v2.2 Q6: failed = read-only archive — the old failed→pending retry
     edge is gone (dead edge, debt #10); remedy = the agent re-proposes a
     new record. The transition now raises ValueError."""
-    rec = _create(vault_dir, db_conn, type="relatedness")
-    _drive(vault_dir, db_conn, rec["id"], "failed", actor="executor")
+    rec = _create(vault_dir, ledger_conn, type="relatedness")
+    _drive(vault_dir, ledger_conn, rec["id"], "failed", actor="executor")
     with pytest.raises(ValueError):
-        proposals.advance(db_conn, vault_dir, rec["id"], "pending", actor="t")
+        proposals.advance(ledger_conn, vault_dir, rec["id"], "pending", actor="t")
 
 
 @pytest.mark.parametrize(
@@ -122,32 +122,32 @@ def test_failed_retry_edge_removed(vault_dir, db_conn):
         ("merged", "pending"), ("rejected", "pending"), ("expired", "pending"),
     ],
 )
-def test_illegal_transitions_raise(vault_dir, db_conn, src, dst):
-    rec = _create(vault_dir, db_conn)
+def test_illegal_transitions_raise(vault_dir, ledger_conn, src, dst):
+    rec = _create(vault_dir, ledger_conn)
     cur = rec
     if src == "processing":
-        proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="t")
+        proposals.advance(ledger_conn, vault_dir, rec["id"], "processing", actor="t")
     elif src in ("adopted", "awaiting_review", "failed"):
-        cur = _drive(vault_dir, db_conn, rec["id"], src)
+        cur = _drive(vault_dir, ledger_conn, rec["id"], src)
     elif src == "merged":
-        cur = _drive(vault_dir, db_conn, rec["id"], "adopted")
-        cur = proposals.advance(db_conn, vault_dir, rec["id"], "merged", actor="t")
+        cur = _drive(vault_dir, ledger_conn, rec["id"], "adopted")
+        cur = proposals.advance(ledger_conn, vault_dir, rec["id"], "merged", actor="t")
     elif src in ("rejected", "expired"):
-        cur = _drive(vault_dir, db_conn, rec["id"], "awaiting_review")
-        cur = proposals.advance(db_conn, vault_dir, rec["id"], src, actor="t")
+        cur = _drive(vault_dir, ledger_conn, rec["id"], "awaiting_review")
+        cur = proposals.advance(ledger_conn, vault_dir, rec["id"], src, actor="t")
     with pytest.raises(ValueError):
-        proposals.advance(db_conn, vault_dir, cur["id"], dst, actor="t")
+        proposals.advance(ledger_conn, vault_dir, cur["id"], dst, actor="t")
 
 
-def test_advance_unknown_status_raises(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn)
+def test_advance_unknown_status_raises(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn)
     with pytest.raises(ValueError):
-        proposals.advance(db_conn, vault_dir, rec["id"], "bogus", actor="t")
+        proposals.advance(ledger_conn, vault_dir, rec["id"], "bogus", actor="t")
 
 
-def test_advance_missing_record_raises(vault_dir, db_conn):
+def test_advance_missing_record_raises(vault_dir, ledger_conn):
     with pytest.raises(FileNotFoundError):
-        proposals.advance(db_conn, vault_dir, 99999, "processing", actor="t")
+        proposals.advance(ledger_conn, vault_dir, 99999, "processing", actor="t")
 
 
 # ── authorization dispatch (auto vs review) ──────────────────────────────
@@ -169,83 +169,83 @@ def test_authorization_policy():
         proposals.authorization("bogus")
 
 
-def test_process_proposal_auto_vs_review(vault_dir, db_conn):
-    auto = _create(vault_dir, db_conn, type="entity_index")
-    p = proposals.process_proposal(db_conn, vault_dir, auto["id"],
+def test_process_proposal_auto_vs_review(vault_dir, ledger_conn):
+    auto = _create(vault_dir, ledger_conn, type="entity_index")
+    p = proposals.process_proposal(ledger_conn, vault_dir, auto["id"],
                                    actor="consolidator")
     assert p["status"] == "adopted"
 
-    review = _create(vault_dir, db_conn, type="summary")
-    p = proposals.process_proposal(db_conn, vault_dir, review["id"],
+    review = _create(vault_dir, ledger_conn, type="summary")
+    p = proposals.process_proposal(ledger_conn, vault_dir, review["id"],
                                    actor="consolidator")
     assert p["status"] == "awaiting_review"
 
     # process requires pending
     with pytest.raises(ValueError):
-        proposals.process_proposal(db_conn, vault_dir, review["id"], actor="x")
+        proposals.process_proposal(ledger_conn, vault_dir, review["id"], actor="x")
 
     # process on a missing record
     with pytest.raises(FileNotFoundError):
-        proposals.process_proposal(db_conn, vault_dir, 99999, actor="x")
+        proposals.process_proposal(ledger_conn, vault_dir, 99999, actor="x")
 
 
 # ── record queries ──────────────────────────────────────────────────────
 
-def test_scan_returns_all_id_order(vault_dir, db_conn):
-    _create(vault_dir, db_conn, type="entity_index")
-    r2 = _create(vault_dir, db_conn, type="relatedness")
-    out = proposals.scan(db_conn)
+def test_scan_returns_all_id_order(vault_dir, ledger_conn):
+    _create(vault_dir, ledger_conn, type="entity_index")
+    r2 = _create(vault_dir, ledger_conn, type="relatedness")
+    out = proposals.scan(ledger_conn)
     assert len(out) == 2
     assert [p["id"] for p in out] == sorted(p["id"] for p in out)
     assert out[0]["relpath"].startswith("suggestions/")
     assert all("status" in p and "payload" in p for p in out)
 
 
-def test_scan_filter_status(vault_dir, db_conn):
-    r1 = _create(vault_dir, db_conn, type="entity_index")
-    r2 = _create(vault_dir, db_conn, type="summary")
-    proposals.process_proposal(db_conn, vault_dir, r1["id"], actor="t")  # → adopted
-    proposals.process_proposal(db_conn, vault_dir, r2["id"], actor="t")  # → awaiting_review
-    assert [p["id"] for p in proposals.scan(db_conn, status="adopted")] == [r1["id"]]
-    assert [p["id"] for p in proposals.scan(db_conn, status="awaiting_review")] == [r2["id"]]
+def test_scan_filter_status(vault_dir, ledger_conn):
+    r1 = _create(vault_dir, ledger_conn, type="entity_index")
+    r2 = _create(vault_dir, ledger_conn, type="summary")
+    proposals.process_proposal(ledger_conn, vault_dir, r1["id"], actor="t")  # → adopted
+    proposals.process_proposal(ledger_conn, vault_dir, r2["id"], actor="t")  # → awaiting_review
+    assert [p["id"] for p in proposals.scan(ledger_conn, status="adopted")] == [r1["id"]]
+    assert [p["id"] for p in proposals.scan(ledger_conn, status="awaiting_review")] == [r2["id"]]
 
 
-def test_scan_empty_when_no_records(vault_dir, db_conn):
-    assert proposals.scan(db_conn) == []
+def test_scan_empty_when_no_records(vault_dir, ledger_conn):
+    assert proposals.scan(ledger_conn) == []
 
 
-def test_record_and_record_by_relpath(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn)
-    assert proposals.record(db_conn, rec["id"])["relpath"] == rec["relpath"]
-    assert proposals.record(db_conn, 99999) is None
-    assert proposals.record_by_relpath(db_conn, rec["relpath"])["id"] == rec["id"]
-    assert proposals.record_by_relpath(db_conn, "suggestions/nope.md") is None
+def test_record_and_record_by_relpath(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn)
+    assert proposals.record(ledger_conn, rec["id"])["relpath"] == rec["relpath"]
+    assert proposals.record(ledger_conn, 99999) is None
+    assert proposals.record_by_relpath(ledger_conn, rec["relpath"])["id"] == rec["id"]
+    assert proposals.record_by_relpath(ledger_conn, "suggestions/nope.md") is None
 
 
-def test_records_by_run(vault_dir, db_conn):
+def test_records_by_run(vault_dir, ledger_conn):
     now = time.time()
-    r1 = _create(vault_dir, db_conn, run_id="run-A", now=now)
-    _create(vault_dir, db_conn, run_id="run-B", now=now)
-    out = proposals.records_by_run(db_conn, "run-A", now - 10)
+    r1 = _create(vault_dir, ledger_conn, run_id="run-A", now=now)
+    _create(vault_dir, ledger_conn, run_id="run-B", now=now)
+    out = proposals.records_by_run(ledger_conn, "run-A", now - 10)
     assert [p["id"] for p in out] == [r1["id"]]
 
 
 # ── expire_overdue (created_at-based) ───────────────────────────────────
 
-def test_expire_overdue(vault_dir, db_conn):
+def test_expire_overdue(vault_dir, ledger_conn):
     now = time.time()
-    old = _create(vault_dir, db_conn, type="summary", now=now - 20 * 86400)
-    proposals.process_proposal(db_conn, vault_dir, old["id"], actor="t")
-    recent = _create(vault_dir, db_conn, type="summary", now=now - 2 * 86400)
-    proposals.process_proposal(db_conn, vault_dir, recent["id"], actor="t")
+    old = _create(vault_dir, ledger_conn, type="summary", now=now - 20 * 86400)
+    proposals.process_proposal(ledger_conn, vault_dir, old["id"], actor="t")
+    recent = _create(vault_dir, ledger_conn, type="summary", now=now - 2 * 86400)
+    proposals.process_proposal(ledger_conn, vault_dir, recent["id"], actor="t")
 
-    n = proposals.expire_overdue(db_conn, vault_dir)
+    n = proposals.expire_overdue(ledger_conn, vault_dir)
     assert n == 1
-    assert proposals.record(db_conn, old["id"])["status"] == "expired"
-    assert proposals.record(db_conn, recent["id"])["status"] == "awaiting_review"
+    assert proposals.record(ledger_conn, old["id"])["status"] == "expired"
+    assert proposals.record(ledger_conn, recent["id"])["status"] == "awaiting_review"
     # v2a (D25): the expiry transitions are ledgered in proposal_transitions
     # only (actor = "system"); the channel books no file row.
-    rows = db_conn.execute(
+    rows = ledger_conn.execute(
         "SELECT actor, to_status FROM proposal_transitions "
         "WHERE proposal_id = ? AND to_status = 'expired'",
         (old["id"],)).fetchall()
@@ -253,22 +253,25 @@ def test_expire_overdue(vault_dir, db_conn):
     assert rows[0]["actor"] == "system"
 
 
-def test_expire_overdue_now_ts_param(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="summary")
-    proposals.process_proposal(db_conn, vault_dir, rec["id"], actor="t")
+def test_expire_overdue_now_ts_param(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="summary")
+    proposals.process_proposal(ledger_conn, vault_dir, rec["id"], actor="t")
     # 15 days after creation (creation = "now" → created_at = now).
-    n = proposals.expire_overdue(db_conn, vault_dir,
+    n = proposals.expire_overdue(ledger_conn, vault_dir,
                                  now_ts=time.time() + 15 * 86400)
     assert n == 1
 
 
 # ── v2a (D25): the channel books no file rows ─────────────────────────────
 
-def test_creation_writes_no_change_log_row(vault_dir, db_conn):
+def test_creation_writes_no_change_log_row(vault_dir, db_conn, ledger_conn):
     """v2a: creation is quiet — no file written, no change_log row at all
     (the pre-v2a "row lands via the watcher consumer" half is gone: there
-    is no projection write for the consumer to book)."""
-    rec = _create(vault_dir, db_conn, type="entity_index")
+    is no projection write for the consumer to book).
+
+    Two-conn after the 2026-10-31 split: the record lands in ledger.db
+    (ledger_conn); the change_log assertion reads index.db (db_conn)."""
+    rec = _create(vault_dir, ledger_conn, type="entity_index")
     rows = get_changes(db_conn, since=0, path=rec["relpath"])
     assert rows == []
     assert db_conn.execute(
@@ -276,11 +279,11 @@ def test_creation_writes_no_change_log_row(vault_dir, db_conn):
     ).fetchone()[0] == 0
 
 
-def test_proposal_transitions_table(vault_dir, db_conn):
-    rec = _create(vault_dir, db_conn, type="entity_index")
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="role-a")
-    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="role-b")
-    rows = db_conn.execute(
+def test_proposal_transitions_table(vault_dir, ledger_conn):
+    rec = _create(vault_dir, ledger_conn, type="entity_index")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "processing", actor="role-a")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "adopted", actor="role-b")
+    rows = ledger_conn.execute(
         "SELECT from_status, to_status, actor, reason FROM proposal_transitions "
         "WHERE proposal_id = ? ORDER BY ts, rowid", (rec["id"],)).fetchall()
     assert [(r[0], r[1], r[2]) for r in rows] == [
@@ -305,34 +308,37 @@ def _suggestions_snapshot(vault_dir: Path):
     ))
 
 
-def test_proposal_channel_zero_file_landing(vault_dir, db_conn):
+def test_proposal_channel_zero_file_landing(vault_dir, db_conn, ledger_conn):
     """inv-5 (v2a, D25): create + the full advance sequence land NO file and
     book NO change_log row — both authorization channels (auto: processing
     → adopted; review: processing → awaiting_review), each driven to
     merged. The record + proposal_transitions rows are the whole state:
     after the flow, suggestions/ is zero-change and the channel has booked
-    zero file rows."""
+    zero file rows.
+
+    Two-conn after the 2026-10-31 split: the state rows live in ledger.db
+    (ledger_conn); the change_log assertion reads index.db (db_conn)."""
     before = _suggestions_snapshot(vault_dir)
 
-    auto = _create(vault_dir, db_conn, type="entity_index",
+    auto = _create(vault_dir, ledger_conn, type="entity_index",
                    payload={"entity": "e", "attrs": {"f": "v"}})
-    proposals.advance(db_conn, vault_dir, auto["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, auto["id"], "adopted", actor="t")
-    proposals.advance(db_conn, vault_dir, auto["id"], "merged", actor="executor")
+    proposals.advance(ledger_conn, vault_dir, auto["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, auto["id"], "adopted", actor="t")
+    proposals.advance(ledger_conn, vault_dir, auto["id"], "merged", actor="executor")
 
-    review = _create(vault_dir, db_conn, type="summary",
+    review = _create(vault_dir, ledger_conn, type="summary",
                      payload={"form": "cache", "body": "b"})
-    proposals.advance(db_conn, vault_dir, review["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, review["id"], "awaiting_review", actor="t")
-    proposals.advance(db_conn, vault_dir, review["id"], "adopted", actor="human")
-    proposals.advance(db_conn, vault_dir, review["id"], "merged", actor="executor")
+    proposals.advance(ledger_conn, vault_dir, review["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, review["id"], "awaiting_review", actor="t")
+    proposals.advance(ledger_conn, vault_dir, review["id"], "adopted", actor="human")
+    proposals.advance(ledger_conn, vault_dir, review["id"], "merged", actor="executor")
 
     # The directory is zero-change end to end (no file created, no file
     # re-rendered) and no record has a backing file.
     assert _suggestions_snapshot(vault_dir) == before
     for rec in (auto, review):
         assert not (vault_dir / rec["relpath"]).is_file()
-    # The proposal channel books no file ledger row.
+    # The proposal channel books no file ledger row (index.db).
     assert db_conn.execute(
         "SELECT COUNT(*) FROM change_log WHERE path LIKE 'suggestions/%'"
     ).fetchone()[0] == 0
@@ -340,7 +346,7 @@ def test_proposal_channel_zero_file_landing(vault_dir, db_conn):
     # (created, →processing, →adopted, →merged); review = 5 (… →
     # awaiting_review inserted).
     for rec, n in ((auto, 4), (review, 5)):
-        got = db_conn.execute(
+        got = ledger_conn.execute(
             "SELECT COUNT(*) FROM proposal_transitions WHERE proposal_id = ?",
             (rec["id"],)).fetchone()[0]
         assert got == n
@@ -352,10 +358,10 @@ def _count_files(vault_dir: Path) -> int:
     return sum(1 for p in vault_dir.rglob("*") if p.is_file())
 
 
-def test_propose_malformed_payload_zero_disk(vault_dir, db_conn):
+def test_propose_malformed_payload_zero_disk(vault_dir, ledger_conn):
     """Malformed per-verb payload → error to the agent, zero disk writes."""
     before_files = _count_files(vault_dir)
-    before_rows = db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
+    before_rows = ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0]
 
     tool = ProposeTool()
     # entity_index with an empty 'attrs' dict
@@ -375,19 +381,19 @@ def test_propose_malformed_payload_zero_disk(vault_dir, db_conn):
     assert out.startswith("Error:")
 
     assert _count_files(vault_dir) == before_files  # nothing on disk
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == before_rows
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == before_rows
 
 
-def test_propose_unknown_type_rejected(vault_dir, db_conn):
+def test_propose_unknown_type_rejected(vault_dir, ledger_conn):
     tool = ProposeTool()
     out = tool.call({"type": "bogus", "payload": None,
                      "source_refs": [], "justification": "j"}, _ctx(vault_dir))
     assert out.startswith("Error:")
     assert "unknown proposal type" in out
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
-def test_propose_privileged_verb_rejected(vault_dir, db_conn):
+def test_propose_privileged_verb_rejected(vault_dir, ledger_conn):
     """type ∉ the role's verbs (config) → actionable error, zero writes."""
     tool = ProposeTool()
     out = tool.call({"type": "reminder", "payload": {"body": "at 07:00"},
@@ -395,18 +401,18 @@ def test_propose_privileged_verb_rejected(vault_dir, db_conn):
                     _ctx(vault_dir, verbs=("entity_index", "relatedness", "summary")))
     assert out.startswith("Error:")
     assert "reminder" in out and "entity_index" in out  # lists the allowed verbs
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
     assert not (vault_dir / "suggestions").is_dir()
 
 
-def test_propose_success_auto_and_review(vault_dir, db_conn):
+def test_propose_success_auto_and_review(vault_dir, ledger_conn):
     tool = ProposeTool()
     out = tool.call(
         {"type": "entity_index", "payload": {"entity": "e", "attrs": {"f": "v"}},
          "source_refs": ["notes/test.md"], "justification": "why"},
         _ctx(vault_dir, verbs=("entity_index",)))
     assert out.startswith("proposal #")
-    rec = proposals.scan(db_conn)[0]
+    rec = proposals.scan(ledger_conn)[0]
     assert rec["status"] == "adopted"  # auto channel
     assert rec["actor"] == "consolidator"  # stamped from ctx.write_source
     assert rec["run_id"] == "consolidator-20261026T000000"
@@ -418,11 +424,11 @@ def test_propose_success_auto_and_review(vault_dir, db_conn):
          "source_refs": ["notes/test.md"], "justification": "why"},
         _ctx(vault_dir, verbs=("summary",)))
     assert out2.startswith("proposal #")
-    rec2 = proposals.scan(db_conn, status="awaiting_review")[0]
+    rec2 = proposals.scan(ledger_conn, status="awaiting_review")[0]
     assert rec2["status"] == "awaiting_review"  # review channel
 
 
-def test_propose_retired_types_redirect_operational(vault_dir, db_conn):
+def test_propose_retired_types_redirect_operational(vault_dir, ledger_conn):
     """D5 (spec §四 退役三件): the three v1 verbs are rejected BEFORE the
     envelope check with an *operational* reason naming the replacement —
     the model learns the redirect, not just the ban. Zero disk writes."""
@@ -438,10 +444,10 @@ def test_propose_retired_types_redirect_operational(vault_dir, db_conn):
         assert "retired" in out, f"{t} must be named retired"
         assert needle in out, f"{t} redirect must name its replacement ({needle!r})"
     assert _count_files(vault_dir) == before_files  # nothing on disk
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
-def test_propose_entity_v1_prose_shape_rejected(vault_dir, db_conn):
+def test_propose_entity_v1_prose_shape_rejected(vault_dir, ledger_conn):
     """D7: the v1 prose shape {entity, value} is rejected structurally at
     the propose entry — attrs are fields, not narrative."""
     tool = ProposeTool()
@@ -451,10 +457,10 @@ def test_propose_entity_v1_prose_shape_rejected(vault_dir, db_conn):
                     _ctx(vault_dir))
     assert out.startswith("Error:")
     assert "attrs" in out  # names the required structured shape
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
-def test_propose_summary_report_refs_rejected(vault_dir, db_conn):
+def test_propose_summary_report_refs_rejected(vault_dir, ledger_conn):
     """D8 / invariant 7 (propose half): a report assertion without its own
     source refs is rejected at the write entry — a report claim with no
     supporting paths is not landable."""
@@ -474,7 +480,7 @@ def test_propose_summary_report_refs_rejected(vault_dir, db_conn):
                     _ctx(vault_dir))
     assert out.startswith("Error:")
     assert "assertions" in out
-    assert db_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
+    assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
 
 
 def test_write_doc_into_suggestions_rejected(vault_dir):

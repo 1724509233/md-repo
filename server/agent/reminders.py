@@ -66,9 +66,9 @@ class DocPathUserReminder(UserReminder):
         warning = ""
         last_read_ts = agent.last_read_ts.get(rel, 0)
         if last_read_ts > 0:
-            from ..vault.db.conn import get_conn
+            from ..vault.db.conn import get_index_conn
 
-            conn = get_conn()
+            conn = get_index_conn()
             if conn is not None:
                 from ..vault.db.changes import get_changes
 

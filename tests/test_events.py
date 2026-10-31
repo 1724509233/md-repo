@@ -244,7 +244,7 @@ def test_apply_change_publishes_change(db_conn, vault_dir):
     assert rec[0][1] == {"op": "create", "source": "web", "path": "notes/wire.md"}
 
 
-def test_advance_publishes_only_adopted(db_conn, vault_dir):
+def test_advance_publishes_only_adopted(ledger_conn, vault_dir):
     """Drive EVERY legal transition in TRANSITIONS: the proposal event
     fires exactly when new_status == 'adopted' (spec §8 item 10)."""
     rec = []
@@ -260,25 +260,25 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
 
         def rec_at(status):
             rec = proposals.create(
-                db_conn, vault_dir, "summary", actor="test", run_id="r1",
+                ledger_conn, vault_dir, "summary", actor="test", run_id="r1",
                 source_refs=["notes/test.md"], justification="b",
                 now=1760000000.0)
             rid = rec["id"]
             if status == "processing":
-                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "processing", actor="test")
             elif status == "adopted":
-                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
-                proposals.advance(db_conn, vault_dir, rid, "adopted", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "adopted", actor="test")
             elif status == "awaiting_review":
-                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
-                proposals.advance(db_conn, vault_dir, rid, "awaiting_review", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "awaiting_review", actor="test")
             elif status == "failed":
-                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
-                proposals.advance(db_conn, vault_dir, rid, "failed", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "failed", actor="test")
             elif status == "expired":
-                proposals.advance(db_conn, vault_dir, rid, "processing", actor="test")
-                proposals.advance(db_conn, vault_dir, rid, "awaiting_review", actor="test")
-                proposals.advance(db_conn, vault_dir, rid, "expired", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "processing", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "awaiting_review", actor="test")
+                proposals.advance(ledger_conn, vault_dir, rid, "expired", actor="test")
             return rec
 
         def prop_events():
@@ -296,7 +296,7 @@ def test_advance_publishes_only_adopted(db_conn, vault_dir):
             rec.clear()
             # The expired→awaiting_review revive pair is human-only (invariant 12).
             act = "human" if (src == "expired" and dst == "awaiting_review") else "test"
-            proposals.advance(db_conn, vault_dir, crec["id"], dst, actor=act)
+            proposals.advance(ledger_conn, vault_dir, crec["id"], dst, actor=act)
             if dst == "adopted":
                 assert prop_events() == [
                     {"relpath": crec["relpath"], "status": "adopted"}], (src, dst, rec)

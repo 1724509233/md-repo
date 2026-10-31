@@ -18,67 +18,85 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from server.bgagent import runner
+from server.vault.db import conn as db_handle
 from server.vault.db import relatedness as rel
+from server.vault.db.schema import init_ledger_db
 
 
-def test_upsert_insert_and_refresh(db_conn):
-    eid = rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "same topic",
+@pytest.fixture
+def ledger_conn(vault_dir):
+    """A ledger.db connection (the four authoritative-state tables now live
+    there, not in index.db). Registers the pair singleton (index=None) so
+    the readback path that resolves the ledger conn via ``get_ledger_conn()``
+    hits ledger.db; intentionally shadows the conftest pair fixture — these
+    files pin the ledger-only path (index side None)."""
+    conn = init_ledger_db(vault_dir / ".sync" / "ledger.db")
+    db_handle.init(None, conn)
+    yield conn
+    db_handle.init(None, None)
+    conn.close()
+
+
+def test_upsert_insert_and_refresh(ledger_conn):
+    eid = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "same topic",
                           "consolidator", run_id="r1")
-    assert db_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
+    assert ledger_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
 
     # Re-proposing the same live pair: refreshed in place, still one row.
-    eid2 = rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "refined basis",
+    eid2 = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "refined basis",
                            "consolidator", run_id="r2")
     assert eid2 == eid
-    row = db_conn.execute("SELECT basis, run_id FROM relatedness WHERE id = ?",
+    row = ledger_conn.execute("SELECT basis, run_id FROM relatedness WHERE id = ?",
                           (eid,)).fetchone()
     assert (row["basis"], row["run_id"]) == ("refined basis", "r2")
-    assert db_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
+    assert ledger_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
 
 
-def test_ignored_pair_repropose_fresh_live_row(db_conn):
-    eid = rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "first",
+def test_ignored_pair_repropose_fresh_live_row(ledger_conn):
+    eid = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "first",
                           "consolidator")
-    assert rel.mark_ignored(db_conn, eid) is True
-    assert rel.mark_ignored(db_conn, eid) is False  # already ignored
+    assert rel.mark_ignored(ledger_conn, eid) is True
+    assert rel.mark_ignored(ledger_conn, eid) is False  # already ignored
 
     # The human dismissed it; the agent re-proposes → a FRESH live row is
     # inserted (the ignored row stays as telemetry).
-    eid2 = rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "again",
+    eid2 = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "again",
                            "consolidator")
     assert eid2 != eid
-    live = db_conn.execute(
+    live = ledger_conn.execute(
         "SELECT COUNT(*) FROM relatedness WHERE ignored = 0").fetchone()[0]
-    ignored = db_conn.execute(
+    ignored = ledger_conn.execute(
         "SELECT COUNT(*) FROM relatedness WHERE ignored = 1").fetchone()[0]
     assert (live, ignored) == (1, 1)
 
 
-def test_edges_for_actor_newest_first(db_conn):
+def test_edges_for_actor_newest_first(ledger_conn):
     t0 = time.time()
-    rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "old", "role-x",
+    rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "old", "role-x",
                     now=t0)
-    rel.upsert_edge(db_conn, "notes/c.md", "notes/d.md", "new", "role-x",
+    rel.upsert_edge(ledger_conn, "notes/c.md", "notes/d.md", "new", "role-x",
                     now=t0 + 100)
-    rel.upsert_edge(db_conn, "notes/e.md", "notes/f.md", "other actor", "role-y",
+    rel.upsert_edge(ledger_conn, "notes/e.md", "notes/f.md", "other actor", "role-y",
                     now=t0 + 50)
 
-    out = rel.edges_for_actor(db_conn, "role-x")
+    out = rel.edges_for_actor(ledger_conn, "role-x")
     assert [e["source"] for e in out] == ["notes/c.md", "notes/a.md"]
 
 
-def test_readback_relatedness_section(tmp_path, db_conn):
+def test_readback_relatedness_section(tmp_path, ledger_conn):
     """spec §5.3: the role's context head shows its live machine edges and
     the ignored-pair telemetry in the dedicated section — DB-only, bounded."""
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
     t0 = time.time()
-    rel.upsert_edge(db_conn, "notes/a.md", "notes/b.md", "same topic", "test-org",
+    rel.upsert_edge(ledger_conn, "notes/a.md", "notes/b.md", "same topic", "test-org",
                     now=t0)
-    ignored_eid = rel.upsert_edge(db_conn, "notes/c.md", "notes/d.md", "nope",
+    ignored_eid = rel.upsert_edge(ledger_conn, "notes/c.md", "notes/d.md", "nope",
                                   "test-org", now=t0 + 1)
-    rel.mark_ignored(db_conn, ignored_eid)
+    rel.mark_ignored(ledger_conn, ignored_eid)
 
     block = runner._readback_block("test-org")
     assert "## 相关性边（机器建议层 · 只进账本，不进笔记）" in block

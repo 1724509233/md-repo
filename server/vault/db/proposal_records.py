@@ -2,12 +2,12 @@
 mutations, lock-holding (card 5).
 
 Split along the lock boundary: this module owns the write SQL (each
-mutation below runs inside the shared ``_db_lock``); ``server/proposals.py``
+mutation below runs inside the shared ``_ledger_lock``); ``server/proposals.py``
 keeps the read face (record/scan/trail) and the state-machine orchestration
 (transition legality, the authorization policy, event publishing).
 
 Concurrency (card 5): the lock is held INTERNALLY by these functions —
-outside ``server/vault`` ``_db_lock`` is no longer importable, the named
+outside ``server/vault`` ``_ledger_lock`` is no longer importable, the named
 functions are the interface. Read helpers (``server/proposals``) stay
 lock-free: the single non-reentrant lock must never be held by a reader
 (a reader inside a locked section would deadlock the same thread).
@@ -24,7 +24,7 @@ import sqlite3
 import time
 from datetime import datetime
 
-from .schema import _db_lock
+from .schema import _ledger_lock
 
 # The synthetic card addressing directory (must match
 # server.proposals.PROPOSALS_DIR — that module cannot be imported here, see
@@ -49,7 +49,7 @@ def create(
     creation ``proposal_transitions`` row. The caller validates the type /
     source_refs and shapes the JSON before calling.
     """
-    with _db_lock:
+    with _ledger_lock:
         cur = conn.execute(
             """
             INSERT INTO proposals
@@ -95,7 +95,7 @@ def advance(
 
     Compound UPDATE + transitions INSERT in ONE lock.
     """
-    with _db_lock:
+    with _ledger_lock:
         now = time.time()
         cur = conn.execute(
             "UPDATE proposals SET status = ?, reject_reason = ?, merged_at = ?, "
@@ -119,7 +119,7 @@ def revive_rearm(conn: sqlite3.Connection, record_id: int) -> None:
     window base, so it is set to now — the original creation moment stays
     in the ``proposal_transitions`` created row (no audit loss).
     Conditional on the status the revive just wrote."""
-    with _db_lock:
+    with _ledger_lock:
         conn.execute(
             "UPDATE proposals SET created_at = ? "
             "WHERE id = ? AND status = 'awaiting_review'",

@@ -15,7 +15,8 @@ from .bgagent import start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import self_exclusion
 from .config import load_background_agents, load_notifications, load_server_config
-from .vault.db.schema import init_db
+from .vault.db.migrate_ledger import migrate_ledger
+from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed
 from .logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
@@ -44,7 +45,7 @@ class Runtime:
             task.cancel()
 
 
-async def build_runtime(vault_dir: Path, conn, bg_agents: list,
+async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
                         notifications_cfg) -> Runtime:
     """Assemble the runtime wiring graph, returned as a named Runtime.
 
@@ -96,7 +97,7 @@ async def build_runtime(vault_dir: Path, conn, bg_agents: list,
             bg_agents, vault_dir,
             hooks=[GuardedNotificationHook(
                 conn, daily_cap=notifications_cfg.daily_cap)],
-            db_conn=conn)
+            db_conn=conn, ledger_conn=ledger_conn)
         await asyncio.sleep(0)  # let the bgagent tasks start
 
     return Runtime(watcher, on_created, on_modified, on_moved, on_deleted,
@@ -160,17 +161,25 @@ def main(argv: list[str] | None = None) -> None:
     db_path = vault_dir / ".sync" / "index.db"
     conn = init_db(db_path)
 
-    # Register the module-level DB handle for lazy access (agent tools, reminders).
+    # Ledger file split (2026-10-31, L4): the four authoritative-state
+    # tables (proposals / proposal_transitions / snapshots / relatedness)
+    # live in their own file. First boot migrates them out of index.db.
+    ledger_path = vault_dir / ".sync" / "ledger.db"
+    ledger_conn = init_ledger_db(ledger_path)
+    migrate_ledger(conn, ledger_path)
+
+    # Register the module-level DB handle pair for lazy access
+    # (agent tools, reminders).
     from .vault.db.conn import init as register_db_conn
 
-    register_db_conn(conn)
+    register_db_conn(conn, ledger_conn)
 
     # Ensure FTS + graph indexes are populated and in sync (first run: full
     # rebuild; legacy/desynced FTS: cheap repair from the content table).
     ensure_indexed(conn, vault_dir)
 
-    app = create_app(vault_dir=vault_dir, db_conn=conn, ai_config=config.ai,
-                     bg_targets=_agent_caps(bg_agents))
+    app = create_app(vault_dir=vault_dir, db_conn=conn, ledger_conn=ledger_conn,
+                     ai_config=config.ai, bg_targets=_agent_caps(bg_agents))
 
     config_obj = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=config.log.level.lower()
@@ -179,7 +188,7 @@ def main(argv: list[str] | None = None) -> None:
 
     async def _run() -> None:
         start_logrotate(None, logs_dir, config.log.retention_days)
-        rt = await build_runtime(vault_dir, conn, bg_agents, notifications_cfg)
+        rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents, notifications_cfg)
         await server.serve()
         rt.stop()
         events.set_bus(None)

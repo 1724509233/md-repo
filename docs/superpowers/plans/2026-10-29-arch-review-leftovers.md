@@ -33,7 +33,7 @@
 - **问题**：`proposals`/`proposal_transitions`（提案记录状态账本）与 `change_log`（文件账本）共享同一连接与同一把锁——它们之间的 seam 是一个并发原语，不是接口。card 5 沿锁边界切了写面（`vault/db/proposal_records.py` 持锁、`proposals.py` 读面+状态机），但两账本的**逻辑隔离**没动。
 - **出处**：评审 spec card 5 的 amber 注（2026-10-28 评审原文）；关联 v2.2 debt #1（conditional UPDATE，已落地为 `proposal_records.advance` 的 rowcount 判定，invariant 11）。
 - **为何不在 card 5 做**：amber 注定位它是「正在朝隔离它们的方向走」的战略方向，不是本卡的验收项。
-- **下轮形态**：候选方向——两账本分连接（WAL 下各自 autocommit），或至少在 `proposal_records` 与 `changes` 之间立一个显式 seam。需 oracle 级讨论，**架构卡**。
+- **已裁决落地（2026-10-31，oracle 裁决 A 方案，spec 先行）**：主矛盾经 oracle 裁决重定义为**生命周期耦合而非并发**——产品唯一的恢复程序（recovery drill）对权威状态是假的：index.db 丢失/损坏 → 重启 `init_db` 新建空库，四表（proposals / proposal_transitions / snapshots / relatedness——权威、无重建来源）静默清空、无告警，drill 的 ok 判据（files+FTS）检测不到；drill CLI 对 live vault 无守卫。落地 = 四表同批迁 `.sync/ledger.db`（独立 conn + 独立非重入 `_ledger_lock`，WAL 仲裁跨进程），first-boot 启动路径内 ATTACH 单事务原子迁移（幂等三分支），drill 改造（双备份、单 wipe、四表逐行保留 = 验收标准），并发矛盾作为副产品归零。B（同文件+seam）被 A 吸收；C（落盘投影）违宪（D25 三重守卫）；D（accepted loss）灭 ask-gate 审计凭证。v2b 碰撞矩阵：①②⑤⑦ 的写域 = 四表 → **L4 先 v2b 后**。实施与验收：`docs/superpowers/specs/2026-10-31-ledger-file-split-design.md`（5 步实施序 + 锚点全绿；全量 pytest 735 passed + 1 预存失败）。L5 交互：ledger conn 沿用单例惯例，L5-prod 届时两个 conn 一起迁；金丝雀不静音。运维口径：备份必须含 ledger.db（AGENTS.md 已落）。
 
 ## L5. 并发测试卫生：`test_proposals_advance_race.py` 偶发线程异常
 

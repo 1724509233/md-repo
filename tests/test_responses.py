@@ -85,7 +85,7 @@ def test_get_related_docs_no_links(tmp_path: Path):
     conn = init_db(vault / ".sync" / "index.db")
     (vault / "isolated.md").write_bytes(b"# Isolated\n\nNo links here.")
 
-    register_db_conn(conn)
+    register_db_conn(conn, None)
     result = execute_tool("get_related_docs", {"path": "isolated.md"}, ToolContext(vault_dir=vault))
     assert "[[wikilinks]]" in result
     conn.close()
@@ -109,7 +109,7 @@ def test_recent_changes_empty(tmp_path: Path):
     (vault / ".sync").mkdir()
     conn = init_db(vault / ".sync" / "index.db")
 
-    register_db_conn(conn)
+    register_db_conn(conn, None)
     result = execute_tool("recent_changes", {"since": "1m"}, ToolContext(vault_dir=vault))
     assert "check the path/source filters" in result
     conn.close()
@@ -131,7 +131,7 @@ def test_read_doc_moved_hint(tmp_path: Path):
     log_change(conn, "new.md", "moved", from_path="old.md", source="agent")
     (vault / "new.md").write_bytes(b"moved content")
 
-    register_db_conn(conn)
+    register_db_conn(conn, None)
     result = execute_tool("read_doc", {"path": "old.md"}, ToolContext(vault_dir=vault))
     assert "moved to" in result
     assert "new.md" in result
@@ -150,7 +150,7 @@ def test_delete_doc_deleted_hint(tmp_path: Path):
     # Simulate: temp.md was deleted 5 minutes ago
     log_change(conn, "temp.md", "deleted", source="agent", ts=time.time() - 300)
 
-    register_db_conn(conn)
+    register_db_conn(conn, None)
     result = execute_tool("delete_doc", {"path": "temp.md"}, ToolContext(vault_dir=vault))
     assert "previously deleted" in result
     conn.close()

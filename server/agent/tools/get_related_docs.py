@@ -29,14 +29,14 @@ class GetRelatedDocsTool(Tool):
                 f"Tip: use search_docs to find related content by keyword.")
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...vault.db.conn import get_conn
+        from ...vault.db.conn import get_index_conn
         from ...vault.db.graph_sql import graph_get_related
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
             return self.related_no_file(args.path)
 
-        results = graph_get_related(get_conn(), args.path, hops=1)
+        results = graph_get_related(get_index_conn(), args.path, hops=1)
         if not results:
             return self.related_no_links(args.path)
         lines = [f"{r['path']} (via {r['type']})" for r in results]

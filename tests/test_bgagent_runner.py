@@ -614,7 +614,7 @@ def test_run_report_folds_report_paths(tmp_path: Path):
     assert report.files_changed == 2  # 普通路径照常计数（deep links 只是分流）
 
 
-def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
+def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
     """inv-8: a run's failures are visible in the NEXT run's context —
     the readback block (open counts + failed proposals with their
     reject_reason) is injected into system_prompt after the 当前时间 line."""
@@ -624,18 +624,18 @@ def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
     vault.mkdir(exist_ok=True)
     # Seed records under this alias: 1 open (adopted), 1 failed with reason.
     rec_open = proposals.create(
-        db_conn, vault, "relatedness", actor="test-org", run_id="test-org-earlier",
+        ledger_conn, vault, "relatedness", actor="test-org", run_id="test-org-earlier",
         source_refs=["notes/a.md"], justification="j",
         payload={"target": "notes/b.md"})
-    proposals.advance(db_conn, vault, rec_open["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault, rec_open["id"], "adopted", actor="t")
+    proposals.advance(ledger_conn, vault, rec_open["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault, rec_open["id"], "adopted", actor="t")
 
     rec_fail = proposals.create(
-        db_conn, vault, "summary", actor="test-org", run_id="test-org-earlier",
+        ledger_conn, vault, "summary", actor="test-org", run_id="test-org-earlier",
         source_refs=["notes/a.md"], justification="j",
         payload={"body": "b"})
-    proposals.advance(db_conn, vault, rec_fail["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault, rec_fail["id"], "failed", actor="t",
+    proposals.advance(ledger_conn, vault, rec_fail["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault, rec_fail["id"], "failed", actor="t",
                       reject_reason="boom")
 
     cfg = _cfg(tmp_path)
@@ -654,7 +654,7 @@ def test_readback_injected_into_context_head(tmp_path: Path, db_conn):
     assert prompt.index("当前时间：") < prompt.index("## 你的提案回读")
 
 
-def test_readback_injects_newest_failures_first(tmp_path: Path, db_conn):
+def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
     """inv-8 (oracle gate P0-Q6b): with more than READBACK_TOP_N recorded
     failures, the injected list is the N most recent (updated_at desc) —
     the newest failure is always visible, the oldest drops off."""
@@ -669,11 +669,11 @@ def test_readback_injects_newest_failures_first(tmp_path: Path, db_conn):
     recs = []
     for i in range(n):
         rec = proposals.create(
-            db_conn, vault, "summary", actor="test-org",
+            ledger_conn, vault, "summary", actor="test-org",
             run_id=f"test-org-f-{i}", source_refs=["notes/a.md"],
             justification="j", payload={"body": "b"})
-        proposals.advance(db_conn, vault, rec["id"], "processing", actor="t")
-        proposals.advance(db_conn, vault, rec["id"], "failed", actor="t",
+        proposals.advance(ledger_conn, vault, rec["id"], "processing", actor="t")
+        proposals.advance(ledger_conn, vault, rec["id"], "failed", actor="t",
                           reject_reason=f"boom-{i}")
         recs.append(rec)
         time.sleep(0.005)  # separate the wall-clock updated_at sort keys

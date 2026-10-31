@@ -39,7 +39,7 @@ def _user_area(vault_dir) -> dict[str, str]:
     return out
 
 
-def test_user_area_zero_writes_through_full_flow(vault_dir, db_conn):
+def test_user_area_zero_writes_through_full_flow(vault_dir, ledger_conn):
     (vault_dir / "notes" / "other.md").write_bytes(b"# Other\n\nbody text\n")
     before = _user_area(vault_dir)
 
@@ -65,45 +65,45 @@ def test_user_area_zero_writes_through_full_flow(vault_dir, db_conn):
                      "candidate": "reading A", "rationale": "dates"},
          "source_refs": ["notes/test.md"], "justification": "j"}, ctx
     ).startswith("proposal #")
-    for r in proposals.scan(db_conn):
+    for r in proposals.scan(ledger_conn):
         if r["status"] == "awaiting_review":
-            proposals.advance(db_conn, vault_dir, r["id"], "adopted", actor="human")
+            proposals.advance(ledger_conn, vault_dir, r["id"], "adopted", actor="human")
 
-    summary = run_executor(vault_dir, db_conn)
+    summary = run_executor(vault_dir, ledger_conn)
     assert summary["merged"] == 3
     assert summary["errors"] == []
 
     # Machine-zone artifacts only: file landings in index/, the edge DB-only.
     assert (vault_dir / "index" / "entities.md").is_file()
     assert (vault_dir / "index" / "errata" / "test.md").is_file()
-    assert db_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
+    assert ledger_conn.execute("SELECT COUNT(*) FROM relatedness").fetchone()[0] == 1
     assert not (vault_dir / "archive").is_dir()
 
     assert _user_area(vault_dir) == before  # invariant 1
 
 
-def test_machine_zone_absent_from_segments_after_flow(vault_dir, db_conn):
+def test_machine_zone_absent_from_segments_after_flow(vault_dir, db_conn, ledger_conn):
     """After the full flow lands index/* artifacts and re-indexing runs, no
     segment may carry a machine-zone path (invariant 6) — while the user
     notes remain searchable."""
     from server.vault.orchestration.indexer import ensure_indexed
 
     rec = proposals.create(
-        db_conn, vault_dir, "entity_index", actor="consolidator", run_id="b",
+        ledger_conn, vault_dir, "entity_index", actor="consolidator", run_id="b",
         source_refs=["notes/test.md"], justification="j",
         payload={"entity": "e1", "attrs": {"f": "v"}},
     )
-    proposals.advance(db_conn, vault_dir, rec["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, rec["id"], "adopted", actor="t")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, rec["id"], "adopted", actor="t")
     summary_rec = proposals.create(
-        db_conn, vault_dir, "summary", actor="consolidator", run_id="b",
+        ledger_conn, vault_dir, "summary", actor="consolidator", run_id="b",
         source_refs=["notes/test.md"], justification="j",
         payload={"form": "cache", "body": "s"},
     )
-    proposals.advance(db_conn, vault_dir, summary_rec["id"], "processing", actor="t")
-    proposals.advance(db_conn, vault_dir, summary_rec["id"], "awaiting_review", actor="t")
-    proposals.advance(db_conn, vault_dir, summary_rec["id"], "adopted", actor="human")
-    assert run_executor(vault_dir, db_conn)["merged"] == 2
+    proposals.advance(ledger_conn, vault_dir, summary_rec["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault_dir, summary_rec["id"], "awaiting_review", actor="t")
+    proposals.advance(ledger_conn, vault_dir, summary_rec["id"], "adopted", actor="human")
+    assert run_executor(vault_dir, ledger_conn)["merged"] == 2
 
     # Machine-zone landings exist on disk; v2a (D25) the proposal channel
     # landed no file (the relpath is a synthetic card identifier).

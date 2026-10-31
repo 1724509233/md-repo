@@ -3,12 +3,12 @@ lock-holding (card 5).
 
 Split along the lock boundary: this module owns the SQL half of
 ``server/snapshots.py``'s capture/finalize/discard/gc — each mutation runs
-inside the shared ``_db_lock``; the disk half (pre-image blob reads/writes,
+inside the shared ``_ledger_lock``; the disk half (pre-image blob reads/writes,
 blob deletion) stays with the ``server/snapshots.py`` caller, outside the
 lock.
 
 Concurrency (card 5): the lock is held INTERNALLY by these functions —
-outside ``server/vault`` ``_db_lock`` is no longer importable, the named
+outside ``server/vault`` ``_ledger_lock`` is no longer importable, the named
 functions are the interface. Read helpers (``server/snapshots``'
 live_preimage / by_call / by_run / recent_calls) stay lock-free: the single
 non-reentrant lock must never be held by a reader.
@@ -18,7 +18,7 @@ from __future__ import annotations
 import sqlite3
 
 
-from .schema import _db_lock
+from .schema import _ledger_lock
 
 
 def insert_capture(
@@ -35,7 +35,7 @@ def insert_capture(
 ) -> int:
     """Insert one in-flight snapshot row (``live=0`` until finalize).
     Returns the row id."""
-    with _db_lock:
+    with _ledger_lock:
         cur = conn.execute(
             """
             INSERT INTO snapshots
@@ -59,7 +59,7 @@ def finalize(conn: sqlite3.Connection, snapshot_id: int,
     Other live rows for the path are demoted; this row is claimed even
     while still in-flight (``live=0``); every other row is untouched.
     """
-    with _db_lock:
+    with _ledger_lock:
         conn.execute(
             """
             UPDATE snapshots SET
@@ -76,7 +76,7 @@ def finalize(conn: sqlite3.Connection, snapshot_id: int,
 def discard(conn: sqlite3.Connection, snapshot_id: int) -> None:
     """Drop a capture whose write did not happen (no side effect on the
     live slot: the row was inserted with ``live=0`` and never finalized)."""
-    with _db_lock:
+    with _ledger_lock:
         conn.execute("DELETE FROM snapshots WHERE id = ?", (snapshot_id,))
         conn.commit()
 
@@ -94,7 +94,7 @@ def gc_sweep(conn: sqlite3.Connection, cutoff: float) -> list[dict]:
     Compound SELECT+DELETE in ONE lock (the row set and its deletion must
     be one atomic unit).
     """
-    with _db_lock:
+    with _ledger_lock:
         rows = [dict(r) for r in conn.execute(
             """
             SELECT id, blob_name FROM snapshots
