@@ -49,13 +49,13 @@ background_agents:
       max_tokens: 4096
       temperature: 0.7
 
-  # ── 记忆运行时 v2.2：固化者（示例，取消注释启用）─────────────────────────
+  # ── 记忆运行时：碎片整理（consolidator，示例，取消注释启用）─────────────
   # 夜巡消化近期人类通道的碎片；唯一写动作 = propose 工具（零文件落：
   # suggestions/ 无投影文件、无账本行，v2a D25）。分界线：提案角色不持直写（ADR-0004）。
   # 预算是法律（这里），消耗记账在 .sync/index.db 的 trigger_state 表。
   # trigger：events ⊆ {create,update,delete,move}；arm_count/min_interval_h
   # 可缺省（默认 3 / 1.0h）。cron 保留为 deadline floor（无活则空转不烧 LLM）。
-  # - name: "记忆固化"
+  # - name: "碎片整理"
   #   alias: consolidator
   #   enabled: true
   #   cron: "0 2 * * *"
@@ -73,6 +73,29 @@ background_agents:
   #     events: [create]
   #     arm_count: 3
   #     min_interval_h: 6
+  #   model:
+  #     provider: openai
+  #     model_id: qwen2.5:14b
+  #     base_url: "http://localhost:11434/v1"
+  #     api_key: ""
+  #     context_window: 16384
+  #     max_tokens: 4096
+  #     temperature: 0.7
+  #
+  # ── 记忆运行时：矛盾批注（proofreader，低频次纯 cron 巡查）──────────────
+  # - name: "矛盾批注"
+  #   alias: proofreader
+  #   enabled: true
+  #   cron: "30 3 * * *"              # 每日 03:30，低频次纯 cron 巡查（无 trigger）
+  #   target_dir: index              # 与 consolidator 同区（index/ 是共享写者面，豁免互叠检查）；report_dir 必须互异
+  #   prompt: server/prompts/proofreader.md
+  #   report_dir: .reports/proofreader
+  #   max_rounds: 30
+  #   timeout_s: 1800
+  #   budget_runs_per_day: 2
+  #   budget_max_proposals: 3
+  #   tools: [read_doc, search_docs, list_files, get_related_docs, propose]
+  #   verbs: [errata]
   #   model:
   #     provider: openai
   #     model_id: qwen2.5:14b
@@ -100,7 +123,7 @@ background_agents:
   #     base_url: "http://localhost:11434/v1"
   #     api_key: ""
 
-# ── 记忆运行时 v2.2：哨兵（示例，取消注释启用）─────────────────────────────
+# ── 记忆运行时：召回诊断（sentinel，示例，取消注释启用）──────────────────
 # 召回治理：旁路读取 recall 遥测（不经检索接口）、分桶判断，产**只读报告**
 # （「N 篇 90 天未动，建议归档」——v2：archive 动词退役，自动化不搬用户区文件，
 # 搬动 = 人在 Obsidian 拖）。报告通道（ADR-0004）：write_doc 写机器区
@@ -108,7 +131,7 @@ background_agents:
 # trigger.source: recall = 从召回账本武装（metric: failed_or_low = 失败查询
 # + 低分命中计数，合成流量不计入）；cron 保留为每周心跳（复盘不靠自觉）。
 # tools 白名单 = 行为维度授权（v2 法律层：必须显式声明，无 fail-open 默认）。
-# - name: "记忆哨兵"
+# - name: "召回诊断"
 #   alias: sentinel
 #   enabled: true
 #   cron: "0 9 * * 1"                 # 周一 09:00 每周心跳
@@ -132,11 +155,11 @@ background_agents:
 #     base_url: "http://localhost:11434/v1"
 #     api_key: ""
 #
-# ── 记忆运行时 v2.2：叙事者（示例，取消注释启用）──────────────────────────
+# ── 记忆运行时：历史回顾（narrator，示例，取消注释启用）──────────────────
 # 周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，write_doc 产只读周报
 # index/reports/narrator/YYYY-MM-DD.md（daily slot 幂等覆盖）。报告通道（ADR-0004）：
 # 不产提案、不持 propose（reminder 动词退役；周期性问题 = 进周报待人处理）。
-# - name: "叙事者"
+# - name: "历史回顾"
 #   alias: narrator
 #   enabled: true
 #   cron: "0 10 * * 0"                # 周日 10:00 周报

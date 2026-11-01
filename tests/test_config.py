@@ -264,3 +264,96 @@ def test_escalation_unknown_action_raises(tmp_path: Path):
         "      zero_recall_candidate: bad_action\n")
     with pytest.raises(ValueError, match="action"):
         load_background_agents(str(cfg_file), tmp_path)
+
+
+def test_two_agents_same_target_dir_suggestions_passes(tmp_path: Path):
+    """Two proposal-zone agents (both ``target_dir: suggestions``) are exempt
+    from the scope-overlap check and both load clean."""
+    (tmp_path / "prompt_a.md").write_text("a", encoding="utf-8")
+    (tmp_path / "prompt_b.md").write_text("b", encoding="utf-8")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "background_agents:\n"
+        "  - alias: a\n"
+        "    cron: '0 3 * * *'\n"
+        "    target_dir: suggestions\n"
+        "    prompt: prompt_a.md\n"
+        "    report_dir: .reports/a\n"
+        "    tools: [read_doc, propose]\n"
+        "    verbs: [summary]\n"
+        "    model:\n"
+        "      model_id: m\n"
+        "  - alias: b\n"
+        "    cron: '0 4 * * *'\n"
+        "    target_dir: suggestions\n"
+        "    prompt: prompt_b.md\n"
+        "    report_dir: .reports/b\n"
+        "    tools: [read_doc, propose]\n"
+        "    verbs: [summary]\n"
+        "    model:\n"
+        "      model_id: m\n",
+        encoding="utf-8",
+    )
+    agents = load_background_agents(str(cfg_file), tmp_path)
+    assert len(agents) == 2
+
+
+def test_five_role_config_loads_clean(tmp_path: Path):
+    """A 5-role memory-runtime config (consolidator + proofreader sharing
+    ``suggestions/``, executor, sentinel, narrator) loads clean. The executor
+    role (``is_executor: true``) is exempt from the tools/verbs legal layer,
+    so it declares neither."""
+    for name in ("consolidator", "proofreader", "executor", "sentinel", "narrator"):
+        (tmp_path / f"prompt_{name}.md").write_text(name, encoding="utf-8")
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "background_agents:\n"
+        "  - alias: consolidator\n"
+        "    cron: '0 2 * * *'\n"
+        "    target_dir: suggestions\n"
+        "    prompt: prompt_consolidator.md\n"
+        "    report_dir: .reports/consolidator\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes, get_related_docs, propose]\n"
+        "    verbs: [entity_index, relatedness, summary]\n"
+        "    model:\n"
+        "      model_id: m\n"
+        "  - alias: proofreader\n"
+        "    cron: '30 3 * * *'\n"
+        "    target_dir: suggestions\n"
+        "    prompt: prompt_proofreader.md\n"
+        "    report_dir: .reports/proofreader\n"
+        "    tools: [read_doc, search_docs, list_files, get_related_docs, propose]\n"
+        "    verbs: [errata]\n"
+        "    model:\n"
+        "      model_id: m\n"
+        "  - alias: executor\n"
+        "    cron: '*/30 * * * *'\n"
+        "    target_dir: .\n"
+        "    prompt: prompt_executor.md\n"
+        "    report_dir: .reports/executor\n"
+        "    is_executor: true\n"
+        "    model:\n"
+        "      model_id: m\n"
+        "  - alias: sentinel\n"
+        "    cron: '0 9 * * 1'\n"
+        "    target_dir: index/reports/sentinel\n"
+        "    prompt: prompt_sentinel.md\n"
+        "    report_dir: .reports/sentinel\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes, get_related_docs, recall_stats, write_doc]\n"
+        "    model:\n"
+        "      model_id: m\n"
+        "  - alias: narrator\n"
+        "    cron: '0 10 * * 0'\n"
+        "    target_dir: weekly\n"
+        "    prompt: prompt_narrator.md\n"
+        "    report_dir: .reports/narrator\n"
+        "    tools: [read_doc, search_docs, list_files, recent_changes, get_related_docs, recall_stats, write_doc]\n"
+        "    model:\n"
+        "      model_id: m\n",
+        encoding="utf-8",
+    )
+    agents = load_background_agents(str(cfg_file), tmp_path)
+    assert len(agents) == 5
+    assert {a.alias for a in agents} == {
+        "consolidator", "proofreader", "executor", "sentinel", "narrator"}
+    assert [a for a in agents if a.is_executor][0].alias == "executor"

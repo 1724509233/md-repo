@@ -20,3 +20,11 @@ issues/
 .DS_Store
 .relay/
 .slim/deepwork/
+# teaching workspace (proposal-channel course)
+MISSION.md
+NOTES.md
+RESOURCES.md
+learning-records/
+lessons/
+reference/
+assets/

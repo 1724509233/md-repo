@@ -163,7 +163,7 @@ pytest tests/ -v          # 574 tests
 │   ├── vault/               # 索引子系统：db/（SQLite+FTS5+图谱）· fs/（切块+链接解析）· orchestration/（索引+refs+移动检测）；公共 API = service.py
 │   ├── agent/               # LLM agent：tools/（10 工具）· runtime · session · policy · reminders
 │   ├── bgagent/             # 后台 agent：scheduler（cron+arming）· runner · notify · executor
-│   ├── prompts/             # bgagent 角色提示词（sentinel / consolidator / narrator）
+│   ├── prompts/             # bgagent 角色提示词（consolidator / proofreader / sentinel / narrator）
 │   └── templates/
 │       ├── index.html       # Web UI（单文件，Tailwind CDN）
 │       └── style.css        # 自定义样式

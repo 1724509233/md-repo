@@ -76,13 +76,25 @@ _Avoid_: recall telemetry（代码对用途的自称，不是术语）、recall�
 
 ### 记忆运行时
 
-**sentinel**（记忆哨兵）：
+**sentinel**（召回诊断）：
 bgagent，无落地动词角色（报告通道，ADR-0004）：读 recall log、对文档分桶、产只读报告（机器区文件 + 控制台 API）；archive 提案已退役（v2.1 D5，实际搬动 = 人 / 交互 agent）；无 propose、不写用户区；每周心跳 + recall arming 提前唤醒。
-_Avoid_: 哨兵（裸词，中文须带「记忆」）、sentinel agent
+_Avoid_: 哨兵（裸词）、记忆哨兵（v1 显示名）、sentinel agent
 
 **recall arming**：
 sentinel 专属的武装信号源：`scan_recall_arming` 用双游标扫 recall log（零命中查询数 + 低分命中数）累计，达 arm_count 且过冷却/日预算后触发一次运行。
 _Avoid_: recall trigger、recall source（事件名）
+
+**碎片整理**（consolidator）：
+事件驱动的碎片消化角色：读近期人类通道 create 事件，对账/抽实体/蒸馏，只产 entity_index / relatedness / summary 提案（propose 唯一写入口，零文件落）。v2b 拆分自原「记忆固化者」：errata（矛盾检测）拆出为矛盾批注；`reminder` 动词 v2 退役（VALID_TYPES 保留 = 存量兼容 + MCP 面）。
+_Avoid_: 记忆固化（v1 显示名）、固化者（v1 称谓）
+
+**矛盾批注**（proofreader）：
+低频次纯 cron 巡查角色（每日 03:30，无 trigger）：read 面宽（search/get_related_docs/read_doc 摸既有笔记对）、产出窄（只产 errata 矛盾卡提案，candidate 为 advisory 候选更正）；人采纳后执行器落增量矛盾卡到 index/errata/，**原文永不改**（精确替换 = 人的 rebase）——机器只批注、不改原文，故不叫「纠错」。与碎片整理共享 target_dir suggestions/（proposals 区豁免 scope 重叠校验）。
+_Avoid_: 纠错（机器不改原文，名字会误导）、校对（v2b 占位称谓，未启用）、proofreader agent
+
+**历史回顾**（narrator）：
+周频纯 cron 心跳（无 trigger）：读 changelog + 近期情景，write_doc 产只读周报到 index/reports/narrator/（报告通道，无 propose）。生产配置中保持禁用（注释态）。
+_Avoid_: 叙事者（v1 显示名）
 
 ### 记忆运行时 · v2 提案与写通道
 
@@ -111,7 +123,7 @@ _Avoid_: actor 盖章（裸词）、身份校验（裸词）
 _Avoid_: 人确认写、交互写（裸词）
 
 **报告通道**（v2.2，ADR-0004）：
-bgagent 无落地动词角色（sentinel / 叙事者）专属写通道：读工具 + `write_doc`（写边界 = 机器区 `index/`），无 propose、用户区零写；**分界线：提案角色（固化者）= propose 唯一写入口、无直写**（防终审闸门被绕过）；人面 = 控制台报告 API + 推送，主 agent 用既有 `read_doc` 读（index/ 可读、不进搜索图谱，不新增读工具）。
+bgagent 无落地动词角色（sentinel / 历史回顾）专属写通道：读工具 + `write_doc`（写边界 = 机器区 `index/`），无 propose、用户区零写；**分界线：提案角色（碎片整理者）= propose 唯一写入口、无直写**（防终审闸门被绕过）；人面 = 控制台报告 API + 推送，主 agent 用既有 `read_doc` 读（index/ 可读、不进搜索图谱，不新增读工具）。
 _Avoid_: 报告路径、bgagent 直写（裸词，与用户区直写歧义）
 
 **回读注入**：

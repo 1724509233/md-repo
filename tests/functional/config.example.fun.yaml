@@ -37,7 +37,7 @@ background_agents:
   # archive 动词退役，哨兵不产提案——harness 以 status ok + 非空 summary 判
   # PASS）。tools 只读：无写工具、无 propose。trigger.source: recall 从
   # 召回账本武装（arm_count: 1 = 一条失败/低分信号即武装）。
-  - name: "记忆哨兵（功能测试）"
+  - name: "召回诊断（功能测试）"
     alias: sentinel
     enabled: true
     cron: "0 9 * * 1"                 # 每周心跳（deadline floor；功能测试用 run_once 直跑，不依赖 cron）
@@ -70,7 +70,7 @@ background_agents:
   # 直接写/移动/删除一律被拒（SuggestionsGate）。
   # 历史：v1 mock 剧本用 write_doc 写提案文件（suggestions/ 在 scope 内 ✓）；
   # v2 改走 propose 通道（write_doc 进 suggestions/ 已被拒）。
-  - name: "记忆固化（功能测试）"
+  - name: "碎片整理（功能测试）"
     alias: consolidator
     enabled: true
     cron: "0 2 * * *"
