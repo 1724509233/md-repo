@@ -62,7 +62,7 @@ def apply_change(
     one-off ~440 ms page-cache cold start). Driver = in-lock rglob vault scans
     in refs. Reopen the performance card if the vault exceeds 5k files or
     writer queuing is observed — see
-    docs/benchmarks/2026-10-30-apply-change-lock-hold-benchmark.md.
+    ~/md-vault/projects/md-repo/benchmarks/2026-10-30-apply-change-lock-hold-benchmark.md.
 
     ``update_refs`` controls whether ``_update_references`` is called for
     moved actions. Set to False when the caller will handle reference

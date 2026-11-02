@@ -17,7 +17,7 @@ Python 3.12、FastAPI、pydantic（args 模型）、pytest。无新依赖。
 ## Spec / 依据
 
 - 待办 b4620a26
-- bgagent 法律层先例：`docs/superpowers/specs/2026-10-22-agent-permission-policy-design.md` §通道入口（bgagent tools 显式声明 + fail-fast）
+- bgagent 法律层先例：`~/md-vault/projects/md-repo/specs/2026-10-22-agent-permission-policy-design.md` §通道入口（bgagent tools 显式声明 + fail-fast）
 - AGENTS.md 架构节（routes 按 URL 前缀分模块，agent 域 = server/routes/agent.py）
 
 ## Global Constraints

@@ -1,7 +1,7 @@
 """Channel permission policy: single entry for validating agent tool calls.
 
 Consolidates the permission rules that used to be scattered across the
-channel entries (spec: docs/superpowers/specs/2026-10-22-agent-permission-policy-design.md):
+channel entries (spec: ~/md-vault/projects/md-repo/specs/2026-10-22-agent-permission-policy-design.md):
 
 - L1: pydantic schema validation — simple ``{loc}: {msg}`` format. The
   detailed original-value-replay + type-hint format lives in the execution

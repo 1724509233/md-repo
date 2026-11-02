@@ -35,8 +35,8 @@ pytest（既有 fixtures：vault_dir/ledger_conn/app）、propose 工具直接�
 
 ## Spec / 依据
 
-- `docs/superpowers/specs/2026-10-27-reversible-automation-design-v2.1.md` §四 动词目录、§5.1 写入口结构化（D-P1/D-P2）、§7.5 硬约束汇总
-- `docs/superpowers/specs/2026-10-22-agent-permission-policy-design.md`（通道 × 防线梳理）
+- `~/md-vault/projects/md-repo/specs/2026-10-27-reversible-automation-design-v2.1.md` §四 动词目录、§5.1 写入口结构化（D-P1/D-P2）、§7.5 硬约束汇总
+- `~/md-vault/projects/md-repo/specs/2026-10-22-agent-permission-policy-design.md`（通道 × 防线梳理）
 - 待办 65e328d7；10-30 完成的逐项验证待办（v2a 债务 10 项落地记录）
 
 ## Global Constraints

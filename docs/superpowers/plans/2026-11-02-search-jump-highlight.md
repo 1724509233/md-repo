@@ -37,7 +37,7 @@ vanilla JS（app.js 顶层函数）、Vue 3（CDN）、Tailwind Play CDN、agent
 ## Spec / 依据
 
 - 待办 12c69570 原文
-- `docs/superpowers/specs/2026-10-16-empty-folder-tree-design.md`（面板/树/304 契约背景；跳转契约 spec §3.3 见 app.js:410 注释）
+- `~/md-vault/projects/md-repo/specs/2026-10-16-empty-folder-tree-design.md`（面板/树/304 契约背景；跳转契约 spec §3.3 见 app.js:410 注释）
 - AGENTS.md「Frontend UI Workflow」规则 1-2（design-first + 视觉确认先于提交）
 
 ## Global Constraints

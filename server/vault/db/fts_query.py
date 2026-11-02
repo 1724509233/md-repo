@@ -2,7 +2,7 @@
 
 Dynamic FTS5 expressions must only be built from the known-legal shapes
 below — free-form string concatenation is forbidden. Every pitfall in
-``docs/fts5-recall-experiments.md`` §3 is encoded as a construction rule:
+``~/md-vault/projects/md-repo/fts5-recall-experiments.md`` §3 is encoded as a construction rule:
 
 - NEAR phrases are SPACE-separated; the comma only introduces the N
   parameter (``NEAR(召回 关联, 5)`` — ``NEAR(a, b, 5)`` is a syntax error).

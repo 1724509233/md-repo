@@ -27,8 +27,8 @@ Python 3.12、FastAPI、pytest（client fixture）、sqlite 双库（ledger_conn
 ## Spec / 依据
 
 - 待办 8978a337 原文
-- `docs/superpowers/specs/2026-10-16-empty-folder-tree-design.md`（/api/docs 返回 {files, dirs} + ETag/304 契约：「304 省的是响应体，不是扫描」）
-- `docs/superpowers/specs/2026-09-27-md-sync-design.md`（web 文件管理契约；删除不同步语义不变）
+- `~/md-vault/projects/md-repo/specs/2026-10-16-empty-folder-tree-design.md`（/api/docs 返回 {files, dirs} + ETag/304 契约：「304 省的是响应体，不是扫描」）
+- `~/md-vault/projects/md-repo/specs/2026-09-27-md-sync-design.md`（web 文件管理契约；删除不同步语义不变）
 
 ## Global Constraints
 

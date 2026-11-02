@@ -4,7 +4,7 @@ Watchdog is a trigger (doorbell), not a data source. Events mark paths
 as dirty; a worker thread debounces, reads the filesystem, compares
 against an in-memory snapshot, and emits semantic operations.
 
-See docs/superpowers/specs/2026-10-07-snapshot-watcher-design.md
+See ~/md-vault/projects/md-repo/specs/2026-10-07-snapshot-watcher-design.md
 """
 from __future__ import annotations
 

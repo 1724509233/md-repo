@@ -47,7 +47,15 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 ## Design Spec
 
-`docs/superpowers/specs/2026-09-27-md-sync-design.md` — read before making architectural changes.
+Spec 已归档至 vault：`~/md-vault/projects/md-repo/specs/2026-09-27-md-sync-design.md`。架构变更前用 md-vault MCP `search_docs("md-sync design")` 检索、`read_doc("projects/md-repo/specs/2026-09-27-md-sync-design.md")` 读全文。
+
+## 文档归档
+
+归档位置：`~/md-vault/projects/md-repo/`（plans/ specs/ adr/ benchmarks/ review/ issues/ + 顶层杂项）。
+
+MCP 检索：`search_docs("<关键词>")` 全文检索、`read_doc("<相对路径>")` 读全文、`get_related_docs("<相对路径>")` 查关联。
+
+仓库保留清单：AGENTS.md / GLOSSARY.md / README.md / MISSION.md / NOTES.md / RESOURCES.md + `server/` 下 README 与 prompts/ + `docs/superpowers/plans/2026-11-02-*.md` 五份 + 2 份提案通道 HTML。
 
 ## Frontend UI Workflow
 

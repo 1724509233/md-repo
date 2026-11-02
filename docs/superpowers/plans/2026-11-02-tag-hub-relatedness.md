@@ -50,8 +50,8 @@ Python sqlite3（index.db 的 entities/edges 表，schema 已在 db/schema.py，
 
 ## Spec / 依据
 
-- `docs/adr/0003-tag-pivot-drift.md`（全文，accepted：重新实现 = BFS 放行 tag + doc→tag→doc 透传 + 测试；附带漂移：score 字段未实现）
-- `docs/superpowers/specs/2026-10-01-knowledge-base-refactor.md` §3.1 表设计（L195-215）、§3.2 抽取规则（L217+）、API 示例含 score（L233-235 附近）
+- `~/md-vault/projects/md-repo/adr/0003-tag-pivot-drift.md`（全文，accepted：重新实现 = BFS 放行 tag + doc→tag→doc 透传 + 测试；附带漂移：score 字段未实现）
+- `~/md-vault/projects/md-repo/specs/2026-10-01-knowledge-base-refactor.md` §3.1 表设计（L195-215）、§3.2 抽取规则（L217+）、API 示例含 score（L233-235 附近）
 - 待办 fffd5176 / 1e62e9d8 原文
 
 ## Global Constraints
@@ -106,4 +106,4 @@ Python sqlite3（index.db 的 entities/edges 表，schema 已在 db/schema.py，
 
 ## 执行方法
 
-单 lane @fixer（用户待办已预定：「执行时 dispatch fixer lane」）。brief = 本文件 + `docs/adr/0003-tag-pivot-drift.md` 全文 + 10-01 spec §3.1-3.2 摘录。串行派发（本 host 一次一个子任务）。
+单 lane @fixer（用户待办已预定：「执行时 dispatch fixer lane」）。brief = 本文件 + `~/md-vault/projects/md-repo/adr/0003-tag-pivot-drift.md` 全文 + 10-01 spec §3.1-3.2 摘录。串行派发（本 host 一次一个子任务）。
