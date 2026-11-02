@@ -247,7 +247,7 @@ def main():
         results = graph_get_related(db_conn, path, hops=hops)
         if not results:
             return related_no_links(path)
-        lines = [f"{r['path']} (via {r['type']})" for r in results]
+        lines = [f"{r['path']} (via {r['type']}, score {r['score']:.2f})" for r in results]
         return f"Related documents for {path}:\n" + "\n".join(lines)
     
     @mcp.tool()

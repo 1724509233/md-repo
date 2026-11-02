@@ -88,53 +88,136 @@ def graph_get_backlinks(conn: sqlite3.Connection, path: str) -> list[dict]:
     return [{"path": row[0], "type": row[1]} for row in cursor.fetchall()]
 
 
-def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> list[dict]:
-    """Get related documents within N hops (capped at 3).
+# Relevance weights and via-type priority for tie-breaking (10-01 spec §3.3).
+# A tag hop is the weakest signal; on a score tie we prefer the stronger
+# relation type and the shorter (fewer-step) path.
+_WEIGHT = {"wikilink": 0.8, "related": 0.7, "tag": 0.5}
+_VIA_PRIORITY = {"wikilink": 0, "related": 1, "tag": 2}
 
-    Each BFS level issues a single batched query over the whole frontier
-    instead of one query per node.
+
+def _better(cand: dict, cur: dict) -> bool:
+    """True if path ``cand`` beats ``cur``: higher score, then fewer relations,
+    then the stronger via-type (wikilink > related > tag)."""
+    if cand["score"] != cur["score"]:
+        return cand["score"] > cur["score"]
+    if cand["relations"] != cur["relations"]:
+        return cand["relations"] < cur["relations"]
+    return _VIA_PRIORITY[cand["via"]] < _VIA_PRIORITY[cur["via"]]
+
+
+def _record(best: dict, name: str, via: str, relations: int) -> None:
+    """Record a path to ``name``; keep the best per the _better rule."""
+    entry = {
+        "score": _WEIGHT[via] * (0.8 ** (relations - 1)),
+        "relations": relations,
+        "via": via,
+    }
+    cur = best.get(name)
+    if cur is None or _better(entry, cur):
+        best[name] = entry
+
+
+def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> list[dict]:
+    """Get related documents within N hops (capped at 3), with relevance scores.
+
+    The BFS frontier holds ``(doc_name, depth)`` where depth is the doc-step
+    level from the start doc (start = depth 0). Each hop expands a frontier
+    doc at depth d over two relations, both yielding results at
+    ``relations = d + 1``:
+      * direct doc neighbours via doc↔doc edges (via = that edge type);
+      * docs sharing a tag: each doc→tag edge of the frontier doc leads to a
+        tag, and every other doc with an edge to that same tag is a result
+        (via "tag"). The tag is an in-hop intermediary, so a doc→tag→doc
+        chain is 1 step (relations 1 → score 0.5) and completes within a
+        single hop — the tag is never carried into the next frontier.
+
+    score = weight(via) * 0.8 ** (relations - 1). A direct doc neighbour is
+    relations 1; a doc reached through a tag hub is relations 1; an A→X→B doc
+    chain is relations 2. Every path-candidate to a doc is recorded and the
+    max score is kept (see _better); each doc is expanded at most once so
+    cycles terminate. Output is round(score, 2), one row per doc, sorted by
+    score desc then path asc.
     """
     hops = min(hops, 3)
     if hops < 1:
         return []
 
-    def _get_neighbors(paths: list[str]) -> list[tuple[str, str]]:
-        if not paths:
-            return []
-        placeholders = ",".join("?" * len(paths))
-        cursor = conn.execute(
-            f"""
-            SELECT dst.name, ed.type FROM edges ed
-            JOIN entities src ON src.id = ed.src_id
-            JOIN entities dst ON dst.id = ed.dst_id
-            WHERE src.name IN ({placeholders}) AND dst.type = 'doc'
-            UNION
-            SELECT src.name, ed.type FROM edges ed
-            JOIN entities src ON src.id = ed.src_id
-            JOIN entities dst ON dst.id = ed.dst_id
-            WHERE dst.name IN ({placeholders}) AND src.type = 'doc'
-            """,
-            paths + paths,
-        )
-        return [(row[0], row[1]) for row in cursor.fetchall()]
-
-    seen = {path}
-    results = []
-    current = [path]
+    best: dict[str, dict] = {}
+    seen: set[str] = {path}
+    frontier: list[tuple[str, int]] = [(path, 0)]
 
     for _ in range(hops):
-        neighbors = _get_neighbors(current)
-        next_level = []
-        for name, etype in neighbors:
-            if name not in seen and name != path:
-                seen.add(name)
-                results.append({"path": name, "type": etype})
-                next_level.append(name)
-        current = next_level
-        if not current:
+        next_frontier: list[tuple[str, int]] = []
+
+        for doc, depth in frontier:
+            rel = depth + 1
+
+            # Direct doc neighbours (doc→doc), both directions.
+            rows = conn.execute(
+                """
+                SELECT dst.name, ed.type FROM edges ed
+                JOIN entities src ON src.id = ed.src_id
+                JOIN entities dst ON dst.id = ed.dst_id
+                WHERE src.name = ? AND src.type = 'doc' AND dst.type = 'doc'
+                UNION
+                SELECT src.name, ed.type FROM edges ed
+                JOIN entities src ON src.id = ed.src_id
+                JOIN entities dst ON dst.id = ed.dst_id
+                WHERE dst.name = ? AND dst.type = 'doc' AND src.type = 'doc'
+                """,
+                (doc, doc),
+            ).fetchall()
+            for neighbor, etype in rows:
+                if neighbor == path:
+                    continue
+                if neighbor not in seen:
+                    seen.add(neighbor)
+                    next_frontier.append((neighbor, depth + 1))
+                _record(best, neighbor, etype, rel)
+
+            # Docs sharing a tag: doc→tag of this doc, then every other doc
+            # with an edge to one of those tags (via "tag").
+            tag_names = [
+                r[0]
+                for r in conn.execute(
+                    """
+                    SELECT dst.name FROM edges ed
+                    JOIN entities src ON src.id = ed.src_id
+                    JOIN entities dst ON dst.id = ed.dst_id
+                    WHERE src.name = ? AND src.type = 'doc' AND dst.type = 'tag'
+                    """,
+                    (doc,),
+                ).fetchall()
+            ]
+            if tag_names:
+                ph = ",".join("?" * len(tag_names))
+                hub_rows = conn.execute(
+                    f"""
+                    SELECT DISTINCT src.name FROM edges ed
+                    JOIN entities src ON src.id = ed.src_id
+                    JOIN entities dst ON dst.id = ed.dst_id
+                    WHERE dst.name IN ({ph}) AND dst.type = 'tag' AND src.type = 'doc'
+                    """,
+                    tag_names,
+                ).fetchall()
+                for (neighbor,) in hub_rows:
+                    if neighbor == path or neighbor == doc:
+                        continue
+                    if neighbor not in seen:
+                        seen.add(neighbor)
+                        next_frontier.append((neighbor, depth + 1))
+                    _record(best, neighbor, "tag", rel)
+
+        frontier = next_frontier
+        if not frontier:
             break
 
-    return results
+    return [
+        {"path": name, "type": entry["via"], "score": round(entry["score"], 2)}
+        for name, entry in sorted(
+            best.items(), key=lambda kv: (-round(kv[1]["score"], 2), kv[0])
+        )
+    ]
 
 
 def _find_referrers(conn: sqlite3.Connection | None, vault_dir: Path, target_path: str) -> list[str]:

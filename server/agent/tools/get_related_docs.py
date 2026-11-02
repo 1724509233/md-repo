@@ -39,5 +39,5 @@ class GetRelatedDocsTool(Tool):
         results = graph_get_related(get_index_conn(), args.path, hops=1)
         if not results:
             return self.related_no_links(args.path)
-        lines = [f"{r['path']} (via {r['type']})" for r in results]
+        lines = [f"{r['path']} (via {r['type']}, score {r['score']:.2f})" for r in results]
         return f"Related documents for {args.path}:\n" + "\n".join(lines)

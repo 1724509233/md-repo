@@ -4,6 +4,8 @@ from __future__ import annotations
 import sqlite3
 import time
 
+import pytest
+
 from server.vault import (
     clear_changes,
     delete_file,
@@ -1204,3 +1206,358 @@ def test_apply_change_deleted_removes_dead_links_via_edges(vault_dir):
         assert "[[notes/target]]" not in content
     finally:
         conn.close()
+
+
+# --- Task 1: tag extraction (frontmatter meta + heading removal) ---
+
+def _tag_edges(conn, doc_path):
+    """Return {tag_name: edge_type} for a doc's outgoing tag edges."""
+    rows = conn.execute(
+        "SELECT e.name, ed.type FROM edges ed "
+        "JOIN entities d ON d.id = ed.src_id AND d.type = 'doc' "
+        "JOIN entities e ON e.id = ed.dst_id "
+        "WHERE d.name = ? AND ed.type = 'tag'",
+        (doc_path,),
+    ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def _tag_entity_names(conn):
+    return {r[0] for r in conn.execute("SELECT name FROM entities WHERE type = 'tag'")}
+
+
+def test_extract_tags_frontmatter_inline(vault_dir):
+    """frontmatter `tags: [alpha, beta]` → two doc→tag edges."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            b"---\ntags: [alpha, beta]\n---\nbody\n"
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        assert {"alpha", "beta"} <= _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {"alpha": "tag", "beta": "tag"}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_frontmatter_block(vault_dir):
+    """frontmatter block `tags:\\n  - alpha` → doc→tag edge."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            b"---\ntags:\n  - alpha\n---\nbody\n"
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        assert "alpha" in _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {"alpha": "tag"}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_body_inline(vault_dir):
+    """mid-sentence `#beta` in body → tag edge (current behavior preserved)."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            "body\n\nsee #beta usage here\n".encode("utf-8")
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        assert "beta" in _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {"beta": "tag"}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_h1_no_space_not_tag(vault_dir):
+    """H1 `#标题` (no space) → no '标题' tag edge; a real body tag still extracts."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            "#标题\n\nsome body #real tag\n".encode("utf-8")
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        assert "标题" not in _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {"real": "tag"}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_heading_space_not_tag(vault_dir):
+    """`# 标题` (heading with space) → no tag edge (regression pin)."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            "# 标题\n\nbody\n".encode("utf-8")
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        assert "标题" not in _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_normalization(vault_dir):
+    """`tags: [Alpha, \"#beta\"]` → entities alpha, beta (strip + lstrip# + lowercase)."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            b'---\ntags: [Alpha, "#beta"]\n---\nbody\n'
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+
+        names = _tag_entity_names(conn)
+        assert "alpha" in names
+        assert "beta" in names
+        assert "Alpha" not in names
+        assert "#beta" not in names
+    finally:
+        conn.close()
+
+
+def test_extract_tags_reextract_idempotent(vault_dir):
+    """re-extract with the tag removed → old tag edge disappears (L158 cleanup)."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(b"---\ntags: [alpha]\n---\nbody\n")
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+        assert _tag_edges(conn, "notes/a.md") == {"alpha": "tag"}
+
+        # Rewrite the doc without the tag, then re-extract the same path.
+        (vault_dir / "notes" / "a.md").write_bytes(b"body with no tag\n")
+        graph_extract_file(conn, vault_dir, "notes/a.md")
+        assert _tag_edges(conn, "notes/a.md") == {}
+    finally:
+        conn.close()
+
+
+def test_extract_tags_bad_frontmatter_no_crash(vault_dir):
+    """malformed frontmatter (not YAML) → no exception; body tags still extracted."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        (vault_dir / "notes" / "a.md").write_bytes(
+            b"---\n: : : {bad]\n---\nbody #real\n"
+        )
+        graph_extract_file(conn, vault_dir, "notes/a.md")  # must not raise
+
+        assert "real" in _tag_entity_names(conn)
+        assert _tag_edges(conn, "notes/a.md") == {"real": "tag"}
+    finally:
+        conn.close()
+
+
+# --- Task 2: related BFS tag pass-through + score ---
+
+def test_related_tag_hub_two_hop(vault_dir):
+    """A #t, B #t (no direct edge) → B reachable via tag hub: score 0.5, via tag."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        t = graph_upsert_entity(conn, "t", "tag")
+        graph_add_edge(conn, a, t, "tag", "a.md")
+        graph_add_edge(conn, b, t, "tag", "b.md")
+
+        results = graph_get_related(conn, "a.md")
+        by_path = {r["path"]: r for r in results}
+        assert "b.md" in by_path
+        assert by_path["b.md"]["type"] == "tag"
+        assert by_path["b.md"]["score"] == 0.5
+    finally:
+        conn.close()
+
+
+def test_related_direct_wikilink_score(vault_dir):
+    """A→B wikilink one-hop → score 0.8, type wikilink."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        graph_add_edge(conn, a, b, "wikilink", "a.md")
+
+        results = graph_get_related(conn, "a.md")
+        by_path = {r["path"]: r for r in results}
+        assert "b.md" in by_path
+        assert by_path["b.md"]["type"] == "wikilink"
+        assert by_path["b.md"]["score"] == 0.8
+    finally:
+        conn.close()
+
+
+def test_related_tag_not_a_result(vault_dir):
+    """the tag entity itself is never a result; every result path is a doc."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        t = graph_upsert_entity(conn, "t", "tag")
+        graph_add_edge(conn, a, t, "tag", "a.md")
+        graph_add_edge(conn, b, t, "tag", "b.md")
+
+        results = graph_get_related(conn, "a.md")
+        paths = [r["path"] for r in results]
+        assert "t" not in paths  # tag entity never emitted as a result
+        assert all(p.endswith(".md") for p in paths)  # every result is a doc path
+        assert "b.md" in paths
+    finally:
+        conn.close()
+
+
+def test_related_best_path_dedup(vault_dir):
+    """B reachable via wikilink (0.8) AND tag hub (0.5) → one entry, score 0.8 (max)."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        t = graph_upsert_entity(conn, "t", "tag")
+        graph_add_edge(conn, a, b, "wikilink", "a.md")   # direct, 0.8
+        graph_add_edge(conn, a, t, "tag", "a.md")         # tag hub
+        graph_add_edge(conn, b, t, "tag", "b.md")         # B via tag hub, 0.5
+
+        results = graph_get_related(conn, "a.md")
+        b_entries = [r for r in results if r["path"] == "b.md"]
+        assert len(b_entries) == 1  # deduped to one
+        assert b_entries[0]["score"] == 0.8  # max wins
+        assert b_entries[0]["type"] == "wikilink"
+    finally:
+        conn.close()
+
+
+def test_related_multi_hop_decay(vault_dir):
+    """A→B→C wikilink chain, hops=2 → C score 0.64 (0.8×0.8), type wikilink."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        c = graph_upsert_entity(conn, "c.md", "doc", "c.md")
+        graph_add_edge(conn, a, b, "wikilink", "a.md")
+        graph_add_edge(conn, b, c, "wikilink", "b.md")
+
+        results = graph_get_related(conn, "a.md", hops=2)
+        by_path = {r["path"]: r for r in results}
+        assert by_path["b.md"]["score"] == 0.8
+        assert by_path["c.md"]["score"] == pytest.approx(0.64, abs=1e-9)
+        assert by_path["c.md"]["type"] == "wikilink"
+    finally:
+        conn.close()
+
+
+def test_related_sorted_by_score(vault_dir):
+    """multiple results are sorted by score descending."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")   # wikilink 0.8
+        c = graph_upsert_entity(conn, "c.md", "doc", "c.md")   # related 0.7
+        t = graph_upsert_entity(conn, "t", "tag")
+        d = graph_upsert_entity(conn, "d.md", "doc", "d.md")   # tag hub 0.5
+        graph_add_edge(conn, a, b, "wikilink", "a.md")
+        graph_add_edge(conn, a, c, "related", "a.md")
+        graph_add_edge(conn, a, t, "tag", "a.md")
+        graph_add_edge(conn, d, t, "tag", "d.md")
+
+        results = graph_get_related(conn, "a.md")
+        scores = [r["score"] for r in results]
+        assert scores == sorted(scores, reverse=True)
+        by_path = {r["path"]: r for r in results}
+        assert by_path["b.md"]["score"] == 0.8
+        assert by_path["c.md"]["score"] == 0.7
+        assert by_path["d.md"]["score"] == 0.5
+    finally:
+        conn.close()
+
+
+def test_related_loop_via_tag(vault_dir):
+    """A #t, B #t, B→A wikilink → no infinite loop; A (start) never in results."""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import graph_upsert_entity, graph_add_edge, graph_get_related
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        t = graph_upsert_entity(conn, "t", "tag")
+        graph_add_edge(conn, a, t, "tag", "a.md")
+        graph_add_edge(conn, b, t, "tag", "b.md")
+        graph_add_edge(conn, b, a, "wikilink", "b.md")
+
+        results = graph_get_related(conn, "a.md", hops=3)
+        paths = [r["path"] for r in results]
+        assert "a.md" not in paths  # start doc excluded
+        assert "b.md" in paths
+    finally:
+        conn.close()
+
+
+# --- Task 3: closed-loop e2e (frontmatter tag → get_related_docs) ---
+
+def test_e2e_frontmatter_tag_related(vault_dir, db_conn):
+    """two docs sharing a frontmatter tag → get_related_docs output has the other doc + score.
+
+    Full extraction→query loop through the real tool ``_execute`` (LLM face
+    bypassed): the index conn is the ``db_conn`` fixture, so ``get_index_conn()``
+    resolves to it.
+    """
+    from server.agent import ToolContext
+    from server.agent.tools.get_related_docs import GetRelatedDocsTool, GetRelatedDocsArgs
+    from server.vault.orchestration.indexer import graph_extract_file
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"---\ntags: [shared]\n---\nbody A\n")
+    (vault_dir / "notes" / "b.md").write_bytes(b"---\ntags: [shared]\n---\nbody B\n")
+
+    graph_extract_file(db_conn, vault_dir, "notes/a.md")
+    graph_extract_file(db_conn, vault_dir, "notes/b.md")
+
+    tool = GetRelatedDocsTool()
+    args = GetRelatedDocsArgs(path="notes/a.md")
+    out = tool._execute(args, ToolContext(vault_dir=vault_dir))
+
+    assert "notes/b.md" in out
+    assert "score 0.50" in out
