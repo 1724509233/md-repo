@@ -14,3 +14,4 @@ class AIConfig:
     context_window: int = 16384
     max_rounds: int = 15
     read_doc_max_chars: int = 4000
+    tools: list[str] | None = None   # 主 agent 工具白名单；None = 未配置 = 全量（未知名启动报错）

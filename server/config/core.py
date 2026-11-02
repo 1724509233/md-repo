@@ -9,6 +9,7 @@ import yaml
 
 from .ai import AIConfig
 from .log import LogConfig
+from ..agent.tools import TOOL_REGISTRY
 
 
 @dataclass
@@ -18,6 +19,35 @@ class ServerConfig:
     vault_dir: Path
     ai: AIConfig | None = None
     log: LogConfig = field(default_factory=LogConfig)
+
+
+def _parse_ai_tools(tools_raw) -> list[str] | None:
+    """Parse + validate the ``ai.tools`` whitelist (main agent tool surface).
+
+    Shape: a list of tool names, each of which must exist in the agent tool
+    registry. Absent/None → None (all tools, backward compatible — the
+    default has always been the full registry). Unknown names or an
+    explicitly empty list raise ValueError at load (fail-fast, mirrors the
+    bgagent tools precedent in ``bgagent._parse_tools`` — no fail-open
+    default; an empty whitelist must not silently grant every tool).
+    """
+    if tools_raw is None:
+        return None
+    if not isinstance(tools_raw, list):
+        raise ValueError(
+            f"ai.tools must be a list of tool names, got {type(tools_raw).__name__}")
+    if not tools_raw:
+        raise ValueError(
+            "ai.tools must not be empty (omit the key to enable all tools)")
+    if not all(isinstance(t, str) and t for t in tools_raw):
+        raise ValueError(
+            f"ai.tools must be a list of non-empty strings")
+    bad = [t for t in tools_raw if t not in TOOL_REGISTRY]
+    if bad:
+        raise ValueError(
+            f"ai.tools contains unknown tool name(s): {bad} "
+            f"(valid: {sorted(TOOL_REGISTRY)})")
+    return tools_raw
 
 
 def load_server_config(config_path: str) -> ServerConfig:
@@ -49,6 +79,7 @@ def load_server_config(config_path: str) -> ServerConfig:
             context_window=int(ai_raw.get("context_window", 16384)),
             max_rounds=int(ai_raw.get("max_rounds", 15)),
             read_doc_max_chars=int(ai_raw.get("read_doc_max_chars", 4000)),
+            tools=_parse_ai_tools(ai_raw.get("tools")),
         )
 
     return ServerConfig(

@@ -22,6 +22,7 @@ ai:
   max_tokens: 4096
   context_window: 131072
   temperature: 0.7
+  # tools: [read_doc, search_docs, propose]  # 可选：工具白名单；缺省 = 全部工具；未知名/空列表启动报错
 
 # 后台定时 agent（可选）— 各自独立 cron / provider / prompt
 # 启动时 fail-fast 校验：alias 唯一、cron 合法、prompt 文件存在、

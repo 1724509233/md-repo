@@ -18,36 +18,43 @@ from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 logger = logging.getLogger("md-vault.api")
 
 
+def _build_agent_spec(ctx) -> AgentSpec:
+    """Declarative agent spec from the server's AI config.
+
+    ``ctx.ai_config.tools`` is the tool whitelist (validated against
+    TOOL_REGISTRY at config load): a list = those tools in config order;
+    None (unset) = all tools in registry order (behavior unchanged).
+    """
+    tools = [TOOL_REGISTRY[n] for n in ctx.ai_config.tools] if ctx.ai_config.tools else list(TOOL_REGISTRY.values())
+    return AgentSpec(
+        system_prompt=SYSTEM_PROMPT,
+        model=ModelConfig(
+            model_id=ctx.ai_config.model,
+            provider="openai",
+            base_url=ctx.ai_config.base_url,
+            api_key=ctx.ai_config.api_key,
+            context_window=ctx.ai_config.context_window,
+        ),
+        tools=tools,
+        system_reminders=[TimeSystemReminder()],
+        user_reminders=[DocPathUserReminder()],
+        max_rounds=ctx.ai_config.max_rounds,
+        vault_dir=ctx.vault_dir,
+        read_doc_max_chars=ctx.ai_config.read_doc_max_chars,
+    )
+
+
 def register(app, ctx) -> None:
     session_mgr = SessionManager(ctx.db_conn, ctx.vault_dir)
 
     # Agent instances per session (created on first chat, reused afterwards).
     agent_cache: dict[str, Agent] = {}
 
-    def _build_agent_spec() -> AgentSpec:
-        """Declarative agent spec from the server's AI config."""
-        return AgentSpec(
-            system_prompt=SYSTEM_PROMPT,
-            model=ModelConfig(
-                model_id=ctx.ai_config.model,
-                provider="openai",
-                base_url=ctx.ai_config.base_url,
-                api_key=ctx.ai_config.api_key,
-                context_window=ctx.ai_config.context_window,
-            ),
-            tools=list(TOOL_REGISTRY.values()),
-            system_reminders=[TimeSystemReminder()],
-            user_reminders=[DocPathUserReminder()],
-            max_rounds=ctx.ai_config.max_rounds,
-            vault_dir=ctx.vault_dir,
-            read_doc_max_chars=ctx.ai_config.read_doc_max_chars,
-        )
-
     def _get_agent(session_id: str) -> Agent:
         agent = agent_cache.get(session_id)
         if agent is None:
             messages = session_mgr.get_or_create(session_id)
-            agent = Agent(_build_agent_spec(), messages=messages)
+            agent = Agent(_build_agent_spec(ctx), messages=messages)
             agent_cache[session_id] = agent
         return agent
 

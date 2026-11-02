@@ -1293,3 +1293,44 @@ def test_write_source_attribution(tmp_path: Path):
                      ToolContext(vault_dir=vault, run_id="run-9"))
     # Bgagent run: the run_id is stamped as batch_id (ledger run attribution).
     m.assert_called_once_with("c.md", "agent", batch_id="run-9")
+
+
+# ── _build_agent_spec: ai.tools whitelist filtering (todo b4620a26) ──────
+
+def _spec_ctx(tmp_path: Path, tools):
+    """Minimal ctx stub with every field _build_agent_spec reads."""
+    from types import SimpleNamespace
+
+    from server.config.ai import AIConfig
+
+    return SimpleNamespace(
+        vault_dir=tmp_path,
+        ai_config=AIConfig(
+            base_url="http://x",
+            model="m",
+            context_window=16384,
+            max_rounds=15,
+            read_doc_max_chars=4000,
+            tools=tools,
+        ),
+    )
+
+
+def test_build_agent_spec_filters_tools(tmp_path: Path):
+    """ai.tools whitelist → spec.tools = registry subset, in config order."""
+    from server.agent.tools import TOOL_REGISTRY
+    from server.routes.agent import _build_agent_spec
+
+    ctx = _spec_ctx(tmp_path, ["read_doc"])
+    spec = _build_agent_spec(ctx)
+    assert spec.tools == [TOOL_REGISTRY["read_doc"]]
+
+
+def test_build_agent_spec_default_all_tools(tmp_path: Path):
+    """tools=None (unset) → all tools, registry order (behavior unchanged)."""
+    from server.agent.tools import TOOL_REGISTRY
+    from server.routes.agent import _build_agent_spec
+
+    ctx = _spec_ctx(tmp_path, None)
+    spec = _build_agent_spec(ctx)
+    assert set(spec.tools) == set(TOOL_REGISTRY.values())

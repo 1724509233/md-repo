@@ -357,3 +357,60 @@ def test_five_role_config_loads_clean(tmp_path: Path):
     assert {a.alias for a in agents} == {
         "consolidator", "proofreader", "executor", "sentinel", "narrator"}
     assert [a for a in agents if a.is_executor][0].alias == "executor"
+
+
+# ── ai.tools whitelist (main agent tool surface; todo b4620a26) ──────────
+
+def _ai_cfg_file(tmp_path: Path, extra: str = "") -> Path:
+    """Write a minimal server config with an ``ai`` section.
+
+    ``extra`` = additional indented keys under ``ai:``.
+    """
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_bytes((
+        "server:\n"
+        "  host: 0.0.0.0\n"
+        "  port: 9888\n"
+        "  vault_dir: ./vault\n"
+        "ai:\n"
+        "  base_url: http://localhost:11434/v1\n"
+        f"{extra}"
+    ).encode("utf-8"))
+    return cfg_file
+
+
+def test_ai_tools_subset_accepted(tmp_path: Path):
+    """Explicit whitelist of valid names loads and is preserved as-is."""
+    cfg = load_server_config(str(_ai_cfg_file(tmp_path,
+        "  tools: [\"read_doc\", \"search_docs\"]\n")))
+    assert cfg.ai is not None
+    assert cfg.ai.tools == ["read_doc", "search_docs"]
+
+
+def test_ai_tools_unknown_name_fails_fast(tmp_path: Path):
+    """Unknown tool name → ValueError at load (fail-fast), with the bad
+    name plus at least one valid name so the typo is fixable."""
+    cfg_file = _ai_cfg_file(tmp_path,
+        "  tools: [\"read_doc\", \"nope_tool\"]\n")
+    with pytest.raises(ValueError) as exc:
+        load_server_config(str(cfg_file))
+    msg = str(exc.value)
+    assert "nope_tool" in msg
+    from server.agent.tools import TOOL_REGISTRY
+    assert any(name in msg for name in TOOL_REGISTRY)
+
+
+def test_ai_tools_absent_defaults_none(tmp_path: Path):
+    """No tools key → None (= all tools; behavior unchanged)."""
+    cfg = load_server_config(str(_ai_cfg_file(tmp_path)))
+    assert cfg.ai is not None
+    assert cfg.ai.tools is None
+
+
+def test_ai_tools_empty_list_fails_fast(tmp_path: Path):
+    """An explicitly empty whitelist fails fast instead of silently
+    falling back to the full toolset (fail-open footgun)."""
+    cfg_file = _ai_cfg_file(tmp_path, "  tools: []\n")
+    with pytest.raises(ValueError) as exc:
+        load_server_config(str(cfg_file))
+    assert "empty" in str(exc.value).lower()
