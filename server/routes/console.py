@@ -194,6 +194,19 @@ def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
     ):
         if not d.is_dir():
             continue
+        # Dot files are system cruft (e.g. macOS .DS_Store). The UI tree lists
+        # only .md files, so a folder holding just dot files looks empty and
+        # the user expects deletion to remove it — unlink those dot files
+        # (best-effort; no snapshot, no per-file change_log row: the dir-level
+        # record_folder below covers the user-visible semantics) so the rmdir
+        # can succeed. Ordinary non-.md files are user content and still keep
+        # the folder alive.
+        for p in d.iterdir():
+            if p.is_file() and p.name.startswith("."):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass  # best-effort; rmdir below still decides keep/drop
         try:
             d.rmdir()
         except OSError:

@@ -729,6 +729,80 @@ def test_manage_delete_empty_folder_logs_change(client, vault_dir, db_conn) -> N
     )
 
 
+def test_manage_delete_folder_with_dsstore(client, vault_dir, db_conn) -> None:
+    # A folder whose only content is a macOS dot file. The UI tree shows it
+    # as "empty" (dirs come from os.walk, files list only .md), so the user
+    # can request deletion — and the server must actually remove the folder
+    # and book a dir-level deleted event (todo 8978a337).
+    sub = vault_dir / "notes" / "empty"
+    sub.mkdir()
+    (sub / ".DS_Store").write_bytes(b"junk")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/empty"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 0  # no .md files
+    assert not sub.exists()  # folder gone
+    assert not (sub / ".DS_Store").exists()  # dot file gone
+    changes = get_changes(db_conn)
+    assert any(
+        c["path"] == "notes/empty"
+        and c["action"] == "deleted"
+        and c["source"] == "web"
+        for c in changes
+    )
+
+
+def test_manage_delete_folder_nested_dots(client, vault_dir) -> None:
+    # Nested dot file in a subdirectory: bottom-up cleanup clears the sub dir
+    # before the target, so the whole tree disappears.
+    root = vault_dir / "notes" / "x"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.md").write_bytes(b"# A")
+    (root / "sub" / ".DS_Store").write_bytes(b"junk")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/x"}
+    )
+    assert r.status_code == 200
+    assert r.json()["deleted_count"] == 1  # only a.md is an .md file
+    assert not root.exists()  # whole tree gone
+    assert not (root / "sub" / ".DS_Store").exists()
+
+
+def test_manage_delete_folder_dots_and_user_file_keeps(client, vault_dir) -> None:
+    # A dot file is system cruft (cleared), but an ordinary non-.md file is
+    # user content: it keeps the folder alive (existing pinned behavior).
+    sub = vault_dir / "notes" / "y"
+    sub.mkdir()
+    (sub / ".DS_Store").write_bytes(b"junk")
+    (sub / "b.txt").write_bytes(b"keep me")
+    r = client.post(
+        "/api/docs/manage", json={"action": "delete", "path": "notes/y"}
+    )
+    assert r.status_code == 200
+    assert sub.is_dir()  # folder kept (b.txt is user content)
+    assert not (sub / ".DS_Store").exists()  # dot file cleared
+    assert (sub / "b.txt").is_file()  # user file preserved
+
+
+def test_delete_dots_folder_changes_docs_etag(client, vault_dir) -> None:
+    # User-visible symptom of todo 8978a337: deleting a dots-only folder must
+    # change the /api/docs body, so a subsequent GET with If-None-Match
+    # returns 200 (not 304) and the dir no longer appears. Before the fix the
+    # folder was silently kept, so the second GET returned 304.
+    empt = vault_dir / "empt"
+    empt.mkdir()
+    (empt / ".DS_Store").write_bytes(b"junk")
+    r1 = client.get("/api/docs")
+    assert r1.status_code == 200
+    etag1 = r1.headers["etag"]
+    r = client.post("/api/docs/manage", json={"action": "delete", "path": "empt"})
+    assert r.status_code == 200
+    r2 = client.get("/api/docs", headers={"if-none-match": etag1})
+    assert r2.status_code == 200  # not 304 — the body changed
+    assert "empt" not in r2.json()["dirs"]
+
+
 def test_manage_rename_empty_folder_logs_moved(client, vault_dir, db_conn) -> None:
     (vault_dir / "srcdir").mkdir()
     r = client.post(
