@@ -121,39 +121,82 @@ async function openDoc(path, heading) {
   if (heading) {
     await nextTick()
     const lastCrumb = heading.split(' > ').pop().trim()
-    const headings = document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6')
-    const el = Array.from(headings).find(h => h.textContent.trim() === lastCrumb)
+    // 按文本查找标题元素；挂 flash 时再查一次（搜索页跳转触发面板切换重渲染/reflow，
+    // 首个引用可能已脱钩；重查不到则跳过 flash，不崩）
+    const findHeadingEl = () => Array.from(
+      document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6')
+    ).find(h => h.textContent.trim() === lastCrumb)
+
+    const el = findHeadingEl()
     if (el) {
       el.scrollIntoView({ behavior: 'auto', block: 'center' })
       setTimeout(() => {
+        const cur = findHeadingEl()
+        if (!cur) return
         // 强制清理旧标记 class（防止重复点击时 fade-out 未完成导致冲突）
-        el.classList.remove('heading-flash', 'heading-flash-in', 'heading-flash-out')
-        void el.offsetWidth // 强制 reflow，确保 class 移除生效
-        el.classList.add('heading-flash', 'heading-flash-in')
-
-        let dismissed = false
-        function dismiss() {
-          if (dismissed) return
-          dismissed = true
-          el.classList.remove('heading-flash-in')
-          el.classList.add('heading-flash-out')
-          el.addEventListener('animationend', function onOut(e2) {
-            if (e2.animationName === 'marker-fade-out') {
-              el.classList.remove('heading-flash', 'heading-flash-out')
-            }
-          })
-          preview.removeEventListener('scroll', scrollHandler)
-        }
+        cur.classList.remove('heading-flash', 'heading-flash-in', 'heading-flash-out')
+        void cur.offsetWidth // 强制 reflow，确保 class 移除生效
+        cur.classList.add('heading-flash', 'heading-flash-in')
 
         // 滚动容器是 #preview 的祖先（app.js 中 .flex-1.overflow-y-auto），
         // 向上查找最近的 overflow-y:auto/scroll 祖先
-        let scroller = el.parentElement
+        let scroller = cur.parentElement
         while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
           scroller = scroller.parentElement
         }
         if (!scroller) scroller = document.querySelector('#preview').parentElement
-        const scrollHandler = () => dismiss()
+
+        // 稳定门：搜索页跳转后面板宽度过渡（200ms）在监听挂上后仍在进行，其 reflow
+        // 引发的 scroll 会立刻 dismiss（待办 12c69570 高亮自动消失的根因）。门内
+        // 忽略滚动；门在「rAF 双帧稳定 且 无进行中的 CSS 过渡」时开启（树内跳转
+        // 无过渡 → 门立即开，行为不变）；上限 300ms（自挂载点，含 200ms 定时的
+        // 总时延 500ms 封顶）。
+        let gateOpen = false
+        let rAFDone = false
+        let transDone = !Array.from(document.querySelectorAll('body *'))
+          .some(n => typeof n.getAnimations === 'function' && n.getAnimations().length > 0)
+        function onTrans() {
+          transDone = true
+          tryOpenGate()
+        }
+        function tryOpenGate() {
+          if (!gateOpen && rAFDone && transDone) {
+            gateOpen = true
+            document.removeEventListener('transitionend', onTrans)
+          }
+        }
+        function scrollHandler() {
+          if (gateOpen) dismiss()
+        }
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          rAFDone = true
+          tryOpenGate()
+        }))
+        if (!transDone) document.addEventListener('transitionend', onTrans, { once: true })
         scroller.addEventListener('scroll', scrollHandler)
+        setTimeout(() => {
+          transDone = true
+          tryOpenGate()
+        }, 300)
+
+        // 淡出标记；dismissed 幂等——滚动触发后下一次跳转再调它是 no-op，
+        // 避免 -out class 被重加导致 fade 动画重启闪回
+        let dismissed = false
+        function dismiss() {
+          if (dismissed) return
+          dismissed = true
+          cur.classList.remove('heading-flash-in')
+          cur.classList.add('heading-flash-out')
+          cur.addEventListener('animationend', function onOut(e2) {
+            if (e2.animationName === 'marker-fade-out') {
+              cur.classList.remove('heading-flash', 'heading-flash-out')
+            }
+          })
+          // 监听挂在 scroller 上（旧代码误引用未定义的 preview，任何一次 dismiss
+          // 都会在 fade-out 启动后抛 ReferenceError，监听泄漏）
+          scroller.removeEventListener('scroll', scrollHandler)
+          document.removeEventListener('transitionend', onTrans)
+        }
 
         state._dismissMarker = dismiss
       }, 200)

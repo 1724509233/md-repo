@@ -142,6 +142,8 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 @keyframes pageFade { from { opacity: 0; } to { opacity: 1; } }
 .doc-wrap.page-turn { animation: pageIn .45s cubic-bezier(.32,.72,0,1) both; }
 .doc-wrap.page-turn-out { animation: pageOut .45s cubic-bezier(.32,.72,0,1) both; }
+/* 移动端/减动效：纯淡入，无水平滑动（pageIn 的 12% 位移+3D 旋转在手机上读成多余摆动，2026-11-02 用户确认） */
+.doc-wrap.page-turn-fade { animation: pageFade .2s ease both; }
 @media (prefers-reduced-motion: reduce) {
   .doc-wrap.page-turn, .doc-wrap.page-turn-out { animation: pageFade .2s ease both; }
   /* 文件树展开/折叠、编辑预览切换、工具详情：减弱动效时直接显隐/切换（确认按钮 :active 保留） */

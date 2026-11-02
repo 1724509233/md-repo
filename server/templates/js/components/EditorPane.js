@@ -73,7 +73,8 @@ export const EditorPane = {
         const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
         const desktop = window.innerWidth >= 1024
         if (reduced || !desktop) {
-          docWrapEl.value.classList.add('page-turn')
+          // 移动端/减动效：不做水平滑动（pageIn 的 12% 位移+3D 旋转在手机上读成多余摆动，2026-11-02 用户确认），纯淡入
+          docWrapEl.value.classList.add('page-turn-fade')
           resolve()
         } else {
           docWrapEl.value.classList.add('page-turn-out')
@@ -90,7 +91,7 @@ export const EditorPane = {
     onMounted(() => {
       if (docWrapEl.value) {
         docWrapEl.value.addEventListener('animationend', () => {
-          docWrapEl.value.classList.remove('page-turn', 'page-turn-out')
+          docWrapEl.value.classList.remove('page-turn', 'page-turn-out', 'page-turn-fade')
         })
       }
       if (editorEl.value) {
