@@ -114,10 +114,15 @@ python -m client.main config.yaml
 | `get_related_docs` | 自动 | 图谱关联文档（wikilink/tag/related） |
 | `recent_changes` | 自动 | 变更日志查询（谁改了什么，按 source 过滤） |
 | `recall_stats` | 自动 | 召回遥测统计（sentinel 治理用） |
+| `propose` | 自动 | 创建提案（只写 DB 记录，零文件落） |
+| `list_proposals` | 自动 | 列出提案（只读，按状态/类型过滤） |
+| `get_proposal` | 自动 | 读取单条提案详情（审阅摘要） |
 | `write_doc` | **需确认** | 创建/覆盖文档 |
 | `edit_doc` | **需确认** | 精确文本替换 |
 | `delete_doc` | **需确认** | 删除文档 |
 | `move_docs` | **需确认** | 移动/重命名文档（批量） |
+| `adopt_proposal` | **需确认** | 采纳提案（共享 console 的 advance 决策路径） |
+| `reject_proposal` | **需确认** | 拒绝提案（共享 console 的 advance 决策路径） |
 
 安全边界：路径不能越出 vault、仅限 `.md` 文件、`.sync/` 目录受保护。
 
@@ -141,36 +146,37 @@ python -m client.main config.yaml
 ## 测试
 
 ```bash
-pytest tests/ -v          # 574 tests
+pytest tests/ -v          # 738 tests
 ```
 
 ## 项目结构
 
 ```
 ├── server/
-│   ├── main.py              # 入口：config → db → app → watcher → uvicorn
-│   ├── api.py               # FastAPI 路由工厂（create_app）
+│   ├── main.py              # 入口：config → 双账本(index.db+ledger.db) → app → runtime(watcher+ledger+bgagent) → uvicorn
+│   ├── api.py               # FastAPI 路由工厂（create_app，纯 wiring）
+│   ├── routes/              # 路由分域模块（console/notifications/sync/recall/memory/agent），每域 register(app, ctx)
 │   ├── sync.py              # manifest 对比（compare_files，无 IO 纯函数）
 │   ├── snapshot_watcher.py  # SnapshotWatcher：doorbell + 脏集合 + 快照对比
-│   ├── write_registry.py    # 写归因注册表（变更 source 归因）
+│   ├── ledger.py            # 变更账本（change_log+files 唯一写入面：register/record/consume）
 │   ├── events.py            # 进程内事件总线（change / recall / 等）
 │   ├── ai.py                # RAG 搜索 + LLM 流式
 │   ├── mcp_server.py        # MCP stdio server（AI 助手接入）
-│   ├── proposals.py         # 提案状态机（suggestions/ 提案区）
+│   ├── proposals.py         # 提案状态机（DB 为状态源，suggestions/ 零文件落）
 │   ├── recovery.py          # 恢复演练：证明 index.db 是可重建缓存
 │   ├── logrotate.py         # 客户端旧日志定期清理
-│   ├── config.py            # YAML 配置解析
-│   ├── vault/               # 索引子系统：db/（SQLite+FTS5+图谱）· fs/（切块+链接解析）· orchestration/（索引+refs+移动检测）；公共 API = service.py
-│   ├── agent/               # LLM agent：tools/（10 工具）· runtime · session · policy · reminders
+│   ├── config/              # YAML 配置解析包（core/ai/log/notifications/bgagent）
+│   ├── vault/               # 索引子系统：db/（SQLite+FTS5+图谱）· fs/（切块+链接解析）· orchestration/（索引+refs+移动检测）；直接 import 真实模块（service.py 门面已删）
+│   ├── agent/               # LLM agent：tools/（含 propose/adopt 等提案工具）· runtime · session · policy · reminders
 │   ├── bgagent/             # 后台 agent：scheduler（cron+arming）· runner · notify · executor
-│   ├── prompts/             # bgagent 角色提示词（consolidator / proofreader / sentinel / narrator）
+│   ├── prompts/             # bgagent 角色提示词（consolidator / proofreader / executor / sentinel / narrator）
 │   └── templates/
 │       ├── index.html       # Web UI（单文件，Tailwind CDN）
 │       └── style.css        # 自定义样式
 ├── client/
 │   ├── main.py              # 轮询循环入口
 │   └── sync.py              # 扫描 + 同步逻辑
-├── tests/                   # pytest 套件（574 tests）
+├── tests/                   # pytest 套件（738 tests）
 └── docs/                    # 设计文档 + 实施计划（superpowers/specs · plans）
 ```
 
