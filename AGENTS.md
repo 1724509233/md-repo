@@ -13,7 +13,7 @@ Verified 2026-10-13 with agent-browser 0.39.0 on Windows:
 
 ```bash
 pip install -e ".[dev]"          # install (do this first)
-pytest tests/ -v                 # run all tests (33 files, 574 tests)
+pytest tests/ -v                 # run all tests
 pytest tests/test_api.py::test_health -v  # single test
 python -m server.main config.yaml   # start server (default port 9888)
 python -m client.main config.yaml   # start client polling loop
@@ -22,9 +22,9 @@ md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 
 ## Architecture
 
-- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ai_config, bg_targets)` factory (wiring only); routes live in `server/routes/` (one module per URL-prefix domain: console/notifications/sync/recall/memory/agent), each registering via `register(app, ctx)` on the `WebContext` (exposed at `app.state.ctx`). Route-table order is pinned by `tests/test_routes_order.py`. `main.py` is the entry point that wires config → db → app → `build_runtime()` (named runtime assembly: event bus + publisher filters, the four ledger callbacks, snapshot watcher, bgagent tasks; returns a `Runtime` with `stop()`) → uvicorn.
+- **server/** — FastAPI app. `api.py` has the `create_app(vault_dir, db_conn, ledger_conn, ai_config, bg_targets)` factory (wiring only); routes live in `server/routes/` (one module per URL-prefix domain: console/notifications/sync/recall/memory/agent), each registering via `register(app, ctx)` on the `WebContext` (exposed at `app.state.ctx`). Route-table order is pinned by `tests/test_routes_order.py`. `main.py` is the entry point that wires config → db → app → `build_runtime()` (named runtime assembly: event bus + publisher filters, the four ledger callbacks, snapshot watcher, bgagent tasks; returns a `Runtime` with `stop()`) → uvicorn.
 - **server/vault/** — Index subsystem, split into submodules: `db/` (SQLite schema, conn, file_index, segments_sql, fts_query, graph_sql, changes, sessions, recall, relatedness, trigger_state, notifications, proposal_records, snapshot_records), `fs/` (segmenter, link_parser, vault_ops), `orchestration/` (indexer, move_detect, refs, file_ops). Import directly from the real modules (e.g. `from server.vault.db.file_index import get_all_files`) — the `service.py` facade is gone (card 5).
-- **server/agent/** — LLM agent system: `agent.py` (Agent class), `runtime.py` (LoopRuntime streaming loop), `session.py` (SessionManager), `tools/` (10 tools: read_doc / search_docs / list_files / get_related_docs / recent_changes / recall_stats auto; write_doc / edit_doc / delete_doc / move_docs ask), `policy.py` (channel policy), `prompts.py`, `reminders.py`.
+- **server/agent/** — LLM agent system: `agent.py` (Agent class), `runtime.py` (LoopRuntime streaming loop), `session.py` (SessionManager), `tools/` (15 tools, one module each: read_doc / search_docs / list_files / get_related_docs / recent_changes / recall_stats / propose / list_proposals / get_proposal auto; write_doc / edit_doc / delete_doc / move_docs / adopt_proposal / reject_proposal ask), `policy.py` (channel policy), `prompts.py`, `reminders.py`.
 - **server/bgagent/** — Background agents with independent model configs: `scheduler.py` (cron + event arming), `runner.py` (run_once), `notify.py` (in-app notifications), `executor.py` (framework role, not an LLM agent).
 - **client/** — Python polling client. `sync.py` has `scan_local_files()`, `sync_once()`, `run_polling_loop()`. `main.py` is the entry point.
 - **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn` (index domain), `ledger_conn` (ledger domain, 2026-10-31 split), `app`, `client`, `ai_config` fixtures.
@@ -35,7 +35,7 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.
 - **Sync lock is in-memory**: a `SyncLock` instance (`server/sync_lock.py`) constructed by `create_app` and exposed at `app.state.ctx.sync_lock`. Tests that need to simulate a locked state set `lock.locked_at` directly (see `test_sync_lock` in `tests/test_api.py`). It resets on process restart.
-- **Path traversal guard**: `_safe_rel_path()` in `server/api.py` rejects paths with `..` or leading `/`. Upload and download both go through it.
+- **Path traversal guard**: `safe_rel_path()` in `server/vault/fs/vault_ops.py` (aliased `_safe_rel_path` in the route modules) rejects paths with `..` or leading `/`. Upload and download both go through it.
 - **Deletion is not synced**: if a client deletes a file, it simply won't appear in `local_files`. The server keeps it. On next sync it shows up in `to_pull` (server has it, client doesn't). This is by design.
 - **Conflict files**: saved as `{stem}.conflict-{device_name}{suffix}` (e.g. `notes/test.conflict-mac.md`). The local version is kept untouched.
 - **Config**: both server and client read a single `config.yaml` with both `server:` and `client:` sections. Each side only reads its own section. Copy `config.example.yaml` to `config.yaml` and edit.
@@ -55,11 +55,11 @@ Spec 已归档至 vault：`~/md-vault/projects/md-repo/specs/2026-09-27-md-sync-
 
 MCP 检索：`search_docs("<关键词>")` 全文检索、`read_doc("<相对路径>")` 读全文、`get_related_docs("<相对路径>")` 查关联。
 
-仓库保留清单：AGENTS.md / GLOSSARY.md / README.md / MISSION.md / NOTES.md / RESOURCES.md + `server/` 下 README 与 prompts/ + `docs/superpowers/plans/2026-11-02-*.md` 五份 + 2 份提案通道 HTML。
+仓库保留清单：AGENTS.md / GLOSSARY.md / README.md / MISSION.md / NOTES.md / RESOURCES.md + `server/` 下 README 与 prompts/ + `docs/superpowers/plans/2026-11-02-*.md` 六份 + 2 份提案通道 HTML。
 
 ## Frontend UI Workflow
 
-Web UI lives in `server/templates/index.html` + `server/templates/style.css`, served via Jinja2. Tailwind CSS Play CDN + Flowbite 2.5.2. No build step.
+Web UI is a Vue 3 CDN SPA (no build step): `server/templates/index.html` is the shell that loads `app.js`, with component modules under `server/templates/js/` (`components/` + `utils/`) plus `style.css`. Static assets are served via `/static` (mounted from the templates directory in `api.py`). Tailwind CSS Play CDN + Flowbite 2.5.2.
 
 ### Rules
 
