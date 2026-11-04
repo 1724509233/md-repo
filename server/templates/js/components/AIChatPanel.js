@@ -106,12 +106,22 @@ export const AIChatPanel = {
       const msg = shallowReactive({ role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
       if (text) { msg.blocks.push({ type: 'text', text }); msg.blocksLen = 1 }
       messages.value.push(msg)
-      scrollToBottom()
+      scrollToBottom(true) // 新消息入场强制贴底（用户刚发送/回复起点，期望可见）
       return msg
     }
 
     let scrollTicking = false
-    function scrollToBottom() {
+    // 贴底跟随（sticky bottom）：仅当用户已在底部附近（<64px）时跟随新内容滚动；
+    // 用户上滑读历史时不拽回（回归：流式输出时无法停留查看历史对话）。
+    // force=true 用于新消息入场（addMsg）——用户主动发送，期望看到回复起点。
+    const NEAR_BOTTOM_PX = 64
+    function isNearBottom() {
+      const el = messagesEl.value
+      if (!el) return true
+      return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX
+    }
+    function scrollToBottom(force) {
+      if (!force && !isNearBottom()) return
       if (scrollTicking) return
       scrollTicking = true
       requestAnimationFrame(() => {
@@ -275,7 +285,7 @@ export const AIChatPanel = {
               }
             } catch (e) { }
           }
-          scrollToBottom()
+          scrollToBottom(false) // 流式事件：贴底跟随（用户在底部附近才跟随，上滑读历史不拽回）
         }
       } catch (e) {
         if (e.name === 'AbortError') {

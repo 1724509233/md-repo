@@ -279,8 +279,10 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 详情展开/折叠：grid-template-rows 0fr→1fr（完全镜像 .tool-detail 的实现方式） */
 .thinking-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .thinking-detail.open { grid-template-rows: 1fr; }
-/* 折叠机制要求 grid 子项 min-height: 0；max-height 150px 内滚动（镜像 .tool-pre 的滚动约束） */
-.thinking-text { min-height: 0; overflow-x: hidden; overflow-y: auto; max-height: 150px; padding: 2px 0 6px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--ink-soft); word-break: break-word; }
+/* 折叠机制要求 grid 子项 min-height: 0。无嵌套滚动：max-height 150px 内滚动会挡住
+   流式输出的最新内容（需手动滚内层才看得到，回归 2026-11-04）——思考块自然生长，
+   可见性由消息区贴底跟随保证；答案到达后思考块自动收起（expanded=false），不驻留 */
+.thinking-text { min-height: 0; overflow: hidden; padding: 2px 0 6px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--ink-soft); word-break: break-word; }
 /* 收起态清零 vertical padding：grid 0fr 行收缩时 grid item 的 border-box 下限 = padding 盒，
    min-height: 0 压不掉 padding → 2+6=8px 透明盒漏在 thinking-line 下（.tool-detail 无此问题
    因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁 */
