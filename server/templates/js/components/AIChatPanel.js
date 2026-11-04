@@ -318,6 +318,9 @@ export const AIChatPanel = {
     }
 
     function onKeydown(e) {
+      // IME 组合态（中文输入法）Enter 先确认候选词：此时 keydown 带 isComposing=true
+      // （部分旧浏览器 keyCode=229），不拦截则选词瞬间误发送（回归：输入法回车误触发）
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'Enter' && !e.shiftKey) {
         if (e.ctrlKey) {
           e.preventDefault()
