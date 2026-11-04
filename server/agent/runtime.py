@@ -187,7 +187,14 @@ class LoopRuntime(Runtime):
 
                 result = execute_tool(tc["name"], args, ctx)
                 logger.debug("tool_result %s => %s", tc["name"], result[:200])
-                yield Event("tool_result", {"id": tc["id"], "result": result})
+                # Tool-level failure: the tool executed but returned an "Error:…"
+                # string (e.g. file not found in _execute). Flag it so the UI renders
+                # the error (⚠ + red) like the validate/precheck path — otherwise it
+                # lands on the done branch and reads as a successful ✓.
+                payload = {"id": tc["id"], "result": result}
+                if result.startswith("Error"):
+                    payload["error"] = True
+                yield Event("tool_result", payload)
                 agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
                 # Tool-declared post-success hook (e.g. read tracking)

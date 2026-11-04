@@ -13,7 +13,13 @@ const toolShortNames = {
   delete_doc: { icon: ICONS.trash, label: '删除' },
   move_docs: { icon: ICONS.box, label: '移动' },
   get_related_docs: { icon: ICONS.link, label: '关联' },
-  recent_changes: { icon: ICONS.clock, label: '变更记录' }
+  recent_changes: { icon: ICONS.clock, label: '变更记录' },
+  recall_stats: { icon: ICONS.chart, label: '召回统计' },
+  propose: { icon: ICONS.plus, label: '提案' },
+  list_proposals: { icon: ICONS.list, label: '提案列表' },
+  get_proposal: { icon: ICONS.book, label: '查看提案' },
+  adopt_proposal: { icon: ICONS.check, label: '采纳提案' },
+  reject_proposal: { icon: ICONS.x, label: '拒绝提案' }
 }
 
 export const AIChatPanel = {
@@ -63,6 +69,12 @@ export const AIChatPanel = {
         case 'move_docs': return args.moves ? (args.moves.length + ' 个文件') : ''
         case 'get_related_docs': return args.path
         case 'recent_changes': return args.since || args.source || args.path || '全部'
+        case 'recall_stats': return `近 ${args.days || 30} 天`
+        case 'propose': return args.type || ''
+        case 'list_proposals': { const f = [args.status, args.type, args.actor].filter(Boolean); return f.length ? f.join('/') : '全部' }
+        case 'get_proposal': return `#${args.id}`
+        case 'adopt_proposal': return `#${args.id}`
+        case 'reject_proposal': return `#${args.id}`
         default: return ''
       }
     }
@@ -78,21 +90,27 @@ export const AIChatPanel = {
           const chars = num(/(\d+)\s*chars/)
           if (isNaN(chars)) return fallback()
           let lines = r.split('\n').length - 2; if (lines < 1) lines = 1
-          return `读取 ${args.path || ''}，共 ${lines} 行，${chars} 字`
+          return `共 ${lines} 行，${chars} 字`
         }
         case 'search_docs': {
           let c = num(/count="(\d+)"/)
           if (isNaN(c)) { const m2 = r.match(/<result[\s>]/g); c = m2 ? m2.length : NaN }
           if (isNaN(c)) return fallback()
-          return `搜索"${args.query || ''}"，找到 ${c} 篇相关文档`
+          return `找到 ${c} 篇`
         }
-        case 'list_files': { const lf = nonEmptyLines(); if (!lf) return fallback(); return `列出文件，共 ${lf} 个` }
-        case 'write_doc': { const wc = num(/(\d+)\s*chars/); if (isNaN(wc)) return fallback(); return `写入 ${args.path || ''}，共 ${wc} 字` }
-        case 'edit_doc': { const n = num(/(\d+)\s*occurrence/); if (isNaN(n)) return fallback(); return `编辑 ${args.path || ''}，替换 ${n} 处` }
-        case 'delete_doc': return `删除 ${args.path || ''}`
-        case 'move_docs': { const mv = args.moves ? args.moves.length : NaN; if (isNaN(mv)) return fallback(); return `移动 ${mv} 个文件` }
-        case 'get_related_docs': { const rl = nonEmptyLines() - 1; if (rl < 0) rl = 0; return `关联 ${args.path || ''}，找到 ${rl} 篇相关文档` }
-        case 'recent_changes': { const rc = nonEmptyLines(); if (!rc) return fallback(); return `查询变更记录，共 ${rc} 条` }
+        case 'list_files': { const lf = nonEmptyLines(); if (!lf) return fallback(); return `共 ${lf} 个文件` }
+        case 'write_doc': { const wc = num(/(\d+)\s*chars/); if (isNaN(wc)) return fallback(); return `共 ${wc} 字` }
+        case 'edit_doc': { const m = /replaced (\d+) chars with (\d+) chars/.exec(r); if (!m) return fallback(); return `替换 ${m[1]}→${m[2]} 字符` }
+        case 'delete_doc': return `已删除`
+        case 'move_docs': return `已移动`
+        case 'get_related_docs': { const rl = nonEmptyLines() - 1; if (rl < 0) rl = 0; return `找到 ${rl} 篇关联` }
+        case 'recent_changes': { const rc = nonEmptyLines(); if (!rc) return fallback(); return `共 ${rc} 条` }
+        case 'recall_stats': { const lines = r.split('\n'); let n = 0; for (let i = 2; i < lines.length; i++) { const l = lines[i]; if (!l.trim() || /^Failed queries/.test(l)) break; n++ } if (!n) return fallback(); return `命中 ${n} 篇文档` }
+        case 'propose': { const m = /proposal #(\d+) created.*\(status: (\w+)\)/.exec(r); if (!m) return fallback(); return `新建 #${m[1]}（${m[2]}）` }
+        case 'list_proposals': { const n = (r.match(/"id":/g) || []).length; if (!n) return fallback(); return `共 ${n} 条` }
+        case 'get_proposal': { const m = /"status":\s*"(\w+)"/.exec(r); return m ? `状态 ${m[1]}` : `提案 #${args.id}` }
+        case 'adopt_proposal': return `已采纳`
+        case 'reject_proposal': return `已拒绝`
         default: return fallback()
       }
     }
