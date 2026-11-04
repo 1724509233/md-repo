@@ -64,9 +64,10 @@ Web UI is a Vue 3 CDN SPA (no build step): `server/templates/index.html` is the 
 ### Rules
 
 1. **Design-first**: For any UI layout change (panel placement, responsive behavior, animation, scroll strategy), present the approach to the user BEFORE implementing. Do not iterate reactively — decide placement, transition mechanism, and content reflow strategy upfront.
-2. **Verify before commit**: UI/CSS changes require user visual confirmation in a browser before committing. "Tests pass" ≠ "UI works". Never commit layout changes without explicit user approval.
-3. **Segmented writing**: HTML files >100 lines must be written in segments (structure → styles → scripts), not one-shot. This makes diffs reviewable and errors locatable.
-4. **Panel/drawer checklist**: Before implementing any slide-in panel or drawer, explicitly decide:
+2. **Copy norms** (2026-11-04, 监控页移动端评审后定稿): UI 只放用户做判断/行动需要的信息——状态、数量、时间、标题；实现 meta（后端字段名、端点路径、L2/trigger_state 这类设计概念）不进正文。刷新节奏只表达一次（页头「更新于 HH:mm」），卡头不重复。统计口径的解释进 title tooltip 或 L2 详情层，不写常驻小字。
+3. **Verify before commit**: UI/CSS changes require user visual confirmation in a browser before committing. "Tests pass" ≠ "UI works". Never commit layout changes without explicit user approval.
+4. **Segmented writing**: HTML files >100 lines must be written in segments (structure → styles → scripts), not one-shot. This makes diffs reviewable and errors locatable.
+5. **Panel/drawer checklist**: Before implementing any slide-in panel or drawer, explicitly decide:
    - Placement: side (left/right) vs bottom vs overlay
    - Transition: `transform` (GPU, no reflow) vs `width`/`flex-basis` (triggers reflow) — prefer transform
    - Content reflow: does the main content area resize? If yes, how does centering/scrolling behave?

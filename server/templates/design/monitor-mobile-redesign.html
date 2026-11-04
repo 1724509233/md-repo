@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆控制台 · 监控页移动端重设计（v5 稿 · 纸墨）</title>
+<style>
+/* ════════════ 0) token = 现网 style.css :root 纸墨 6 色 + 状态三色 + 字体（同 v5 稿，原值）════════════ */
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A; --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --st-ok:#059669; --st-error:#ef4444; --st-empty:#94a3b8;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper)}
+body{color:var(--ink);font-family:var(--serif);font-size:15px;line-height:1.7;padding:20px 16px 40px}
+.mdoc{max-width:1280px;margin:0 auto}
+/* ── 设计稿 chrome（同 v5 稿类名）── */
+.ph{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 14px;margin-bottom:6px}
+.ph h1{font-size:19px;font-weight:700;letter-spacing:.01em;color:var(--ink)}
+.ph .sub{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.sc-kicker{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin:26px 2px 10px}
+.foot{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);font-family:var(--sans);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);line-height:1.7}
+/* 手机帧样机：固定宽（自检节 320/360/390 帧 = 宽 2px 边框内径即标注值） */
+.frames{display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start}
+.frame{flex:0 0 auto;background:var(--paper);border:2px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 10px 30px rgba(33,29,24,.09)}
+.frame.w375{width:375px}.frame.w360{width:360px}.frame.w390{width:390px}.frame.w320{width:320px}
+.frame-cap{font-family:var(--sans);font-size:10.5px;color:var(--ink-soft);text-align:center;padding:7px 10px 9px;border-top:1px dashed color-mix(in srgb,var(--line) 90%,transparent);line-height:1.6}
+.frame-cap b{color:var(--ink)}
+.frame-cap .err{color:var(--st-error)}
+.frame-cap .ok{color:var(--st-ok)}
+
+/* ════════════ 1) 生产件原样拷贝（style.css 883–1034 监控页分节子集；
+      前/后帧共用同一份 → 差异只来自本稿新增 .mm-* 类，无第二套视觉语言）════════════ */
+.mwrap{flex:1;min-height:0;display:flex;flex-direction:column;min-width:0;background:var(--paper)}
+.m-scroll{flex:1;overflow-y:auto;min-height:0;padding:24px 28px 44px}
+.mpage{max-width:680px;margin:0 auto}
+/* ≤1023px 生产回退 = 单列（style.css @media max-1023；稿内帧恒为手机宽，直接落单列态） */
+.mp-head{margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.mp-back{border:1px solid var(--line);background:transparent;color:var(--ink-soft);font-family:var(--sans);font-size:11px;font-weight:500;border-radius:999px;padding:4px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.mp-back svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mp-title{font-size:19px;font-weight:700;margin-top:10px;letter-spacing:.01em}
+.mp-meta{font-family:var(--mono);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-top:6px;line-height:1.8}
+.mgroup{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin:18px 2px 9px;display:flex;align-items:center;gap:8px}
+.mgroup:first-of-type{margin-top:4px}
+.mgroup::after{content:'';flex:1;height:1px;background:color-mix(in srgb,var(--line) 75%,transparent)}
+.mgroup .q{font-family:var(--mono);font-size:9px;font-weight:400;letter-spacing:.03em;text-transform:none;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+.zline{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 55%,transparent);text-align:center;padding:10px 2px;border:1px dashed color-mix(in srgb,var(--line) 70%,transparent);border-radius:7px}
+.mcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.mcard:last-child{margin-bottom:0}
+.mc-h{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.mc-t{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink)}
+.mc-poll{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent)}
+.s9{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.s9c{background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:7px;padding:8px 10px;min-width:0}
+.s9c .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s9c .v{font-family:var(--mono);font-size:16px;font-weight:500;margin-top:1px;font-variant-numeric:tabular-nums}
+.s9c.hot .v{color:var(--brass)}
+.s9c.err .v{color:var(--st-error)}
+.s9c.dim .v{color:color-mix(in srgb,var(--ink-soft) 50%,transparent)}
+.mtable{border:1px solid var(--line);border-radius:7px;overflow-x:auto}
+.mtable table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:10px}
+.mtable th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;background:color-mix(in srgb,var(--ink) 3%,transparent)}
+.mtable td{padding:5px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent);white-space:nowrap;color:var(--ink)}
+.mtable tr:last-child td{border-bottom:none}
+.mtable td .w{color:var(--brass);font-variant-numeric:tabular-nums}
+.ano-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:7px}
+.ano-top{display:flex;align-items:center;gap:8px;min-width:0}
+.ano-top .tt{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ano-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);flex-shrink:0}
+.trail-mini{display:flex;flex-direction:column;gap:3px}
+.trail-mini .tline{display:flex;gap:8px;font-family:var(--mono);font-size:9.5px;color:var(--ink-soft);align-items:baseline}
+.trail-mini .tline .op{color:var(--brass);flex-shrink:0;min-width:56px}
+.trail-mini .tline .tp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trail-mini .tcount{font-family:var(--mono);font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);text-align:right}
+.rev-rows{display:flex;flex-direction:column;gap:7px}
+.rev-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.rev-time{margin-left:auto;flex-shrink:0;font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);font-variant-numeric:tabular-nums;white-space:nowrap}
+.f-meta{display:flex;align-items:center;gap:7px;min-width:0}
+.f-title{font-family:var(--serif);font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.f-meta+.f-title{margin-top:5px}
+.seg-row{margin-top:10px}
+.seg-row:first-of-type{margin-top:0}
+.seg-top{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.seg-top .nm{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.seg-top .tg{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.segs{display:flex;gap:4px}
+.seg{height:10px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent)}
+.seg.f{background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 70%,var(--line)));border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.seg.e{background:transparent;border-style:dashed;border-color:color-mix(in srgb,var(--line) 90%,transparent)}
+.seg-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px}
+.seg-sub .sp{flex:1}
+.seg-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.exec-vis{display:flex;align-items:center;gap:14px;padding:4px 2px 2px}
+.lamp{width:11px;height:11px;border-radius:999px;background:var(--st-ok);flex-shrink:0}
+.lamp.off{background:color-mix(in srgb,var(--ink-soft) 40%,var(--line))}
+.exec-vis .big{font-family:var(--mono);font-size:34px;font-weight:500;line-height:1;color:var(--brass);font-variant-numeric:tabular-nums}
+.exec-vis .cap-line{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);line-height:1.7;min-width:0}
+.exec-vis .cap-line b{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.rcl-stats{display:flex;gap:6px}
+.rcl-stat{flex:1;background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:6px;padding:6px 8px;min-width:0}
+.rcl-stat .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rcl-stat .v{font-family:var(--mono);font-size:14px;font-weight:500;margin-top:1px}
+.wbar{display:flex;flex-direction:column;gap:8px;margin-top:4px}
+.wbar-h{font-family:var(--mono);font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-bottom:2px}
+/* 生产「前」wline = 200px 1fr 44px（style.css L987，≥360px 手机带生效形态） */
+.wline{display:grid;grid-template-columns:200px 1fr 44px;gap:10px;align-items:center;min-width:0}
+.wline .p{font-family:var(--mono);font-size:10px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
+.wline .p .lh{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);white-space:normal;margin-top:1px}
+.wline .bar{height:12px;background:color-mix(in srgb,var(--ink) 5%,transparent);border-radius:3px;overflow:hidden;min-width:0}
+.wline .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 60%,var(--line)));border-radius:3px}
+.wline .v{font-family:var(--mono);font-size:10.5px;color:var(--brass);text-align:right;font-variant-numeric:tabular-nums}
+.tchip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);padding:1px 7px;border-radius:999px;flex-shrink:0;white-space:nowrap}
+.spill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 4%,transparent);color:var(--ink-soft);white-space:nowrap;flex-shrink:0}
+.spill::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--st-empty);flex-shrink:0}
+.spill.merged::before{background:var(--st-ok)}
+.spill.rejected::before{background:var(--st-error)}
+.rcl-l2btn{margin-top:10px;border:1px solid var(--line);background:transparent;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--ink-soft);border-radius:999px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px}
+.rcl-l2btn .car{display:inline-flex}
+.rcl-l2btn .car svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block;transform:rotate(90deg)}
+.l2-pad{padding-top:12px}
+.l2-sub{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin:14px 0 6px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.l2-sub:first-child{margin-top:0}
+.l2-sub .cap{font-family:var(--mono);font-size:9px;font-weight:400;text-transform:none;letter-spacing:0;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+
+/* ════════════ 2) 本稿新增件（全部 .mm- 前缀；生产实施时同规则整体包进 @media (max-width: 639px)：
+      纯 CSS 追加 + 模板加类名与 mm-cnt span（既有类名零改动）。6 个：.mm-scroll / .mm-card / .mm-wline / .mm-t-docs / .mm-t-fq / .mm-cnt。
+      实施契约：style.css 既有 @media (max-width: 359px) .wline 规则被 .mm-wline 完全取代（≤359px 同样走叠放）= 死代码，实施时随同删除；
+      mm 块与既有媒体块无顺序约束。════════════ */
+/* ① 页面 gutters：28px 桌面级边距 → 16px 手机 gutter（375px 卡内容 285 → 315px，+30px 全用于两病灶） */
+.mm-scroll{padding:20px 16px 32px}
+/* ② 卡内距微收：16 → 13px（14 → 12px 纵）；卡距 12 → 10px。圆角 10 保留（纸墨卡家族不动） */
+.mm-card{padding:12px 13px;margin-bottom:10px}
+/* ③ 病灶一「召回分数」：200px 1fr 44px 三列 → 两行叠放（path 独占整宽；bar + 值 归第二行）。
+   DOM 不变（span.p / span.bar / span.v 原序），纯网格改排 → 无新增 DOM */
+.mm-wline{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}
+.mm-wline .p{grid-column:1/-1}
+.mm-wline .v{min-width:34px}
+/* ④ 病灶二「文档榜」：6 列全 nowrap → 3 列（文档 / 加权 / last_hit）；
+   三计数列藏进文档格尾 .mm-cnt 微行（信息不删，降权到行尾注脚）；
+   路径 = 唯一可折行单元：优先词/连字符边界，overflow-wrap:anywhere 兜底极端 token（不用 break-all 断词） */
+.mm-t-docs table{min-width:0}
+.mm-t-docs th:nth-child(2),.mm-t-docs td:nth-child(2),
+.mm-t-docs th:nth-child(3),.mm-t-docs td:nth-child(3),
+.mm-t-docs th:nth-child(4),.mm-t-docs td:nth-child(4){display:none}
+.mm-t-docs td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0}
+.mm-t-docs th:nth-child(1){text-align:left}
+.mm-t-docs td .w{display:inline-block;min-width:30px;text-align:right}
+.mm-cnt{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:2px;letter-spacing:0}
+/* ⑤ 失败查询表：query 列 = 唯一可折行单元（2 行 clamp，全文进 title 兜底）；「7d 次数」列口径挪入 th title */
+.mm-t-fq td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+/* ⑥ 自检节：同页不同宽 = 同一份 .mm-* 规则在 320/360/375/390 四帧复算（无第三套样式） */
+</style>
+</head>
+<body>
+<div class="mdoc">
+  <div class="ph">
+    <h1>记忆控制台 · 监控页移动端重设计</h1>
+    <span class="sub">纸墨 tokens · 2026-11-04</span>
+  </div>
+
+  <!-- ══ 01 · 前后对比 ══ -->
+  <div class="sc-kicker">01 · 375px 前后对比</div>
+  <div class="frames">
+
+    <!-- ── 前（生产原样）── -->
+    <div>
+      <div class="frame w375">
+        <div class="mwrap"><div class="m-scroll"><div class="mpage">
+          <div class="mcard">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="rcl-stats">
+              <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">72</div></div>
+              <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">191</div></div>
+              <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">129.5</div></div>
+            </div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline"><span class="p">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline"><span class="p">工作笔记/MOC.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline"><span class="p">学习计划/my sop skill.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline"><span class="p">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline"><span class="p">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <button class="rcl-l2btn" type="button" aria-expanded="true"><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md</td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="工作笔记/MOC.md">工作笔记/MOC.md</td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="学习计划/my sop skill.md">学习计划/my sop skill.md</td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md</td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                  <tr><td title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md</td><td>19</td><td>7</td><td>0</td><td><span class="w">21.1</span></td><td>10-29 14:44</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                  <tr><td title="åyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">åyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>前</b> · 生产现状（style.css 原样 · 可拖横滚 · 查询已脱敏）</div>
+      </div>
+    </div>
+
+    <!-- ── 后（本稿 .mm-* 件）── -->
+    <div>
+      <div class="frame w375">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="rcl-stats">
+              <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">72</div></div>
+              <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">191</div></div>
+              <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">129.5</div></div>
+            </div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p" title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p" title="工作笔记/MOC.md">工作笔记/MOC.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline mm-wline"><span class="p" title="学习计划/my sop skill.md">学习计划/my sop skill.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline mm-wline"><span class="p" title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline mm-wline"><span class="p" title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <button class="rcl-l2btn" type="button" aria-expanded="true"><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="工作笔记/MOC.md">工作笔记/MOC.md<span class="mm-cnt">human 25 · on_demand 1 · synthetic 0</span></td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="学习计划/my sop skill.md">学习计划/my sop skill.md<span class="mm-cnt">human 25 · on_demand 1 · synthetic 0</span></td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                  <tr><td title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md<span class="mm-cnt">human 19 · on_demand 7 · synthetic 0</span></td><td>19</td><td>7</td><td>0</td><td><span class="w">21.1</span></td><td>10-29 14:44</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                  <tr><td title="åyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">åyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>后</b> · 本稿（同数据 · 仅加 .mm-* 类 + 删 meta 小字 · 最长路径仍截尾，title 全文 · 查询已脱敏）</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 02 · 375px 整页六卡 ══ -->
+  <div class="sc-kicker">02 · 375px 整页六卡</div>
+  <div class="frames">
+    <div>
+      <div class="frame w375">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mp-head">
+            <button class="mp-back" type="button"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+            <div class="mp-title">记忆运行时 · 后台监控</div>
+            <div class="mp-meta">更新于 00:25</div>
+          </div>
+          <div class="mgroup">状态<span class="q">健康吗</span></div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">九态</span></div>
+            <div class="s9">
+              <div class="s9c dim"><div class="k">Processing</div><div class="v">0</div></div>
+              <div class="s9c hot"><div class="k">Awaiting</div><div class="v">1</div></div>
+              <div class="s9c dim"><div class="k">Adopted</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Rejected</div><div class="v">0</div></div>
+              <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+              <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Failed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">异常清单</span></div>
+            <div class="zline">无异常</div>
+          </div>
+          <div class="mgroup">系统<span class="q">在干什么</span></div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">后台任务</span></div>
+            <div class="seg-row">
+              <div class="seg-top"><span class="nm">consolidator</span><span class="tg">arm 0/3</span></div>
+              <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+              <div class="seg-sub"><span>上次 昨天 23:28</span><span class="sp"></span><span>今天 0/3 次</span></div>
+            </div>
+            <div class="seg-row">
+              <div class="seg-top"><span class="nm">proofreader</span><span class="tg">arm 0/3</span></div>
+              <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+              <div class="seg-sub"><span>上次 8h 前</span><span class="sp"></span><span>今天 0/2 次</span></div>
+            </div>
+            <div class="seg-row">
+              <div class="seg-top"><span class="nm">sentinel</span><span class="tg">arm 0/10</span></div>
+              <div class="segs"><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i><i class="seg e"></i></div>
+              <div class="seg-sub"><span>上次 2h 前</span><span class="sp"></span><span>今天 0/2 次</span></div>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">执行器</span></div>
+            <div class="exec-vis">
+              <span class="lamp off" title="armed · 待机"></span>
+              <span class="big">0</span>
+              <span class="cap-line"><b>executor</b> · 30min 循环 · last_op 11-02 16:42<br>0 条 adopted 待落地<br>last_batch consolidator-20261030T163039</span>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="rcl-stats">
+              <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">72</div></div>
+              <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">191</div></div>
+              <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">129.5</div></div>
+            </div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p" title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p" title="工作笔记/MOC.md">工作笔记/MOC.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline mm-wline"><span class="p" title="学习计划/my sop skill.md">学习计划/my sop skill.md<span class="lh">last_hit 11-03 20:02</span></span><span class="bar"><i style="width:82.6%"></i></span><span class="v">25.9</span></div>
+              <div class="wline mm-wline"><span class="p" title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline mm-wline"><span class="p" title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <button class="rcl-l2btn" type="button" aria-expanded="true"><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="工作笔记/MOC.md">工作笔记/MOC.md<span class="mm-cnt">human 25 · on_demand 1 · synthetic 0</span></td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="学习计划/my sop skill.md">学习计划/my sop skill.md<span class="mm-cnt">human 25 · on_demand 1 · synthetic 0</span></td><td>25</td><td>1</td><td>0</td><td><span class="w">25.9</span></td><td>11-03 20:02</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                  <tr><td title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md<span class="mm-cnt">human 19 · on_demand 7 · synthetic 0</span></td><td>19</td><td>7</td><td>0</td><td><span class="w">21.1</span></td><td>10-29 14:44</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">采纳提案</span></div>
+            <div class="rev-rows">
+              <div class="rev-row">
+                <div class="f-meta"><span class="tchip"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>relatedness</span><span class="rev-time">11-02 17:18</span></div>
+                <div class="f-title" title="projects/md-repo/plans/2026-10-29-arch-review-leftovers.md">projects/md-repo/plans/2026-10-29-arch-review-leftovers.md</div>
+              </div>
+              <div class="rev-row">
+                <div class="f-meta"><span class="tchip"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>relatedness</span><span class="rev-time">11-02 17:18</span></div>
+                <div class="f-title" title="projects/md-repo/specs/2026-10-31-ledger-file-split-design.md">projects/md-repo/specs/2026-10-31-ledger-file-split-design.md</div>
+              </div>
+              <div class="rev-row">
+                <div class="f-meta"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>errata</span><span class="rev-time">11-02 16:42</span></div>
+                <div class="f-title" title="项目笔记/md-repo/changelog-bugs.md">项目笔记/md-repo/changelog-bugs.md</div>
+              </div>
+            </div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>整页</b> · 六卡单列（顺序 ①②③④⑤⑥ 不变）· 查询已脱敏</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ 03 · 自检 ══ -->
+  <div class="sc-kicker">03 · 自检 · 320 / 360 / 375 / 390px · 帧内 = 受影响卡 + 回归卡，数据缩减为顶格场景</div>
+  <div class="frames" style="overflow-x:auto;flex-wrap:nowrap;padding-bottom:8px">
+    <!-- 320（简化卡样张：召回卡 = mm-wline / mm-t-docs / mm-t-fq / mm-cnt 四件齐收，含既有 @media 359 wline 回退形态替换验证） -->
+    <div>
+      <div class="frame w320">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+            </div>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>320px</b> · 简化卡样张（召回）· 无横向溢出 · 无重叠 · 查询已脱敏</div>
+      </div>
+    </div>
+    <!-- 360 -->
+    <div>
+      <div class="frame w360">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">九态</span></div>
+            <div class="s9">
+              <div class="s9c dim"><div class="k">Processing</div><div class="v">0</div></div>
+              <div class="s9c hot"><div class="k">Awaiting</div><div class="v">1</div></div>
+              <div class="s9c dim"><div class="k">Adopted</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Rejected</div><div class="v">0</div></div>
+              <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+              <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Failed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">执行器</span></div>
+            <div class="exec-vis">
+              <span class="lamp off"></span>
+              <span class="big">0</span>
+              <span class="cap-line"><b>executor</b> · 30min 循环 · last_op 11-02 16:42<br>0 条 adopted 待落地<br>last_batch consolidator-20261030T163039</span>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>360px</b> · 无横向溢出 · 无重叠 · 查询已脱敏</div>
+      </div>
+    </div>
+    <!-- 375 -->
+    <div>
+      <div class="frame w375">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">九态</span></div>
+            <div class="s9">
+              <div class="s9c dim"><div class="k">Processing</div><div class="v">0</div></div>
+              <div class="s9c hot"><div class="k">Awaiting</div><div class="v">1</div></div>
+              <div class="s9c dim"><div class="k">Adopted</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Rejected</div><div class="v">0</div></div>
+              <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+              <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Failed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">执行器</span></div>
+            <div class="exec-vis">
+              <span class="lamp off"></span>
+              <span class="big">0</span>
+              <span class="cap-line"><b>executor</b> · 30min 循环 · last_op 11-02 16:42<br>0 条 adopted 待落地<br>last_batch consolidator-20261030T163039</span>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>375px</b> · 无横向溢出 · 无重叠 · 查询已脱敏</div>
+      </div>
+    </div>
+    <!-- 390 -->
+    <div>
+      <div class="frame w390">
+        <div class="mwrap"><div class="m-scroll mm-scroll"><div class="mpage">
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">九态</span></div>
+            <div class="s9">
+              <div class="s9c dim"><div class="k">Processing</div><div class="v">0</div></div>
+              <div class="s9c hot"><div class="k">Awaiting</div><div class="v">1</div></div>
+              <div class="s9c dim"><div class="k">Adopted</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Rejected</div><div class="v">0</div></div>
+              <div class="s9c"><div class="k">Merged</div><div class="v">5</div></div>
+              <div class="s9c dim"><div class="k">Expired</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Failed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Malformed</div><div class="v">0</div></div>
+              <div class="s9c dim"><div class="k">Pending</div><div class="v">0</div></div>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">执行器</span></div>
+            <div class="exec-vis">
+              <span class="lamp off"></span>
+              <span class="big">0</span>
+              <span class="cap-line"><b>executor</b> · 30min 循环 · last_op 11-02 16:42<br>0 条 adopted 待落地<br>last_batch consolidator-20261030T163039</span>
+            </div>
+          </div>
+          <div class="mcard mm-card">
+            <div class="mc-h"><span class="mc-t">召回</span></div>
+            <div class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/watchdog-design.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:100%"></i></span><span class="v">31.3</span></div>
+              <div class="wline mm-wline"><span class="p">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="lh">last_hit 10-30 15:54</span></span><span class="bar"><i style="width:80.7%"></i></span><span class="v">25.3</span></div>
+              <div class="wline mm-wline"><span class="p">项目笔记/md-repo/changelog-bugs.md<span class="lh">last_hit 10-29 14:44</span></span><span class="bar"><i style="width:67.4%"></i></span><span class="v">21.1</span></div>
+            </div>
+            <div style="display:block"><div class="l2-pad">
+              <div class="l2-sub">召回文档榜</div>
+              <div class="mtable mm-t-docs"><table>
+                <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                <tbody>
+                  <tr><td title="项目笔记/md-repo/watchdog-design.md">项目笔记/md-repo/watchdog-design.md<span class="mm-cnt">human 31 · on_demand 9 · synthetic 0</span></td><td>31</td><td>9</td><td>0</td><td><span class="w">31.3</span></td><td>10-29 14:44</td></tr>
+                  <tr><td title="projects/md-repo/spec/2026-10-02-mcp-server-design.md">projects/md-repo/spec/2026-10-02-mcp-server-design.md<span class="mm-cnt">human 31 · on_demand 1 · synthetic 0</span></td><td>31</td><td>1</td><td>0</td><td><span class="w">25.3</span></td><td>10-30 15:54</td></tr>
+                </tbody>
+              </table></div>
+              <div class="l2-sub">失败查询</div>
+              <div class="mtable mm-t-fq"><table>
+                <thead><tr><th>query</th><th>最近</th><th title="窗口内同 query 计数（≤200 行）">7d 次数</th></tr></thead>
+                <tbody>
+                  <tr><td title="ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy">ååyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy</td><td>11-03 20:02</td><td>4</td></tr>
+                </tbody>
+              </table></div>
+            </div></div>
+          </div>
+        </div></div></div>
+        <div class="frame-cap"><b>390px</b> · 无横向溢出 · 无重叠 · 查询已脱敏</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    稿：server/templates/design/monitor-mobile-redesign.html · 纸墨 tokens · 2026-11-04<br>
+    实施风险：生产 ⑥ 卡 `:key="p.relpath"`（MonitorPage.js L419）在同 relpath 多条终态时撞 key → 需改 relpath+created 或索引
+  </div>
+</div>
+</body>
+</html>

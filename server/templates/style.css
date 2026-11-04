@@ -916,15 +916,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .mcard:last-child { margin-bottom: 0; }
 .mc-h { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }
 .mc-t { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--ink); }
-.mc-poll { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); }
 .mc-h.clickable { cursor: pointer; user-select: none; }
 .mc-h.clickable:hover .mc-t { color: var(--brass); }
 .mc-h .car { margin-left: auto; color: color-mix(in srgb, var(--ink-soft) 60%, transparent); transition: transform .2s var(--ease); }
 .mc-h .car svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: block; }
 .mcard.open .car { transform: rotate(90deg); }
-.mc-note { font-family: var(--sans); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); margin-top: 10px; line-height: 1.65; }
-.mc-note b { color: var(--ink); }
-.mc-note i { font-style: normal; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--brass) 80%, var(--ink)); background: color-mix(in srgb, var(--brass) 8%, transparent); border-radius: 4px; padding: 1px 5px; }
 /* 九态 9 格（产品现有顺序；零态淡显 / awaiting 铜 / failed 红） */
 .s9 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
 .s9c { background: color-mix(in srgb, var(--ink) 3%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 7px; padding: 8px 10px; min-width: 0; }
@@ -941,7 +937,6 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .l2-pad { padding-top: 12px; }
 .l2-sub { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin: 14px 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .l2-sub:first-child { margin-top: 0; }
-.l2-sub .cap { font-family: var(--mono); font-size: 9px; font-weight: 400; text-transform: none; letter-spacing: 0; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); }
 .mtable { border: 1px solid var(--line); border-radius: 7px; overflow-x: auto; }
 .mtable table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: 10px; }
 .mtable th { font-family: var(--sans); font-size: 9px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); white-space: nowrap; background: color-mix(in srgb, var(--ink) 3%, transparent); }
@@ -958,13 +953,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .trail-mini .tline .op { color: var(--brass); flex-shrink: 0; min-width: 56px; }
 .trail-mini .tline .tp { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trail-mini .tcount { font-family: var(--mono); font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: right; }
-/* 最近终态（merged / rejected；文字行 = 终态为事件非比例，不图形化） */
+/* ⑥ 采纳提案（merged；两行卡与记忆控制台卡同构：f-meta = tag + merge 时间 / f-title = 短标题，复用 feed 规则） */
 .rev-rows { display: flex; flex-direction: column; gap: 7px; }
 .rev-row { background: color-mix(in srgb, var(--ink) 2%, transparent); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
-.rev-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.rev-top .tt { font-family: var(--serif); font-size: 12.5px; font-weight: 600; color: var(--ink); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rev-top .dt { font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); flex-shrink: 0; }
-.rev-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rev-time { margin-left: auto; flex-shrink: 0; font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* 分段刻度条（实心段 = 当前 arm，总段数 = 目标；armed_target 端点恒 null → 按 arm 画，arm=0 单段虚线占位） */
 .seg-row { margin-top: 10px; }
 .seg-row:first-of-type { margin-top: 0; }
@@ -988,7 +980,6 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 召回 top5 横条比例图（宽度 ∝ weighted，按 top5 最大值归一，值标条尾兜底） */
 .wbar { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .wline { display: grid; grid-template-columns: 200px 1fr 44px; gap: 10px; align-items: center; min-width: 0; }
-.wbar-h { font-family: var(--mono); font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); margin-bottom: 2px; }
 .wline .p { font-family: var(--mono); font-size: 10px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
 /* last_hit 降为 path 下副注（图形列放不下三个字段：path / 条 / 值 占满三列） */
 .wline .p .lh { display: block; font-size: 9px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); white-space: normal; margin-top: 1px; }
@@ -1013,9 +1004,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .mpage.grid .mp-head, .mpage.grid .mgroup { grid-column: 1 / -1; }
 .mpage.grid .mgroup { margin: 6px 2px 0; }
 .mpage.grid .mgroup:first-of-type { margin-top: 4px; }
-/* 行 3/4：⑤召回 ⑥最近终态 通栏（DOM 顺序 = ①②③④⑤⑥，row-major 自然落位，零重排） */
+/* 行 3/4：⑤召回 ⑥采纳提案 通栏（DOM 顺序 = ①②③④⑤⑥，row-major 自然落位，零重排） */
 .mpage.grid .mcard.full { grid-column: 1 / -1; }
-/* 网格内卡：卡间距 12px 由 gap 承担；flex 纵排让 mc-note 贴底，行内等高由 stretch 撑满 */
+/* 网格内卡：卡间距 12px 由 gap 承担，行内等高由 stretch 撑满 */
 .mpage.grid .mcard { margin-bottom: 0; display: flex; flex-direction: column; min-width: 0; }
 /* flex 纵排下 inline 子件会被 stretch 拉满：L2 按钮回到内容宽 pill（左对齐） */
 .mpage.grid .rcl-l2btn { align-self: flex-start; }
@@ -1025,10 +1016,23 @@ details.d-sec .body { padding: 8px 12px 14px; }
   /* ≤1023px（含 <768px）：单列，六区块通栏堆叠，顺序不变（无需第三套断点） */
   .mpage.grid { grid-template-columns: 1fr; max-width: 680px; }
 }
-@media (max-width: 359px) {
-  /* 生产窄屏视口（<360px）：wline 固定部（path 200 + 值 44 + gap 20 = 264px）在 320px 屏
-     内宽 ~252px 下放不下 → path 改 auto、条取 flex。media query 按视口计。 */
-  .wline { grid-template-columns: auto 1fr 44px; }
+/* 监控页 ≤639px 手机（2026-11-04；稿 design/monitor-mobile-redesign.html §2，原值） */
+.mm-cnt{display:none}
+@media (max-width: 639px){
+  .mm-scroll{padding:20px 16px 32px}
+  .mm-card{padding:12px 13px;margin-bottom:10px}
+  .mm-wline{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}
+  .mm-wline .p{grid-column:1/-1}
+  .mm-wline .v{min-width:34px}
+  .mm-t-docs table{min-width:0}
+  .mm-t-docs th:nth-child(2),.mm-t-docs td:nth-child(2),
+  .mm-t-docs th:nth-child(3),.mm-t-docs td:nth-child(3),
+  .mm-t-docs th:nth-child(4),.mm-t-docs td:nth-child(4){display:none}
+  .mm-t-docs td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0}
+  .mm-t-docs th:nth-child(1){text-align:left}
+  .mm-t-docs td .w{display:inline-block;min-width:30px;text-align:right}
+  .mm-cnt{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:2px;letter-spacing:0}
+  .mm-t-fq td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 }
 /* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标） */
 @media (prefers-reduced-motion: reduce) {
@@ -1160,7 +1164,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .mwrap.mp-enter .mpage > div:nth-child(6) { animation-delay: 200ms; }  /* ③ 后台任务 */
 .mwrap.mp-enter .mpage > div:nth-child(7) { animation-delay: 240ms; }  /* ④ 执行器 */
 .mwrap.mp-enter .mpage > div:nth-child(8) { animation-delay: 280ms; }  /* ⑤ 召回（通栏） */
-.mwrap.mp-enter .mpage > div:nth-child(9) { animation-delay: 320ms; }  /* ⑥ 最近终态（通栏） */
+.mwrap.mp-enter .mpage > div:nth-child(9) { animation-delay: 320ms; }  /* ⑥ 采纳提案（通栏） */
 
 /* ── 页内微动效：首载「一次」= 仅在 .mp-enter 窗口内播放（条宽/刻度为快照，30s 轮询无时序，不画持续进度）
    刻度条实心段 / 召回比例条 = 自左 scaleX 展开（GPU；宽 = 数据 inline 值，轮询跳变无过渡无闪烁）；
