@@ -227,6 +227,7 @@ async function _applyChangeToCurrentDoc(changes) {
   if (deleted) {
     state.docContent = ''
     state.currentPath = null
+    state.dirty = false  // 与 handleToolResult 的 delete_doc 快路径同策：文档已不存在，脏态无意义
   } else {
     if (moved) state.currentPath = moved.path
     // 脏缓冲保护：用户正在编辑时不替换未保存内容（快速路径另有 conflict 横幅；
@@ -318,6 +319,10 @@ async function handleToolResult(evt) {
   if (name === 'delete_doc') {
     if (args.path === state.currentPath) {
       state.docContent = ''
+      // 清 path 防 /chat doc-path 预检 409（回归：agent 删除当前文档后再次发消息 409）；
+      // 文档已不存在，脏态无意义（saveDoc 对 null path 本就 early-return）
+      state.currentPath = null
+      state.dirty = false
     }
     // 304（DB 未消费到新数据）→ 不推进游标，轮询兜底自愈
     if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3
@@ -329,6 +334,26 @@ async function handleToolResult(evt) {
         // 脏缓冲只重指路径、不替换未保存内容（与 _applyChangeToCurrentDoc 的脏保护同策）
         if (!state.dirty) api.getDoc(m.to_path).then(text => { state.docContent = text }).catch(() => { })
         break
+      }
+    }
+    // 引用方文档：盘上内容已被 update_references_batch 改写（wikilink 全路径/短名）→ 读盘刷新；
+    // 脏缓冲不覆盖（与 write_doc 分支同策），改弹 conflict banner，防用户保存旧引用覆盖改写
+    if (state.currentPath && moves.length) {
+      const movedSelf = moves.some(m => m.to_path === state.currentPath)
+      // 镜像 refs.py update_references_batch 的替换形态：[[from_path]]（.md 有无两种）、[[stem]]，均含 |alias 变体
+      const content = state.docContent
+      const escRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const refers = moves.some(m => {
+        if (!content || !m.from_path) return false
+        const stem = m.from_path.replace(/\.md$/, '').split('/').pop()
+        const forms = [m.from_path]
+        if (!/\.md$/.test(m.from_path)) forms.push(m.from_path + '.md')
+        forms.push(stem)
+        return forms.some(f => new RegExp('\\[\\[' + escRe(f) + '(?:\\|[^\\]]+)?\\]\\]').test(content))
+      })
+      if (!movedSelf && refers) {
+        if (state.dirty) state.conflict = { toolName: 'move_docs', path: state.currentPath }
+        else api.getDoc(state.currentPath).then(text => { state.docContent = text }).catch(() => { })
       }
     }
     if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3

@@ -239,6 +239,9 @@ export const AIChatPanel = {
                   const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
                   if (tool) {
                     tool.status = 'confirm'
+                    // status 变更在原始块对象上不可追踪（blocks 非 deep reactive）→
+                    // uiTick 驱动 1 次 re-render 让 confirm-btns 的 v-if 生效（同 toggleBlock 机制）
+                    currentTurn.uiTick = (currentTurn.uiTick || 0) + 1
                   } else {
                     console.warn('[ai-chat] confirm_request: no matching tool for id', evt.id)
                   }
@@ -249,6 +252,9 @@ export const AIChatPanel = {
                   if (tool) {
                     tool.status = evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done')
                     tool.result = evt.result
+                    // 同 confirm_request：status/result 变更不可追踪 → uiTick 即时显示 done/error 图标与结果文本
+                    //（不再等 'done' 事件的 finishTurn render 兜底）
+                    currentTurn.uiTick = (currentTurn.uiTick || 0) + 1
                     // 服务端 SSE tool_result 只带 {id, result, rejected?, error?}——没有 name/args；
                     // emit 前必须合并 tool_call 块的 name/args（等价旧 HTML UI 从 dataset.toolName/
                     // args 恢复的做法），否则 app.js 快速路径整体失效（回归史见其 handleToolResult 注）
