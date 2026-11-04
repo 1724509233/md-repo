@@ -1271,28 +1271,39 @@ def test_done_reason_final_vs_round_limit(tmp_path: Path):
 
 
 def test_write_source_attribution(tmp_path: Path):
-    """ledger.register 使用 ctx.write_source（默认 "agent"，后台 agent 传 alias）。"""
+    """写归因：agent 写工具同步 ledger.record（旧口径 ledger.register →
+    watcher 消费），source 用 ctx.write_source（默认 "agent"，后台 agent
+    传 alias），run_id → batch_id。record 是同步记账，需要 index conn 已
+    注册才会走到（None 守卫，与工具内现有模式一致）。"""
+    from unittest.mock import ANY
+
     from server.agent import execute_tool, ToolContext
+    from server.vault import init_db
 
     vault = tmp_path / "vault"
     vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn, None)
 
-    with patch("server.ledger.register") as m:
+    with patch("server.ledger.record") as m:
         execute_tool("write_doc", {"path": "a.md", "content": "x"},
                      ToolContext(vault_dir=vault, write_source="notes-organizer"))
     # Interactive run: run_id "" → batch_id stays empty (behavior unchanged).
-    m.assert_called_once_with("a.md", "notes-organizer", batch_id="")
+    m.assert_called_once_with(conn, vault, "a.md", "created", "notes-organizer",
+                              new_hash=ANY, batch_id="")
 
-    with patch("server.ledger.register") as m:
+    with patch("server.ledger.record") as m:
         execute_tool("write_doc", {"path": "b.md", "content": "x"},
                      ToolContext(vault_dir=vault))
-    m.assert_called_once_with("b.md", "agent", batch_id="")
+    m.assert_called_once_with(conn, vault, "b.md", "created", "agent",
+                              new_hash=ANY, batch_id="")
 
-    with patch("server.ledger.register") as m:
+    with patch("server.ledger.record") as m:
         execute_tool("write_doc", {"path": "c.md", "content": "x"},
                      ToolContext(vault_dir=vault, run_id="run-9"))
     # Bgagent run: the run_id is stamped as batch_id (ledger run attribution).
-    m.assert_called_once_with("c.md", "agent", batch_id="run-9")
+    m.assert_called_once_with(conn, vault, "c.md", "created", "agent",
+                              new_hash=ANY, batch_id="run-9")
 
 
 # ── _build_agent_spec: ai.tools whitelist filtering (todo b4620a26) ──────

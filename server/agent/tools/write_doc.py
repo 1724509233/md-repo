@@ -23,7 +23,7 @@ class WriteDocTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture, hash_bytes
-        from ...vault.db.conn import get_ledger_conn
+        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ... import ledger
 
         fp = ctx.vault_dir / args.path
@@ -41,7 +41,6 @@ class WriteDocTool(Tool):
             snap = capture(conn, ctx.vault_dir, args.path,
                            "update" if existed else "create",
                            ctx.write_source, run_id=ctx.run_id)
-        ledger.register(args.path, ctx.write_source, batch_id=ctx.run_id)
         try:
             fp.write_bytes(new_bytes)
         except OSError as e:
@@ -53,9 +52,17 @@ class WriteDocTool(Tool):
 
                 discard(conn, ctx.vault_dir, snap)
             raise
+        digest = hash_bytes(new_bytes)
         if snap is not None:
-            finalize(conn, snap, hash_bytes(new_bytes))
+            finalize(conn, snap, digest)
             gc_after_capture(conn, ctx.vault_dir)
+        # 新约定：change_log 行必须在 tool_result SSE 前入库（UI 快路径
+        # loadDocs 得 200）；skip 标记使 watcher 事件记零行，恰好一行。
+        index_conn = get_index_conn()
+        if index_conn is not None:
+            ledger.record(index_conn, ctx.vault_dir, args.path,
+                          "modified" if existed else "created",
+                          ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
         if existed:
             return f"Saved: {args.path} ({len(args.content)} chars, overwritten)"
         return f"Saved: {args.path} ({len(args.content)} chars)"

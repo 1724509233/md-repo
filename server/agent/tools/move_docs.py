@@ -83,6 +83,7 @@ class MoveDocsTool(DocTool):
         # partial-rename failure the captures are discarded (the live slot
         # is untouched) and the error surfaces as before.
         conn = get_ledger_conn()
+        index_conn = get_index_conn()
         pairs = []  # (from_path, to_path, snapshot | None)
         if conn is not None:
             call_id = new_call_id()
@@ -91,15 +92,24 @@ class MoveDocsTool(DocTool):
                     conn, ctx.vault_dir, from_path, "move", ctx.write_source,
                     run_id=ctx.run_id, call_id=call_id, new_path=to_path)))
         try:
-            # DB update (files, change_log, FTS, graph) is handled by the snapshot
-            # watcher via ledger.consume → apply_change. We only register the write
-            # so the watcher attributes the change to "agent" instead of "watchdog".
+            # 新约定：每个 rename 同步记账（ledger.record → apply_change：files/
+            # change_log/FTS/graph 在 tool_result SSE 前全部到位，UI 快路径
+            # loadDocs 依赖）；skip 标记使 watcher 事件记零行，恰好一行。
+            # update_refs=False：引用改写已由上方 update_references_batch
+            # (pre_rename=True) 批量做过（与 web manage 同口径），防双重改写。
+            digests = {}  # to_path → 改后哈希（finalize 与记账共用，免重复读盘）
             for from_path, to_path in moves:
                 src = ctx.vault_dir / from_path
                 dst = ctx.vault_dir / to_path
                 dst.parent.mkdir(parents=True, exist_ok=True)
-                ledger.register(to_path, ctx.write_source, batch_id=ctx.run_id)
                 src.rename(dst)
+                digest = hash_bytes((ctx.vault_dir / to_path).read_bytes())
+                digests[to_path] = digest
+                if index_conn is not None:
+                    ledger.record(index_conn, ctx.vault_dir, to_path, "moved",
+                                  ctx.write_source, from_path=from_path,
+                                  new_hash=digest, update_refs=False,
+                                  batch_id=ctx.run_id)
         except OSError:
             if conn is not None:
                 for _, _, snap in pairs:
@@ -108,7 +118,7 @@ class MoveDocsTool(DocTool):
         if conn is not None:
             for from_path, to_path, snap in pairs:
                 if snap is not None:
-                    finalize(conn, snap, hash_bytes((ctx.vault_dir / to_path).read_bytes()))
+                    finalize(conn, snap, digests[to_path])
             gc_after_capture(conn, ctx.vault_dir)
 
         lines = [f"Moved {len(moves)} file(s):"]

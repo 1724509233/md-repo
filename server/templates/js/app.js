@@ -80,6 +80,8 @@ function exitMonitorPage() {
 async function loadDocs() {
   const data = await api.getDocs()
   if (data) { state.files = data.files; state.dirs = data.dirs }  // 304 → null，保持旧值
+  // false = 304（行尚未消费入 DB）：需要条件推进游标的调用方不得推进
+  return !!data
 }
 
 async function openDoc(path, heading) {
@@ -301,24 +303,24 @@ async function pollMemory() {
 // 回归史：Vue 重写（2dbbd17，10-08）曾直接 emit 原始 evt，name/args 恒 undefined，本快速
 //   路径静默失效；叠加 pollChanges 过滤 agent 行，agent 的文档更新完全到不了 UI
 //   （2026-10-29 修复）。勿改回 emit 原始 evt。
-// 游标推进：仅限成功的写类工具（rejected/error 没写盘，推进会白跳过窗口内其他来源的行）；
-//   +3s 余量覆盖 watcher 1.5s debounce——agent 行的 ts 打在消费时刻、晚于 tool_result
-//   到达时刻，不留余量则推进无效，轮询会重复拉取。
-function handleToolResult(evt) {
+// 行时间戳：现打在写时（工具同步 ledger.record，早于 tool_result SSE 到达）；
+//   +3s 余量 = 去重余量（轮询不再重复拉取本行）。条件推进 = 未消费不推进的自愈契约：
+//   loadDocs 得 304（行未入 DB）时游标不动，10s 轮询自动补取。
+async function handleToolResult(evt) {
   const { name, args, result } = evt
   // rejected/error 无写盘（旧 UI 只在 status==='done' 时同步）：直接返回，也不推进
   // 游标——白推进会跳过窗口内其他来源（watchdog/bgagent）的行
   if (evt.rejected || evt.error) return
-  // 成功写类工具：游标推进到 当前时刻+3s（watcher 1.5s debounce 记账余量），轮询
-  // 不再重复拉取本行
-  if (name === 'write_doc' || name === 'edit_doc' || name === 'delete_doc' || name === 'move_docs') {
+  // edit_doc 无树依赖（编辑器已 getDoc 读盘刷新）：无条件推进
+  if (name === 'edit_doc') {
     lastChangeTs = Date.now() / 1000 + 3
   }
   if (name === 'delete_doc') {
     if (args.path === state.currentPath) {
       state.docContent = ''
     }
-    loadDocs()
+    // 304（DB 未消费到新数据）→ 不推进游标，轮询兜底自愈
+    if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3
   } else if (name === 'move_docs') {
     const moves = args.moves || []
     for (const m of moves) {
@@ -329,7 +331,7 @@ function handleToolResult(evt) {
         break
       }
     }
-    loadDocs()
+    if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3
   } else if (name === 'write_doc' || name === 'edit_doc') {
     if (args.path === state.currentPath) {
       if (state.dirty) {
@@ -338,7 +340,9 @@ function handleToolResult(evt) {
         api.getDoc(args.path).then(text => { state.docContent = text }).catch(() => { })
       }
     }
-    if (name === 'write_doc') loadDocs()
+    if (name === 'write_doc') {
+      if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3
+    }
   }
 }
 

@@ -33,7 +33,7 @@ class EditDocTool(DocTool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
-        from ...vault.db.conn import get_ledger_conn
+        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.fs.vault_ops import edit_file
         from ... import ledger
 
@@ -49,12 +49,21 @@ class EditDocTool(DocTool):
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path, "update",
                            ctx.write_source, run_id=ctx.run_id)
-        ledger.register(args.path, ctx.write_source, batch_id=ctx.run_id)
         result = edit_file(ctx.vault_dir, args.path, args.old_string, args.new_string)
-        if conn is not None:
-            if result.startswith("Error"):
+        if result.startswith("Error"):
+            # 失败路径零记账（无写盘，无 registry 残留）
+            if conn is not None:
                 discard(conn, ctx.vault_dir, snap)
-            else:
-                finalize(conn, snap, hash_bytes(fp.read_bytes()))
-                gc_after_capture(conn, ctx.vault_dir)
+            return result
+        digest = hash_bytes(fp.read_bytes())
+        if conn is not None:
+            finalize(conn, snap, digest)
+            gc_after_capture(conn, ctx.vault_dir)
+        # 新约定：change_log 行必须在 tool_result SSE 前入库（UI 快路径
+        # loadDocs 得 200）；skip 标记使 watcher 事件记零行，恰好一行。
+        # index conn 与 ledger conn 独立解析（与 write/delete 同口径）。
+        index_conn = get_index_conn()
+        if index_conn is not None:
+            ledger.record(index_conn, ctx.vault_dir, args.path, "modified",
+                          ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
         return result

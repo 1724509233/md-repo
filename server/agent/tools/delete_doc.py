@@ -28,7 +28,7 @@ class DeleteDocTool(DocTool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture
-        from ...vault.db.conn import get_ledger_conn
+        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ... import ledger
 
         fp = ctx.vault_dir / args.path
@@ -43,11 +43,14 @@ class DeleteDocTool(DocTool):
             snap = capture(conn, ctx.vault_dir, args.path, "delete",
                            ctx.write_source, run_id=ctx.run_id)
 
-        # The deleted row is ledgered by the watcher consumer (ledger.consume →
-        # apply_change) with this registration — no direct apply_change here
-        # (writer-side convention: exactly one row per write).
-        ledger.register(args.path, ctx.write_source, batch_id=ctx.run_id)
+        # 新约定：change_log 行同步入库（record → apply_change），必须在
+        # tool_result SSE 前到位（UI 快路径 loadDocs 得 200）；skip 标记使
+        # watcher 事件记零行，恰好一行。
+        index_conn = get_index_conn()
         fp.unlink()
+        if index_conn is not None:
+            ledger.record(index_conn, ctx.vault_dir, args.path, "deleted",
+                          ctx.write_source, batch_id=ctx.run_id)
         if snap is not None:
             finalize(conn, snap, "")  # post-state: file absent
             gc_after_capture(conn, ctx.vault_dir)
