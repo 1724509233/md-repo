@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆控制台 · 剪枝版设计图（v5 稿）</title>
+<style>
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A; --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --st-ok:#059669; --st-error:#ef4444; --st-empty:#94a3b8;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper)}
+body{color:var(--ink);font-family:var(--serif);font-size:15px;line-height:1.7;padding:20px 16px 40px}
+.wrap{max-width:760px;margin:0 auto}
+/* ── 页头 + 场景切换 ── */
+.ph{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 14px;margin-bottom:6px}
+.ph h1{font-size:19px;font-weight:700;letter-spacing:.01em;color:var(--ink)}
+.ph .sub{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.seg{display:flex;gap:2px;background:color-mix(in srgb,var(--ink) 6%,transparent);border-radius:9px;padding:3px;margin:12px 0 16px;flex-wrap:wrap}
+.seg button{font-family:var(--sans);font-size:11.5px;font-weight:500;border:none;background:transparent;color:var(--ink-soft);padding:6px 13px;border-radius:7px;cursor:pointer;transition:background-color .15s,color .15s}
+.seg button:hover{color:var(--ink);background:color-mix(in srgb,var(--brass) 8%,transparent)}
+.seg button[aria-pressed="true"]{background:var(--brass);color:var(--paper)}
+.scene{display:none}
+.scene.cur{display:block;animation:scIn .22s var(--ease) both}
+@keyframes scIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+.sc-kicker{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin:0 2px 10px}
+/* ── 场景 1/2 布局：300px 面板 + 注记 ── */
+.sc-flex{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+.panel{width:300px;flex:0 0 300px;background:var(--paper);border:1px solid var(--line);border-radius:12px;overflow:hidden;box-shadow:0 10px 30px rgba(33,29,24,.09)}
+.notes{flex:1;min-width:270px;padding-top:4px}
+.notes h3{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--ink-soft);margin:2px 0 8px}
+.note-row{display:flex;gap:9px;align-items:flex-start;font-family:var(--sans);font-size:11.5px;line-height:1.6;color:var(--ink-soft);padding:7px 2px;border-bottom:1px dashed color-mix(in srgb,var(--line) 85%,transparent)}
+.note-row b{color:var(--ink);font-weight:600}
+.tag{flex-shrink:0;font-family:var(--mono);font-size:9px;border-radius:4px;padding:1px 6px;margin-top:2px;letter-spacing:.03em}
+.tag.cut{color:#b91c1c;background:color-mix(in srgb,#ef4444 9%,transparent);border:1px solid color-mix(in srgb,#ef4444 30%,transparent)}
+.tag.fix{color:var(--brass);background:color-mix(in srgb,var(--brass) 10%,transparent);border:1px solid color-mix(in srgb,var(--brass) 32%,transparent)}
+.tag.keep{color:var(--st-ok);background:color-mix(in srgb,#059669 8%,transparent);border:1px solid color-mix(in srgb,#059669 30%,transparent)}
+.tag.new{color:var(--ink);background:color-mix(in srgb,var(--ink) 6%,transparent);border:1px solid color-mix(in srgb,var(--line) 90%,transparent)}
+/* ── 面板头 ── */
+.p-head{height:44px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--line);background:var(--surface);font-family:var(--sans)}
+.p-head .picon{width:15px;height:15px;color:var(--brass);display:flex}
+.p-head .picon svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.p-head .ptitle{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--ink)}
+.p-head .pcount{font-size:11px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.ibtn{width:24px;height:24px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;border-radius:6px;cursor:pointer}
+.ibtn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.ibtn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.ibtn.right{margin-left:auto}
+/* ── L0 状态行 ── */
+.l0bar{background:var(--surface);border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;align-items:center;row-gap:2px;min-height:32px;padding:0 10px;position:relative}
+.l0-status{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);font-variant-numeric:tabular-nums;white-space:nowrap}
+.l0-status .err{color:var(--st-error);font-weight:500}
+.l0-status .ld{color:color-mix(in srgb,var(--ink-soft) 50%,transparent)}
+.l0-status .strike{color:color-mix(in srgb,var(--st-error) 75%,var(--ink-soft));text-decoration:line-through}
+.l0-go{margin-left:auto;display:inline-flex;align-items:center;gap:5px;border:none;background:transparent;cursor:pointer;font-family:var(--sans);font-size:10.5px;font-weight:500;color:var(--ink-soft);padding:6px 0;white-space:nowrap}
+.l0-go svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.l0-go .dot{width:6px;height:6px;border-radius:999px;background:var(--st-error);flex-shrink:0}
+/* ── feed ── */
+.feed{padding:10px 12px 14px}
+.f-day{font-family:var(--sans);font-size:9.5px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);display:flex;align-items:center;gap:8px;padding:8px 0 10px}
+.f-day::after{content:'';flex:1;height:1px;background:color-mix(in srgb,var(--line) 75%,transparent)}
+.f-item{position:relative;display:grid;grid-template-columns:38px minmax(0,1fr);gap:8px;padding-bottom:13px}
+.f-item::before{content:'';position:absolute;left:33.5px;top:14px;bottom:-2px;width:1px;background:color-mix(in srgb,var(--line) 85%,transparent)}
+.f-item.last::before{display:none}
+.f-dot{position:absolute;left:34px;top:12px;width:5px;height:5px;border-radius:999px;background:color-mix(in srgb,var(--ink-soft) 40%,var(--line))}
+.f-item.hot .f-dot{width:7px;height:7px;left:33px;top:11px;background:var(--brass);animation:softPulse 2.2s ease-in-out infinite}
+@keyframes softPulse{0%,100%{opacity:1}50%{opacity:.35}}
+.f-time{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);text-align:right;padding-right:8px;padding-top:10px;font-variant-numeric:tabular-nums}
+.f-card{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px;cursor:pointer;transition:border-color .15s,background-color .15s;text-align:left;font-family:var(--sans);display:block;width:100%}
+.f-card:hover{border-color:color-mix(in srgb,var(--brass) 45%,var(--line));background:color-mix(in srgb,var(--brass) 5%,var(--surface))}
+.f-card.term{opacity:.8}
+.f-row1{display:flex;align-items:center;gap:7px;min-width:0}
+.f-meta{display:flex;align-items:center;gap:7px;min-width:0}
+.f-meta .spill{margin-left:auto}
+.f-title{font-family:var(--serif);font-size:13.5px;font-weight:600;color:var(--ink);line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.f-row1 .f-title{flex:1;min-width:0}
+.f-meta + .f-title{margin-top:5px}
+.f-date{flex-shrink:0;font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.f-more{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);text-align:center;padding:10px 0 4px;border-top:1px dashed color-mix(in srgb,var(--line) 85%,transparent)}
+/* ── chip / pill ── */
+.tchip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);background:color-mix(in srgb,var(--ink) 4%,transparent);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);padding:1px 7px;border-radius:999px;flex-shrink:0;white-space:nowrap}
+.tchip svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.spill{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:10px;padding:2px 9px;border-radius:999px;border:1px solid var(--line);background:color-mix(in srgb,var(--ink) 4%,transparent);color:var(--ink-soft);white-space:nowrap;flex-shrink:0}
+.spill::before{content:'';width:6px;height:6px;border-radius:999px;background:var(--st-empty);flex-shrink:0}
+.spill.awaiting{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.awaiting::before{background:var(--brass);animation:softPulse 2.2s ease-in-out infinite}
+.spill.adopted{background:color-mix(in srgb,var(--brass) 10%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.spill.adopted::before{background:var(--brass)}
+.spill.merged::before{background:var(--st-ok)}
+.spill.rejected::before{background:var(--st-error)}
+.spill.failed::before{background:var(--st-error)}
+/* ── 详情面 ── */
+.d-head{padding:14px 12px 10px}
+.d-chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.d-chips .age{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.d-title{font-family:var(--serif);font-size:15.5px;font-weight:700;line-height:1.5;margin-top:8px}
+.d-path{font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.d-sec{border-top:1px dashed color-mix(in srgb,var(--line) 85%,transparent)}
+.d-sec summary{list-style:none;cursor:pointer;padding:11px 12px 0;display:flex;align-items:center;gap:7px;font-family:var(--sans);font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);transition:color .15s}
+.d-sec summary:hover{color:var(--brass)}
+.d-sec summary::-webkit-details-marker{display:none}
+.d-sec .ln{margin-left:auto;font-family:var(--mono);font-size:9.5px;font-weight:400;letter-spacing:.04em;text-transform:none;color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.d-sec .car{display:inline-flex;color:color-mix(in srgb,var(--ink-soft) 60%,transparent);transition:transform .2s var(--ease)}
+.d-sec .car svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block}
+.d-sec[open] summary .car{transform:rotate(90deg)}
+.d-sec .body{padding:8px 12px 14px}
+.d-md{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-family:var(--serif);font-size:12px;line-height:1.75;color:var(--ink)}
+.d-md h3{font-size:13px;font-weight:700;margin:2px 0 6px}
+.d-md p{margin:5px 0}
+.d-md ul{margin:6px 0;padding-left:16px}
+.d-md li{margin:3px 0}
+.src-list{display:flex;flex-direction:column;gap:5px}
+.src-link{font-family:var(--mono);font-size:11px;color:var(--ink);text-decoration:none;border-bottom:1px dashed color-mix(in srgb,var(--brass) 40%,var(--line));display:inline-flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.src-link svg{width:10px;height:10px;flex-shrink:0;stroke:var(--brass);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.run-box{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:6px}
+.run-line{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);min-width:0}
+.run-line .rk{font-family:var(--sans);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);width:56px;flex-shrink:0}
+.run-line .rv{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.run-line .rv .pill{display:inline-flex;align-items:center;gap:4px;font-size:9.5px;color:var(--st-ok);background:color-mix(in srgb,#059669 8%,transparent);border:1px solid color-mix(in srgb,#059669 30%,var(--line));border-radius:999px;padding:0 7px;margin-left:4px}
+.sim-rows{display:flex;flex-direction:column;gap:5px}
+.sim-row{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:7px 9px;min-width:0}
+.sim-row .pp{font-family:var(--mono);font-size:10.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sim-row .sp2{font-family:var(--sans);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log-trail{display:flex;flex-direction:column;gap:5px}
+.log-line{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px;font-family:var(--mono);font-size:10px;color:var(--ink-soft)}
+.log-line .seq{color:var(--brass);flex-shrink:0;font-variant-numeric:tabular-nums}
+.log-line .act{color:var(--ink);flex-shrink:0}
+.log-line .msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--sans);font-size:10.5px}
+.act-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line);background:var(--surface)}
+.btn{font-family:var(--sans);font-size:12px;font-weight:600;border-radius:8px;padding:8px 0;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:1}
+.btn svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.btn-adopt{background:var(--brass);color:var(--paper);border:1px solid var(--brass)}
+.btn-rej{background:transparent;color:var(--ink-soft);border:1px solid var(--line)}
+/* ── 监控页 ── */
+.mpage{display:grid;grid-template-columns:1fr 1.6fr;column-gap:12px;row-gap:12px;align-items:stretch}
+@media (max-width:639px){.mpage{grid-template-columns:1fr}}
+.mp-head{grid-column:1/-1;margin-bottom:4px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.mp-back{border:1px solid var(--line);background:transparent;color:var(--ink-soft);font-family:var(--sans);font-size:11px;font-weight:500;border-radius:999px;padding:4px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.mp-back svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mp-title{font-size:19px;font-weight:700;margin-top:10px;letter-spacing:.01em;color:var(--ink)}
+.mp-meta{font-family:var(--mono);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-top:6px}
+.mgroup{grid-column:1/-1;font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);margin:6px 2px 0;display:flex;align-items:center;gap:8px}
+.mgroup::after{content:'';flex:1;height:1px;background:color-mix(in srgb,var(--line) 75%,transparent)}
+.mgroup .qq{font-family:var(--mono);font-size:9px;font-weight:400;letter-spacing:.03em;text-transform:none;color:color-mix(in srgb,var(--ink-soft) 65%,transparent)}
+.mcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;min-width:0}
+.mcard.full{grid-column:1/-1}
+.mcard.alert{border-color:color-mix(in srgb,var(--st-error) 50%,var(--line));background:color-mix(in srgb,var(--st-error) 3%,var(--surface))}
+.mc-h{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+.mc-t{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink)}
+.alert-pill{margin-left:auto;font-family:var(--mono);font-size:9.5px;color:var(--st-error);border:1px solid color-mix(in srgb,var(--st-error) 40%,var(--line));background:color-mix(in srgb,var(--st-error) 7%,transparent);border-radius:999px;padding:1px 8px}
+.s9{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.s9c{background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent);border-radius:7px;padding:8px 10px;min-width:0}
+.s9c .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.s9c .v{font-family:var(--mono);font-size:16px;font-weight:500;margin-top:1px;font-variant-numeric:tabular-nums;color:var(--ink)}
+.s9c.hot .v{color:var(--brass)}
+.s9c.err .v{color:var(--st-error)}
+.s9c.dim .v{color:color-mix(in srgb,var(--ink-soft) 50%,transparent)}
+.ano-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:9px 11px;display:flex;flex-direction:column;gap:7px}
+.ano-top{display:flex;align-items:center;gap:8px;min-width:0}
+.ano-top .tt{font-family:var(--serif);font-size:12.5px;font-weight:600;color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ano-top .dt{font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);flex-shrink:0}
+.trail-mini{display:flex;flex-direction:column;gap:3px}
+.trail-mini .tline{display:flex;gap:8px;font-family:var(--mono);font-size:9.5px;color:var(--ink-soft);align-items:baseline}
+.trail-mini .tline .op{color:var(--brass);flex-shrink:0;min-width:56px}
+.trail-mini .tline .tp{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trail-mini .tcount{font-family:var(--mono);font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);text-align:right}
+.seg-row{margin-top:10px}
+.seg-row:first-of-type{margin-top:0}
+.seg-top{display:flex;align-items:baseline;gap:8px;margin-bottom:5px}
+.seg-top .nm{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.seg-top .tg{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.segs{display:flex;gap:4px}
+.seg{height:10px;flex:1;border-radius:3px;background:color-mix(in srgb,var(--ink) 6%,transparent);border:1px solid color-mix(in srgb,var(--line) 80%,transparent)}
+.seg.f{background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 70%,var(--line)));border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.seg.e{background:transparent;border-style:dashed;border-color:color-mix(in srgb,var(--line) 90%,transparent)}
+.seg-sub{display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:10px;color:var(--ink-soft);margin-top:5px}
+.seg-sub .sp{flex:1}
+.seg-sub .dim{color:color-mix(in srgb,var(--ink-soft) 60%,transparent)}
+.exec-vis{display:flex;align-items:center;gap:14px;padding:4px 2px;margin:auto 0}
+.lamp{width:11px;height:11px;border-radius:999px;background:var(--st-ok);flex-shrink:0;animation:softPulse 2.2s ease-in-out infinite;box-shadow:0 0 0 4px color-mix(in srgb,var(--st-ok) 15%,transparent)}
+.exec-vis .big{font-family:var(--mono);font-size:34px;font-weight:500;line-height:1;color:var(--brass);font-variant-numeric:tabular-nums}
+.exec-vis .cap-line{font-family:var(--mono);font-size:10.5px;color:var(--ink-soft);line-height:1.7}
+.exec-vis .cap-line b{font-family:var(--sans);font-size:12px;font-weight:600;color:var(--ink)}
+.rcl-stats{display:flex;gap:6px}
+.rcl-stat{flex:1;background:color-mix(in srgb,var(--ink) 3%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,transparent);border-radius:6px;padding:6px 8px;min-width:0}
+.rcl-stat .k{font-family:var(--sans);font-size:9px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rcl-stat .v{font-family:var(--mono);font-size:14px;font-weight:500;margin-top:1px;color:var(--ink)}
+.wbar{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.wline{display:grid;grid-template-columns:minmax(0,170px) 1fr 40px;gap:10px;align-items:center;min-width:0}
+.wline .p{font-family:var(--mono);font-size:10px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wline .p .lh{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 65%,transparent);white-space:normal;margin-top:1px}
+.wline .bar{height:12px;background:color-mix(in srgb,var(--ink) 5%,transparent);border-radius:3px;overflow:hidden}
+.wline .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--brass),color-mix(in srgb,var(--brass) 60%,var(--line)));border-radius:3px}
+.wline .vv{font-family:var(--mono);font-size:10.5px;color:var(--brass);text-align:right;font-variant-numeric:tabular-nums}
+.rcl-l2btn{margin-top:10px;border:1px solid var(--line);background:transparent;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--ink-soft);border-radius:999px;padding:5px 12px;display:inline-flex;align-items:center;gap:6px;align-self:flex-start}
+.rcl-l2btn:hover{color:var(--brass);border-color:color-mix(in srgb,var(--brass) 45%,var(--line))}
+.rcl-l2btn svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s var(--ease)}
+.rcl-l2btn[aria-expanded="true"] svg{transform:rotate(90deg)}
+.fold{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease)}
+.fold.open{grid-template-rows:1fr}
+.fold>div{overflow:hidden;min-height:0}
+.l2-pad{padding-top:12px}
+.l2-sub{font-family:var(--sans);font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);margin:12px 0 6px}
+.l2-sub:first-child{margin-top:0}
+.mtable{border:1px solid var(--line);border-radius:7px;overflow-x:auto}
+.mtable table{border-collapse:collapse;width:100%;font-family:var(--mono);font-size:10px}
+.mtable th{font-family:var(--sans);font-size:9px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);white-space:nowrap;background:color-mix(in srgb,var(--ink) 3%,transparent)}
+.mtable td{padding:5px 9px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent);white-space:nowrap;color:var(--ink)}
+.mtable tr:last-child td{border-bottom:none}
+.mtable td .w{color:var(--brass);font-variant-numeric:tabular-nums}
+.rev-rows{display:flex;flex-direction:column;gap:7px}
+.rev-row{background:color-mix(in srgb,var(--ink) 2%,transparent);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.rev-time{margin-left:auto;flex-shrink:0;font-family:var(--mono);font-size:9.5px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);font-variant-numeric:tabular-nums;white-space:nowrap}
+/* ── 场景 4：rail 前后 ── */
+.raid{display:flex;gap:26px;flex-wrap:wrap;align-items:flex-start}
+.raid-col{display:flex;flex-direction:column;align-items:center;gap:8px}
+.raid-cap{font-family:var(--sans);font-size:10.5px;color:var(--ink-soft)}
+.raid-cap b{color:var(--ink)}
+.rail{width:64px;background:var(--surface);border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:6px}
+.rsep{width:22px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:4px 0}
+.rbtn{border:none;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:52px;height:44px;border-radius:9px;color:var(--ink-soft);position:relative}
+.rbtn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1;color:var(--ink-soft)}
+.rbtn.on{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.rbtn.on .rlabel{color:var(--brass)}
+.rbtn.on::before{content:'';position:absolute;left:-6px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+.rbtn.reserved{color:color-mix(in srgb,var(--ink-soft) 45%,transparent);border:1.5px dashed color-mix(in srgb,var(--ink-soft) 30%,transparent);pointer-events:none}
+.rbtn.reserved .rlabel{color:color-mix(in srgb,var(--ink-soft) 45%,transparent)}
+.rbtn .badge{position:absolute;top:3px;right:6px;min-width:15px;height:15px;padding:0 4px;border-radius:999px;background:var(--brass);color:#fff;font-family:var(--sans);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px var(--surface)}
+.l0demo{flex:1;min-width:280px;display:flex;flex-direction:column;gap:8px}
+.l0demo .lab{font-family:var(--sans);font-size:10.5px;color:var(--ink-soft);margin-top:4px}
+.l0demo .lab b{color:var(--ink)}
+.l0demo .l0bar{width:100%;max-width:400px}
+.foot{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);font-family:var(--sans);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="ph">
+    <h1>记忆控制台 · 剪枝版设计图</h1>
+    <span class="sub">纸墨 tokens · 基于 style.css 实况类 · 2026-11-03 · v5 稿</span>
+  </div>
+  <div class="seg" role="tablist">
+    <button aria-pressed="true" onclick="sc(0)">01 · L0 队列</button>
+    <button aria-pressed="false" onclick="sc(1)">02 · 终审详情</button>
+    <button aria-pressed="false" onclick="sc(2)">03 · 后台监控</button>
+    <button aria-pressed="false" onclick="sc(3)">04 · 导航前后</button>
+  </div>
+
+  <!-- ══ 场景 01 · L0 队列 ══ -->
+  <section class="scene cur">
+    <div class="sc-kicker">场景 01 · 300px 审查面板 — 卡片四要素</div>
+    <div class="sc-flex">
+      <div class="panel">
+        <div class="p-head">
+          <span class="picon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+          <span class="ptitle">记忆</span>
+          <span class="pcount">5</span>
+        </div>
+        <div class="l0bar">
+          <span class="l0-status">3 待审 <span class="ld">·</span> 1 待落地 <span class="ld">·</span> <span class="err">1 失败</span></span>
+          <button class="l0-go"><span class="dot"></span>后台 →</button>
+        </div>
+        <div class="feed">
+          <div class="f-day">今天</div>
+          <div class="f-item hot">
+            <div class="f-time">14:32</div>
+            <span class="f-dot"></span>
+            <button class="f-card">
+              <div class="f-meta">
+                <span class="tchip"><svg viewBox="0 0 24 24"><path d="M9 15 15 9M10.5 6.5 12 5a4.5 4.5 0 0 1 6.4 6.4L16.5 13M13.5 17.5 12 19a4.5 4.5 0 0 1-6.4-6.4L7.5 11"/></svg>relatedness</span>
+                <span class="spill awaiting">awaiting</span>
+              </div>
+              <div class="f-title">补充『同步冲突』与回滚策略的关联文档映射</div>
+            </button>
+          </div>
+          <div class="f-item">
+            <div class="f-time">11:07</div>
+            <span class="f-dot"></span>
+            <button class="f-card">
+              <div class="f-meta">
+                <span class="tchip"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/></svg>note</span>
+                <span class="spill awaiting">awaiting</span>
+              </div>
+              <div class="f-title">归档 2026-10 月度回顾到 projects/md-repo</div>
+            </button>
+          </div>
+          <div class="f-item last">
+            <div class="f-time">09:41</div>
+            <span class="f-dot"></span>
+            <button class="f-card">
+              <div class="f-meta">
+                <span class="tchip"><svg viewBox="0 0 24 24"><path d="M14.5 6.5a4 4 0 0 0-5.6 5L4 16.4V20h3.6l4.9-4.9a4 4 0 0 0 5-5.6L14.8 12l-2.8-2.8z"/></svg>refactor</span>
+                <span class="spill adopted">adopted</span>
+              </div>
+              <div class="f-title">提案状态机补充 expired 分支</div>
+            </button>
+          </div>
+          <div class="f-day">昨天</div>
+          <div class="f-item last">
+            <div class="f-time">16:20</div>
+            <span class="f-dot"></span>
+            <button class="f-card term">
+              <div class="f-meta">
+                <span class="tchip"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/></svg>proposal</span>
+                <span class="spill merged">merged</span>
+              </div>
+              <div class="f-title">v2.1 约束面校验报告</div>
+            </button>
+          </div>
+          <div class="f-more">更早 6 条 · 终态全貌见「后台 →」</div>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>卡片改动</h3>
+        <div class="note-row"><span class="tag">砍</span><span><b>row2 信息行</b>（src 路径 · run_id · 终态落地/理由拼接 · mini-trail）全部移出卡片 → 进详情「批次 / 轨迹」节</span></div>
+        <div class="note-row"><span class="tag">砍</span><span><b>agent 事件细行</b>：其信息在监控页 ③ 后台任务已有，L0 回归纯审查队列</span></div>
+        <div class="note-row"><span class="tag">砍</span><span><b>报告段常驻空位</b>（「暂无报告」占位）：仅当有报告时渲染单行（alias + 标题 + 日期）</span></div>
+        <div class="note-row"><span class="tag">修</span><span><b>title 独占一行（2 行 clamp）</b>：type + 状态 chip 自占一行（状态靠右），标题整宽两行——同行布局把长标题挤成 1–2 字</span></div>
+        <div class="note-row"><span class="tag">修</span><span><b>状态写法统一 .spill pill</b>：现网 awaiting 是 stamp 文字、终态是 pill，同一列表两种写法</span></div>
+        <div class="note-row"><span class="tag">修</span><span><b>f-time = 具体 HH:mm</b>：created 字段只有日期，时刻取 trail 最早行（提交点）/ 终态转换最新行 / merged_at；无时间戳回退创建日相对标签，分组键同步改用该时刻的日期</span></div>
+        <div class="note-row"><span class="tag">留</span><span>时间轴骨架 / 日期分组 / fresh 铜脉冲 / L0 计数行 + 红点「后台 →」；状态行删「轮询 30s」字样</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 场景 02 · 终审详情 ══ -->
+  <section class="scene">
+    <div class="sc-kicker">场景 02 · 终审详情 — 全文正文 + 可折叠节（节可点，实际可展开）</div>
+    <div class="sc-flex">
+      <div class="panel">
+        <div class="p-head">
+          <button class="ibtn"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg></button>
+          <span class="ptitle">终审</span>
+          <span class="pcount">2/5</span>
+          <button class="ibtn right"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+        <div class="d-head">
+          <div class="d-chips">
+            <span class="tchip"><svg viewBox="0 0 24 24"><path d="M9 15 15 9M10.5 6.5 12 5a4.5 4.5 0 0 1 6.4 6.4L16.5 13M13.5 17.5 12 19a4.5 4.5 0 0 1-6.4-6.4L7.5 11"/></svg>relatedness</span>
+            <span class="spill awaiting">awaiting</span>
+            <span class="age">今天</span>
+          </div>
+          <div class="d-title">补充『同步冲突』与回滚策略的关联文档映射</div>
+          <div class="d-path">index/proposals/2026-11-03-rel-sync-rollback.md</div>
+        </div>
+        <details class="d-sec" open>
+          <summary><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>正文 · 全文<span class="ln">386 字</span></summary>
+          <div class="body">
+            <div class="d-md">
+              <h3>为什么需要这条关联</h3>
+              <p>「同步冲突」条目当前只指向设计文档，但回滚两个入口（执行器 /api/memory/rollback 与人工 rollback）共用同一套冲突判定逻辑。agent 写入新的冲突策略时会漏掉这个关联点。</p>
+              <p>建议在 index/notes/sync-conflict.md 的 frontmatter 中补 related 字段，指向 2026-09-27-md-sync-design.md 的 rollback 小节，并标注适用版本。</p>
+              <ul><li>成本：两行 frontmatter</li><li>可回滚：执行器保留旧版本</li></ul>
+              <p>合并后，相关召回对「回滚」一词的 7d 无命中（当前 4 次）应可覆盖。</p>
+            </div>
+          </div>
+        </details>
+        <details class="d-sec">
+          <summary><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>来源<span class="ln">2</span></summary>
+          <div class="body"><div class="src-list">
+            <a class="src-link"><svg viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></svg>index/notes/sync-conflict.md</a>
+            <a class="src-link"><svg viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></svg>projects/md-repo/specs/2026-09-27-md-sync-design.md</a>
+          </div></div>
+        </details>
+        <details class="d-sec">
+          <summary><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>批次 · 可逆性<span class="ln">run-…-0142</span></summary>
+          <div class="body"><div class="run-box">
+            <div class="run-line"><span class="rk">批次</span><span class="rv">run-20261103-0142</span></div>
+            <div class="run-line"><span class="rk">产出者</span><span class="rv">碎片整理</span></div>
+            <div class="run-line"><span class="rk">可逆性</span><span class="rv"><span class="pill">可回滚</span></span></div>
+            <div class="run-line"><span class="rk">创建</span><span class="rv">11-03 14:32</span></div>
+          </div></div>
+        </details>
+        <details class="d-sec">
+          <summary><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>相似记忆<span class="ln">共享 1 来源</span></summary>
+          <div class="body"><div class="sim-rows">
+            <div class="sim-row"><div class="pp">index/notes/sync-conflict.md</div><div class="sp2">与提案共享来源 · 30d 召回榜在列</div></div>
+          </div></div>
+        </details>
+        <details class="d-sec">
+          <summary><span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>变更轨迹<span class="ln">2</span></summary>
+          <div class="body"><div class="log-trail">
+            <div class="log-line"><span class="seq">#12</span><span class="act">human</span><span class="msg">状态变更 · 状态机 ledger 记账</span></div>
+            <div class="log-line"><span class="seq">#11</span><span class="act">executor</span><span class="msg">apply · index/notes/sync-conflict.md</span></div>
+          </div></div>
+        </details>
+        <div class="act-row">
+          <button class="btn btn-adopt"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>审查通过 · 采纳</button>
+          <button class="btn btn-rej">驳回</button>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>详情改动</h3>
+        <div class="note-row"><span class="tag">修</span><span><b>正文 220 字/段 · 360 字总截断 → 全文 markdown 渲染</b>（取消「… 共 N 字」），默认展开、可收起</span></div>
+        <div class="note-row"><span class="tag">新</span><span><b>各节 = 单行摘要 + 点击展开</b>（现 5 节恒展开挤满 300px）：来源 / 批次·可逆性 / 相似记忆 / 轨迹</span></div>
+        <div class="note-row"><span class="tag">砍</span><span><b>相似记忆 0.50–0.95 伪分数</b>（前端合成值）→ 只留事实：共享来源数 + 召回榜在列</span></div>
+        <div class="note-row"><span class="tag">留</span><span>五段判断顺序 / 头部常驻（chip+状态+标题+全路径）/ sticky 采纳·驳回 + 必填理由 / 确认之后 done 视图（未画，行为不变）</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 场景 03 · 后台监控 ══ -->
+  <section class="scene">
+    <div class="sc-kicker">场景 03 · 后台监控 L1 — 布局不动，注释剪枝</div>
+    <div class="mpage">
+      <div class="mp-head">
+        <button class="mp-back"><svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg>返回文档</button>
+        <div class="mp-title">后台监控</div>
+        <div class="mp-meta">更新于 14:32</div>
+      </div>
+      <div class="mgroup">状态 <span class="qq">— 健康吗</span></div>
+      <div class="mcard">
+        <div class="mc-h"><span class="mc-t">九态</span></div>
+        <div class="s9">
+          <div class="s9c dim"><div class="k">processing</div><div class="v">0</div></div>
+          <div class="s9c hot"><div class="k">awaiting</div><div class="v">3</div></div>
+          <div class="s9c"><div class="k">adopted</div><div class="v">1</div></div>
+          <div class="s9c"><div class="k">rejected</div><div class="v">2</div></div>
+          <div class="s9c"><div class="k">merged</div><div class="v">12</div></div>
+          <div class="s9c dim"><div class="k">expired</div><div class="v">1</div></div>
+          <div class="s9c err"><div class="k">failed</div><div class="v">1</div></div>
+          <div class="s9c dim"><div class="k">malformed</div><div class="v">0</div></div>
+          <div class="s9c dim"><div class="k">pending</div><div class="v">0</div></div>
+        </div>
+      </div>
+      <div class="mcard alert">
+        <div class="mc-h"><span class="mc-t">异常清单</span><span class="alert-pill">1 failed</span></div>
+        <div class="ano-row">
+          <div class="ano-top">
+            <span class="tchip"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/></svg>note</span>
+            <span class="tt">整理 projects/md-repo 顶层杂项</span>
+            <span class="dt">11-03</span>
+          </div>
+          <div class="trail-mini">
+            <div class="tline"><span class="op">#14 apply</span><span class="tp">projects/md-repo/杂项.md</span></div>
+            <div class="tline"><span class="op">#13 state</span><span class="tp">failed · 目标文档已被删除</span></div>
+            <div class="tline"><span class="op">#12 state</span><span class="tp">awaiting_review</span></div>
+            <div class="tcount">共 4 条</div>
+          </div>
+        </div>
+      </div>
+      <div class="mgroup">系统 <span class="qq">— 在干什么</span></div>
+      <div class="mcard">
+        <div class="mc-h"><span class="mc-t">后台任务</span></div>
+        <div class="seg-row">
+          <div class="seg-top"><span class="nm">碎片整理</span><span class="tg">arm 2/4</span></div>
+          <div class="segs"><div class="seg f"></div><div class="seg f"></div><div class="seg e"></div><div class="seg e"></div></div>
+          <div class="seg-sub">上次 26m 前<span class="sp"></span><span class="dim">今天 3/8 次</span></div>
+        </div>
+        <div class="seg-row">
+          <div class="seg-top"><span class="nm">矛盾批注</span><span class="tg">arm 1/3</span></div>
+          <div class="segs"><div class="seg f"></div><div class="seg e"></div><div class="seg e"></div></div>
+          <div class="seg-sub">上次 3h 前<span class="sp"></span><span class="dim">今天 1/6 次</span></div>
+        </div>
+      </div>
+      <div class="mcard">
+        <div class="mc-h"><span class="mc-t">执行器</span></div>
+        <div class="exec-vis">
+          <span class="lamp"></span>
+          <span class="big">12</span>
+          <div class="cap-line"><b>今天 ops</b><br>last_op 11-03 14:06<br>1 条 adopted 待落地</div>
+        </div>
+      </div>
+      <div class="mcard full">
+        <div class="mc-h"><span class="mc-t">召回</span></div>
+        <div class="rcl-stats">
+          <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">4</div></div>
+          <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">128</div></div>
+          <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">8.6</div></div>
+        </div>
+        <div class="wbar">
+          <div class="wline"><span class="p">projects/md-repo/specs/2026-09-27-md-sync-design.md<span class="lh">last_hit 今天</span></span><span class="bar"><i style="width:100%"></i></span><span class="vv">8.6</span></div>
+          <div class="wline"><span class="p">index/notes/sync-conflict.md<span class="lh">last_hit 昨天</span></span><span class="bar"><i style="width:64%"></i></span><span class="vv">5.5</span></div>
+          <div class="wline"><span class="p">AGENTS.md<span class="lh">last_hit 2d</span></span><span class="bar"><i style="width:38%"></i></span><span class="vv">3.2</span></div>
+        </div>
+        <button class="rcl-l2btn" aria-expanded="false" onclick="l2(this)"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>L2 深钻 · 召回文档榜 / 失败查询</button>
+        <div class="fold" id="l2fold"><div><div class="l2-pad">
+          <div class="l2-sub">召回文档榜（30d）</div>
+          <div class="mtable"><table><thead><tr><th>path</th><th>human</th><th>on_demand</th><th>weighted</th><th>last_hit</th></tr></thead><tbody>
+            <tr><td>projects/md-repo/specs/2026-09-27-md-sync-design.md</td><td>6</td><td>14</td><td><span class="w">8.6</span></td><td>11-03</td></tr>
+            <tr><td>index/notes/sync-conflict.md</td><td>2</td><td>9</td><td><span class="w">5.5</span></td><td>11-02</td></tr>
+            <tr><td>AGENTS.md</td><td>1</td><td>5</td><td><span class="w">3.2</span></td><td>11-01</td></tr>
+          </tbody></table></div>
+          <div class="l2-sub">失败查询（7d）</div>
+          <div class="mtable"><table><thead><tr><th>query</th><th>近 ts</th><th>7d 次数</th></tr></thead><tbody>
+            <tr><td>回滚 策略</td><td>11-03 09:12</td><td>4</td></tr>
+            <tr><td>ledger 锁</td><td>11-02 17:40</td><td>2</td></tr>
+          </tbody></table></div>
+        </div></div></div>
+      </div>
+      <div class="mcard full">
+        <div class="mc-h"><span class="mc-t">采纳提案</span></div>
+        <div class="rev-rows">
+          <div class="rev-row">
+            <div class="f-meta"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/></svg>proposal</span><span class="rev-time">11-02 18:40</span></div>
+            <div class="f-title">v2.1 约束面校验报告</div>
+          </div>
+          <div class="rev-row">
+            <div class="f-meta"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7z"/></svg>note</span><span class="rev-time">11-01 09:30</span></div>
+            <div class="f-title">归档：同步笔记</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="notes" style="margin-top:14px;min-width:0">
+      <h3>监控改动</h3>
+      <div class="note-row"><span class="tag">砍</span><span><b>各卡自解释 mc-note 脚注</b>（6 段图表约定说明 → 0；确需的约定说明进卡片头 ? tooltip，未画）</span></div>
+      <div class="note-row"><span class="tag">砍</span><span><b>页头 3 行轮询注释</b>（「30s 轮询缓存 · /api/memory/status + … · L0/L1 后端成本为零」）→ 单行「更新于 HH:mm」</span></div>
+      <div class="note-row"><span class="tag">留</span><span>六卡非对称网格 E / 零态 zline 占位 / failed 红边 + 脉冲 / L2 深钻（本页唯一按需层，可点试用）/ 刻度条·大数字·比例条</span></div>
+    </div>
+  </section>
+
+  <!-- ══ 场景 04 · 导航前后 ══ -->
+  <section class="scene">
+    <div class="sc-kicker">场景 04 · 导航 — 两个铃铛归一、死控件清除</div>
+    <div class="raid">
+      <div class="raid-col">
+        <div class="rail">
+          <div class="rbtn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></div>
+          <div class="rbtn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span class="rlabel">搜索</span></div>
+          <div class="rsep"></div>
+          <div class="rbtn on"><svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg><span class="rlabel">通知</span><span class="badge">3</span></div>
+          <div class="rsep"></div>
+          <div class="rbtn reserved"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span class="rlabel">最近</span></div>
+          <div class="rbtn reserved"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14 3h-4l-.5 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2L10 21h4l.5-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2z"/></svg><span class="rlabel">设置</span></div>
+        </div>
+        <div class="raid-cap"><b>前</b> · 铃铛=记忆控制台入口<br>真通知在顶栏（同名混淆）<br>最近/设置 = 死占位</div>
+      </div>
+      <div class="raid-col">
+        <div class="rail">
+          <div class="rbtn"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg><span class="rlabel">文件</span></div>
+          <div class="rbtn"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m20 20-4.5-4.5"/></svg><span class="rlabel">搜索</span></div>
+          <div class="rsep"></div>
+          <div class="rbtn on"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg><span class="rlabel">记忆</span><span class="badge">3</span></div>
+        </div>
+        <div class="raid-cap"><b>后</b> · 改名「记忆」+ 节点图标<br>死控件删除<br>真通知 = 顶栏铃铛（唯一）</div>
+      </div>
+      <div class="l0demo">
+        <div class="lab"><b>L0 状态行</b> · 前</div>
+        <div class="l0bar"><span class="l0-status">3 待审 <span class="ld">·</span> 1 待落地 <span class="ld">·</span> <span class="err">1 失败</span> <span class="ld">·</span> <span class="strike">轮询 30s</span></span><button class="l0-go">后台 →</button></div>
+        <div class="lab"><b>L0 状态行</b> · 后</div>
+        <div class="l0bar"><span class="l0-status">3 待审 <span class="ld">·</span> 1 待落地 <span class="ld">·</span> <span class="err">1 失败</span></span><button class="l0-go"><span class="dot"></span>后台 →</button></div>
+        <div class="note-row" style="border:none"><span class="tag">砍</span><span>实现细节注释（「轮询 30s」「后端成本为零」等）不进 UI</span></div>
+        <div class="note-row" style="border:none"><span class="tag">修</span><span>failed&gt;0 时「后台 →」带红点（现有逻辑保留）</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot">静态示例数据 · 场景 02 各节与场景 03 的 L2 可实际点击展开/收起 · 视觉 token 与类名取自现网 style.css（纸墨：paper/ink/brass/line/surface + 状态三色）· 移动端 ≤860px 面板全宽 overlay 行为不变</div>
+</div>
+<script>
+const scenes=[...document.querySelectorAll('.scene')];
+const btns=[...document.querySelectorAll('.seg button')];
+function sc(i){scenes.forEach((s,k)=>s.classList.toggle('cur',k===i));btns.forEach((b,k)=>b.setAttribute('aria-pressed',k===i?'true':'false'));window.scrollTo({top:0})}
+function l2(el){const f=document.getElementById('l2fold');const open=f.classList.toggle('open');el.setAttribute('aria-expanded',open)}
+</script>
+</body>
+</html>

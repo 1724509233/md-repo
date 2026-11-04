@@ -1,14 +1,18 @@
-/* MemoryConsole 组件：300px 记忆控制台面板（v4 L0 主态 = 定稿 design/console-v4-watch.html 场景 01）
- * 三个面：L0 主态（.l0bar 纯状态行「N 待审 · N 待落地 · N 失败[· N 快照降级] · 轮询 30s」+ 行尾「后台 →」唯一入口
- *         + .feed 流水：agent 事件细行 / 待审卡（钻入详情）/ 终态卡淡显痕迹
- *         + 报告区：只读 advisory 通道卡片行（alias chip + title + 日期；点卡 → 报告详情面））
- *         终审详情（五段材料按判断顺序 + 粘性动作行 + 拒绝理由 + 确认之后子视图）
+/* MemoryConsole 组件：300px 记忆控制台面板（定稿 design/console-v5-prune.html）
+ * 三个面：L0 主态（.l0bar 纯状态行「N 待审 · N 待落地 · N 失败[· N 快照降级]」+ 行尾「后台 →」唯一入口
+ *         + .feed 纯审查队列：待审卡 / adopted 在途卡 / 终态卡淡显痕迹；
+ *         卡片四要素 = 类型 tchip + 状态 .spill pill + 时间 f-time + 短标题
+ *         （src 路径 / run_id / 落地·理由拼接 / mini-trail 全部移出卡片 → 详情对应节）
+ *         + 报告区：只读 advisory 通道单行（仅有报告时渲染：alias + 标题 + 日期，无常驻空位）
+ *         终审详情（五段材料按判断顺序 + 粘性动作行 + 拒绝理由 + 确认之后子视图；
+ *         正文 = justification 全文 markdown（默认展开可折叠），其余各节 = 单行摘要 + 计数 + 点击展开（默认收起））
  *         报告详情（第三面：只读 markdown 全文 + 文件路径行；深链 state.memoryReport 直达）
  * 宪法：console 只移状态（adopt/reject 走状态机，actor = human）；文件由确定性执行器落地。
  * 数据：state.memoryStatus / state.memoryProposals / state.memoryReports 由 app 30s 轮询注入，本组件不自建轮询；
- *       L0 与 feed 全部消费这些 ref（awaiting 5 字段按 relpath join proposals 富化 source_refs / run_id / created）；
- *       内容摘录经 GET /api/memory/proposals/{relpath} 按需读取（记录 body = justification；D25 无投影文件）；
- *       报告全文经 GET /api/memory/reports/{relpath} 按需读取（renderMarkdown = 既有 marked+DOMPurify 助手，无新依赖）。
+ *       L0 与 feed 全部消费这些 ref（awaiting 按 relpath join proposals 富化 created / trail 时刻，时间轴分组与 f-time）；
+ *       正文经 GET /api/memory/proposals/{relpath} 按需读取（记录 body = justification；D25 无投影文件）；
+ *       报告全文经 GET /api/memory/reports/{relpath} 按需读取（renderMarkdown = 既有 marked+DOMPurify 助手，无新依赖）；
+ *       变更轨迹懒加载：首次展开轨迹节时经 GET /api/memory/proposals/{relpath}/trail 读取（awaiting 项不预取）。
  * 入口纪律：「后台 →」= 唯一 L0→L1 入口（window.openMonitorPage()，Phase A 挂载）；
  *       v3 九格脉搏 / 触发行 / 召回块整体移除——九态由监控页①九格承担，面板内彻底消失。
  */
@@ -17,36 +21,17 @@ import { api } from '../api.js'
 import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
 
 /* 类型 chip 图标（单色线条，stroke: currentColor；未知/存量退役类型回退时钟） */
-const TYPE_ICONS = {
+export const TYPE_ICONS = {
   entity_index: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   relatedness: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>',
   summary: '<svg viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>',
-  errata: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16.5h.01"/></svg>',
+  errata: '<svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
   reminder: '<svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>'
 }
-const TYPE_ICON_DEFAULT = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
+export const TYPE_ICON_DEFAULT = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
 
-/* 九态脉搏格（标签用批准的短写；hot = 待审、err = 失败） */
-const STATUS_TILES = [
-  { key: 'pending', label: 'Pending' },
-  { key: 'processing', label: 'Process' },
-  { key: 'awaiting_review', label: 'Awaiting' },
-  { key: 'adopted', label: 'Adopted' },
-  { key: 'rejected', label: 'Rejected' },
-  { key: 'expired', label: 'Expired' },
-  { key: 'merged', label: 'Merged' },
-  { key: 'failed', label: 'Failed' },
-  { key: 'malformed', label: 'Malform' }
-]
-
-const BODY_CLAMP = 360   // 内容摘录字符上限（超出显示「… 共 N 字」）
-const PARA_CLAMP = 220   // 单段摘录字符上限
-const MAX_PARAS = 3
-
-function clip(s, n) {
-  s = s.replace(/\s+/g, ' ').trim()
-  return s.length > n ? s.slice(0, n) + '…' : s
-}
+/* 折叠节 chevron（设计稿 .d-sec summary 口径：展开旋 90°） */
+const CAR = '<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>'
 
 export const MemoryConsole = {
   name: 'MemoryConsole',
@@ -66,19 +51,11 @@ export const MemoryConsole = {
       return m
     })
 
-    // ─── 审查队列（status.awaiting_review 最旧在前，富化 source_refs[0] + run_id）───
+    // ─── 审查队列（status.awaiting_review 最旧在前；位次 / 计数 / fresh 基线查表）───
     const queue = computed(() => {
       const st = state.memoryStatus
       if (!st || !st.proposals) return []
-      const awaiting = st.proposals.awaiting_review || []
-      return awaiting.map(it => {
-        const full = byRel.value[it.relpath] || {}
-        return {
-          ...it,
-          run_id: full.run_id || '',
-          src: (full.source_refs && full.source_refs[0]) || ''
-        }
-      })
+      return st.proposals.awaiting_review || []
     })
     const queueCount = computed(() => queue.value.length)
 
@@ -141,8 +118,7 @@ export const MemoryConsole = {
     )
     const reports = computed(() => state.memoryReports || [])
     const reportsLen = computed(() => reports.value.length)
-    const reportsLoaded = computed(() => state.memoryReports !== null)
-    // 卡片行（feed 卡片同壳）：alias chip + title（无 # 标题回退 alias）+ 日期相对标签（今天/昨天/MM-DD，同 feed keyOf 口径）
+    // 报告单行（仅当有报告时渲染）：alias chip + title（无 # 标题回退 alias）+ 日期相对标签（今天/昨天/MM-DD）
     const reportCards = computed(() => {
       const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
       const shortOf = k => k === dayKey(now) ? '今天' : k === dayKey(yest) ? '昨天' : k.slice(5)
@@ -153,8 +129,7 @@ export const MemoryConsole = {
       })
     })
 
-    // ─── L0 状态行 + feed 事件行数据（v3 的触发条 / 召回块整体移除 → 监控页「系统」组；
-    //     recall 仅保留：详情面「相似记忆」的 source_refs ∩ 召回榜消费）───
+    // ─── L0 状态行（v5：实现注释字样「轮询 30s」不进 UI）；agent 事件行删除（监控页③后台任务承担）───
     const byStatus = computed(() =>
       (state.memoryStatus && state.memoryStatus.proposals && state.memoryStatus.proposals.by_status) || {})
     // L0 单行行动数（设计场景 01 口径）：awaiting（行动）/ adopted（执行器队列）/ failed（需留意，>0 告警红）
@@ -186,74 +161,52 @@ export const MemoryConsole = {
         prevDeg = n
       }
     )
-    const agents = computed(() => (state.memoryStatus && state.memoryStatus.agents) || [])
     const recall = computed(() => (state.memoryStatus && state.memoryStatus.recall) || {})
     const recall_error = computed(() => !!recall.value.recall_error)
 
-    // ─── feed 流水（设计场景 01 定稿：agent 事件细行 / 待审卡 / adopted 在途卡 / 终态卡淡显痕迹；
+    // ─── feed 流水（v5 剪枝：纯审查队列——待审卡 / adopted 在途卡 / 终态卡淡显痕迹；
     //     时间轴分组 今天 / 昨天 / MM-DD，无时间数据归「更早」；倒序取前 FEED_CAP 条，
-    //     尾注 f-more 计数指向监控页「最近终态 / 异常清单」）───
+    //     尾注 f-more 计数指向监控页「采纳提案 / 异常清单」）───
     const FEED_CAP = 8
     const pad2 = n => String(n).padStart(2, '0')
     const dayKey = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
-    /* merged_at（PyYAML datetime 化 "YYYY-MM-DD HH:MM:SS" / ISO T）→ MM-DD HH:mm（设计稿口径） */
-    function fmtMerged(s) {
-      const m = String(s || '').match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
-      return m ? m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] : String(s || '')
+    /* 卡时间 = 具体时刻（HH:mm 位）：created 字段只有日期，
+       具体 ts 取自 trail 行（path 须为提案文件本身，滤掉共享行）或 merged_at；统一返回毫秒 */
+    const trailTs = (p, rel, pick) => {
+      const ts = ((p && p.trail) || []).filter(r => r.path === rel && r.ts).map(r => r.ts * 1000)
+      if (!ts.length) return null
+      return pick === 'last' ? Math.max(...ts) : Math.min(...ts)
     }
+    const fmtHM = ts => { const d = new Date(ts); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) }
     const feedGroups = computed(() => {
       const st = state.memoryStatus
       const awaiting = ((st && st.proposals && st.proposals.awaiting_review) || []).map(it => {
-        const full = byRel.value[it.relpath] || {}
+        const p = byRel.value[it.relpath] || {}
         return {
           kind: 'awaiting', key: 'a-' + it.relpath, relpath: it.relpath,
-          type: it.type, title: it.title, age: it.age_days, created: full.created || null,
-          src: (full.source_refs && full.source_refs[0]) || it.relpath,
-          run_id: full.run_id || '', fresh: freshRel.value === it.relpath
+          type: it.type, title: it.title, age: it.age_days, created: p.created || null,
+          ts: trailTs(p, it.relpath, 'first'),   // 提交点（trail 最早行）
+          fresh: freshRel.value === it.relpath
         }
       })
-      // 事件行 = 最近发生了什么：仅「跑过」的 agent 成行（last_run = 0 尚未运行 → 无事件，见监控页③）
-      const events = agents.value
-        .filter(a => a.last_run)
-        .map(a => {
-          const d = new Date(a.last_run * 1000)
-          const t = new Date(); const y = new Date(); y.setDate(y.getDate() - 1)
-          const today = dayKey(d) === dayKey(t), yesterday = dayKey(d) === dayKey(y)
-          return {
-            kind: 'agent', key: 'e-' + a.alias, alias: a.alias,
-            date: new Date(d.getFullYear(), d.getMonth(), d.getDate()),
-            time: today || yesterday ? pad2(d.getHours()) + ':' + pad2(d.getMinutes()) : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()),
-            msg: 'run 完成 · 今天 ' + (a.runs_today || 0) + ' 次'
-          }
-        })
       const terminals = (state.memoryProposals || [])
         .filter(p => p.status === 'merged' || p.status === 'rejected' || p.status === 'failed')
         .map(p => {
-          const trail = Array.isArray(p.trail) ? [...p.trail].sort((a, b) => (a.seq || 0) - (b.seq || 0)) : []
-          let landed = null
-          for (const r of trail) if (r.path && r.path !== p.relpath) { landed = r.path; break }
-          let row2
-          if (p.status === 'merged') row2 = (landed ? '落地 ' + landed : p.relpath) + ' · merged_at ' + (p.merged_at ? fmtMerged(p.merged_at) : '—')
-          else if (p.status === 'rejected') row2 = '理由：' + (p.reject_reason || '—')
-          else row2 = p.reject_reason ? '理由：' + p.reject_reason + ' · 提案保留待修'
-            : (trail.length ? ('最近 op · ' + trail[trail.length - 1].path) + ' · 提案保留待修' : '提案保留待修 · 详情见「后台 →」')
+          // merged 取 merged_at 全时刻；rejected / failed 取轨迹最新点（终态转换）；皆无则 null
+          const m = /:/.test(p.merged_at || '') ? Date.parse(String(p.merged_at).replace(' ', 'T')) : NaN
+          const ts = !isNaN(m) ? m : (trailTs(p, p.relpath, 'last') || trailTs(p, p.relpath, 'first'))
           return {
             kind: 'term', key: 't-' + p.relpath, relpath: p.relpath, type: p.type,
-            title: p.title, status: p.status, created: p.created || null, row2, trail: trail.slice(-2)
+            title: p.title, status: p.status, created: p.created || null, ts: ts || null
           }
         })
-      // adopted 在途卡（执行器队列）：与终态卡同壳、不淡显；trail 同口径（API 新→旧序，
-      // 先按 seq 升序再 slice(-2)，直接 slice 会取到最老 2 行且倒排）
+      // adopted 在途卡（执行器队列）：与终态卡同壳、不淡显
       const adopted = (state.memoryProposals || [])
         .filter(p => p.status === 'adopted')
-        .map(p => {
-          const trail = Array.isArray(p.trail) ? [...p.trail].sort((a, b) => (a.seq || 0) - (b.seq || 0)).slice(-2) : []
-          return {
-            kind: 'adopted', key: 'd-' + p.relpath, relpath: p.relpath, type: p.type,
-            title: p.title, status: 'adopted', created: p.created || null,
-            row2: '等待执行器落地 · merged_at 待定', trail
-          }
-        })
+        .map(p => ({
+          kind: 'adopted', key: 'd-' + p.relpath, relpath: p.relpath, type: p.type,
+          title: p.title, status: 'adopted', created: p.created || null, ts: trailTs(p, p.relpath, 'first')
+        }))
       /* 日期 → 组 key（t / y / MM-DD / x = 无日期数据「更早」）+ 标签 */
       const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
       const keyOf = d => d ? (dayKey(d) === dayKey(now) ? 't' : dayKey(d) === dayKey(yest) ? 'y' : dayKey(d)) : 'x'
@@ -261,9 +214,10 @@ export const MemoryConsole = {
         : k === 'y' ? '昨天 · ' + pad2(yest.getMonth() + 1) + '-' + pad2(yest.getDate())
         : k === 'x' ? '更早' : k.slice(5)
       const parseDay = s => { const m = String(s || '').match(/\d{4}-\d{2}-\d{2}/); return m ? new Date(Number(m[0].slice(0, 4)), Number(m[0].slice(5, 7)) - 1, Number(m[0].slice(8, 10))) : null }
-      /* 组内序 = 设计稿示例（agent 细行 → 待审卡 → 终态卡）；awaiting 最旧在前（v3 审查队列口径）、
+      const dOf = it => it.ts ? new Date(it.ts) : parseDay(it.created)   // 分组键：具体时刻的日期，无时刻回退 created 日期
+      /* 组内序 = 设计稿示例（待审卡 → 在途卡 → 终态卡）；awaiting 最旧在前（v3 审查队列口径）、
          终态倒序；组间按日期倒序（今天 > 昨天 > 旧日期 > 更早） */
-      const sortVal = x => x.kind === 'agent' ? 0 : x.kind === 'awaiting' ? 1 : x.kind === 'adopted' ? 2 : 3
+      const sortVal = x => x.kind === 'awaiting' ? 0 : x.kind === 'adopted' ? 1 : 2
       const rank = k => k === 'x' ? 0
         : k === 't' ? Number(dayKey(now).replace(/-/g, ''))
         : k === 'y' ? Number(dayKey(yest).replace(/-/g, ''))
@@ -274,26 +228,24 @@ export const MemoryConsole = {
         if (!gmap.has(k)) { const g = { key: k, label: labelOf(k), items: [] }; gmap.set(k, g); groups.push(g) }
         gmap.get(k).items.push(item)
       }
-      for (const e of events) push(keyOf(e.date), e)
-      for (const a of awaiting) push(keyOf(parseDay(a.created)), a)
-      for (const d of adopted) push(keyOf(parseDay(d.created)), d)
-      for (const t of terminals) push(keyOf(parseDay(t.created)), t)
+      for (const a of awaiting) push(keyOf(dOf(a)), a)
+      for (const d of adopted) push(keyOf(dOf(d)), d)
+      for (const t of terminals) push(keyOf(dOf(t)), t)
       groups.sort((a, b) => rank(b.key) - rank(a.key))
       for (const g of groups) {
         // 同 kind 内：awaiting 最旧在前（age 降序）；终态倒序（created 降序）
         g.items.sort((a, b) => sortVal(a) - sortVal(b)
           || (a.kind === 'awaiting' ? (b.age || 0) - (a.age || 0)
-              : String(b.created || '').localeCompare(String(a.created || ''))))
+              : ((b.ts || 0) - (a.ts || 0) || String(b.created || '').localeCompare(String(a.created || '')))))
       }
-      // f-time（设计稿 HH:mm 位）：agent 行 = last_run 时刻（上方已建）；卡 = 创建日相对标签（created 无时刻，
-      // 无 created 的卡回退 age 口径）——终态卡回退 merged_at 时刻（设计稿「merged_at 10-20 09:41」取 HH:mm 无）→ 用日期标签
+      // f-time（设计稿 HH:mm 位）：具体时刻（提交点 / 终态转换点 / merged_at）；无时刻回退创建日相对标签
       for (const g of groups) for (const it of g.items) {
-        if (it.kind === 'agent') continue
+        if (it.ts) { it.time = fmtHM(it.ts); continue }
         const d = parseDay(it.created)
         it.time = d ? keyOf(d) === 't' ? '今天' : keyOf(d) === 'y' ? '昨天' : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
           : (it.kind === 'awaiting' ? (formatAge(it.age) || '—') : '—')
       }
-      // 倒序截断 FEED_CAP：超出部分并入 f-more 计数（指向监控页 ⑥最近终态 / ②异常清单）
+      // 倒序截断 FEED_CAP：超出部分并入 f-more 计数（指向监控页 ⑥采纳提案 / ②异常清单）
       const flat = []
       for (const g of groups) for (const it of g.items) {
         if (flat.length >= FEED_CAP) break
@@ -310,10 +262,6 @@ export const MemoryConsole = {
       return { groups: out, more: Math.max(0, total - flat.length) }
     })
     const feedLen = computed(() => feedGroups.value.groups.reduce((s, g) => s + g.items.length, 0))
-    /* feed 终态卡 mini-trail 行（与详情面 trailRowsOf 同口径：human = 状态机记账，其余 = 执行器落文件） */
-    function trailMsg(t) {
-      return t.source === 'human' ? '状态变更 · 状态机 ledger 记账' : '应用变更 · ' + t.path
-    }
 
     // ─── 详情面 ───
     const detailItem = computed(() =>
@@ -335,7 +283,7 @@ export const MemoryConsole = {
     // 提案列表是否已到达（null = 尚未轮询；[] 轮询过但无提案 → 详情区分「加载 / 未找到」）
     const proposalsLoaded = computed(() => state.memoryProposals !== null)
 
-    // 内容摘录（记录 body = justification；D25 无投影文件，读记录端点）
+    // 正文（记录 body = justification 全文；D25 无投影文件，读记录端点；markdown 渲染，无截断）
     const bodyText = ref(null)      // null = 加载中 / 无
     const bodyError = ref(null)
     let bodyLoadToken = 0
@@ -351,20 +299,13 @@ export const MemoryConsole = {
         if (token === bodyLoadToken) bodyError.value = e.message
       }
     }
-    const bodyParas = computed(() => {
-      if (!bodyText.value) return []
-      const paras = bodyText.value.split(/\n{2,}/).map(p => p.trim()).filter(Boolean)
-      return paras.slice(0, MAX_PARAS).map(p => clip(p, PARA_CLAMP))
-    })
     const bodyTotal = computed(() => bodyText.value ? bodyText.value.replace(/\s+/g, '').length : 0)
-    const bodyClamped = computed(() => bodyTotal.value > BODY_CLAMP)
 
-    // 相似记忆比对：source_refs ∩ 召回 top（30d 加权榜）
+    // 相似记忆比对：source_refs ∩ 召回 top（30d 加权榜）；只留事实（共享来源 / 召回榜在列），不合成相似度分数
     const similar = computed(() => {
       const item = detailItem.value
       if (!item || !Array.isArray(item.source_refs)) return []
       const top = recall.value.top || []
-      const max = top.reduce((m, t) => Math.max(m, t.weighted || 0), 0)
       const byPath = {}
       for (const t of top) byPath[t.path] = t
       return item.source_refs
@@ -372,10 +313,15 @@ export const MemoryConsole = {
         .slice(0, 3)
         .map(r => ({
           path: r,
-          score: (max > 0 ? 0.5 + 0.45 * (byPath[r].weighted / max) : 0.5).toFixed(2),
           sub: '与提案共享来源 · 30d 召回榜在列'
         }))
     })
+
+    // 批次摘要短写（summary 行）：run-20261103-0142 → run-…-0142（长 id 进摘要行放不下，全值在展开区）
+    function shortRun(id) {
+      const m = String(id || '').match(/^(run-)\d+(-\d+)$/)
+      return m ? m[1] + '…' + m[2] : (id || '—')
+    }
 
     // 动作行可见性：仅 awaiting_review 且未进入确认之后
     const canAct = computed(() =>
@@ -413,8 +359,20 @@ export const MemoryConsole = {
       }
       return rows
     })
-    /* 状态 pill（仅详情面消费）：status key → .spill 色 class（九态色板整体在监控页①，
-       面板内保留原 key 短写；awaiting_review 为队列键名 → awaiting 类） */
+    /* 轨迹节（详情面懒加载）：首次展开时取 trail；计数 ln = 行数（加载前「—」）；
+       确认之后子视图自带轨迹区 → 轨迹节在 doneView 时隐藏（避免双显） */
+    const trailPrimed = ref(false)
+    const trailLoading = ref(false)
+    const trailCount = computed(() => trail.value.length)
+    async function onTrailToggle(e) {
+      if (trailPrimed.value || !detailItem.value) return
+      trailLoading.value = true
+      await loadTrail(detailItem.value.relpath)
+      trailLoading.value = false
+      if (e.target && e.target.open) trailPrimed.value = true   // 收起即未取 → 不标记（下次展开再取）
+    }
+
+    /* 状态 pill（详情头 + 队列卡共用）：status key → .spill 色 class（awaiting_review 为队列键名 → awaiting 类） */
     const PILL_CLS = {
       awaiting_review: 'awaiting', adopted: 'adopted', rejected: 'rejected',
       expired: 'expired', merged: 'merged', failed: 'failed'
@@ -494,7 +452,7 @@ export const MemoryConsole = {
       return '状态 ' + s
     })
 
-    // 详情面复位 + 按需取摘录；深链指向非待审提案（铃铛深链）→ 直接给确认之后子视图
+    // 详情面复位 + 按需取正文；深链指向非待审提案（铃铛深链）→ 直接给确认之后子视图
     // 设计场景 03：钻取/返回不毁队列面流水 —— 返回时恢复队列面滚动位置
     let queueScroll = 0
     watch(
@@ -514,6 +472,8 @@ export const MemoryConsole = {
         rejectReason.value = ''
         actionError.value = null
         trail.value = []
+        trailPrimed.value = false
+        trailLoading.value = false
         lastAction.value = ''
         await loadBody(rel)
         const item = detailItem.value
@@ -640,15 +600,16 @@ export const MemoryConsole = {
     function backReport() { emit('report-back') }
 
     return {
-      l0, degraded, degradedFresh, feedGroups, feedLen, openMonitor, trailMsg,
-      reportCards, reportsLen, reportsLoaded,
-      pillText, pillCls, formatAge, recall_error,
-      detailItem, queueIndex, queueCount, proposalsLoaded, bodyText, bodyParas, bodyTotal, bodyClamped, bodyError, similar,
+      l0, degraded, degradedFresh, feedGroups, feedLen, openMonitor,
+      reportCards, reportsLen,
+      pillText, pillCls, formatAge, recall_error, shortRun,
+      detailItem, queueIndex, queueCount, proposalsLoaded, bodyText, bodyTotal, bodyError, similar,
       canAct, acting, actionError, rsnOpen, rejectReason, doneView, trailRows,
+      trailLoading, trailCount, onTrailToggle,
       pillStatus, reasonOk, landedFile, doneMeta, doneLabel,
       reportItem, reportContent, reportError, reportBodyEl, onReportCopyClick,
       adopt, reject, pick, back, close, openSrc, toggleRsn, pickReport, backReport,
-      renderMarkdown,
+      renderMarkdown, CAR,
       TYPE_ICONS, TYPE_ICON_DEFAULT
     }
   },
@@ -656,14 +617,15 @@ export const MemoryConsole = {
     <!-- L0 主态：纯状态行 + 流水（:key 变化 → 面入场动画重放：opacity + 8px 位移） -->
     <div v-if="!detail && !report" :key="'queue'" data-face="queue" class="c-face anim">
       <div class="p-head">
-        <span class="picon"><svg viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6h4"/></svg></span>
-        <span class="ptitle">记忆控制台</span>
+        <span class="picon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+        <span class="ptitle">记忆</span>
+        <span class="pcount" v-if="l0.awaiting + l0.adopted + l0.failed > 0">{{ l0.awaiting + l0.adopted + l0.failed }}</span>
         <span class="pacts"><button class="ibtn" title="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
-      <!-- L0 行动数 = 纯状态行（整行不可点；「轮询 30s」并入单行）；行尾「后台 →」= 唯一 L0→L1 入口；
+      <!-- L0 行动数 = 纯状态行（整行不可点）；行尾「后台 →」= 唯一 L0→L1 入口；
            failed > 0 → 失败数告警红 + 入口小红点（0 时不渲染 dot） -->
       <div class="l0bar">
-        <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span v-if="degraded > 0" class="l0-deg" :class="{ fresh: degradedFresh }" title="运行期内快照捕捉降级计数（进程内，重启归零）">{{ degraded }} 快照降级</span><span class="ld">·</span><span class="dim">轮询 30s</span></span>
+        <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span v-if="degraded > 0" class="l0-deg" :class="{ fresh: degradedFresh }" title="运行期内快照捕捉降级计数（进程内，重启归零）">{{ degraded }} 快照降级</span></span>
         <button class="l0-go" type="button" title="后台监控页 L1（面板收起，监控页接管主区域）" @click="openMonitor"><span v-if="l0.failed > 0" class="dot" aria-hidden="true"></span>后台<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
       <div class="c-scroll">
@@ -672,62 +634,48 @@ export const MemoryConsole = {
             <template v-for="(grp, gi) in feedGroups.groups" :key="'g' + grp.key">
               <div class="f-day">{{ grp.label }}</div>
               <template v-for="(it, ii) in grp.items" :key="'i' + it.key">
-                <div v-if="it.kind === 'agent'" class="f-item f-agent">
-                  <span class="f-time">{{ it.time }}</span>
-                  <div class="f-agent-txt"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l2.5 2.5"/></svg><span class="nm">{{ it.alias }}</span><span class="msg">{{ it.msg }}</span></div>
-                </div>
-                <div v-else-if="it.kind === 'awaiting'" class="f-item" :class="{ hot: it.fresh }">
+                <div v-if="it.kind === 'awaiting'" class="f-item" :class="{ hot: it.fresh }">
                   <span class="f-dot"></span>
                   <span class="f-time">{{ it.time }}</span>
                   <button class="f-card" :class="{ fresh: it.fresh }" type="button" :title="it.relpath" @click="pick(it)">
-                    <div class="f-row1"><span class="tchip"><span v-html="TYPE_ICONS[it.type] || TYPE_ICON_DEFAULT"></span>{{ it.type || 'unknown' }}</span><span class="f-title">{{ it.title }}</span><span class="f-stamp">awaiting</span></div>
-                    <div class="f-row2">{{ it.src }}<template v-if="it.run_id"><span class="sep">·</span>{{ it.run_id }}</template></div>
+                    <div class="f-meta"><span class="tchip"><span v-html="TYPE_ICONS[it.type] || TYPE_ICON_DEFAULT"></span>{{ it.type || 'unknown' }}</span><span class="spill awaiting">awaiting</span></div>
+                    <div class="f-title">{{ it.title }}</div>
                   </button>
                 </div>
                 <div v-else-if="it.kind === 'adopted'" class="f-item" :class="{ last: it.lastItem }">
                   <span class="f-dot"></span>
                   <span class="f-time">{{ it.time }}</span>
                   <button class="f-card" type="button" :title="it.relpath" @click="pick(it)">
-                    <div class="f-row1"><span class="tchip">{{ it.type || 'unknown' }}</span><span class="f-title">{{ it.title }}</span><span class="spill adopted" style="font-size:9.5px;padding:1px 7px">adopted</span></div>
-                    <div class="f-row2">{{ it.row2 }}</div>
-                    <div v-if="it.trail.length" class="f-trail">
-                      <div v-for="(t, ti) in it.trail" :key="ti" class="log-line"><span class="seq">#{{ t.seq }}</span><span class="act">{{ t.source }}</span><span class="msg">{{ trailMsg(t) }}</span></div>
-                    </div>
+                    <div class="f-meta"><span class="tchip"><span v-html="TYPE_ICONS[it.type] || TYPE_ICON_DEFAULT"></span>{{ it.type || 'unknown' }}</span><span class="spill adopted" style="font-size:9.5px;padding:1px 7px">adopted</span></div>
+                    <div class="f-title">{{ it.title }}</div>
                   </button>
                 </div>
                 <div v-else class="f-item f-term" :class="{ last: it.lastItem }">
                   <span class="f-dot"></span>
                   <span class="f-time">{{ it.time }}</span>
                   <button class="f-card f-term" type="button" :title="it.relpath" @click="pick(it)">
-                    <div class="f-row1"><span class="tchip">{{ it.type || 'unknown' }}</span><span class="f-title">{{ it.title }}</span><span class="spill" :class="it.status" style="font-size:9.5px;padding:1px 7px">{{ it.status }}</span></div>
-                    <div class="f-row2">{{ it.row2 }}</div>
-                    <div v-if="it.trail.length" class="f-trail">
-                      <div v-for="(t, ti) in it.trail" :key="ti" class="log-line"><span class="seq">#{{ t.seq }}</span><span class="act">{{ t.source }}</span><span class="msg">{{ trailMsg(t) }}</span></div>
-                    </div>
+                    <div class="f-meta"><span class="tchip"><span v-html="TYPE_ICONS[it.type] || TYPE_ICON_DEFAULT"></span>{{ it.type || 'unknown' }}</span><span class="spill" :class="it.status" style="font-size:9.5px;padding:1px 7px">{{ it.status }}</span></div>
+                    <div class="f-title">{{ it.title }}</div>
                   </button>
                 </div>
               </template>
             </template>
-            <div v-if="feedGroups.more > 0" class="f-more">{{ feedGroups.more }} 条更老 —— 终态全貌见「后台 →」· 最近终态</div>
+            <div v-if="feedGroups.more > 0" class="f-more">{{ feedGroups.more }} 条更老 —— 见「后台 →」· 采纳提案</div>
           </template>
-          <div v-else-if="!reportsLen" class="q-empty">
+          <div v-else class="q-empty">
             <div class="ring"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/><path d="M4 13h5l1.5 2.5h3L15 13h5"/></svg></div>
             <div class="t1">无待审提案</div>
             <div class="t2">系统运行正常 · 后台活动见「后台 →」</div>
           </div>
         </div>
-        <!-- 报告区：只读 advisory 通道（index/reports/<alias>/，机器区命名 L2 钉死）；首载前不渲染（未知态 ≠ 空态）。
-             卡片行与待审卡同壳（.f-card）：alias chip + title + 日期相对标签；fresh = mtime 跨轮询增长（freshSet 口径）；
-             点卡 → 报告详情面（第三面）；空态 = 常驻淡显一行（监控页「无异常」zline 设计语言） -->
-        <div v-if="reportsLoaded" class="rpt-sec">
+        <!-- 报告区：只读 advisory 通道（index/reports/<alias>/，机器区命名 L2 钉死）；
+             仅当有报告时渲染（无常驻空位）；单行 = alias chip + title + 日期（relpath 全值在 hover title）；
+             点行 → 报告详情面（第三面） -->
+        <div v-if="reportsLen" class="rpt-sec">
           <div class="c-sec-h rpt-h"><span>报告</span><span class="cnt" :class="{ hot: reportsLen > 0 }">{{ reportsLen }}</span><span class="rpt-ln">只读 · 建议不执行</span></div>
-          <template v-if="reportsLen">
-            <button v-for="r in reportCards" :key="r.relpath" class="f-card rpt-card" :class="{ fresh: r.fresh }" type="button" :title="r.relpath" @click="pickReport(r)">
-              <div class="f-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ r.alias }}</span><span class="f-title">{{ r.title || r.alias }}</span><span class="f-date">{{ r.dateShort }}</span></div>
-              <div class="f-row2">{{ r.relpath }}</div>
-            </button>
-          </template>
-          <div v-else class="zline">暂无报告</div>
+          <button v-for="r in reportCards" :key="r.relpath" class="f-card rpt-card" :class="{ fresh: r.fresh }" type="button" :title="r.relpath" @click="pickReport(r)">
+            <div class="f-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ r.alias }}</span><span class="f-title">{{ r.title || r.alias }}</span><span class="f-date">{{ r.dateShort }}</span></div>
+          </button>
         </div>
       </div>
     </div>
@@ -784,7 +732,7 @@ export const MemoryConsole = {
           </template>
         </div>
         <template v-else>
-          <!-- (1) 类型 + 状态 + 标题 + 年龄 -->
+          <!-- (1) 类型 + 状态 + 标题 + 年龄（头部常驻：chip + pill + 标题 + 全路径 + 相对时间） -->
           <div class="d-head">
             <div class="d-chips">
               <span class="tchip"><span v-html="TYPE_ICONS[detailItem.type] || TYPE_ICON_DEFAULT"></span>{{ detailItem.type || 'unknown' }}</span>
@@ -795,49 +743,68 @@ export const MemoryConsole = {
             <div class="d-path" :title="detailItem.relpath">{{ detailItem.relpath }}</div>
           </div>
 
-          <!-- (2) 内容摘录 -->
-          <div class="d-sec">
-            <div class="d-label"><span>内容</span><span class="ln">body 摘录 · 全文见来源</span></div>
-            <div class="d-md" v-if="bodyError"><span style="color: #b91c1c">{{ bodyError }}</span></div>
-            <div class="d-md" v-else-if="!bodyParas.length"><span style="color: var(--ink-soft)">{{ bodyText === null ? '读取中…' : '（无正文）' }}</span></div>
-            <div class="d-md" v-else>
-              <p v-for="(p, i) in bodyParas" :key="i">{{ p }}</p>
-              <div v-if="bodyClamped" class="ellip">… 共 {{ bodyTotal }} 字</div>
+          <!-- (2) 正文：justification 全文 markdown（无截断）；默认展开、可折叠 -->
+          <details class="d-sec" open>
+            <summary><span class="car" v-html="CAR"></span>正文<span class="ln" v-if="bodyTotal">{{ bodyTotal }} 字</span></summary>
+            <div class="body">
+              <div class="d-md" v-if="bodyError"><span style="color: #b91c1c">{{ bodyError }}</span></div>
+              <div class="d-md" v-else-if="bodyText === null"><span style="color: var(--ink-soft)">读取中…</span></div>
+              <div class="d-md" v-else-if="!bodyText"><span style="color: var(--ink-soft)">（无正文）</span></div>
+              <div class="d-md" v-else v-html="renderMarkdown(bodyText)"></div>
             </div>
-          </div>
+          </details>
 
-          <!-- (3) 来源（可跳转原文） -->
-          <div class="d-sec" v-if="detailItem.source_refs && detailItem.source_refs.length">
-            <div class="d-label"><span>来源</span><span class="ln">source_refs · 可跳转</span></div>
-            <div class="src-list">
-              <a v-for="r in detailItem.source_refs" :key="r" class="src-link" :title="r" href="javascript:void(0)" @click="openSrc(r)">
-                <svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>{{ r }}
-              </a>
-            </div>
-          </div>
-
-          <!-- (4) 批次 · 可逆性 -->
-          <div class="d-sec">
-            <div class="d-label"><span>批次 · 可逆性</span></div>
-            <div class="run-box">
-              <div class="run-line"><span class="rk">批次</span><span class="rv" :title="detailItem.run_id">{{ detailItem.run_id || '—' }}</span></div>
-              <div class="run-line"><span class="rk">产出者</span><span class="rv">{{ detailItem.actor || '—' }}</span></div>
-              <div class="run-line"><span class="rk">可逆性</span><span class="rv"><span class="spill" :class="detailItem.reversible ? 'adopted' : ''">{{ detailItem.reversible ? '可回滚' : '不可回滚' }}</span></span></div>
-              <div class="run-line"><span class="rk">创建</span><span class="rv">{{ detailItem.created || '—' }}</span></div>
-            </div>
-          </div>
-
-          <!-- (5) 相似记忆比对 -->
-          <div class="d-sec">
-            <div class="d-label"><span>相似记忆</span><span class="ln">source_refs ∩ 召回榜 · 查重复</span></div>
-            <div v-if="similar.length" class="sim-rows">
-              <div v-for="s in similar" :key="s.path" class="sim-row">
-                <div class="sp1"><span class="pp" :title="s.path">{{ s.path }}</span><span class="sc">{{ s.score }}</span></div>
-                <div class="sp2">{{ s.sub }}</div>
+          <!-- (3) 来源（可跳转原文）：单行摘要 + 计数，默认收起 -->
+          <details v-if="detailItem.source_refs && detailItem.source_refs.length" class="d-sec">
+            <summary><span class="car" v-html="CAR"></span>来源<span class="ln">{{ detailItem.source_refs.length }}</span></summary>
+            <div class="body">
+              <div class="src-list">
+                <a v-for="r in detailItem.source_refs" :key="r" class="src-link" :title="r" href="javascript:void(0)" @click="openSrc(r)">
+                  <svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>{{ r }}
+                </a>
               </div>
             </div>
-            <div v-else class="tr-sub" style="padding: 2px 2px 4px">与 30d 召回榜无重叠（{{ recall_error ? '召回数据暂不可用' : '无共享来源' }}）</div>
-          </div>
+          </details>
+
+          <!-- (4) 批次 · 可逆性：summary ln = 批次短写（run-…-0142） -->
+          <details class="d-sec">
+            <summary><span class="car" v-html="CAR"></span>批次 · 可逆性<span class="ln" :title="detailItem.run_id">{{ shortRun(detailItem.run_id) }}</span></summary>
+            <div class="body">
+              <div class="run-box">
+                <div class="run-line"><span class="rk">批次</span><span class="rv" :title="detailItem.run_id">{{ detailItem.run_id || '—' }}</span></div>
+                <div class="run-line"><span class="rk">产出者</span><span class="rv">{{ detailItem.actor || '—' }}</span></div>
+                <div class="run-line"><span class="rk">可逆性</span><span class="rv"><span class="spill" :class="detailItem.reversible ? 'adopted' : ''">{{ detailItem.reversible ? '可回滚' : '不可回滚' }}</span></span></div>
+                <div class="run-line"><span class="rk">创建</span><span class="rv">{{ detailItem.created || '—' }}</span></div>
+              </div>
+            </div>
+          </details>
+
+          <!-- (5) 相似记忆比对：只留事实（共享来源 / 召回榜在列），不合成相似度分数 -->
+          <details class="d-sec">
+            <summary><span class="car" v-html="CAR"></span>相似记忆<span class="ln">{{ similar.length ? '共享 ' + similar.length + ' 来源' : '无重叠' }}</span></summary>
+            <div class="body">
+              <div v-if="similar.length" class="sim-rows">
+                <div v-for="s in similar" :key="s.path" class="sim-row">
+                  <div class="pp" :title="s.path">{{ s.path }}</div>
+                  <div class="sp2">{{ s.sub }}</div>
+                </div>
+              </div>
+              <div v-else class="tr-sub" style="padding: 2px 2px 4px">与 30d 召回榜无重叠（{{ recall_error ? '召回数据暂不可用' : '无共享来源' }}）</div>
+            </div>
+          </details>
+
+          <!-- (6) 变更轨迹：懒加载（首次展开取 trail）；doneView 时隐藏（确认之后子视图自带轨迹区） -->
+          <details v-if="!doneView" class="d-sec" @toggle="onTrailToggle">
+            <summary><span class="car" v-html="CAR"></span>变更轨迹<span class="ln">{{ trailLoading ? '…' : (trailCount ? trailCount : '—') }}</span></summary>
+            <div class="body">
+              <div v-if="trailCount" class="log-trail">
+                <div v-for="(row, i) in trailRows" :key="row.seq + '-' + i" class="log-line">
+                  <span class="seq">{{ row.seq }}</span><span class="act">{{ row.act }}</span><span class="msg">{{ row.msg }}</span>
+                </div>
+              </div>
+              <div v-else class="tr-sub" style="padding: 2px 2px 4px">{{ trailLoading ? '读取轨迹…' : '无轨迹记录' }}</div>
+            </div>
+          </details>
 
           <!-- 操作失败提示（400 等；服务端文案直接展示） -->
           <div v-if="actionError" class="m-err">

@@ -380,17 +380,11 @@ const panels = [
   { id: 'file', label: '文件', icon: ICONS.folder, width: 260 },
   { id: 'search', label: '搜索', icon: ICONS.search, width: 260 }
 ]
-// 预留位（最近/设置）：虚线占位、不可点，由模板渲染；「通知」已激活为记忆控制台槽位
-const reservedItems = [
-  { id: 'recent', label: '最近', icon: ICONS.clock },
-  { id: 'settings', label: '设置', icon: ICONS.gear, bottom: true }
-]
-
 function activePanelCfg() {
   return panels.find(p => p.id === activePanel.value) || panels[0]
 }
 
-// ─── rail 通知槽徽标（定稿 2026-10-23：需人参与态总和 = 待审 + failed；0 → 不渲染；
+// ─── rail 记忆槽徽标（定稿 2026-10-23：需人参与态总和 = 待审 + failed；0 → 不渲染；
 //     hover title = 分解构成「待审 N · 失败 M」，同设计稿场景 02 口径）───
 const badgeParts = computed(() => {
   const bs = (state.memoryStatus && state.memoryStatus.proposals && state.memoryStatus.proposals.by_status) || {}
@@ -413,7 +407,7 @@ function onMemoryOpenDoc(path) {
 
 // ─── 后台监控页 L1（定稿设计 design/console-v4-watch.html 场景 02 · 非对称网格 02E）：
 //     本阶段唯一入口 window.openMonitorPage()（Phase B 的 L0「后台 →」调它；不加顶栏按钮）。
-//     互斥契约：开页 → L0 面板收起；「← 返回文档」→ 面板不自动重开（重入走 rail【通知】）───
+//     互斥契约：开页 → L0 面板收起；「← 返回文档」→ 面板不自动重开（重入走 rail【记忆】）───
 function openMonitorPage() {
   clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
   const el = document.querySelector('.mwrap')
@@ -544,8 +538,8 @@ export function createApp() {
       onMounted(() => {
         loadDocs()
         setInterval(pollChanges, 10000)
-        setInterval(pollNotifications, 30000)
-        setInterval(pollMemory, 30000)
+        // 通知 + 记忆共用一个 30s 定时器：同周期串行触发两次取数（合并前为两个独立 30s 定时器）
+        setInterval(() => { pollNotifications(); pollMemory() }, 30000)
         pollNotifications()
         pollMemory()
 
@@ -633,7 +627,7 @@ export function createApp() {
 
       return {
         state, editorPaneRef, fileTreeRef, isDesktop, ICONS,
-        activePanel, panels, reservedItems, activePanelCfg,
+        activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
         onMemoryRailClick, onMemoryOpenDoc, badgeParts, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
@@ -657,27 +651,16 @@ export function createApp() {
               <span class="rlabel">{{ p.label }}</span>
             </button>
             <div class="rsep"></div>
-            <button v-for="r in reservedItems.filter(x => !x.bottom)" :key="r.id" type="button"
-              class="rbtn reserved" :title="'预留：' + r.label" tabindex="-1">
-              <span class="ricon" v-html="r.icon"></span>
-              <span class="rlabel">{{ r.label }}</span>
-            </button>
-            <!-- 记忆控制台槽位（原预留「通知」）：徽标 = 需人参与态总和（待审 + failed，定稿 2026-10-23；0 不渲染；hover title 分解构成） -->
+            <!-- 记忆控制台槽位（节点图标 = 记忆网络，设计稿场景 04；真通知 = 顶栏铃铛，唯一）：
+                 徽标 = 需人参与态总和（待审 + failed，定稿 2026-10-23；0 不渲染；hover title 分解构成） -->
             <button type="button"
               class="rbtn" :class="{ on: state.memoryOpen }"
               :title="'记忆控制台' + (badgeParts.total > 0 ? ' · 待审 ' + badgeParts.awaiting + ' · 失败 ' + badgeParts.failed : '')"
               aria-label="记忆控制台页" @click="onMemoryRailClick">
-              <span class="ricon" v-html="ICONS.bell"></span>
-              <span class="rlabel">通知</span>
+              <span class="ricon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+              <span class="rlabel">记忆</span>
               <span v-if="badgeParts.total > 0" class="badge">{{ badgeParts.total > 99 ? '99+' : badgeParts.total }}</span>
             </button>
-            <div class="rbottom">
-              <button v-for="r in reservedItems.filter(x => x.bottom)" :key="r.id" type="button"
-                class="rbtn reserved" :title="r.label + '（预留）'" tabindex="-1">
-                <span class="ricon" v-html="r.icon"></span>
-                <span class="rlabel">{{ r.label }}</span>
-              </button>
-            </div>
           </div>
 
           <!-- 面板容器（桌面：v-show 常驻 200ms fade；移动：260px 左侧滑入 overlay） -->

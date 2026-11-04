@@ -41,15 +41,6 @@ export const api = {
     return res.json()
   },
 
-  /** POST /api/docs/{path} — 上传文档（multipart） */
-  async uploadDoc(path, file) {
-    const form = new FormData()
-    form.append('file', file)
-    const res = await fetch('/api/docs/' + encodeURIComponent(path), { method: 'POST', body: form })
-    if (!res.ok) throw new Error(`POST /api/docs/${path} → ${res.status}`)
-    return res.json()
-  },
-
   /** GET /api/docs/changes?since= — 变更轮询 */
   async getChanges(since) {
     const res = await fetch('/api/docs/changes?since=' + since)
@@ -96,18 +87,6 @@ export const api = {
       body: JSON.stringify({ old_session_id: oldSessionId })
     })
     if (!res.ok) throw new Error(`new-session → ${res.status}`)
-    return res.json()
-  },
-
-  /** GET /api/graph/backlinks?path= — 反向链接 */
-  async graphBacklinks(path) {
-    const res = await fetch('/api/graph/backlinks?path=' + encodeURIComponent(path))
-    return res.json()
-  },
-
-  /** GET /api/graph/related?path=&hops= — 关联文档 */
-  async graphRelated(path, hops = 1) {
-    const res = await fetch('/api/graph/related?path=' + encodeURIComponent(path) + '&hops=' + hops)
     return res.json()
   },
 
