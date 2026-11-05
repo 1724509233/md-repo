@@ -77,6 +77,7 @@ def test_log_query_hit_rows_and_query_row(db_conn):
 @pytest.mark.parametrize("source,expected", [
     ("web", "human"),
     ("agent", "on_demand"),
+    ("mcp", "on_demand"),
     ("somealias", "synthetic"),
 ])
 def test_log_query_traffic_derivation(db_conn, source, expected):
@@ -317,6 +318,70 @@ def test_search_docs_telemetry_failure_never_breaks_result(db_conn, vault_dir,
     ctx = ToolContext(vault_dir=vault_dir, write_source="agent")
     out = tool.call({"query": "hello"}, ctx)
     assert "<results" in out  # tool result unaffected
+
+
+# ── mcp channel logging (P0 L5: the unified recall ledger) ────────────────
+
+def test_mcp_search_ledgers_on_demand(db_conn, vault_dir, monkeypatch):
+    """MCP search_docs: one recall_queries row (source='mcp') plus one
+    recall_log row per hit; traffic=on_demand — agent-mediated,
+    user-initiated recall from the external IDE (same demand class as the
+    in-app agent, so it counts toward value judgment)."""
+    from server.mcp_server import _mcp_search
+
+    results = [{"path": "notes/a.md", "score": 0.8,
+                "segments": [{"heading_path": "", "kind": "text",
+                              "content": "x", "score": 0.8}]}]
+    calls = _mock_rag_search(monkeypatch, results)
+
+    out = _mcp_search(vault_dir, "hello")
+    assert "<results" in out
+
+    q = db_conn.execute("SELECT * FROM recall_queries").fetchone()
+    assert q["source"] == "mcp"
+    assert q["traffic"] == "on_demand"
+    assert q["recall"] == "strict"
+    assert q["hits"] == 1
+    row = db_conn.execute("SELECT * FROM recall_log").fetchone()
+    assert row["source"] == "mcp"
+    assert row["traffic"] == "on_demand"
+    assert row["path"] == "notes/a.md"
+    assert calls == [{"query": "hello", "top_k": 5, "recall": "strict"}]
+
+
+def test_mcp_search_zero_hit_ledgered(db_conn, vault_dir, monkeypatch):
+    """A zero-hit MCP search is ledgered too (failed-recall signal)."""
+    from server.mcp_server import _mcp_search
+
+    _mock_rag_search(monkeypatch, [])
+
+    out = _mcp_search(vault_dir, "nope")
+    assert out == SearchDocsTool.search_no_match("nope")
+
+    q = db_conn.execute("SELECT * FROM recall_queries").fetchone()
+    assert q["source"] == "mcp"
+    assert q["hits"] == 0
+    assert db_conn.execute("SELECT count(*) FROM recall_log").fetchone()[0] == 0
+
+
+def test_mcp_search_telemetry_failure_never_breaks_response(db_conn, vault_dir,
+                                                            monkeypatch):
+    """The ledger write is fail-open: a failing recall write must not
+    change the MCP search response."""
+    from server.mcp_server import _mcp_search
+
+    _mock_rag_search(monkeypatch, [
+        {"path": "notes/a.md", "score": 0.8,
+         "segments": [{"heading_path": "", "kind": "text", "content": "x", "score": 0.8}]},
+    ])
+
+    def boom(*a, **kw):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(recall_db, "log_query", boom)
+
+    out = _mcp_search(vault_dir, "hello")
+    assert "<results" in out  # MCP response unaffected
 
 
 # ── recall_stats tool ──────────────────────────────────────────────────────

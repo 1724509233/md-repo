@@ -1,10 +1,15 @@
 """Recall telemetry (memory-runtime v2): the single owner of recall writes.
 
-Both the web search endpoint and the agent search tool ledger through
-:func:`log_query`. Traffic is dimensioned at write time:
+All three read channels ledger through :func:`log_query`: the web search
+endpoint (source "web"), the in-app agent tool (source "agent"), and the
+MCP stdio channel (source "mcp", P0 L5 — the unified recall ledger makes
+the external IDE agent's searches traceable too). Traffic is dimensioned
+at write time:
 
 - ``human``: the human's own searches (web endpoint)
-- ``on_demand``: the main agent (desktop agent channel, source "agent")
+- ``on_demand``: agent-mediated, user-initiated searches (in-app agent
+  channel "agent"; MCP channel "mcp" — same demand class, so it counts
+  toward value judgment)
 - ``synthetic``: background agents (their alias) — synthetic traffic never
   counts toward value judgments
 """
@@ -22,6 +27,13 @@ TRAFFIC_CLASSES = ("human", "on_demand", "synthetic")
 def _traffic(source: str) -> str:
     """Derive the traffic class from a write source."""
     if source == "agent":
+        return "on_demand"
+    if source == "mcp":
+        # P0 L5: the MCP channel is the user's external IDE agent — an
+        # agent-mediated, user-initiated search, the same demand class as
+        # the in-app agent (counts toward value judgment; NOT the bgagent
+        # synthetic sentinel class, which is machine-initiated background
+        # traffic).
         return "on_demand"
     if source == "web":
         return "human"

@@ -391,15 +391,27 @@ def register(app, ctx) -> None:
         recall_out: dict = {}
         try:
             all_traffic = recall_db.doc_traffic(ctx.db_conn, time.time() - 30 * 86400)
+            # by_source_7d: recall_queries rows per source over 7d (P0 L5:
+            # the unified recall ledger records all three channels — web /
+            # agent / mcp — so the poll face can tell them apart).
+            by_source_7d = {
+                r["source"] or "": r["c"] for r in ctx.db_conn.execute(
+                    "SELECT source, count(*) AS c FROM recall_queries "
+                    "WHERE ts > ? GROUP BY source",
+                    (time.time() - 7 * 86400,),
+                ).fetchall()
+            }
             recall_out = {
                 "failed_7d": len(recall_db.failed_queries(ctx.db_conn, time.time() - 7 * 86400)),
                 "docs_tracked": len(all_traffic),
                 "top": [{"path": t["path"], "weighted": t["weighted"],
                          "last_hit": t["last_hit"]} for t in all_traffic[:5]],
+                "by_source_7d": by_source_7d,
             }
         except Exception as e:
             recall_out = {
-                "failed_7d": 0, "docs_tracked": 0, "top": [], "recall_error": str(e),
+                "failed_7d": 0, "docs_tracked": 0, "top": [],
+                "by_source_7d": {}, "recall_error": str(e),
             }
 
         # executor: the deterministic 30-minute loop is a framework role, not

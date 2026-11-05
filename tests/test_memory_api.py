@@ -293,6 +293,9 @@ def test_status_shape_and_counts(client, vault_dir, db_conn, ledger_conn):
     assert data["recall"]["failed_7d"] == 1
     assert data["recall"]["docs_tracked"] == 2
     assert [t["path"] for t in data["recall"]["top"]] == ["notes/a.md", "notes/b.md"]
+    # by_source_7d (P0 L5): recall_queries rows per source over 7d;
+    # sources with no rows in the window are simply absent.
+    assert data["recall"]["by_source_7d"] == {"web": 1}
     assert "recall_error" not in data["recall"]
 
 
@@ -364,7 +367,35 @@ def test_status_recall_table_dropped(client, vault_dir, db_conn):
     assert recall["failed_7d"] == 0
     assert recall["docs_tracked"] == 0
     assert recall["top"] == []
+    assert recall["by_source_7d"] == {}
     assert recall["recall_error"]
+
+
+def test_status_recall_by_source_7d(client, vault_dir, db_conn, ledger_conn):
+    """P0 L5: per-source recall counts — recall_queries rows are grouped
+    by source over the 7d window, so web / agent / mcp (and bgagent
+    aliases) are distinguishable on the poll face. Rows outside the
+    window do not count."""
+    now_ts = time.time()
+    db_conn.executemany(
+        "INSERT INTO recall_queries (ts, source, traffic, query, recall, hits) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (now_ts - 2 * 86400, "web", "human", "q1", "strict", 1),
+            (now_ts - 1 * 86400, "agent", "on_demand", "q2", "strict", 1),
+            (now_ts - 1 * 86400, "agent", "on_demand", "q3", "near", 0),
+            (now_ts - 2 * 86400, "mcp", "on_demand", "q4", "strict", 1),
+            (now_ts - 8 * 86400, "mcp", "on_demand", "old", "strict", 1),
+            (now_ts - 5 * 86400, "bgalias", "synthetic", "q5", "strict", 1),
+        ],
+    )
+    db_conn.commit()
+
+    resp = client.get("/api/memory/status")
+    assert resp.status_code == 200
+    assert resp.json()["recall"]["by_source_7d"] == {
+        "web": 1, "agent": 2, "mcp": 1, "bgalias": 1,
+    }
 
 
 # ── /api/memory/status: agents[] config-derived caps ──────────────────────

@@ -166,16 +166,85 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
         ToolContext(vault_dir=vault_dir, write_source="mcp"))
 
 
+def _mcp_log_recall(query: str, tier: str, results: list) -> None:
+    """Ledger this MCP search in recall telemetry (P0 L5: the unified
+    recall ledger gains the mcp channel alongside agent/web — the three
+    channels' search streams are traceable in recall_queries/recall_log,
+    and stats can distinguish them by source).
+
+    Mirrors ``server/agent/tools/search_docs.py::_log_recall``: the
+    connection is resolved lazily via the module handle (``main()``
+    registers the stdio process's own index.db connection — module-level
+    reuse, WAL, busy_timeout 5s), zero-hit searches are ledgered too
+    (the failed-recall signal), and the write is fail-open — telemetry
+    must never break the MCP response.
+    """
+    from server.vault.db import recall as recall_db
+    from server.vault.db.conn import get_index_conn
+
+    conn = get_index_conn()
+    if conn is None:
+        return
+    try:
+        recall_db.log_query(conn, "mcp", query, tier, results)
+    except Exception:
+        logging.getLogger("mcp_server").exception(
+            "recall telemetry failed for mcp search_docs")
+
+
+def _mcp_search(vault_dir: Path, query: str, top_k: int = 5,
+                expand: bool = True, recall: str = "strict") -> str:
+    """The MCP channel's search_docs body: segments-based search + recall
+    ledger (P0 L5). The ledger write is fail-open (telemetry never breaks
+    the response); zero-hit searches are ledgered too — the failed-recall
+    signal. An FTS syntax error returns the error hint WITHOUT ledgering
+    (the search never ran — same convention as the agent channel)."""
+    import html as _html
+
+    from server.ai import rag_search
+
+    try:
+        results = rag_search(str(vault_dir), query, top_k=top_k,
+                             expand=expand, recall=recall)
+    except Exception as e:
+        if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
+            return fts_syntax_error(query)
+        raise
+    _mcp_log_recall(query, recall, results)
+    if not results:
+        return search_no_match(query)
+    lines = [f'<results count="{len(results)}" query="{_html.escape(query, quote=False)}">']
+    for r in results:
+        lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')
+        for seg in r["segments"]:
+            heading = _html.escape(seg["heading_path"], quote=False) if seg["heading_path"] else ""
+            kind = seg["kind"]
+            if expand and seg["content"]:
+                content = _html.escape(seg["content"].replace("\n", " "), quote=False)
+                lines.append(f'    <segment heading="{heading}" kind="{kind}">{content}</segment>')
+            else:
+                lines.append(f'    <segment heading="{heading}" kind="{kind}"/>')
+        lines.append('  </result>')
+    lines.append('</results>')
+    return "\n".join(lines)
+
+
 def main():
     from server.config import load_server_config
     from server.vault.db.schema import init_db
     from server.vault.orchestration.indexer import ensure_indexed
-    from server.ai import rag_search
     from server.agent import ChannelPolicy, validate_tool_call
     
     config = load_server_config(str(_find_config()))
     vault_dir = config.vault_dir
     db_conn = init_db(vault_dir / ".sync" / "index.db")
+    # Cross-process concurrency with the main server (both processes can
+    # write index.db): WAL is already on via init_db, so readers are
+    # unaffected; this makes the writer lock paths (the recall ledger
+    # write, the rare lazy FTS rebuild) wait up to 5s for the other
+    # process's transaction instead of failing the MCP search with
+    # SQLITE_BUSY (P0 L5).
+    db_conn.execute("PRAGMA busy_timeout = 5000")
 
     # Ledger file split (2026-10-31, L4): same first-boot migration as
     # server/main.py — the four authoritative-state tables move to ledger.db.
@@ -213,29 +282,7 @@ def main():
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
         """Search vault documents by keyword using segments-based FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content. recall: strict (maximal keywords in one section), near (keywords within 5 words in one section), relaxed (keywords may span sections of the same doc), fuzzy (partial/prefix match, OR semantics)."""
-        import html as _html
-        try:
-            results = rag_search(str(vault_dir), query, top_k=top_k, expand=expand, recall=recall)
-        except Exception as e:
-            if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
-                return fts_syntax_error(query)
-            raise
-        if not results:
-            return search_no_match(query)
-        lines = [f'<results count="{len(results)}" query="{_html.escape(query, quote=False)}">']
-        for r in results:
-            lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')
-            for seg in r["segments"]:
-                heading = _html.escape(seg["heading_path"], quote=False) if seg["heading_path"] else ""
-                kind = seg["kind"]
-                if expand and seg["content"]:
-                    content = _html.escape(seg["content"].replace("\n", " "), quote=False)
-                    lines.append(f'    <segment heading="{heading}" kind="{kind}">{content}</segment>')
-                else:
-                    lines.append(f'    <segment heading="{heading}" kind="{kind}"/>')
-            lines.append('  </result>')
-        lines.append('</results>')
-        return "\n".join(lines)
+        return _mcp_search(vault_dir, query, top_k=top_k, expand=expand, recall=recall)
     
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:

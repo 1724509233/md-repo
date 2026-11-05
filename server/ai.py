@@ -24,6 +24,11 @@ def _get_or_open_conn(vault: Path):
     try:
         conn = sqlite3.connect(str(db_path), check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
+        # Cross-process writer contention (e.g. the MCP stdio process
+        # against the main server, P0 L5): the rare lazy-rebuild write
+        # waits up to 5s for the writer lock instead of failing the
+        # search with SQLITE_BUSY.
+        conn.execute("PRAGMA busy_timeout = 5000")
         return conn
     except sqlite3.Error:
         return None
