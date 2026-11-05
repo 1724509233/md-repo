@@ -52,6 +52,11 @@ def _ensure_notification_cols(conn: sqlite3.Connection) -> None:
         # JSON array string of report-channel files (index/reports/**) the run
         # wrote ('' when none) — console report-view deep links (debt #8).
         ("report_paths", "ALTER TABLE notifications ADD COLUMN report_paths TEXT DEFAULT ''"),
+        # The run's batch stamp (run_id: join key to the proposals the run
+        # produced) and the trigger source (why the batch fired: cron tick vs
+        # event arming). Old rows keep the defaults ('' / 'cron').
+        ("run_id", "ALTER TABLE notifications ADD COLUMN run_id TEXT DEFAULT ''"),
+        ("trigger", "ALTER TABLE notifications ADD COLUMN trigger TEXT DEFAULT 'cron'"),
     ):
         if col not in cols:
             conn.execute(ddl)
@@ -230,7 +235,9 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             files_changed INTEGER NOT NULL DEFAULT 0,
             kind TEXT NOT NULL DEFAULT 'batch',
             proposal_paths TEXT DEFAULT '',
-            report_paths TEXT DEFAULT ''
+            report_paths TEXT DEFAULT '',
+            run_id TEXT DEFAULT '',
+            trigger TEXT DEFAULT 'cron'
         )
         """
     )

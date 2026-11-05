@@ -31,8 +31,9 @@ from .schema import _db_lock
 
 # report_fields keys, in the order of the notifications INSERT:
 # alias, name, status, report_path, summary, ops_total, files_changed,
-# kind, proposal_paths, report_paths (the two paths are JSON array strings
-# — '' when the run produced none; shaping stays with the caller).
+# kind, proposal_paths, report_paths, run_id, trigger (the two paths are
+# JSON array strings — '' when the run produced none; shaping stays with
+# the caller).
 
 
 def _midnight() -> float:
@@ -53,12 +54,13 @@ def _insert_run_locked(conn: sqlite3.Connection, fields: dict) -> None:
     lock is non-reentrant)."""
     conn.execute(
         "INSERT INTO notifications (ts, alias, name, status, report_path, summary, "
-        "ops_total, files_changed, kind, proposal_paths, report_paths) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "ops_total, files_changed, kind, proposal_paths, report_paths, run_id, trigger) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (time.time(), fields["alias"], fields["name"], fields["status"],
          fields["report_path"], fields["summary"],
          fields["ops_total"], fields["files_changed"], fields["kind"],
-         fields["proposal_paths"], fields["report_paths"]),
+         fields["proposal_paths"], fields["report_paths"],
+         fields.get("run_id", ""), fields.get("trigger", "cron")),
     )
     conn.commit()
 

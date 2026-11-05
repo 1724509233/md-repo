@@ -61,7 +61,7 @@ def _armed(cfg, vault_dir, db_conn, run_fn, all_aliases=("cons",)):
 
 
 def _fake_run(ran):
-    async def run_fn(cfg, vault_dir, hooks=None):
+    async def run_fn(cfg, vault_dir, hooks=None, trigger="cron"):
         ran.append(cfg.alias)
     return run_fn
 
@@ -208,8 +208,9 @@ def test_idle_tick_does_not_invoke_llm(db_conn, vault_dir, tmp_path):
         async def run(self, agent):
             return
 
-    async def run_fn(cfg, vault_dir, hooks=None):
-        return await run_once(cfg, vault_dir, runtime_cls=FakeRuntime)
+    async def run_fn(cfg, vault_dir, hooks=None, trigger="cron"):
+        return await run_once(cfg, vault_dir, trigger=trigger,
+                              runtime_cls=FakeRuntime)
 
     hook = RecordingHook()
 
@@ -519,6 +520,100 @@ def test_executor_loop_spurious_event_noop(ledger_conn, vault_dir):
         finally:
             events.set_bus(None)
     _run(go())
+
+
+def test_executor_loop_records_run_on_work(db_conn, vault_dir, ledger_conn):
+    """工作周期（merged 非零）→ trigger_state 记 executor 行（last_run_ts>0）——
+    执行器批次进 /api/memory/status agents 列表（G5 缺口）。"""
+    from server import events
+    from server.bgagent.scheduler import _executor_loop
+
+    events.set_bus(None)  # degraded: plain sleep loop
+
+    def fake(vault, conn):
+        return {"merged": 1, "expired": 0, "errors": []}
+
+    async def go():
+        try:
+            _adopted_proposal(vault_dir, ledger_conn)  # armed BEFORE the loop
+            task = asyncio.create_task(
+                _executor_loop(vault_dir, ledger_conn, executor_fn=fake,
+                               interval_s=0.3, index_conn=db_conn))
+            ok = await _poll(
+                lambda: trigger_db.get_state(db_conn, "executor")["last_run_ts"] > 0)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            assert ok, "executor work cycle never recorded in trigger_state"
+        finally:
+            events.set_bus(None)
+    _run(go())
+    st = trigger_db.get_state(db_conn, "executor")
+    assert st["runs_count"] >= 1
+
+
+def test_executor_loop_noop_records_nothing(db_conn, vault_dir, ledger_conn):
+    """无 adopted/overdue 提案 → scan no-op → 执行器不落 trigger_state 行
+    （no-op 静默，不留痕、不刷计数）。"""
+    from server import events
+    from server.bgagent.scheduler import _executor_loop
+
+    events.set_bus(None)
+    calls = []
+
+    def fake(vault, conn):
+        calls.append(1)
+        return {"merged": 0, "expired": 0, "errors": []}
+
+    async def go():
+        try:
+            task = asyncio.create_task(
+                _executor_loop(vault_dir, ledger_conn, executor_fn=fake,
+                               interval_s=0.3, index_conn=db_conn))
+            await asyncio.sleep(0.7)  # let two backstop ticks pass
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        finally:
+            events.set_bus(None)
+    _run(go())
+
+    assert calls == []                      # executor never invoked
+    st = trigger_db.get_state(db_conn, "executor")
+    assert st["last_run_ts"] <= 0           # no row touched
+    assert st["runs_count"] == 0
+
+
+def test_armed_crash_notifies_error_report(db_conn, vault_dir, tmp_path):
+    """Armed 释放后 run 崩溃 → 合成 error RunReport（trigger='trigger'，run_id=''）
+    通知 hooks；armed 路径照常 record_run（crash 也消耗一次释放，G2 缺口）。"""
+    cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=1)
+
+    log_change(db_conn, "notes/a.md", "create", source="web")
+
+    hook = RecordingHook()
+
+    async def run_fn(cfg, vault_dir, hooks=None, trigger="cron"):
+        raise ValueError("boom")
+
+    async def go():
+        await _armed_check(cfg, vault_dir, asyncio.Lock(), [hook], run_fn,
+                           db_conn, {"cons"})
+    _run(go())
+
+    assert len(hook.reports) == 1
+    r = hook.reports[0]
+    assert r.status == "error"
+    assert r.trigger == "trigger"
+    assert r.run_id == ""
+    assert "boom" in r.summary
+    st = trigger_db.get_state(db_conn, cfg.alias)
+    assert st["last_run_ts"] > 0
+    assert st["runs_count"] == 1
 
 
 def test_armed_loop_event_wake(db_conn, vault_dir, tmp_path):

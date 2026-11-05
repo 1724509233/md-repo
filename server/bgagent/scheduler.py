@@ -19,7 +19,9 @@ Memory-runtime v1 additions (trigger agents + executor role):
   woken by ``proposal`` events (adopted) or the 30-min backstop; same armed
   DB scan either way; armed only when the proposals table holds an
   adopted-unmerged or an overdue awaiting_review record. No work
-  → silent no-op (debug level, no log spam).
+  → silent no-op (debug level, no log spam). Work cycles are batch-tracked
+  in ``trigger_state`` (alias ``executor``) so the /api/memory/status
+  agents list covers them.
 """
 from __future__ import annotations
 
@@ -82,6 +84,21 @@ def _idle_report(cfg: BackgroundAgentConfig) -> RunReport:
     )
 
 
+def _crash_report(cfg: BackgroundAgentConfig, trigger: str, exc: Exception) -> RunReport:
+    """Synthesized RunReport for a crashed run (run_once raised before it
+    could produce its own) — the notification hook still records that the
+    batch ran, why it fired, and that it failed. ``run_id`` stays '' — the
+    crash may have preceded run_id generation inside run_once."""
+    now = time.time()
+    return RunReport(
+        alias=cfg.alias, name=cfg.name, status="error",
+        started_at=now, finished_at=now, report_path="",
+        ops_total=0, files_changed=0,
+        summary=f"run crashed: {type(exc).__name__}: {exc}"[:200],
+        trigger=trigger,
+    )
+
+
 def _has_human_activity_since(conn, cfg: BackgroundAgentConfig,
                               all_aliases: set[str]) -> bool:
     """Deadline floor: any non-self-excluded create event since the last run?
@@ -110,8 +127,9 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
     if lock.locked():
         logger.warning("[bg:%s] previous run still active, skipping tick", cfg.alias)
         return
-    if cfg.trigger is not None and conn is not None:
+    if conn is not None:
         trigger_db.ensure_row(conn, cfg.alias)
+    if cfg.trigger is not None and conn is not None:
         source = cfg.trigger.get("source", "change")
         # change-source: deadline floor (idle check — no human work → no LLM).
         # recall-source: the cron tick is the weekly retrospective heartbeat
@@ -125,13 +143,17 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
     await lock.acquire()
     ran = False
     try:
-        await run_fn(cfg, vault_dir, hooks=hooks)
+        await run_fn(cfg, vault_dir, hooks=hooks, trigger="cron")
         ran = True
-    except Exception:
+    except Exception as e:
         logger.exception("[bg:%s] run_once crashed (report may be missing)", cfg.alias)
+        for hook in hooks:
+            hook.notify(_crash_report(cfg, "cron", e))
     finally:
         lock.release()
-        if ran and cfg.trigger is not None and conn is not None:
+        # Crash → no record (the next tick retries); all agents are tracked
+        # in trigger_state, cron-only ones included.
+        if ran and conn is not None:
             trigger_db.record_run(conn, cfg.alias)
 
 
@@ -212,9 +234,11 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
 
     await lock.acquire()
     try:
-        await run_fn(cfg, vault_dir, hooks=hooks)
-    except Exception:
+        await run_fn(cfg, vault_dir, hooks=hooks, trigger="trigger")
+    except Exception as e:
         logger.exception("[bg:%s] triggered run crashed", cfg.alias)
+        for hook in hooks:
+            hook.notify(_crash_report(cfg, "trigger", e))
     finally:
         lock.release()
         trigger_db.record_run(conn, cfg.alias)
@@ -265,7 +289,8 @@ def _executor_armed(vault_dir: Path, conn) -> bool:
 
 async def _executor_loop(vault_dir: Path, conn,
                          executor_fn: Callable = run_executor,
-                         interval_s: float = EXECUTOR_INTERVAL_S) -> None:
+                         interval_s: float = EXECUTOR_INTERVAL_S,
+                         index_conn=None) -> None:
     """Event-wake executor: a ``proposal`` event or the ``interval_s``
     backstop wakes the authoritative DB scan (_executor_armed); armed →
     deterministic merge in a worker thread.
@@ -273,6 +298,11 @@ async def _executor_loop(vault_dir: Path, conn,
     ``conn`` is the LEDGER connection (``.sync/ledger.db``) — the proposals
     records live there (2026-10-31 ledger-file split); the index DB no
     longer holds them.
+
+    ``index_conn`` (index.db, optional): work cycles (merged / expired /
+    errors) are batch-tracked in ``trigger_state`` under the "executor"
+    alias — one row the /api/memory/status agents list shows; a no-op
+    cycle stays silent (no row, no counter bump).
 
     The scan is the sole authority (adopted-unmerged or 14d overdue);
     the event only shortens the wait. No work → silent no-op
@@ -300,6 +330,10 @@ async def _executor_loop(vault_dir: Path, conn,
             summary = await asyncio.to_thread(executor_fn, vault, conn)
             logger.info("[executor] merged=%d expired=%d errors=%d",
                         summary["merged"], summary["expired"], len(summary["errors"]))
+            if index_conn is not None and \
+                    (summary["merged"] or summary["expired"] or summary["errors"]):
+                trigger_db.ensure_row(index_conn, "executor")
+                trigger_db.record_run(index_conn, "executor")
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -355,7 +389,7 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
     exec_conn = ledger_conn if ledger_conn is not None else db_conn
     if exec_conn is not None and not executor_started:
         tasks.append(asyncio.create_task(
-            _executor_loop(vault, exec_conn, executor_fn),
+            _executor_loop(vault, exec_conn, executor_fn, index_conn=db_conn),
             name="executor"))
         executor_started = True
 

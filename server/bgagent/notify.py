@@ -21,7 +21,14 @@ from ..vault.db import notifications as notify_db
 
 @dataclass
 class RunReport:
-    """Outcome of one background agent run."""
+    """Outcome of one background agent run (one run batch: who / when /
+    why-triggered / result / produced reports).
+
+    Batch tracking: ``run_id`` is the run stamp (join key to the proposals
+    this run produced); ``trigger`` is why the batch fired ("cron" scheduled
+    tick vs "trigger" event-arming release). Both land on the notifications
+    row, the report frontmatter and the run's server.log lines.
+    """
 
     alias: str
     name: str
@@ -35,6 +42,8 @@ class RunReport:
     kind: str = "batch"    # "batch" (report-only) | "review" (needs human attention)
     proposal_paths: list[str] = ()  # card relpaths this run produced (v2a: synthetic identifiers — the records have no backing file; deep links address the console cards)
     report_paths: list[str] = ()    # index/reports/** files this run wrote (v2a report channel — real files; deep links open the console report view)
+    run_id: str = ""       # the run's batch stamp (proposal join key; '' = crash-synthesized rows)
+    trigger: str = "cron"  # why the batch fired: "cron" (scheduled tick) | "trigger" (event arming)
 
 
 def _report_fields(report: RunReport) -> dict:
@@ -52,6 +61,8 @@ def _report_fields(report: RunReport) -> dict:
         "kind": report.kind,
         "proposal_paths": json.dumps(report.proposal_paths) if report.proposal_paths else "",
         "report_paths": json.dumps(report.report_paths) if report.report_paths else "",
+        "run_id": report.run_id,
+        "trigger": report.trigger,
     }
 
 

@@ -54,7 +54,7 @@ def register(app, ctx) -> None:
             # Background agent notifications since the client's last sync (cap 50).
             rows = ctx.db_conn.execute(
                 "SELECT ts, alias, name, status, report_path, summary, "
-                "proposal_paths, report_paths "
+                "proposal_paths, report_paths, run_id, trigger "
                 "FROM notifications WHERE read = 0 AND ts > ? ORDER BY ts DESC LIMIT 50",
                 (float(last_sync),)).fetchall()
             result["notifications"] = [dict(r) for r in rows]

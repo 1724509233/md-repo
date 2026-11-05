@@ -708,3 +708,61 @@ def test_retention_prunes_old_reports(tmp_path: Path):
     assert "test-org_2026-09-02_0300.md" not in remaining
     assert "test-org_2026-09-03_0300.md" in remaining  # 第 3 旧份幸存
     assert any(n.startswith("test-org_2026-10") for n in remaining)  # 本次运行报告
+
+
+# ── 批次追踪（run_id / trigger） ──────────────────────────────────────────
+
+def test_run_report_carries_run_id_and_trigger(tmp_path: Path):
+    """RunReport 携带 run_id（批次戳）与 trigger（触发源，缺省 cron）；
+    与报告 frontmatter 同戳（G3 缺口：console 可 join 批次↔提案）。"""
+    report, cfg, vault, rt = _run(tmp_path)
+
+    assert report.trigger == "cron"
+    assert report.run_id.startswith("test-org-")
+    text = next(cfg.report_dir.glob("*.md")).read_text(encoding="utf-8")
+    fm = yaml.safe_load(text.split("---")[1])
+    assert fm["run_id"] == report.run_id
+    assert fm["trigger"] == "cron"
+
+
+def test_report_frontmatter_records_trigger_source(tmp_path: Path):
+    """trigger 参数 → RunReport.trigger + frontmatter trigger（arming 释放
+    路径由 scheduler 传入 'trigger'，canonical 批次记录在此）。"""
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, trigger="trigger",
+                              runtime_cls=lambda: rt)
+
+    report = asyncio.run(go())
+    assert report.trigger == "trigger"
+    text = next(cfg.report_dir.glob("*.md")).read_text(encoding="utf-8")
+    fm = yaml.safe_load(text.split("---")[1])
+    assert fm["trigger"] == "trigger"
+    assert fm["run_id"] == report.run_id
+
+
+def test_run_log_lines_carry_run_id(tmp_path: Path, caplog):
+    """server.log 落点：starting / finished 行携带 run_id + trigger
+    （批次可按 run_id grep，G6 缺口；root logger 文件 handler，无新 sink）。"""
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+
+    with caplog.at_level("INFO", logger="md-vault.bgagent"):
+        report = asyncio.run(go())
+
+    msgs = [r.getMessage() for r in caplog.records
+            if r.name == "md-vault.bgagent"]
+    starting = [m for m in msgs if "starting run_id=" in m]
+    finished = [m for m in msgs if "run finished:" in m]
+    assert starting and finished
+    assert f"run_id={report.run_id}" in starting[0]
+    assert "trigger=cron" in starting[0]
+    assert f"run_id={report.run_id}" in finished[0]
+    assert "trigger=cron" in finished[0]

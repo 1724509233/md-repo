@@ -58,7 +58,7 @@ def test_handle_tick_runs_when_lock_free(tmp_path):
     lock = asyncio.Lock()
     ran = []
 
-    async def run_fn(c, v, hooks=None):
+    async def run_fn(c, v, hooks=None, trigger="cron"):
         ran.append(c.alias)
 
     async def go():
@@ -78,7 +78,7 @@ def test_handle_tick_skips_when_lock_held(tmp_path):
     lock = asyncio.Lock()
     ran = []
 
-    async def run_fn(c, v, hooks=None):
+    async def run_fn(c, v, hooks=None, trigger="cron"):
         ran.append(c.alias)
 
     async def go():
@@ -89,3 +89,57 @@ def test_handle_tick_skips_when_lock_held(tmp_path):
         lock.release()
 
     asyncio.run(go())
+
+
+def test_handle_tick_crash_notifies_error_report(tmp_path, db_conn):
+    """run_fn 崩溃 → 异常被吞 + 合成 error RunReport（trigger='cron'，run_id=''）
+    通知 hooks——批次 crash 也留痕（谁/何时/因何/结果）；锁释放。"""
+    from server.bgagent.scheduler import _handle_tick
+
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    lock = asyncio.Lock()
+    reports = []
+
+    class Hook:
+        def notify(self, r):
+            reports.append(r)
+
+    async def run_fn(c, v, hooks=None, trigger="cron"):
+        raise ValueError("boom")
+
+    async def go():
+        await _handle_tick(cfg, vault, lock, [Hook()], run_fn, db_conn)
+
+    asyncio.run(go())
+    assert not lock.locked()
+    assert len(reports) == 1
+    r = reports[0]
+    assert r.status == "error"
+    assert r.trigger == "cron"
+    assert r.run_id == ""               # crash 可能先于 run_id 生成
+    assert "boom" in r.summary
+
+
+def test_cron_only_agent_records_run_in_trigger_state(tmp_path, db_conn):
+    """无 trigger 块的纯 cron agent：tick 成功 → trigger_state 建行 + record_run
+    （/api/memory/status agents 列表覆盖，G4 缺口）。"""
+    from server.bgagent.scheduler import _handle_tick
+    from server.vault.db import trigger_state as trigger_db
+
+    cfg = _cfg(tmp_path)
+    vault = tmp_path / "vault"
+    lock = asyncio.Lock()
+    ran = []
+
+    async def run_fn(c, v, hooks=None, trigger="cron"):
+        ran.append(c.alias)
+
+    async def go():
+        await _handle_tick(cfg, vault, lock, [], run_fn, db_conn)
+
+    asyncio.run(go())
+    assert ran == ["a"]
+    st = trigger_db.get_state(db_conn, "a")
+    assert st["last_run_ts"] > 0
+    assert st["runs_count"] == 1

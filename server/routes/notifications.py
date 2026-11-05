@@ -8,7 +8,8 @@ def register(app, ctx) -> None:
     @app.get("/api/notifications")
     async def list_notifications(unread: int = 0) -> list[dict]:
         query = ("SELECT id, ts, alias, name, status, report_path, summary, read, "
-                 "ops_total, files_changed, proposal_paths, report_paths FROM notifications")
+                 "ops_total, files_changed, proposal_paths, report_paths, "
+                 "run_id, trigger FROM notifications")
         params: list = []
         if unread:
             query += " WHERE read = 0"

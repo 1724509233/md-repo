@@ -323,3 +323,104 @@ def test_sync_response_includes_notifications(app, db_conn):
         "last_sync": time.time() + 3600,
     })
     assert r.json().get("notifications", []) == []
+
+
+def test_inapp_hook_writes_run_id_and_trigger(db_conn):
+    """run_id / trigger → notifications 表两列（批次追踪落点：console 可
+    join 批次↔提案）；crash 合成行 run_id='' 、trigger 照常。"""
+    InAppHook(db_conn).notify(
+        _report(run_id="test-org-20261101T030000", trigger="trigger"))
+    row = db_conn.execute(
+        "SELECT run_id, trigger FROM notifications").fetchone()
+    assert row["run_id"] == "test-org-20261101T030000"
+    assert row["trigger"] == "trigger"
+
+    InAppHook(db_conn).notify(
+        _report(alias="crashed", status="error", run_id="", trigger="cron"))
+    row = db_conn.execute(
+        "SELECT run_id, trigger FROM notifications WHERE alias = 'crashed'"
+    ).fetchone()
+    assert row["run_id"] == ""
+    assert row["trigger"] == "cron"
+
+
+def test_notifications_run_id_trigger_migration(tmp_path: Path):
+    """旧 notifications 库（无 run_id / trigger 列）经 init_db 补列（幂等，
+    缺省 '' / 'cron'）。存量行保持默认；idempotent ALTER 口径同 report_paths
+    （30 天易失铃数据，无需丢弃存量）。"""
+    import sqlite3
+
+    from server.vault import init_db
+
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            alias TEXT NOT NULL,
+            name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_path TEXT NOT NULL,
+            summary TEXT NOT NULL DEFAULT '',
+            read INTEGER NOT NULL DEFAULT 0,
+            ops_total INTEGER NOT NULL DEFAULT 0,
+            files_changed INTEGER NOT NULL DEFAULT 0,
+            kind TEXT NOT NULL DEFAULT 'batch',
+            proposal_paths TEXT DEFAULT '',
+            report_paths TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path) "
+        "VALUES (100.0, 'old', 'old', 'ok', 'x.md')"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(notifications)")}
+        assert {"run_id", "trigger"} <= cols
+        row = conn.execute(
+            "SELECT run_id, trigger FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row["run_id"] == ""
+        assert row["trigger"] == "cron"
+    finally:
+        conn.close()
+
+    # 幂等：迁移后的库再 init_db 一次是 no-op。
+    conn = init_db(db_path)
+    try:
+        row = conn.execute(
+            "SELECT run_id, trigger FROM notifications WHERE alias = 'old'"
+        ).fetchone()
+        assert row["run_id"] == ""
+        assert row["trigger"] == "cron"
+    finally:
+        conn.close()
+
+
+def test_notifications_api_exposes_run_id_and_trigger(app, db_conn):
+    """/api/notifications 与 /api/sync 透传 run_id / trigger（控制台批次索引）。"""
+    from fastapi.testclient import TestClient
+
+    InAppHook(db_conn).notify(
+        _report(run_id="test-org-20261101T030000", trigger="trigger"))
+    client = TestClient(app)
+
+    items = client.get("/api/notifications", params={"unread": 1}).json()
+    assert len(items) == 1
+    assert items[0]["run_id"] == "test-org-20261101T030000"
+    assert items[0]["trigger"] == "trigger"
+
+    r = client.post("/api/sync", json={
+        "device_name": "test", "local_files": {}, "logs": [], "last_sync": 0,
+    })
+    notifs = r.json().get("notifications", [])
+    assert len(notifs) == 1
+    assert notifs[0]["run_id"] == "test-org-20261101T030000"
+    assert notifs[0]["trigger"] == "trigger"

@@ -17,7 +17,7 @@
 | 符号 | 签名 | 说明 |
 |------|------|------|
 | `start_background_agents` | `(agents, vault_dir, hooks=None, run_fn=None, db_conn=None, ledger_conn=None, executor_fn=None) -> list[asyncio.Task]` | 起调度 task（须在运行中的 loop 内调用） |
-| `run_once` | `async (cfg, vault_dir, *, hooks=None, runtime_cls=LoopRuntime) -> RunReport` | 单次 run；`runtime_cls` 可注入（测试用 FakeRuntime） |
+| `run_once` | `async (cfg, vault_dir, *, hooks=None, trigger="cron", runtime_cls=LoopRuntime) -> RunReport` | 单次 run；`trigger` 是批次触发源（`cron` 定时 tick \| `trigger` 事件 arming 释放）；`runtime_cls` 可注入（测试用 FakeRuntime） |
 | `run_executor` | `(vault_dir, conn) -> dict` | 一个执行器周期，返回 `{"merged": n, "expired": n, "errors": [...]}` |
 | `filter_tools` | `(names: tuple[str, ...] \| list[str]) -> list[Tool]` | 工具白名单过滤；无匹配 → 空列表（调用方视为配置错误） |
 | `cleanup_old_notifications` | `(db_conn, max_age_s=30 * 86400) -> None` | 删除超龄通知行（启动 housekeeping） |
@@ -26,7 +26,7 @@
 
 | 符号 | 说明 |
 |------|------|
-| `RunReport` | 单次 run 结果：`alias` / `name` / `status`（`ok` \| `error` \| `round_limit` \| `timeout` \| `empty` \| `idle`）/ `started_at` / `finished_at` / `report_path` / `ops_total` / `files_changed` / `summary` / `kind`（`batch` \| `review`）/ `proposal_paths` / `report_paths` |
+| `RunReport` | 单次 run 结果：`alias` / `name` / `status`（`ok` \| `error` \| `round_limit` \| `timeout` \| `empty` \| `idle`）/ `started_at` / `finished_at` / `report_path` / `ops_total` / `files_changed` / `summary` / `kind`（`batch` \| `review`）/ `proposal_paths` / `report_paths` / `run_id`（批次戳，与 proposals 的 join 键；崩溃合成行 = `''`）/ `trigger`（`cron` \| `trigger`，批次因何触发） |
 | `NotificationHook` | 可插拔通知 sink（抽象，`notify(report)`） |
 | `InAppHook` | `InAppHook(db_conn)` — 插一行到 notifications 表（Web UI 铃铛） |
 | `GuardedNotificationHook` | `GuardedNotificationHook(db_conn, daily_cap=20)` — 每日硬 cap + same-kind 合并（count-then-act 一锁） |
@@ -61,10 +61,11 @@
 - **arming 是资格，不是 run**：`arm_count` 只负责累加计数；释放还需过冷却与预算两门。
 - **`low_score` 不是 run gate**：它是 recall-source 扫描的命中判分阈值（默认 0.2，`0 < x < 1`），决定哪些 recall 行算"低分命中"，不直接放行 run。
 - **自排除单源**：`self_exclusion(aliases) = {"executor", "agent"} | aliases`——框架强制，合成流量（执行器 / 桌面渠道 / 各 bgagent alias）绝不武装自己的调度器；publish 侧 bus 过滤与 scan 侧权威都调它，避免漂移。
+- **全 agent 轨迹在 `trigger_state`**：tick 成功即 `record_run`——纯 cron agent（无 trigger 块）也记（`ensure_row` 兜底建行），`/api/memory/status` agents 列表因此完整；crash 的 cron tick 不记（下 tick 重试），armed 路径 crash 照常记。
 
 ### 确定性执行器（框架角色，无 LLM）
 
-`executor.py` 是**唯一的** adopted 提案落地者（constitution iron rule 1），纯确定性、无 LLM。`_executor_loop` 由 `proposal` 事件 wake 或 30 分钟 backstop 唤醒，跑权威 DB scan（`_executor_armed`）；armed（proposals 表持有 adopted-unmerged 记录，或 `awaiting_review` 超 14 天 `EXPIRE_AFTER_S`）则在 worker 线程里 `run_executor()` 确定性 merge；无工作 → 静默 no-op（debug 级，不刷日志）。
+`executor.py` 是**唯一的** adopted 提案落地者（constitution iron rule 1），纯确定性、无 LLM。`_executor_loop` 由 `proposal` 事件 wake 或 30 分钟 backstop 唤醒，跑权威 DB scan（`_executor_armed`）；armed（proposals 表持有 adopted-unmerged 记录，或 `awaiting_review` 超 14 天 `EXPIRE_AFTER_S`）则在 worker 线程里 `run_executor()` 确定性 merge；无工作 → 静默 no-op（debug 级，不刷日志）。工作周期（merged / expired / errors 任一非零）在 `trigger_state` 表以 alias `executor` 记一行批次追踪（`ensure_row` + `record_run`），`/api/memory/status` 的 agents 列表因此覆盖执行器；no-op 周期不留痕。
 
 - **`events.publish("proposal")` 只在 `adopted` 触发**——执行器的唯一可行动状态（`proposals.advance` 内判定）。
 - **per-type handler（4 个）**：`entity_index`（upsert `index/entities.md` 机器区）、`relatedness`（`relatedness` 表一条边，零文件落）、`summary`（cache/report 双形态，机器区）、`errata`（追加矛盾卡，单闸门、落地后只读）。`reminder` 无 handler（console 卡片即投递，不落地）；retired 类型（`link`/`correction`/`archive`）无 v2 handler，park 到 `failed` 附可行动原因（存量人工处理，不迁移）。
@@ -89,12 +90,12 @@ bgagent 承载 memory-runtime 的功能角色；角色 prompt 在 `server/prompt
 - **存储**：`<target_dir>/.reports/<alias>/`（`report_dir` 为空时的默认）。
 - **命名**：`<alias>_YYYY-MM-DD_HHMM.md`（alias 前缀防共享目录互覆盖；时间戳命名 → 字典序 = 时序）。
 - **保留**：最近 `RETENTION`(30) 份，写后剪枝（`_write_report_and_prune`，写成功才剪）。
-- **内容**：YAML frontmatter（`run_id` / `started_at` / `finished_at` / `duration_s` / `rounds` / `prompt_tokens` 峰值 / `completion_tokens` 累加 / `status` / `alias` / `ops_by_tool` / `ops_total` / `files_changed` / …）+ body（agent 总结原文 + 操作清单表 + 变更文件）。
+- **内容**：YAML frontmatter（`run_id` / `trigger`（`cron` \| `trigger`，批次触发源）/ `started_at` / `finished_at` / `duration_s` / `rounds` / `prompt_tokens` 峰值 / `completion_tokens` 累加 / `status` / `alias` / `ops_by_tool` / `ops_total` / `files_changed` / …）+ body（agent 总结原文 + 操作清单表 + 变更文件）。
 - **失败也写**：超时 / 取消 / 异常路径都写错误报告（取消路径 re-raise 前先收口）。
 
 ### 通知
 
-- `InAppHook.notify(report)` 插一行到 `notifications` 表（ts/alias/name/status/report_path/summary/ops_total/files_changed/kind + deep-link 路径列表），经 `vault.db.notifications.insert_run`（函数内持锁）。
+- `InAppHook.notify(report)` 插一行到 `notifications` 表（ts/alias/name/status/report_path/summary/ops_total/files_changed/kind + deep-link 路径列表 + 批次追踪 `run_id`/`trigger`），经 `vault.db.notifications.insert_run`（函数内持锁）。崩溃批次（run_once 抛异常、自身来不及产出报告）由 scheduler 合成 `status="error"`、`run_id=''` 的 RunReport 走同一 hook 落行——批次"谁/何时/因何/结果"可查。
 - `GuardedNotificationHook` 前置两道护栏：① 当日行达 `daily_cap` 后不再插原始行，改 upsert 一行 `kind="collapsed"` 汇总（"你漏了 N 条"）；② same-kind `review` 行（`proposal_paths` 与当日同 alias 行相交）跳过（控制台提案面已展示全集）。count-then-act 在一把锁内（硬 cap，非 best-effort）。
 - `cleanup_old_notifications()` 启动时清理 30 天前行。
 - Web UI 经 `/api/notifications` 读同一张表，铃铛展示。

@@ -306,8 +306,14 @@ def _report_name(started_at: float, alias: str) -> str:
 
 def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
                    finished_at: float, status: str, stats: _RunStats,
-                   error_msg: str = "") -> tuple[str, str]:
-    """Render the report markdown. Returns (markdown_text, summary_for_notify)."""
+                   error_msg: str = "", trigger: str = "cron",
+                   run_id: str = "") -> tuple[str, str]:
+    """Render the report markdown. Returns (markdown_text, summary_for_notify).
+
+    ``run_id`` is the run's batch stamp — identical to the RunReport's and to
+    the proposal-record stamp, so the frontmatter is the canonical batch
+    join key (notifications row ↔ proposal records ↔ this file).
+    """
     target_rel = cfg.target_dir.relative_to(vault).as_posix()
     summary = stats.summary or (
         "（轮次耗尽，无总结）" if status == "round_limit"
@@ -327,7 +333,7 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
     changed = "\n".join(f"- {p}" for p in sorted(stats.files_changed)) or "- 无"
 
     fm = {
-        "run_id": datetime.fromtimestamp(started_at).strftime("%Y%m%dT%H%M%S"),
+        "run_id": run_id,
         "started_at": datetime.fromtimestamp(started_at).isoformat(timespec="seconds"),
         "finished_at": datetime.fromtimestamp(finished_at).isoformat(timespec="seconds"),
         "duration_s": int(finished_at - started_at),
@@ -336,6 +342,7 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
         "completion_tokens": stats.completion_tokens,
         "target_dir": target_rel,
         "status": status,
+        "trigger": trigger,
         "alias": cfg.alias,
         "ops_total": len(stats.ops),
         "ops_by_tool": stats.ops_by_tool,
@@ -386,11 +393,17 @@ async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = ""
 
 async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
                    hooks: list[NotificationHook] | None = None,
-                   runtime_cls: type[Runtime] = LoopRuntime) -> RunReport:
+                   runtime_cls: type[Runtime] = LoopRuntime,
+                   trigger: str = "cron") -> RunReport:
     """Run one background agent to completion; write the report; notify hooks.
 
-    ``runtime_cls`` is injectable for tests (FakeRuntime). The run is bounded
-    by ``cfg.timeout_s``; on timeout/cancel an error report is still written.
+    ``runtime_cls`` is injectable for tests (FakeRuntime). ``trigger`` is the
+    batch's firing source ("cron" scheduled tick | "trigger" event-arming
+    release, set by the scheduler): it lands in the report frontmatter, the
+    RunReport and the run's log lines — the per-batch queryable key there is
+    ``run_id`` (server.log landing: root logger file handler, no new sink).
+    The run is bounded by ``cfg.timeout_s``; on timeout/cancel an error
+    report is still written.
     """
     vault = vault_dir.resolve()
     started_at = time.time()
@@ -402,8 +415,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     status, error_msg = "ok", ""
 
     target_rel = cfg.target_dir.relative_to(vault).as_posix()
-    logger.info("[bg:%s] starting target=%s rounds=%d timeout=%ds",
-                cfg.alias, target_rel, cfg.max_rounds, cfg.timeout_s)
+    logger.info("[bg:%s] starting run_id=%s trigger=%s target=%s rounds=%d timeout=%ds",
+                cfg.alias, run_id, trigger, target_rel, cfg.max_rounds, cfg.timeout_s)
 
     if cfg.tools is not None:
         tools = filter_tools(cfg.tools)
@@ -467,12 +480,14 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # 取消路径也走写后剪枝收口（spec §6）：写成功才剪枝，之后 re-raise
         stats.finalize()
         try:
-            _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
+            _write_report_and_prune(cfg, vault, started_at, status, stats,
+                                    error_msg, trigger, run_id)
         finally:
             raise
     except Exception as e:
         status, error_msg = "error", f"{type(e).__name__}: {e}"
-        logger.exception("[bg:%s] run failed", cfg.alias)
+        logger.exception("[bg:%s] run failed: run_id=%s trigger=%s",
+                         cfg.alias, run_id, trigger)
 
     # 空运行：0 ops 且 0 文本（"无需整理"类有文本的 0-ops 运行保持 ok）
     if status == "ok" and not stats.ops and not stats.summary:
@@ -488,7 +503,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     # feed the notification deep links + kind below.
     records = _run_records(run_id, started_at)
 
-    _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg)
+    _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg,
+                            trigger, run_id)
 
     report_path = (cfg.report_dir / _report_name(started_at, cfg.alias)).relative_to(vault).as_posix()
     # Notification kind: a review-channel record (awaiting_review) means a
@@ -506,20 +522,25 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # Report-channel files this run wrote (real files under
         # index/reports/) — the console deep links open them read-only.
         report_paths=_report_paths(stats.files_changed),
+        # Batch tracking: the run stamp (proposal join key) + the firing
+        # source — the notifications row and the run's log lines carry both.
+        run_id=run_id, trigger=trigger,
     )
     for hook in hooks or []:
         hook.notify(report)
-    logger.info("[bg:%s] run finished: status=%s ops=%d files=%d",
-                cfg.alias, status, len(stats.ops), len(stats.files_changed))
+    logger.info("[bg:%s] run finished: run_id=%s trigger=%s status=%s ops=%d files=%d report=%s",
+                cfg.alias, run_id, trigger, status, len(stats.ops),
+                len(stats.files_changed), report_path)
     return report
 
 
 def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
-                  status: str, stats: _RunStats, error_msg: str) -> None:
+                  status: str, stats: _RunStats, error_msg: str,
+                  trigger: str = "cron", run_id: str = "") -> None:
     """Write the report file (mkdir + ledger.register + write_bytes)."""
     finished_at = time.time()
     body, _ = _render_report(cfg, vault, started_at, finished_at, status,
-                             stats, error_msg)
+                             stats, error_msg, trigger, run_id)
     fp = cfg.report_dir / _report_name(started_at, cfg.alias)
     fp.parent.mkdir(parents=True, exist_ok=True)
     ledger.register(fp.relative_to(vault).as_posix(), cfg.alias)
@@ -528,10 +549,11 @@ def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
 
 
 def _write_report_and_prune(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
-                            status: str, stats: _RunStats, error_msg: str) -> None:
+                            status: str, stats: _RunStats, error_msg: str,
+                            trigger: str = "cron", run_id: str = "") -> None:
     """写后剪枝：写成功才剪枝（spec §6 候选 1），崩溃窗口缩到写→剪之间。
 
     所有收口路径（正常/timeout/round_limit/cancelled）统一经它。
     """
-    _write_report(cfg, vault, started_at, status, stats, error_msg)
+    _write_report(cfg, vault, started_at, status, stats, error_msg, trigger, run_id)
     _prune_reports(cfg.report_dir, vault, cfg.alias)
