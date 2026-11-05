@@ -238,5 +238,6 @@ class ProposeTool(Tool):
         except ValueError as e:
             return f"Error: {e}"
 
+        ctx.last_meta = {"id": rec["id"], "status": final["status"]}
         return (f"proposal #{rec['id']} created → {rec['relpath']} "
                 f"(status: {final['status']})")

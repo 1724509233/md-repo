@@ -63,6 +63,7 @@ class WriteDocTool(Tool):
             ledger.record(index_conn, ctx.vault_dir, args.path,
                           "modified" if existed else "created",
                           ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
+        ctx.last_meta = {"chars": len(args.content), "overwritten": existed}
         if existed:
             return f"Saved: {args.path} ({len(args.content)} chars, overwritten)"
         return f"Saved: {args.path} ({len(args.content)} chars)"

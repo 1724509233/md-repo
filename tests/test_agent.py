@@ -234,12 +234,20 @@ def test_execute_write_doc(tmp_path: Path):
 
     vault = tmp_path / "vault"
     vault.mkdir()
+    ctx = ToolContext(vault_dir=vault)
     result = execute_tool(
-        "write_doc", {"path": "notes/new.md", "content": "# New Doc"}, ToolContext(vault_dir=vault))
+        "write_doc", {"path": "notes/new.md", "content": "# New Doc"}, ctx)
     assert "Saved" in result
+    # UI side-channel: structured char count, string contract unchanged.
+    assert ctx.last_meta == {"chars": 9, "overwritten": False}
     fp = vault / "notes" / "new.md"
     assert fp.is_file()
     assert fp.read_bytes() == b"# New Doc"
+    # Overwrite branch: meta distinguishes create vs overwrite.
+    result2 = execute_tool(
+        "write_doc", {"path": "notes/new.md", "content": "# v2"}, ctx)
+    assert "overwritten" in result2
+    assert ctx.last_meta == {"chars": 4, "overwritten": True}
 
 
 def test_execute_edit_doc(tmp_path: Path):
@@ -1345,3 +1353,49 @@ def test_build_agent_spec_default_all_tools(tmp_path: Path):
     ctx = _spec_ctx(tmp_path, None)
     spec = _build_agent_spec(ctx)
     assert set(spec.tools) == set(TOOL_REGISTRY.values())
+
+
+def test_tool_result_meta_in_sse_not_in_llm_channel(tmp_path: Path):
+    """meta (UI side-channel) rides the SSE tool_result event but never enters
+    agent.messages (the LLM channel). The tool stamps ctx.last_meta in _execute;
+    the runtime lifts it into the payload, while the LLM append stays a string."""
+    agent, vault = _make_agent(tmp_path)
+
+    (vault / "notes").mkdir()
+    (vault / "notes" / "a.md").write_bytes(b"# A\n")
+
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_ls"
+    tc.function = MagicMock()
+    tc.function.name = "list_files"
+    tc.function.arguments = '{"dir": ""}'
+    chunk1 = _make_chunk(tool_calls=[tc], finish_reason="tool_calls")
+    chunk2 = _make_chunk(content="ok", finish_reason="stop")
+
+    mock_stream1 = AsyncMock()
+    mock_stream1.__aiter__ = lambda s: _async_iter([chunk1])
+    mock_stream2 = AsyncMock()
+    mock_stream2.__aiter__ = lambda s: _async_iter([chunk2])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[mock_stream1, mock_stream2])
+
+    async def run():
+        events = []
+        async for event in agent.chat("list files"):
+            events.append((event.type, event.data))
+        return events
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    # 1. The SSE tool_result carries the structured meta.
+    tool_results = [d for (t, d) in events if t == "tool_result"]
+    assert tool_results, "expected a tool_result SSE event"
+    assert tool_results[0].get("meta") == {"count": 1}, f"meta missing/wrong: {tool_results[0]}"
+
+    # 2. The LLM channel (agent.messages) holds only the plain string — no meta.
+    tool_msgs = [m for m in agent.messages if m.get("role") == "tool"]
+    assert tool_msgs, "expected a tool message in agent.messages"
+    assert tool_msgs[0].get("content") == "notes/a.md"
+    assert "meta" not in tool_msgs[0], "meta must not leak into the LLM channel"

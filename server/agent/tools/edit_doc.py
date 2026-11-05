@@ -66,4 +66,5 @@ class EditDocTool(DocTool):
         if index_conn is not None:
             ledger.record(index_conn, ctx.vault_dir, args.path, "modified",
                           ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
+        ctx.last_meta = {"from": len(args.old_string), "to": len(args.new_string)}
         return result

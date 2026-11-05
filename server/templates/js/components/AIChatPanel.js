@@ -79,40 +79,39 @@ export const AIChatPanel = {
       }
     }
 
-    function toolResultSummary(name, args, result) {
-      args = args || {}
-      const r = String(result == null ? '' : result)
-      function fallback() { const f = r.split('\n')[0]; return f.length > 80 ? f.slice(0, 77) + '…' : f }
-      function num(re) { const m = re.exec(r); return m ? parseInt(m[1], 10) : NaN }
-      function nonEmptyLines() { return r.split('\n').filter(l => l.trim().length > 0).length }
+    function summaryFromMeta(name, meta) {
       switch (name) {
-        case 'read_doc': {
-          const chars = num(/(\d+)\s*chars/)
-          if (isNaN(chars)) return fallback()
-          let lines = r.split('\n').length - 2; if (lines < 1) lines = 1
-          return `共 ${lines} 行，${chars} 字`
-        }
-        case 'search_docs': {
-          let c = num(/count="(\d+)"/)
-          if (isNaN(c)) { const m2 = r.match(/<result[\s>]/g); c = m2 ? m2.length : NaN }
-          if (isNaN(c)) return fallback()
-          return `找到 ${c} 篇`
-        }
-        case 'list_files': { const lf = nonEmptyLines(); if (!lf) return fallback(); return `共 ${lf} 个文件` }
-        case 'write_doc': { const wc = num(/(\d+)\s*chars/); if (isNaN(wc)) return fallback(); return `共 ${wc} 字` }
-        case 'edit_doc': { const m = /replaced (\d+) chars with (\d+) chars/.exec(r); if (!m) return fallback(); return `替换 ${m[1]}→${m[2]} 字符` }
-        case 'delete_doc': return `已删除`
-        case 'move_docs': return `已移动`
-        case 'get_related_docs': { const rl = nonEmptyLines() - 1; if (rl < 0) rl = 0; return `找到 ${rl} 篇关联` }
-        case 'recent_changes': { const rc = nonEmptyLines(); if (!rc) return fallback(); return `共 ${rc} 条` }
-        case 'recall_stats': { const lines = r.split('\n'); let n = 0; for (let i = 2; i < lines.length; i++) { const l = lines[i]; if (!l.trim() || /^Failed queries/.test(l)) break; n++ } if (!n) return fallback(); return `命中 ${n} 篇文档` }
-        case 'propose': { const m = /proposal #(\d+) created.*\(status: (\w+)\)/.exec(r); if (!m) return fallback(); return `新建 #${m[1]}（${m[2]}）` }
-        case 'list_proposals': { const n = (r.match(/"id":/g) || []).length; if (!n) return fallback(); return `共 ${n} 条` }
-        case 'get_proposal': { const m = /"status":\s*"(\w+)"/.exec(r); return m ? `状态 ${m[1]}` : `提案 #${args.id}` }
-        case 'adopt_proposal': return `已采纳`
-        case 'reject_proposal': return `已拒绝`
-        default: return fallback()
+        case 'read_doc':
+          if (meta.truncated) return `截断：${meta.start}-${meta.end} / ${meta.total} 行`
+          if (meta.full) return `共 ${meta.end} 行，${meta.chars} 字`
+          return `${meta.start}-${meta.end} / ${meta.total} 行`
+        case 'list_files': return meta.count ? `共 ${meta.count} 个文件` : `0 个文件`
+        case 'search_docs': return `找到 ${meta.count} 篇`
+        case 'get_related_docs': return `找到 ${meta.count} 篇关联`
+        case 'write_doc': return meta.overwritten ? `覆写，共 ${meta.chars} 字` : `共 ${meta.chars} 字`
+        case 'edit_doc': return `替换 ${meta.from}→${meta.to} 字符`
+        case 'recent_changes': return `共 ${meta.count} 条`
+        case 'list_proposals': return `共 ${meta.count} 条`
+        case 'recall_stats': return `命中 ${meta.count} 篇文档`
+        case 'get_proposal': return meta.status ? `状态 ${meta.status}` : `提案 #${meta.id}`
+        case 'propose': return `新建 #${meta.id}（${meta.status}）`
+        default: return null
       }
+    }
+
+    // 零正则摘要：meta 是工具 _execute 写入的结构化事实（随 SSE tool_result.meta 到达）；
+    // 四个确认态工具不发 meta，用固定文案；无 meta 的 No-data 分支（如 recall "No recall data"）
+    // 显示原文首行——真实信息直出，不再从散文反解析（正则回退已于 2026-11-05 移除）。
+    const STATIC_SUMMARY = { delete_doc: '已删除', move_docs: '已移动', adopt_proposal: '已采纳', reject_proposal: '已拒绝' }
+    function toolResultSummary(name, result, meta) {
+      if (meta && typeof meta === 'object') {
+        const s = summaryFromMeta(name, meta)
+        if (s) return s
+      }
+      if (STATIC_SUMMARY[name]) return STATIC_SUMMARY[name]
+      const r = String(result == null ? '' : result)
+      const f = r.split('\n')[0]
+      return f.length > 80 ? f.slice(0, 77) + '…' : f
     }
 
     function addMsg(role, text) {
@@ -260,7 +259,7 @@ export const AIChatPanel = {
                   if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = false }
                   { const prev = currentTurn.blocks[currentTurn.blocks.length - 1]
                     if (prev && prev.type === 'thinking') prev.expanded = false } // 工具块垫底 → 思考块自动收起（随下方 blocksLen 写入的 re-render 生效）
-                  currentTurn.blocks.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null, expanded: false })
+                  currentTurn.blocks.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null, meta: null, expanded: false })
                   currentTurn.blocksLen = currentTurn.blocks.length // 工具块入场即 re-render（blocks 原始数组 push 本身不触发）
                   break
                 case 'confirm_request': {
@@ -280,6 +279,7 @@ export const AIChatPanel = {
                   if (tool) {
                     tool.status = evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done')
                     tool.result = evt.result
+                    tool.meta = evt.meta || null
                     // 同 confirm_request：status/result 变更不可追踪 → uiTick 即时显示 done/error 图标与结果文本
                     //（不再等 'done' 事件的 finishTurn render 兜底）
                     currentTurn.uiTick = (currentTurn.uiTick || 0) + 1
@@ -475,7 +475,7 @@ export const AIChatPanel = {
                 </div>
                 <!-- 结果摘要 -->
                 <div v-if="block.status === 'done' && block.result" class="tool-result-text done">
-                  {{ toolResultSummary(block.name, block.args, block.result) }}
+                  {{ toolResultSummary(block.name, block.result, block.meta) }}
                 </div>
                 <div v-if="block.status === 'error'" class="tool-result-text error">
                   {{ block.result || '失败' }}

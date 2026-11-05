@@ -54,7 +54,9 @@ class RecentChangesTool(Tool):
             limit=args.limit,
         )
         if not changes:
+            ctx.last_meta = {"count": 0}
             return self.changes_empty()
+        ctx.last_meta = {"count": len(changes)}
         lines = []
         for c in changes:
             ts_str = time.strftime("%H:%M", time.localtime(c["ts"]))

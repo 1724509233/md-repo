@@ -50,4 +50,5 @@ class GetProposalTool(Tool):
             "source_refs": rec["source_refs"],
             "risk": None,  # placeholder: the main agent fills this in itself
         }
+        ctx.last_meta = {"id": rec["id"], "status": rec["status"]}
         return json.dumps(out, ensure_ascii=False)

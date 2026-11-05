@@ -25,6 +25,10 @@ class ToolContext:
     vault_dir: Path
     read_doc_max_chars: int = 4000
     last_read_ts: dict | None = None
+    # UI side-channel: a tool's _execute stamps this from facts it already
+    # computed; the web runtime reads it into the SSE tool_result payload.
+    # It never enters the LLM channel (agent.messages carries only the string).
+    last_meta: dict | None = None
     write_source: str = "agent"
     # Proposal channel (reversible-automation v2): trusted stamps for the
     # propose tool. ``run_id`` is the bgagent run's batch id (the model can

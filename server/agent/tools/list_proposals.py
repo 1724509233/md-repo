@@ -72,4 +72,5 @@ class ListProposalsTool(Tool):
         out = json.dumps(items, ensure_ascii=False)
         if len(recs) > 20:
             out += f" — {len(recs)} total, showing first 20"
+        ctx.last_meta = {"count": len(recs)}
         return out

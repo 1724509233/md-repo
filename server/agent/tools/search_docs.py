@@ -80,7 +80,9 @@ class SearchDocsTool(Tool):
             raise
         _log_recall(ctx, args.query, tier, results)
         if not results:
+            ctx.last_meta = {"count": 0}
             return self.search_no_match(args.query)
+        ctx.last_meta = {"count": len(results)}
         lines = [f'<results count="{len(results)}" query="{_html.escape(args.query, quote=False)}" tier="{tier}">']
         for r in results:
             lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')

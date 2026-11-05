@@ -40,6 +40,7 @@ class RecallStatsTool(Tool):
         failed = recall_db.failed_queries(conn, since)
         if not docs and not failed:
             return self.no_data()
+        ctx.last_meta = {"count": len(docs)}
 
         lines = [
             f"Recall traffic (window: {args.days}d, half-life: {args.half_life_days:g}d)",

@@ -60,7 +60,17 @@ class ReadDocTool(DocTool):
         text = "".join(shown_lines)
         end_line = offset + len(shown_lines) - 1
 
-        if not truncated and offset == 1 and len(selected) == total:
+        # UI side-channel: structured read facts for the chat summary (→ SSE meta).
+        full = not truncated and offset == 1 and len(selected) == total
+        ctx.last_meta = {
+            "start": offset,
+            "end": end_line,
+            "total": total,
+            "truncated": truncated,
+            "chars": len(content),
+            "full": full,
+        }
+        if full:
             return f"File: {args.path} ({total} lines, {len(content)} chars)\n<content>\n{text}</content>"
 
         header = f"File: {args.path} (lines {offset}-{end_line} of {total})"
