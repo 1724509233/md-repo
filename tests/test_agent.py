@@ -876,6 +876,100 @@ def test_execute_recent_changes_no_db(tmp_path: Path):
     assert "Error" in result
 
 
+def test_execute_recent_changes_dir_prefix(tmp_path: Path):
+    """path="test2" returns test2 itself + everything under test2/, not test3."""
+    from server.agent import execute_tool
+    from server.vault import init_db, log_change
+    from server.vault.orchestration.file_ops import apply_change
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn, None)
+
+    (vault / "test2").mkdir()
+    (vault / "test2" / "a.md").write_bytes(b"a")
+    (vault / "test2" / "b.md").write_bytes(b"b")
+    (vault / "test2" / "c.md").write_bytes(b"c")
+    apply_change(conn, vault, "test2/a.md", "created", source="web")
+    apply_change(conn, vault, "test2/b.md", "created", source="agent")
+    apply_change(conn, vault, "test2/c.md", "created", source="mcp")
+    # Folder-level row for test2 itself (e.g. a web folder delete)
+    log_change(conn, "test2", "deleted", source="web")
+    # Sibling directory that must NOT be matched
+    (vault / "test3").mkdir()
+    (vault / "test3" / "d.md").write_bytes(b"d")
+    apply_change(conn, vault, "test3/d.md", "created", source="web")
+
+    # Directory prefix: all of test2/* returned, test3 NOT returned
+    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault))
+    assert "test2/a.md" in result
+    assert "test2/b.md" in result
+    assert "test2/c.md" in result
+    assert "test3" not in result
+
+    # Exact file path still works
+    result = execute_tool("recent_changes", {"path": "test2/a.md"}, ToolContext(vault_dir=vault))
+    assert "test2/a.md" in result
+    assert "test2/b.md" not in result
+
+
+def test_execute_recent_changes_prefix_boundary(tmp_path: Path):
+    """path="test" must NOT match test2/a.md (the / boundary prevents sibling-prefix matches)."""
+    from server.agent import execute_tool
+    from server.vault import init_db, log_change
+    from server.vault.orchestration.file_ops import apply_change
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn, None)
+
+    (vault / "test2").mkdir()
+    (vault / "test2" / "a.md").write_bytes(b"a")
+    apply_change(conn, vault, "test2/a.md", "created", source="web")
+    # Folder-level row for "test" (a sibling prefix of "test2")
+    log_change(conn, "test", "deleted", source="web")
+
+    result = execute_tool("recent_changes", {"path": "test"}, ToolContext(vault_dir=vault))
+    assert "test2/a.md" not in result
+
+
+def test_execute_recent_changes_prefix_metachars(tmp_path: Path):
+    """% and _ in the path param are treated as literal characters, not LIKE wildcards."""
+    from server.agent import execute_tool
+    from server.vault import init_db
+    from server.vault.orchestration.file_ops import apply_change
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    conn = init_db(vault / ".sync" / "index.db")
+    register_db_conn(conn, None)
+
+    # File with _ in name under test2/
+    (vault / "test2").mkdir()
+    (vault / "test2" / "a_b.md").write_bytes(b"ab")
+    apply_change(conn, vault, "test2/a_b.md", "created", source="web")
+
+    # File under a directory whose name contains %
+    (vault / "100%").mkdir()
+    (vault / "100%" / "x.md").write_bytes(b"x")
+    apply_change(conn, vault, "100%/x.md", "created", source="web")
+    # Sibling that % would match as a wildcard if not escaped
+    (vault / "100X").mkdir()
+    (vault / "100X" / "y.md").write_bytes(b"y")
+    apply_change(conn, vault, "100X/y.md", "created", source="web")
+
+    # "_" in path must be literal: test2 prefix returns test2/a_b.md
+    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault))
+    assert "test2/a_b.md" in result
+
+    # "%" in path must be literal: 100% prefix returns 100%/x.md but NOT 100X/y.md
+    result = execute_tool("recent_changes", {"path": "100%"}, ToolContext(vault_dir=vault))
+    assert "100%/x.md" in result
+    assert "100X/y.md" not in result
+
+
 def test_agent_loop_max_rounds(tmp_path: Path):
     """Agent with max_rounds=3 stops after 3 rounds."""
     import asyncio

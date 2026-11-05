@@ -42,14 +42,23 @@ def get_changes(
 ) -> list[dict]:
     """Return change events with ts > since, ordered by seq DESC.
 
+    ``path`` is prefix-aware: an exact path match (``path = ?``) OR a directory
+    prefix (``path LIKE 'test2/%'``), so the single param can address either
+    the file itself or everything underneath it.  ``%`` and ``_`` in the user
+    path are escaped before the LIKE so they are treated as literal characters.
+
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
     and new keys (``seq``, ``source``, ``op``, ``new_hash``).
     """
     sql = "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log WHERE ts > ?"
     params: list = [since]
     if path is not None:
-        sql += " AND path = ?"
-        params.append(path)
+        # Exact match OR directory prefix: "test2" matches the row recorded
+        # as "test2" itself (e.g. a web folder delete) and everything under
+        # "test2/". ESCAPE keeps %/_ in user paths literal.
+        escaped = path.replace("\\", r"\\").replace("%", r"\%").replace("_", r"\_")
+        sql += " AND (path = ? OR path LIKE ? || '/%' ESCAPE '\\')"
+        params.extend([path, escaped])
     if source is not None:
         sql += " AND source = ?"
         params.append(source)

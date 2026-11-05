@@ -111,7 +111,7 @@ def test_recent_changes_empty(tmp_path: Path):
 
     register_db_conn(conn, None)
     result = execute_tool("recent_changes", {"since": "1m"}, ToolContext(vault_dir=vault))
-    assert "check the path/source filters" in result
+    assert "Check the path/source filters" in result
     conn.close()
 
 
@@ -184,6 +184,6 @@ def test_responses_parity():
     assert "Do not overwrite or relocate on your own" in MoveDocsTool.move_dest_exists("y.md")
     assert "do NOT create a new file" in DocTool.edit_not_found_moved("a.md", "b.md")
     assert "Do NOT recreate it from memory" in DocTool.edit_not_found_deleted("a.md")
-    assert "check the path/source filters" in RecentChangesTool.changes_empty()
+    assert "Check the path/source filters" in RecentChangesTool.changes_empty()
     assert "offset <=" in ReadDocTool.read_offset_exceeds(10, 5)
     assert "invalid search query" in SearchDocsTool.fts_syntax_error('bad"query')

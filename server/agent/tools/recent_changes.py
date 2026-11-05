@@ -10,7 +10,7 @@ from .tool import Tool, ToolContext, _check_optional_path
 
 class RecentChangesArgs(BaseModel):
     """Query the vault change log. Shows who modified what and when (agent/web/watchdog/mcp). All params optional."""
-    path: str | None = Field(default=None, description="Filter by document path")
+    path: str | None = Field(default=None, description="Filter by document path: exact path, or directory prefix (e.g. 'test2' matches test2 itself and everything under test2/)")
     since: str | None = Field(default=None, description='Time filter: "5m", "1h", "2d", or ISO timestamp')
     source: str | None = Field(default=None, description="Filter by source: agent/web/watchdog/mcp")
     limit: int = Field(default=20, description="Max results")
@@ -26,7 +26,9 @@ class RecentChangesTool(Tool):
 
     @staticmethod
     def changes_empty() -> str:
-        return 'No recent changes found. Tip: check the path/source filters, or widen since (e.g. since="7d").'
+        return ('No recent changes found. Note: path matches exactly or as a directory prefix '
+                '(e.g. path="test2" covers everything under test2/). '
+                'Check the path/source filters, or widen since (e.g. since="7d").')
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db.changes import get_changes
