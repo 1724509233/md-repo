@@ -779,6 +779,57 @@ def test_graph_extract_short_name_wikilink(vault_dir):
         conn.close()
 
 
+def test_apply_change_create_invalidates_wikilink_cache(vault_dir):
+    """A create event invalidates the cached empty resolution of its filename.
+
+    Regression for issue agent-get-related-backlinks-inconsistent: the
+    module-level _wikilink_cache used to keep a stale "not found" entry for a
+    filename written after a referrer was extracted, silently dropping the
+    edge until a full rebuild. apply_change now pops exactly the changed
+    filename's entry on create/delete/move, so the next extraction re-scans.
+    Short names in a subdirectory are used so resolution goes through the
+    vault-wide rglob + cache path, not the exact-path shortcut. The forward
+    a→b edge is asserted directly via the edges table (graph_get_related is
+    bidirectional and would pass for the wrong reason via the reverse edge).
+    """
+    from server.vault import init_db
+    from server.vault.fs.link_parser import _clear_wikilink_cache
+    from server.vault.orchestration.file_ops import apply_change
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        # Self-contained: the module cache is process-wide, so start (and end)
+        # clean to make the poisoning scenario deterministic and not leak state.
+        _clear_wikilink_cache()
+
+        # 1. Referrer extracted first; [[b]] does not exist yet, so the empty
+        #    rglob result for "b.md" is cached (the poisoning).
+        (vault_dir / "notes" / "a.md").write_text("See [[b]].")
+        apply_change(conn, vault_dir, "notes/a.md", "created")
+
+        # 2. Target appears; its creation is what invalidates the cached
+        #    "b.md" miss (apply_change → _invalidate_wikilink_filename).
+        (vault_dir / "notes" / "b.md").write_text("See [[a]].")
+        apply_change(conn, vault_dir, "notes/b.md", "created")
+
+        # 3. Re-extract a as if edited; [[b]] must resolve now.
+        apply_change(conn, vault_dir, "notes/a.md", "modified")
+
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM edges e
+            JOIN entities s ON s.id = e.src_id
+            JOIN entities d ON d.id = e.dst_id
+            WHERE s.path = ? AND d.path = ?
+            """,
+            ("notes/a.md", "notes/b.md"),
+        ).fetchone()
+        assert row[0] == 1  # forward a→b edge, dropped if the miss was cached
+    finally:
+        conn.close()
+        _clear_wikilink_cache()
+
+
 def test_remove_dead_links_full_path(vault_dir):
     """remove_dead_links removes wikilinks pointing to a deleted file (full path)."""
     from server.vault import init_db

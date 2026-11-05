@@ -18,6 +18,7 @@ from ..db.changes import log_change
 from ..db.file_index import delete_file, upsert_file
 from ..db.schema import _ACTION_TO_OP, _db_lock
 from ..file_entry import FileEntry
+from ..fs.link_parser import _invalidate_wikilink_filename
 from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .move_detect import pair_moves
 from .indexer import (
@@ -87,17 +88,32 @@ def apply_change(
             upsert_file(conn, path, digest, mtime)
             log_change(conn, path, action, from_path=from_path, source=source,
                        new_hash=digest, batch_id=batch_id)
+            # A new file changes which paths a wikilink filename resolves to;
+            # drop its cached entry so the next extraction re-scans disk.
+            # Targeted O(1) pop — no blanket clear, no eager re-rglob.
+            # (Pure content modification does not change the filename→path
+            # existence map, so only create invalidates here.)
+            if action in ("created", "create"):
+                _invalidate_wikilink_filename(Path(path).name)
             if not _is_index_excluded(path):
                 index_segments(conn, vault_dir, path)
                 graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
             delete_file(conn, path)
             log_change(conn, path, action, source=source, batch_id=batch_id)
+            # The filename no longer exists on disk; drop its cached entry so
+            # later resolutions don't point at a dead path.
+            _invalidate_wikilink_filename(Path(path).name)
             if not _is_index_excluded(path):
                 delete_segments(conn, path)
                 graph_delete_file(conn, path)
                 remove_dead_links(conn, vault_dir, path)
         elif action in ("moved", "move"):
+            # Rename: the old filename disappears and the new one appears —
+            # drop both cached entries so later resolutions re-scan disk.
+            _invalidate_wikilink_filename(Path(path).name)
+            if from_path:
+                _invalidate_wikilink_filename(Path(from_path).name)
             src = vault_dir / from_path
             dst = vault_dir / path
             if new_hash:
