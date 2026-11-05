@@ -361,8 +361,13 @@ def _render_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
     return body, summary
 
 
-async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = "") -> str:
-    """Consume the event stream; return the done reason ('final' | 'round_limit')."""
+async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = "") -> tuple[str, str]:
+    """Consume the event stream; return (done reason, error message).
+
+    The done reason: 'final' | 'round_limit' | 'error' (a stream/API failure
+    the runtime converted to terminal events — its message rides the 'error'
+    event, bug b621b5b4)."""
+    error_msg = ""
     async for event in agent.chat(message):
         if event.type == "round":
             stats.rounds += 1
@@ -386,9 +391,11 @@ async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = ""
                 int(event.data.get("prompt", 0)),
                 int(event.data.get("completion", 0)),
             )
+        elif event.type == "error":
+            error_msg = event.data.get("error") or error_msg
         elif event.type == "done":
-            return event.data.get("reason", "final")
-    return "final"
+            return event.data.get("reason", "final"), error_msg
+    return "final", error_msg
 
 
 async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
@@ -468,11 +475,18 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     agent = Agent(spec, runtime=runtime_cls())
 
     try:
-        reason = await asyncio.wait_for(
+        reason, consume_err = await asyncio.wait_for(
             _consume(agent, f"开始整理 {target_rel}/", stats, cfg.alias),
             timeout=cfg.timeout_s)
         if reason == "round_limit":
             status = "round_limit"
+        elif reason == "error":
+            # Terminal error event from the runtime (unrecoverable
+            # stream/API failure — bug b621b5b4): clean termination, the
+            # report + notification below carry the reason.
+            status = "error"
+            if not error_msg:
+                error_msg = consume_err
     except asyncio.TimeoutError:
         status, error_msg = "timeout", f"exceeded {cfg.timeout_s}s"
     except asyncio.CancelledError:
@@ -510,11 +524,24 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     # Notification kind: a review-channel record (awaiting_review) means a
     # human decision is pending → "review"; auto-channel only → "batch".
     kind = "review" if any(r["status"] == "awaiting_review" for r in records) else "batch"
+    # Notification feed row text: a run that produced no summary text
+    # (error/timeout/round exhaustion) falls back to the status wording —
+    # the feed row must carry the reason (bug b621b5b4: a failed run's row
+    # had an empty summary → the failure was invisible in the feed).
+    summary = stats.summary[:200]
+    if not summary:
+        if status == "error":
+            summary = (f"运行出错：{error_msg}" if error_msg else "运行出错")[:200]
+        elif status == "timeout":
+            summary = (f"运行超时：{error_msg}" if error_msg else "运行超时")[:200]
+        elif status == "round_limit":
+            summary = "轮次耗尽，无总结"
+
     report = RunReport(
         alias=cfg.alias, name=cfg.name, status=status,
         started_at=started_at, finished_at=finished_at,
         report_path=report_path, ops_total=len(stats.ops),
-        files_changed=len(stats.files_changed), summary=stats.summary[:200],
+        files_changed=len(stats.files_changed), summary=summary,
         kind=kind,
         # Card identifiers for the notification deep links (v2a: synthetic
         # relpaths — the records have no backing file).

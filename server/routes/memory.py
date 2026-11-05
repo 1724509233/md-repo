@@ -354,14 +354,36 @@ def register(app, ctx) -> None:
             "SELECT agent, last_run_ts, armed, runs_date, runs_count "
             "FROM trigger_state ORDER BY agent"
         ).fetchall()
+        # Run health per alias (the newest notifications row = the newest
+        # finished run): last_status / last_status_ts / last_summary /
+        # last_report_path + failed_7d (error-row count over 7d) — the
+        # monitor page's failed-run face (bug b621b5b4: previously a failed
+        # run was only a feed row, with no status/space on the monitor).
+        latest_runs = {r["alias"]: r for r in ctx.db_conn.execute(
+            "SELECT n.alias, n.ts, n.status, n.summary, n.report_path "
+            "FROM notifications n "
+            "JOIN (SELECT alias, MAX(ts) AS mts FROM notifications "
+            "      GROUP BY alias) m ON m.alias = n.alias AND n.ts = m.mts"
+        ).fetchall()}
+        failed_7d = {r["alias"]: r["c"] for r in ctx.db_conn.execute(
+            "SELECT alias, count(*) AS c FROM notifications "
+            "WHERE status = 'error' AND ts >= ? GROUP BY alias",
+            (time.time() - 7 * 86400,),
+        ).fetchall()}
         for r in rows:
             runs_today = r["runs_count"] or 0 if r["runs_date"] == today else 0
             caps = (ctx.bg_targets or {}).get(r["agent"]) or {}
+            lr = latest_runs.get(r["agent"])
             agents.append({
                 "alias": r["agent"], "armed": r["armed"] or 0,
                 "armed_target": caps.get("armed_target"),
                 "last_run": r["last_run_ts"] or 0, "runs_today": runs_today,
                 "runs_cap": caps.get("runs_cap"),
+                "last_status": lr["status"] if lr else None,
+                "last_status_ts": int(lr["ts"]) if lr else 0,
+                "last_summary": (lr["summary"] or "")[:200] if lr else "",
+                "last_report_path": (lr["report_path"] or "") if lr else "",
+                "failed_7d": failed_7d.get(r["agent"], 0),
             })
 
         # recall: demand over 7d (failed) + 30d (top docs). Old DBs may lack

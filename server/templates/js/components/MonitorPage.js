@@ -60,7 +60,7 @@ function relRun(ts) {
 
 export const MonitorPage = {
   name: 'MonitorPage',
-  emits: ['back'],
+  emits: ['back', 'open-doc'],
   setup(props, { emit }) {
     const state = inject('state')
     const mwrapRef = ref(null)
@@ -168,11 +168,23 @@ export const MonitorPage = {
     //     降级口径（armed_target 端点恒 null）：按当前 arm 画实心段；arm = 0 → 1 段虚线占位
     //     （不放满 10 段假刻度——「总段数 = 目标」的语义在目标未知时不成立）；
     //     目标值标注「取自 config」（端点不可见前端 config，文案照设计稿口径）─────
+    //     最近失败行（bug b621b5b4）：last_status ∈ {error,timeout,round_limit} →
+    //     状态 + 时间（+7d 失败计数）；错误全文进 title tooltip（L2）；点击开失败报告。
+    //     口径 = 状态/数量/时间/位置——实现 meta 不进正文 ───
+    const HEALTH_LABEL = { error: '失败', timeout: '超时', round_limit: '轮次耗尽' }
     const agents = computed(() =>
       ((state.memoryStatus && state.memoryStatus.agents) || []).map(a => {
         const armed = a.armed || 0
         const target = a.armed_target != null ? a.armed_target : null
-        return { ...a, armed, target,
+        const health = HEALTH_LABEL[a.last_status] ? {
+          status: a.last_status,
+          label: HEALTH_LABEL[a.last_status],
+          dt: fmtDT(a.last_status_ts),
+          failed7: a.failed_7d || 0,
+          summary: a.last_summary || '',
+          report: a.last_report_path || ''
+        } : null
+        return { ...a, armed, target, health,
           total: target != null ? Math.max(target, 1) : Math.max(armed, 1),
           filled: target != null ? Math.min(armed, target) : armed,
           tg: 'arm ' + armed + (target != null ? '/' + target : '') }
@@ -251,12 +263,13 @@ export const MonitorPage = {
         .map(p => ({ ...p, mergedDisp: fmtMerged(p.merged_at) })))
 
     function back() { emit('back') }
+    function openReport(h) { if (h && h.report) emit('open-doc', h.report) }
 
     return {
       nine, failedCount, anomalies, agents, executor,
       recall, recallError, recallSum, recallMax, wLines, allZeroRecall,
       l2Open, l2Loading, l2Error, l2Data, l2FailedRows, toggleL2,
-      finals, back, fmtDT, relRun,
+      finals, back, openReport, fmtDT, relRun,
       typeIcons: TYPE_ICONS, typeIconDefault: TYPE_ICON_DEFAULT,
       mwrapRef, alertFresh, updatedAt
     }
@@ -328,6 +341,14 @@ export const MonitorPage = {
                   <span>上次 {{ relRun(a.last_run) }}</span><span class="sp"></span>
                   <span>今天 {{ a.runs_today }}<template v-if="a.runs_cap != null">/{{ a.runs_cap }} 次</template><template v-else> 次</template></span>
                 </div>
+                <button v-if="a.health" type="button" class="run-health" :class="a.health.status"
+                  :title="(a.health.summary || '无摘要') + (a.health.report ? ' · ' + a.health.report : '')"
+                  @click="openReport(a.health)">
+                  <span class="rh-dot"></span>
+                  <span>上次{{ a.health.label }} {{ a.health.dt }}</span>
+                  <span v-if="a.health.failed7 > 1" class="rh-cnt">· 7d {{ a.health.failed7 }} 次</span>
+                  <span v-if="a.health.report" class="rh-path">{{ a.health.report }}</span>
+                </button>
               </div>
             </template>
             <div v-else class="zline">无后台智能体</div>

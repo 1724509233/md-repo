@@ -13,7 +13,7 @@ import json
 import logging
 from typing import AsyncIterator
 
-from openai import AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 
 from .events import Event
 from .execute import execute_tool
@@ -29,6 +29,42 @@ class Runtime:
 
     async def run(self, agent) -> AsyncIterator[Event]:
         raise NotImplementedError
+
+
+def _ensure_tool_results(agent) -> None:
+    """Backfill a synthetic tool result for any assistant tool_call that has
+    no matching tool message in history (an interrupted dispatch loop left
+    it orphaned).
+
+    Called before every model call: the resubmitted history must be
+    API-valid (every tool_call answered), so a tool call that was already
+    delivered + executed can never be re-taken as a new one on retry — the
+    presence of its tool_result in history is the re-execution guard
+    (bug b621b5b4: the proxy's mid-stream unrecoverable-tool-call abort).
+    No-ops when the history is already consistent.
+    """
+    msgs = agent.messages
+    i = 0
+    while i < len(msgs):
+        m = msgs[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            j = i + 1
+            answered = set()
+            while j < len(msgs) and msgs[j].get("role") == "tool":
+                answered.add(msgs[j].get("tool_call_id"))
+                j += 1
+            missing = [tc for tc in m["tool_calls"]
+                       if tc.get("id") and tc["id"] not in answered]
+            if missing:
+                msgs[j:j] = [
+                    {"role": "tool", "tool_call_id": tc["id"],
+                     "content": "Error: tool execution interrupted before completion"}
+                    for tc in missing
+                ]
+                j += len(missing)
+            i = j
+        else:
+            i += 1
 
 
 class LoopRuntime(Runtime):
@@ -49,6 +85,14 @@ class LoopRuntime(Runtime):
 
         for _round in range(spec.max_rounds):
             yield Event("round", {"n": _round + 1})
+            # History guard: an assistant tool_call must be answered (tool
+            # message present) before the next model call. Keeps the
+            # persisted / resubmitted history API-valid, so a tool call that
+            # was already delivered + executed can never be re-taken as a new
+            # one on retry — its tool_result in history is the guard
+            # (bug b621b5b4: the proxy's mid-stream unrecoverable-tool-call
+            # abort).
+            _ensure_tool_results(agent)
             # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
             if _round >= spec.max_rounds - 3:
                 call_messages = agent.messages + [
@@ -69,46 +113,74 @@ class LoopRuntime(Runtime):
                 create_kwargs["max_tokens"] = model.max_tokens
             if model.temperature is not None:
                 create_kwargs["temperature"] = model.temperature
-            stream = await client.chat.completions.create(**create_kwargs)
+            try:
+                stream = await client.chat.completions.create(**create_kwargs)
+            except APIError as e:
+                # Unrecoverable request failure (connection / timeout /
+                # provider error): nothing was delivered this round, so the
+                # history is untouched. Clean terminal — no retry (a retry
+                # would re-request an output whose tool calls may already
+                # have been delivered + executed); the consumer records
+                # status=error.
+                logger.exception("model request failed at round %d: %s", _round + 1, e)
+                yield Event("error", {"error": f"{type(e).__name__}: {e}"})
+                yield Event("done", {"reason": "error"})
+                return
 
             content = ""
             tool_calls = {}
             usage = None
 
-            async for chunk in stream:
-                if getattr(chunk, "usage", None) is not None:
-                    usage = chunk.usage
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
+            try:
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None) is not None:
+                        usage = chunk.usage
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
 
-                # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
-                # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
-                # 不进 content / 消息历史（思考是草稿，不是回答正文）。
-                # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
-                # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
-                # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
-                for _key in ("reasoning_content", "reasoning", "thinking"):
-                    _val = getattr(delta, _key, None)
-                    if isinstance(_val, str) and _val:
-                        yield Event("reasoning", {"text": _val})
-                        break
+                    # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
+                    # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
+                    # 不进 content / 消息历史（思考是草稿，不是回答正文）。
+                    # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
+                    # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
+                    # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
+                    for _key in ("reasoning_content", "reasoning", "thinking"):
+                        _val = getattr(delta, _key, None)
+                        if isinstance(_val, str) and _val:
+                            yield Event("reasoning", {"text": _val})
+                            break
 
-                if delta.content:
-                    content += delta.content
-                    yield Event("token", {"text": delta.content})
+                    if delta.content:
+                        content += delta.content
+                        yield Event("token", {"text": delta.content})
 
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        acc = tool_calls.setdefault(
-                            tc.index, {"id": None, "name": None, "arguments": ""}
-                        )
-                        if tc.id:
-                            acc["id"] = tc.id
-                        if tc.function and tc.function.name:
-                            acc["name"] = tc.function.name
-                        if tc.function and tc.function.arguments:
-                            acc["arguments"] += tc.function.arguments
+                    if delta.tool_calls:
+                        for tc in delta.tool_calls:
+                            acc = tool_calls.setdefault(
+                                tc.index, {"id": None, "name": None, "arguments": ""}
+                            )
+                            if tc.id:
+                                acc["id"] = tc.id
+                            if tc.function and tc.function.name:
+                                acc["name"] = tc.function.name
+                            if tc.function and tc.function.arguments:
+                                acc["arguments"] += tc.function.arguments
+            except APIError as e:
+                # Unrecoverable mid-stream failure (e.g. the proxy's
+                # "unrecoverable tool call" abort — the endpoint re-delivers a
+                # tool call that was already streamed in the interrupted first
+                # attempt and refuses to continue). The partial round
+                # accumulation is discarded: the assistant message is appended
+                # only after a full stream, so the history never holds a
+                # half-delivered tool call. Clean terminal — no retry (a retry
+                # would re-request an output whose tool calls were already
+                # delivered + executed); the consumer records status=error.
+                logger.exception("model stream failed at round %d: %s", _round + 1, e)
+                yield Event("error", {"error": f"{type(e).__name__}: {e}"})
+                yield Event("done", {"reason": "error"})
+                return
+
 
             # Emit token usage from the API response (prompt_tokens = current context size)
             if usage is not None:

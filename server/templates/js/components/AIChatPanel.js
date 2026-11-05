@@ -294,6 +294,14 @@ export const AIChatPanel = {
                   }
                   break
                 }
+                case 'error':
+                  // 不可恢复的流/API 错误（服务端 runtime 干净终止，bug b621b5b4）：
+                  // 渲染一行错误说明；紧随的 done{reason:"error"} 收尾 turn
+                  //（旧路径：SSE 裸断连，turn 悬在 streaming 态无解释）
+                  if (!currentTurn) { currentTurn = addMsg('ai', ''); }
+                  currentTurn.blocks.push({ type: 'text', text: `⚠️ 运行出错：${evt.error || '未知错误'}` })
+                  currentTurn.blocksLen = currentTurn.blocks.length
+                  break
                 case 'token_usage':
                   tokenUsage.used = evt.used
                   tokenUsage.total = evt.total

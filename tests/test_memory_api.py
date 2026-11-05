@@ -296,6 +296,62 @@ def test_status_shape_and_counts(client, vault_dir, db_conn, ledger_conn):
     assert "recall_error" not in data["recall"]
 
 
+def test_status_agent_run_health(client, vault_dir, db_conn):
+    """Failed-run health on the status endpoint (bug b621b5b4): the newest
+    notifications row per alias exposes last_status / last_status_ts /
+    last_summary / last_report_path, and failed_7d counts error rows over
+    7d — the monitor page's failed-run face (previously a failed run was
+    only an empty feed row, invisible on the monitor)."""
+    now_ts = time.time()
+    today = datetime.now().strftime("%Y-%m-%d")
+    db_conn.execute(
+        "INSERT INTO trigger_state "
+        "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "runs_date, runs_count) VALUES (?, ?, ?, 0.0, 0, ?, ?)",
+        ("agent-x", now_ts, 0, today, 1),
+    )
+    # An older ok run, then a newer failed run → the newest row drives health.
+    db_conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path, "
+        "summary) VALUES (?, ?, ?, ?, ?, ?)",
+        (now_ts - 2 * 3600, "agent-x", "测试整理", "ok",
+         "index/reports/test-org/2026-11-02_2100.md", "正常完成"),
+    )
+    db_conn.execute(
+        "INSERT INTO notifications (ts, alias, name, status, report_path, "
+        "summary) VALUES (?, ?, ?, ?, ?, ?)",
+        (now_ts - 3600, "agent-x", "测试整理", "error",
+         "index/reports/test-org/2026-11-02_2322.md",
+         "运行出错：APIError: Model output contains an unrecoverable tool call."),
+    )
+    # A second alias with trigger_state but no runs yet → null/zero defaults.
+    db_conn.execute(
+        "INSERT INTO trigger_state "
+        "(agent, last_run_ts, armed, last_armed_scan, last_armed_seq, "
+        "runs_date, runs_count) VALUES (?, 0.0, 0, 0.0, 0, ?, 0)",
+        ("agent-y", today),
+    )
+    db_conn.commit()
+
+    resp = client.get("/api/memory/status")
+    assert resp.status_code == 200
+    agents = {a["alias"]: a for a in resp.json()["agents"]}
+
+    a = agents["agent-x"]
+    assert a["last_status"] == "error"
+    assert a["last_status_ts"] > 0
+    assert "unrecoverable" in a["last_summary"]
+    assert a["last_report_path"] == "index/reports/test-org/2026-11-02_2322.md"
+    assert a["failed_7d"] == 1
+
+    y = agents["agent-y"]
+    assert y["last_status"] is None
+    assert y["last_status_ts"] == 0
+    assert y["last_summary"] == ""
+    assert y["last_report_path"] == ""
+    assert y["failed_7d"] == 0
+
+
 def test_status_recall_table_dropped(client, vault_dir, db_conn):
     # Old DBs may lack the recall tables → zeros + recall_error, 200 overall.
     db_conn.execute("DROP TABLE recall_log")
@@ -367,9 +423,11 @@ def test_status_agent_caps_null_without_bg_targets(vault_dir, db_conn, ledger_co
     agent = resp.json()["agents"][0]
     assert agent["armed_target"] is None
     assert agent["runs_cap"] is None
-    # Shape unchanged: the same key set as when caps are filled.
+    # Shape: the key set incl. the run-health fields (bug b621b5b4).
     assert set(agent) == {"alias", "armed", "armed_target", "last_run",
-                          "runs_today", "runs_cap"}
+                          "runs_today", "runs_cap", "last_status",
+                          "last_status_ts", "last_summary",
+                          "last_report_path", "failed_7d"}
 
 
 # ── /api/memory/status: executor block ────────────────────────────────────

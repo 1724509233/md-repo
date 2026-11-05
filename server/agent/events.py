@@ -14,7 +14,7 @@ class Event:
     """A single event emitted by a runtime.
 
     ``type`` is one of: token, tool_call, tool_result, confirm_request,
-    token_usage, done.
+    token_usage, error, done.
     """
 
     type: str

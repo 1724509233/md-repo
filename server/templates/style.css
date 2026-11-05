@@ -498,6 +498,7 @@ pre code.hljs { background: transparent; padding: 0; }
 .status-error { background: #ef4444; }
 .status-round_limit { background: #f59e0b; }
 .status-timeout { background: #fb923c; }
+.status-idle { background: #64748b; }
 .status-empty { background: #94a3b8; }  /* 空运行：灰系，与 ok 绿区分 */
 
 /* 列表项 hover 行高亮 */
@@ -972,6 +973,16 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .seg-sub { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--ink-soft); margin-top: 5px; }
 .seg-sub .sp { flex: 1; }
 .seg-sub .dim { color: color-mix(in srgb, var(--ink-soft) 60%, transparent); }
+/* 最近失败行（③ 后台任务，bug b621b5b4）：状态 + 时间 + 7d 计数；点击开失败报告。
+   错误全文在 title tooltip（L2 层）；路径 = 报告落位（深链目标，用户可直接在 Obsidian 打开）。 */
+.run-health { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 8px; border-radius: 6px; border: 1px solid color-mix(in srgb, var(--st-error) 35%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); font-family: var(--mono); font-size: 10px; color: var(--ink); cursor: pointer; text-align: left; }
+.run-health:hover { border-color: color-mix(in srgb, var(--st-error) 60%, var(--line)); }
+.run-health .rh-dot { width: 7px; height: 7px; border-radius: 9999px; background: var(--st-error); flex-shrink: 0; }
+.run-health .rh-cnt { color: var(--ink-soft); }
+.run-health .rh-path { margin-left: auto; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+.run-health.timeout, .run-health.round_limit { border-color: color-mix(in srgb, #f59e0b 40%, var(--line)); background: color-mix(in srgb, #f59e0b 5%, transparent); }
+.run-health.timeout:hover, .run-health.round_limit:hover { border-color: color-mix(in srgb, #f59e0b 65%, var(--line)); }
+.run-health.timeout .rh-dot, .run-health.round_limit .rh-dot { background: #f59e0b; }
 /* 执行器 = 大数字 + 状态灯（lamp 亮 = last_op_ts 在 30min 内，循环周期 30min，脉冲 = 在跑） */
 .exec-vis { display: flex; align-items: center; gap: 14px; padding: 4px 2px 2px; }
 .lamp { width: 11px; height: 11px; border-radius: 999px; background: var(--st-ok); flex-shrink: 0; }

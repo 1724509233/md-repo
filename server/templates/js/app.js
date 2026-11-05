@@ -85,6 +85,8 @@ async function loadDocs() {
 }
 
 async function openDoc(path, heading) {
+  // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
+  if (state.monitoring) exitMonitorPage()
   // 自动保存未保存的编辑
   if (state.dirty && state.currentPath) {
     await saveDoc()
@@ -782,7 +784,7 @@ export function createApp() {
                 @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
             </div>
             <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
-            <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" />
+            <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc" />
           </main>
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
