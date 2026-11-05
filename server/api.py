@@ -43,7 +43,7 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
         ledger_conn=ledger_conn if ledger_conn is not None else db_conn,
         vault_dir=vault_dir,
         ai_config=ai_config,
-        sync_lock=SyncLock(),
+        sync_lock=SyncLock(vault_dir / ".sync" / "sync.lock"),
         bg_targets=bg_targets,
     )
     app.state.ctx = ctx
