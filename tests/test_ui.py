@@ -41,6 +41,25 @@ def test_ai_panel_component_has_expected_elements():
     assert "stopChat" in js, "missing stop handler"
 
 
+def test_ai_panel_text_fallback_branch_uses_normalized_display():
+    """流式中非末块文本分支（工具块垫底后的过渡态）必须渲染归一显示文本（bug 5dfce279）。
+
+    该分支此前渲染 raw block.text + white-space: pre-wrap：模型行首/尾 '\\n\\n'
+    （调工具前常见）渲染成空行 → 工具块入场 re-render 切换分支瞬间气泡比可见文字偏高，
+    done 后 markdown 又缩回（偶现）。修复：与流式末块分支同口径用 streamDisplayText 归一。
+    同时保留 trim() 守卫（纯空白块不渲染空 div）。
+    """
+    js = read_js("components/AIChatPanel.js")
+    m = re.search(
+        r'v-else-if="block\.text\.trim\(\)"\s+class="turn-text"[^>]*>\{\{([^}]+)\}\}</div>',
+        js,
+    )
+    assert m, "missing non-streaming pre-wrap text fallback branch in AIChatPanel template"
+    assert "streamDisplayText(block.text)" in m.group(1), (
+        "fallback branch must render normalized streamDisplayText(block.text), got: " + m.group(1)
+    )
+
+
 def test_ai_panel_css_has_expected_rules():
     css = read_template("style.css")
     # 面板滑动动画时长应为 .25s（right 属性过渡）

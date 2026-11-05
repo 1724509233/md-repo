@@ -52,6 +52,8 @@ export const AIChatPanel = {
     // 流式分支 white-space: pre-wrap 会把每个换行渲染成行框 → 气泡比可见文字偏高（用户报「整个气泡偏高」）；
     // 最终 markdown 视图无空行（preflight 将 p margin 归零、空行折叠），归一后两者高度基本一致。
     // 连续空行折叠为单个换行（而非保留空行）正是为了贴齐最终视图的紧凑排版。
+    // 使用点两处：流式末块分支 ① 与流式中非末块分支 ③（工具/思考块垫底后的过渡态，bug 5dfce279：
+    // 分支 ③ 若用 raw 文本，工具块入场 re-render 切换分支瞬间气泡跳高——必须与 ① 同口径归一）。
     function streamDisplayText(text) {
       return String(text || '').replace(/\n{2,}/g, '\n').replace(/^\n+/, '').replace(/\n+$/, '')
     }
@@ -442,11 +444,16 @@ export const AIChatPanel = {
             class="msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm"
             :data-uitick="msg.uiTick">
             <template v-for="(block, bi) in msg.blocks" :key="bi">
-              <!-- 文本块 -->
+              <!-- 文本块：三个分支的显示口径必须一致（bug 5dfce279）——
+                ① 流式末块（归一）② 完成后 markdown（空行折叠、preflight p margin 归零）
+                ③ 流式中非末块（工具/思考块垫底后的过渡态）：若渲染 raw pre-wrap，
+                模型行首/尾 '\n\n'（调工具前常见，2026-10-30 抓包实测）会渲染成空行 →
+                工具块入场 re-render 切换分支瞬间气泡跳高，done 后 markdown 又缩回（偶现偏高）
+                → 与 ① 同用 streamDisplayText 归一，分支切换零高度差 -->
               <div v-if="block.type === 'text'">
                 <div v-if="msg.streaming && bi === msg.blocksLen - 1" ref="streamTextEl" class="turn-text stream-cursor" style="white-space: pre-wrap">{{ streamDisplayText(block.text) }}</div>
                 <div v-else-if="msg.rendered" class="turn-text" v-html="renderedHtml(msg, bi)"></div>
-                <div v-else-if="block.text.trim()" class="turn-text" style="white-space: pre-wrap">{{ block.text }}</div>
+                <div v-else-if="block.text.trim()" class="turn-text" style="white-space: pre-wrap">{{ streamDisplayText(block.text) }}</div>
               </div>
               <!-- 工具块 -->
               <div v-else-if="block.type === 'tool'" class="tool-entry">
