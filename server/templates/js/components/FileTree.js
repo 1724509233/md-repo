@@ -170,10 +170,12 @@ export const FileTree = {
     const manage = inject('manage')
     const fileState = inject('state')
 
-    // 操作菜单：{ path, isDir, x, y } | null
+    // 操作菜单：{ path, isDir, x, y, isRoot } | null
     const menu = ref(null)
     // 行内编辑：{ path, isDir, name, mode: 'rename' | 'new-file' | 'new-folder' } | null
     const editing = ref(null)
+    // 根目录新建输入（树流末行，Windows 资源管理器新建效果）：{ mode, name } | null
+    const rootInput = ref(null)
     // 拖拽移动
     const dragPath = ref(null)
     const dragIsDir = ref(false)
@@ -182,15 +184,16 @@ export const FileTree = {
 
     // 视口钳制 + 翻转：w-40=160px 宽；菜单高 = 项数*32 + 8
     // 项数：文件夹 = 新建文件/新建文件夹/重命名/删除（移动端 +移动），文件 = 重命名/删除（移动端 +移动）
+    // 根菜单（isRoot）= 仅 新建文件/新建文件夹（2 项，固定）
     // 下方放不下时翻到触发点上方（跟随按钮），仍放不下则贴顶
-    function openMenu(e, path, isDir) {
+    function openMenu(e, path, isDir, isRoot = false) {
       const menuW = 160
-      const items = (isDir ? 2 : 0) + (window.innerWidth < 1024 ? 1 : 0) + 2
+      const items = isRoot ? 2 : (isDir ? 2 : 0) + (window.innerWidth < 1024 ? 1 : 0) + 2
       const menuH = items * 32 + 8
       const x = e?.clientX != null ? Math.max(0, Math.min(e.clientX, window.innerWidth - menuW)) : null
       let y = e?.clientY != null ? e.clientY : null
       if (y != null && y + menuH > window.innerHeight) y = Math.max(0, y - menuH)
-      menu.value = { path, isDir, x, y }
+      menu.value = { path, isDir, x, y, isRoot }
     }
 
     function closeMenu() { menu.value = null }
@@ -202,6 +205,20 @@ export const FileTree = {
     }
 
     function startNew(dirPath, mode) {
+      if (dirPath === '') {
+        // 根目录新建：树流末行（Windows 资源管理器「新建文件夹」效果）
+        rootInput.value = {
+          mode,
+          name: mode === 'new-folder' ? '新建文件夹' : '未命名'
+        }
+        menu.value = null
+        // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪）
+        nextTick(() => {
+          const el = document.querySelector('#root-new-input')
+          if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+        })
+        return
+      }
       editing.value = { path: dirPath, isDir: mode === 'new-folder', name: mode === 'new-file' ? '未命名' : '新建文件夹', mode }
       menu.value = null
     }
@@ -233,6 +250,32 @@ export const FileTree = {
     function onEditKeydown(e) {
       if (e.key === 'Enter') confirmEdit()
       else if (e.key === 'Escape') editing.value = null
+    }
+
+    // nav 级右键：行级 handler 拥有行内点击（事件冒泡上来时 e.target 仍指行内元素）；
+    // 此处只捡空白区（树下方空白、行间隙、缩进边线区、"无匹配文档"空态区）
+    function onNavContextmenu(e) {
+      if (e.target && e.target.closest && e.target.closest('[data-dir], .tree-file, input')) return
+      openMenu(e, '', true, true)
+    }
+
+    function onRootInputKeydown(e) {
+      if (e.key === 'Enter') confirmRootInput()
+      else if (e.key === 'Escape') rootInput.value = null
+    }
+
+    // 根目录新建确认（树流末行）：先清状态防 blur 二次触发（blur 在 input 被 v-if 卸载时触发）
+    function confirmRootInput() {
+      const r = rootInput.value
+      if (!r) return
+      rootInput.value = null  // 先清状态
+      const name = r.name.trim()
+      if (!name) return  // 空名 = 取消，对齐 confirmEdit 口径
+      if (r.mode === 'new-folder') {
+        manage('create_folder', { path: name })
+      } else {
+        manage('create_file', { path: name + '.md' })
+      }
     }
 
     function confirmDelete() {
@@ -449,7 +492,9 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS, menu, editing, closeMenu, startNew, startRename, confirmDelete, moveItem, onNavDragOver, onNavDrop, ROOT_TARGET,
+      ICONS, menu, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
+      onNavContextmenu, onRootInputKeydown, confirmRootInput,
+      onNavDragOver, onNavDrop, ROOT_TARGET,
       prefetched, prefetching, prefetchDone, showMore: search.showMore, moreRowCount, shownRowCount, SEARCH_TOP_K,
       expandToPath, revealActive, collapseAll
     }
@@ -482,7 +527,6 @@ export const FileTree = {
             :title="item.path"
             @click="pickResult(item)" @mouseenter="activeIndex = i">
             <div class="flex items-center gap-1.5">
-              <span class="search-item-icon" v-html="ICONS.file"></span>
               <span class="search-item-name">{{ item.name }}</span>
             </div>
             <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
@@ -508,12 +552,22 @@ export const FileTree = {
       <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
         :class="{ 'tree-drop-root': dropTarget === ROOT_TARGET }"
         @dragover="onNavDragOver($event)"
-        @drop="onNavDrop($event)">
+        @drop="onNavDrop($event)"
+        @contextmenu.prevent="onNavContextmenu($event)">
         <div v-if="!tree.files.length && !Object.keys(tree.dirs).length"
           class="text-muted text-xs px-2 py-3 text-center">无匹配文档</div>
         <TreeNode :node="tree" dir-path="" :current-path="currentPath"
           @select="selectFile"
           @toggle="toggleDir" />
+        <!-- 根目录新建：树流末行（Windows 资源管理器「新建文件夹」效果） -->
+        <div v-if="rootInput" class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg">
+          <span v-if="rootInput.mode === 'new-folder'" class="w-4 inline-flex" v-html="ICONS.folder"></span>
+          <input id="root-new-input" type="text"
+            class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
+            v-model="rootInput.name"
+            @keydown="onRootInputKeydown($event)"
+            @blur="confirmRootInput()">
+        </div>
       </nav>
 
       <!-- 操作菜单浮层：Teleport 到 body —— 菜单是 fixed 顶层浮层，放在面板子树内会被
@@ -527,11 +581,11 @@ export const FileTree = {
             @click="startNew(menu.path, 'new-file')">新建文件</button>
           <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
-          <button class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startRename(menu.path, menu.isDir)">重命名</button>
-          <button class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="moveItem()">移动</button>
-          <button class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="confirmDelete()">删除</button>
         </div>
       </Teleport>
