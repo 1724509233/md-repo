@@ -6,6 +6,10 @@ import { createSearchController, shapeSegments, countRows } from '../utils/searc
 
 const SEARCH_TOP_K = 8
 
+// 展示排序 collator：locale 感知（中文浏览器 = 拼音序）、numeric 自然序（doc2 < doc10）、
+// sensitivity:base 忽略大小写；undefined locale = 用户浏览器 locale
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
 // 递归统计目录总文件数（含所有子目录），用于目录行徽标与文件页头部计数
 export function countFiles(node) {
   let total = node.files.length
@@ -159,6 +163,14 @@ export const FileTree = {
         if (name.toLowerCase().endsWith('.md')) name = name.slice(0, -3)
         node.files.push({ path: f.path, name })
       }
+      // 展示顺序归视图层（locale 感知）：后端 dirs.sort() 只负责序列化确定性，
+      // 此处按 collator 重排每个目录节点的子键序与文件序（覆盖到达序/DB 行序）
+      function sortNode(node) {
+        node.dirs = Object.fromEntries(Object.entries(node.dirs).sort(([a], [b]) => collator.compare(a, b)))
+        node.files.sort((x, y) => collator.compare(x.name, y.name))
+        for (const child of Object.values(node.dirs)) sortNode(child)
+      }
+      sortNode(root)
       // 自底向上为每个目录节点挂载递归文件总数（count 含自身直接文件 + 所有子目录）
       function annotate(node) {
         for (const child of Object.values(node.dirs)) annotate(child)
