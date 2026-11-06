@@ -120,7 +120,7 @@ validate_tool_call(name, args, spec.policy())   # L1 schema / L2 语义边界 / 
 
 ### 写操作归因 + 可逆层
 
-写工具（write/edit/move/delete）在**写盘前**调 `ledger.register(path, ctx.write_source, batch_id=ctx.run_id)`，确保 SnapshotWatcher 把变更归因到通道（agent 渠道 / bgagent alias）而非兜底的 `"watchdog"`。覆写/删除先 `snapshots.capture()` 捕获全文 pre-image，写后 `finalize()`；失败路径 `discard()` 不留残（写者只 `register`，记账由 watcher consumer 经 `ledger.consume` 落恰好一行）。详见 `server/README.md` 写者侧纪律。
+写工具（write/edit/move/delete）在**写盘后、tool_result SSE 前**同步调 `ledger.record(index_conn, ctx.vault_dir, path, op, ctx.write_source, …, batch_id=ctx.run_id)`：files + change_log 行先入库（UI 快路径 `loadDocs` 读到最新树——2026-11-04 agent-write-file-tree-stale 回归；旧「写盘前 `register()` + watcher consumer 记账」模式留下 ~1.6s 陈旧树窗口，agent 工具不再走，该模式仅保留给其他 in-process 通道：executor / bgagent runner / web 异步写路径）。`record()` 打 skip 标记，随后的 watcher 事件记零行——每次写恰好一行。覆写/删除先 `snapshots.capture()` 捕获全文 pre-image（可逆层，invariant 10），写后 `finalize()`；失败路径 `discard()` 不留残。详见 `server/README.md` 写者侧纪律。
 
 ### 双账本 DB 访问
 
@@ -154,7 +154,7 @@ flowchart LR
         vaultdb["vault.db<br/>conn 双连接 · sessions ·<br/>changes · recall · graph_sql"]
         vaultfs["vault.fs.vault_ops<br/>edit_file · EXCLUDED_INDEX_DIRS"]
         refs["vault.orchestration.refs<br/>update_references_batch"]
-        ledger["ledger.py<br/>register() 写前归因"]
+        ledger["ledger.py<br/>record() 写后同步落行 + skip"]
         snapshots["snapshots.py<br/>capture / finalize / discard"]
         proposals["proposals.py<br/>create / advance / scan / record"]
         ai["ai.py<br/>rag_search()"]

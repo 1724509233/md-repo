@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from pathlib import Path
+from pathlib import Path, PurePath
 
 # Vault top-level directories excluded from segmentation/graph indexing and
 # the document tree (memory-runtime v1): pending-review material is not
@@ -25,6 +25,54 @@ def safe_rel_path(raw: str) -> Path | None:
     if any(p in ("..", "") for p in parts):
         return None
     return Path(*parts)
+
+
+def resolve_disk_case(vault_dir: Path, rel: str | PurePath) -> str:
+    """Resolve each path component to its on-disk case.
+
+    Walks the vault-relative path from the root. For each component that
+    already exists on disk, replaces it with the actual on-disk name
+    (matched casefold via iterdir of the parent). The first non-existent
+    component and all components after it keep their input case (at
+    creation time the input case becomes the disk case). Returns the
+    resolved POSIX string. Pure-new paths are returned unchanged.
+    """
+    rel_str = str(rel).replace("\\", "/")
+    parts = [p for p in rel_str.split("/") if p]
+    if not parts:
+        return rel_str
+
+    current = vault_dir
+    resolved: list[str] = []
+
+    for i, part in enumerate(parts):
+        try:
+            entries = list(current.iterdir())
+        except (OSError, ValueError):
+            # Parent doesn't exist or can't be read — keep input case for rest
+            resolved.extend(parts[i:])
+            break
+
+        # Build casefold lookup for this parent
+        lookup = {e.name.casefold(): e.name for e in entries}
+        matched_name = lookup.get(part.casefold())
+
+        if matched_name is None:
+            # Not found on disk — keep input case for this and all remaining
+            resolved.extend(parts[i:])
+            break
+        else:
+            matched_path = current / matched_name
+            if matched_path.is_dir():
+                # Directory component — descend
+                resolved.append(matched_name)
+                current = matched_path
+            else:
+                # File (leaf) — use on-disk name, stop
+                resolved.append(matched_name)
+                break
+
+    return "/".join(resolved)
 
 
 def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> str:

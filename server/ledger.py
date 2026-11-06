@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
+from .vault.fs.vault_ops import resolve_disk_case
 from .vault.orchestration.file_ops import apply_change, apply_folder_change
 
 _registry: dict[str, tuple[tuple[str, str, bool], float]] = {}
@@ -84,9 +86,11 @@ def _pop(rel_path: str, _ttl: float | None = None) -> tuple[str, str, bool]:
 def register(
     rel_path: str,
     source: str,
+    vault_dir: Path,
     batch_id: str = "",
 ) -> None:
     """Writer-side entry: register an upcoming write for watcher attribution."""
+    rel_path = resolve_disk_case(vault_dir, rel_path)
     _mark(rel_path, source, batch_id, skip=False)
 
 
@@ -104,6 +108,7 @@ def record(
 ) -> None:
     """Synchronous writer-side entry: book the row now, mark skip so the
     consumer books nothing for this path."""
+    rel_path = resolve_disk_case(vault_dir, rel_path)
     _mark(rel_path, source, batch_id, skip=True)
     apply_change(
         conn, vault_dir, rel_path, action,

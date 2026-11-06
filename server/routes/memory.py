@@ -259,7 +259,7 @@ def register(app, ctx) -> None:
             )
         # Attribute the restored writes to the watcher ("web" = human via UI).
         for path in result["restored"]:
-            ledger.register(path, "web")
+            ledger.register(path, "web", ctx.vault_dir)
         return {"ok": True, "restored": result["restored"]}
 
     @app.get("/api/memory/rollback-calls")

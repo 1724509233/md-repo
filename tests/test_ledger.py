@@ -22,8 +22,8 @@ import time
 from server import ledger
 
 
-def test_register_pop_returns_tuple():
-    ledger.register("a/b.md", "executor", batch_id="run-1")
+def test_register_pop_returns_tuple(tmp_path):
+    ledger.register("a/b.md", "executor", tmp_path, batch_id="run-1")
     assert ledger._pop("a/b.md") == ("executor", "run-1", False)
 
 
@@ -31,12 +31,12 @@ def test_pop_unregistered_falls_back_watchdog():
     assert ledger._pop("nope.md") == ("watchdog", "", False)
 
 
-def test_expired_entry_falls_back_watchdog(monkeypatch):
+def test_expired_entry_falls_back_watchdog(monkeypatch, tmp_path):
     # Shrink the TTL; an expired registration must no longer be
     # attributable (a late/duplicate event for a failed write must not
     # steal a source).
     monkeypatch.setattr(ledger, "_REGISTRY_TTL", 0.01)
-    ledger.register("reg/stale.md", "agent")
+    ledger.register("reg/stale.md", "agent", tmp_path)
     time.sleep(0.05)
     assert ledger._pop("reg/stale.md") == ("watchdog", "", False)
 
@@ -71,7 +71,7 @@ def test_consumer_books_one_row_with_batch(vault_dir, db_conn):
     """Regression: the consumer books the row with the registered
     batch_id (the run stamp), not an empty string."""
     (vault_dir / "notes" / "z.md").write_bytes(b"content\n")
-    ledger.register("notes/z.md", "executor", batch_id="run-9")
+    ledger.register("notes/z.md", "executor", vault_dir, batch_id="run-9")
     attribution = ledger.consume(db_conn, vault_dir, "notes/z.md", "created")
     assert attribution == ("executor", "run-9", False)
     rows = [tuple(r) for r in db_conn.execute(
@@ -85,7 +85,7 @@ def test_consumer_books_moved_with_from_path(vault_dir, db_conn):
     carries from_path. The consumer must book the moved row WITH the
     from_path column."""
     (vault_dir / "new.md").write_bytes(b"content\n")
-    ledger.register("new.md", "agent")
+    ledger.register("new.md", "agent", vault_dir)
     attribution = ledger.consume(
         db_conn, vault_dir, "new.md", "moved", from_path="old.md")
     assert attribution == ("agent", "", False)

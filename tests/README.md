@@ -23,7 +23,7 @@ def simulate_consumer(conn, vault_dir, path: str, action: str = "modified", from
 
 驱动**生产 watcher-consumer 路径**（`server.ledger.consume` —— 与 `server/main.py` 四个 `_on_*` 回调同一条）对 `path` 走一次，返回被弹出的 `(source, batch_id, skip)` 归因。
 
-> 断言 ledger 行的单测**必须显式驱动这条 consumer 路径**，不要自己写行（AGENTS.md 变更归因纪律：写前 `ledger.register()`，consumer 落账；`action` 必须是要触发的那个 watcher 事件 —— 首写 `"created"`、改写 `"modified"`、`"deleted"`、`"moved"` + `from_path`）。
+> 断言 ledger 行的单测**必须经生产入口落账**，不要裸 SQL 写行：in-process 通道写前 `ledger.register(rel_path, source, vault_dir, …)` + 显式驱动这条 consumer 路径落账（测归因语义）；agent 写工具 / web 直写则是写后 `ledger.record()` 同步落行（直接断言行即可）。无论哪条，`action` 必须是要触发的那个 watcher 事件 —— 首写 `"created"`、改写 `"modified"`、`"deleted"`、`"moved"` + `from_path`。
 
 ### fixtures
 

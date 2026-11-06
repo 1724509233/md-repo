@@ -180,7 +180,7 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # The file row is ledgered by the watcher consumer (ledger.consume →
     # apply_change) with this registration: exactly one row, attributed to
     # the run.
-    ledger.register(rel, "executor", batch_id=str(p.get("run_id") or ""))
+    ledger.register(rel, "executor", vault, batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
@@ -301,7 +301,7 @@ def _merge_summary(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # 旧全文即此 pre-image；报告型点态不可再生，pre-image 是唯一存档）。
     snap = capture(conn, vault, out_rel, "update" if existed else "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    ledger.register(out_rel, "executor", batch_id=str(p.get("run_id") or ""))
+    ledger.register(out_rel, "executor", vault, batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(out_fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))
@@ -375,7 +375,7 @@ def _merge_errata(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     # pre-image（不变量 10）。槽位空由上面的 pre-check 保证 → op "create"。
     snap = capture(conn, vault, rel, "create", "executor",
                    run_id=str(p.get("run_id") or ""))
-    ledger.register(rel, "executor", batch_id=str(p.get("run_id") or ""))
+    ledger.register(rel, "executor", vault, batch_id=str(p.get("run_id") or ""))
     atomic_write_bytes(fp, new_bytes)
     if snap is not None:
         finalize(conn, snap, hash_bytes(new_bytes))

@@ -241,7 +241,7 @@ def register(app, ctx) -> None:
         files = [
             f for f in get_all_files(ctx.db_conn)
             if len(f["path"].split("/")) <= 1
-            or f["path"].split("/")[0] not in EXCLUDED_INDEX_DIRS
+            or f["path"].split("/")[0].lower() not in EXCLUDED_INDEX_DIRS
         ]
         dirs = []
         for root, dirnames, _ in os.walk(ctx.vault_dir):
@@ -250,7 +250,7 @@ def register(app, ctx) -> None:
             # memory-runtime v1: suggestions/index are system dirs — the
             # document tree (and descent) must not surface them.
             if rel_root == Path("."):
-                dirnames[:] = [d for d in dirnames if d not in EXCLUDED_INDEX_DIRS]
+                dirnames[:] = [d for d in dirnames if d.lower() not in EXCLUDED_INDEX_DIRS]
             dirs.extend((rel_root / d).as_posix() for d in dirnames)
         dirs.sort()
         body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
@@ -321,7 +321,7 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
         rel_str = rel.as_posix()
-        ledger.register(rel_str, "web")
+        ledger.register(rel_str, "web", ctx.vault_dir)
         return {"path": rel_str, "hash": digest}
 
     @app.put("/api/docs/{path:path}")
@@ -336,5 +336,5 @@ def register(app, ctx) -> None:
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        ledger.register(rel.as_posix(), "web")
+        ledger.register(rel.as_posix(), "web", ctx.vault_dir)
         return {"ok": True}

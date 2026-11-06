@@ -41,8 +41,8 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 |------|------|------|
 | `create_app` | `(vault_dir, db_conn, ledger_conn=None, ai_config=None, bg_targets=None) -> FastAPI` | 应用工厂（`api.py`） |
 | `main` / `build_runtime` | `main(argv=None)` / `build_runtime(vault_dir, conn, ledger_conn, bg_agents, notifications_cfg) -> Runtime` | 入口与运行时装配（`main.py`） |
-| `ledger.register` | `(rel_path, source, batch_id="")` | 写盘前登记（watcher 归因） |
-| `ledger.record` | `(conn, vault_dir, rel_path, action, source, *, from_path="", new_hash="", batch_id="", **passthrough)` | 同步落行（web 直写） |
+| `ledger.register` | `(rel_path, source, vault_dir, batch_id="")` | 写盘前登记（watcher 归因；executor / bgagent runner / web 异步写路径） |
+| `ledger.record` | `(conn, vault_dir, rel_path, action, source, *, from_path="", new_hash="", batch_id="", **passthrough)` | 同步落行 + skip（agent 写工具 + web 直写） |
 | `ledger.record_folder` | `(conn, vault_dir, relpath, action, source="web", from_path="")` | 文件夹行（不触 registry） |
 | `ledger.consume` | `(conn, vault_dir, rel_path, action, from_path="") -> tuple[str, str, bool]` | watcher 消费侧记账 |
 | `compare_files` | `(local, server, recent_moves=None) -> dict` | 同步比对（`sync.py`） |
@@ -66,7 +66,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
   → apply_change()（vault/orchestration/file_ops.py）一次完成 文件索引 + change_log + FTS + 图谱
 ```
 
-写者侧纪律：in-process 通道（agent tools、executor、bgagent runner、web 异步路径）写盘**前**调 `ledger.register()`，consumer 据此归因记账；web 控制台直写（文档管理）调 `ledger.record()` 同步落行，consumer 对该 path booking nothing。`apply_change` / `apply_folder_change` 的唯一外部 importer 是 `ledger.py`。未注册写入（MCP stdio、直接磁盘编辑）兜底 `source="watchdog"`。
+写者侧纪律：两种模式——① **同步落行（record）**：agent 写工具（write/edit/move/delete，2026-11-04 起）与 web 控制台直写（文档管理）写盘**后**调 `ledger.record()`，files + change_log 行同步入库（tool_result SSE / console feed 快路径须即时见最新态），并打 skip 标记使随后的 watcher 事件 booking nothing——每次写恰好一行；② **预写登记（register）**：其余 in-process 通道（executor / bgagent runner / web 异步写路径 upload/save 等）写盘**前**调 `ledger.register()`，watcher consumer 据 registry 归因落恰好一行。`apply_change` / `apply_folder_change` 的唯一外部 importer 是 `ledger.py`。未注册写入（MCP stdio、直接磁盘编辑）兜底 `source="watchdog"`。
 
 - invariant：registry TTL 10s；skip mark 共享该 TTL——过期后到达的 FS 事件重新以 `watchdog` 记账（同步 record 设计的既有窗口，保留而非修复）。
 
@@ -74,8 +74,8 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 
 | 函数 | 语义 |
 |------|------|
-| `register` | 写盘前登记，watcher consumer 归因记账（in-process 通道） |
-| `record` | 同步落行 + skip（web 直写，console feed 须即时响应） |
+| `register` | 写盘前登记，watcher consumer 归因记账（executor / bgagent runner / web 异步写路径） |
+| `record` | 同步落行 + skip（agent 写工具 + web 控制台直写；行须先于 tool_result SSE / console feed 入库） |
 | `record_folder` | 文件夹行，不触 registry（watcher 无 folder 回调，无双行风险） |
 | `consume` | watcher 消费侧：pop 注册 → `apply_change`；skip 路径 booking nothing |
 
@@ -153,7 +153,7 @@ spec `~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`。
       │     db/fs/orch    │
       └───────────────────┘
 
-      写前 register 归因：bgagent/ 与 agent/（15 工具）均调 ledger.register
+      写前 register 归因：bgagent/ 及其余 in-process 通道调 ledger.register；agent/（15 工具）+ web 直写写后 ledger.record
       ledger 唯一 importer：file_ops（apply_change / apply_folder_change）
 
     独立入口（不经 main）：

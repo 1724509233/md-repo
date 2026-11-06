@@ -117,25 +117,25 @@ def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn, le
     rt = _build(vault_dir, db_conn, ledger_conn, [], tmp_path)
     try:
         # created
-        ledger.register("notes/created.md", "web")
+        ledger.register("notes/created.md", "web", vault_dir)
         _seed(vault_dir, "notes/created.md", b"# C\n")
         rt.on_created("notes/created.md")
         assert _rows(db_conn, "notes/created.md") == [("create", "notes/created.md", "", "web")]
 
         # modified
-        ledger.register("notes/test.md", "web")
+        ledger.register("notes/test.md", "web", vault_dir)
         _seed(vault_dir, "notes/test.md", b"# T2\n")
         rt.on_modified("notes/test.md")
         assert _rows(db_conn, "notes/test.md") == [("update", "notes/test.md", "", "web")]
 
         # moved (carries old_path)
-        ledger.register("notes/new.md", "web")
+        ledger.register("notes/new.md", "web", vault_dir)
         _seed(vault_dir, "notes/new.md", b"# M\n")
         rt.on_moved("notes/old.md", "notes/new.md")
         assert _rows(db_conn, "notes/new.md") == [("move", "notes/new.md", "notes/old.md", "web")]
 
         # deleted
-        ledger.register("notes/gone.md", "web")
+        ledger.register("notes/gone.md", "web", vault_dir)
         rt.on_deleted("notes/gone.md")
         assert _rows(db_conn, "notes/gone.md") == [("delete", "notes/gone.md", "", "web")]
     finally:

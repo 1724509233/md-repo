@@ -293,7 +293,7 @@ def _prune_reports(report_dir: Path, vault: Path, alias: str) -> None:
     files = sorted(report_dir.glob("*.md"))
     to_delete = files[:-RETENTION] if len(files) > RETENTION else []
     for fp in to_delete:
-        ledger.register(fp.relative_to(vault).as_posix(), alias)
+        ledger.register(fp.relative_to(vault).as_posix(), alias, vault)
         fp.unlink()
     if to_delete:
         logger.info("[bg:%s] pruned %d old reports (kept %d)", alias, len(to_delete), RETENTION)
@@ -570,7 +570,7 @@ def _write_report(cfg: BackgroundAgentConfig, vault: Path, started_at: float,
                              stats, error_msg, trigger, run_id)
     fp = cfg.report_dir / _report_name(started_at, cfg.alias)
     fp.parent.mkdir(parents=True, exist_ok=True)
-    ledger.register(fp.relative_to(vault).as_posix(), cfg.alias)
+    ledger.register(fp.relative_to(vault).as_posix(), cfg.alias, vault)
     fp.write_bytes(body.encode("utf-8"))
     logger.info("[bg:%s] report written: %s", cfg.alias, fp.relative_to(vault).as_posix())
 

@@ -15,7 +15,7 @@ def _index_excluded(f: Path, vault: Path) -> bool:
         rel = f.relative_to(vault)
     except ValueError:
         return False
-    return len(rel.parts) > 1 and rel.parts[0] in EXCLUDED_INDEX_DIRS
+    return len(rel.parts) > 1 and rel.parts[0].lower() in EXCLUDED_INDEX_DIRS
 
 
 def _resolve_dir_case_insensitive(vault: Path, rel: str) -> Path:

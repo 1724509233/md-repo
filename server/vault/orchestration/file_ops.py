@@ -38,7 +38,7 @@ def _is_index_excluded(path: str) -> bool:
     only segmentation/graph work is skipped.
     """
     parts = Path(path).parts
-    return len(parts) > 1 and parts[0] in EXCLUDED_INDEX_DIRS
+    return len(parts) > 1 and parts[0].lower() in EXCLUDED_INDEX_DIRS
 
 
 def apply_change(
