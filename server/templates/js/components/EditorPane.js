@@ -1,6 +1,7 @@
 /* EditorPane 组件：textarea + markdown 预览 + 编辑/预览切换 + page-turn 动画 */
-const { ref, computed, watch, nextTick, onMounted } = Vue
+const { ref, computed, watch, nextTick, onMounted, inject } = Vue
 import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
+import { dirOf } from '../utils/vaultLinks.js'
 
 export const EditorPane = {
   name: 'EditorPane',
@@ -13,6 +14,7 @@ export const EditorPane = {
     const editorEl = ref(null)
     const previewEl = ref(null)
     const docWrapEl = ref(null)
+    const state = inject('state', null)
 
     // 当前编辑内容（本地响应式，避免 v-model 与外部 prop 冲突）
     const localContent = ref(props.content)
@@ -27,8 +29,12 @@ export const EditorPane = {
 
     // 渲染后的 HTML（computed，Vue 自动更新 v-html）
     // frontmatter: true → 开头 --- 块提取为可折叠元数据卡片（聊天面板不传，保持原渲染）
+    // context: 软链解析（baseDir = 当前打开文档目录；files 变/文档变 → computed 重算，链接随之重解析）
     const renderedHtml = computed(() => {
-      return renderMarkdown(localContent.value, { frontmatter: true })
+      return renderMarkdown(localContent.value, {
+        frontmatter: true,
+        context: state ? { baseDir: dirOf(state.currentPath), files: state.files } : null,
+      })
     })
 
     // v-html 更新后执行 postProcess（hljs + mermaid）

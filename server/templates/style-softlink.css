@@ -1,0 +1,43 @@
+/* ============ vault 软链跳转（md 引用软链，todo 7078f897）============
+   活链 = 主题 accent（--brass）+ 下划线，hover 加深、指针手型；
+   死链 / 歧义 = 灰墨（--ink-soft）+ 虚线下划线 + cursor:default（不可点）。
+   颜色全部取 style.css 既有同族变量（--brass / --ink-soft / --paper / --ink），不引入新色系。
+   tooltip 用 title 属性（正文不加常驻解释文字，UI copy 规范）。
+   本文件独立于 style.css，在 index.html 中于 style.css 之后加载。
+
+   软链只会在「预览区 #preview」与「AI 聊天 .turn-text」两处出现（有解析上下文的渲染入口）；
+   MemoryConsole 监控页无上下文，不产生软链类。
+
+   特异性说明：#preview a 为 (1,0,1)，高于裸 a.md-softlink-dead (0,1,1)，会把预览区死链
+   误染成活链色 → 需 #preview a.md-softlink-dead (1,1,1) 压回灰虚线。AI 面板无更高特异度的
+   a 规则，裸规则即可。 */
+
+/* 活链（默认态） */
+a.md-softlink {
+  color: var(--brass);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--brass) 45%, transparent);
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color .15s ease, text-decoration-color .15s ease;
+}
+a.md-softlink:hover {
+  color: color-mix(in srgb, var(--brass) 78%, var(--ink));
+  text-decoration-color: var(--brass);
+}
+
+/* 死链 / 歧义：灰 + 虚线下划线 + 不可点（title 区分「文档不存在」/「存在同名文档，无法定位」） */
+a.md-softlink-dead {
+  color: color-mix(in srgb, var(--ink-soft) 78%, var(--paper));
+  text-decoration: underline dashed;
+  text-decoration-color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+  text-underline-offset: 2px;
+  cursor: default;
+}
+/* 预览区：压过 #preview a（活链色），还原死链灰虚线 */
+#preview a.md-softlink-dead {
+  color: color-mix(in srgb, var(--ink-soft) 78%, var(--paper));
+  text-decoration: underline dashed;
+  text-decoration-color: color-mix(in srgb, var(--ink-soft) 55%, transparent);
+  cursor: default;
+}

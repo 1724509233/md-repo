@@ -1,5 +1,5 @@
 /* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
-const { ref, reactive, shallowReactive, watch, nextTick, onUnmounted } = Vue
+const { ref, reactive, shallowReactive, watch, nextTick, onUnmounted, inject } = Vue
 import { ICONS } from '../utils/icons.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { api } from '../api.js'
@@ -32,6 +32,7 @@ export const AIChatPanel = {
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
     const toolNames = toolShortNames
+    const appState = inject('state', null)   // 软链解析：files 供 renderer.link 用（baseDir 恒 null，AI 回复无「当前文档目录」语义）
 
     const messages = ref([])       // [{ role, blocks: [], streaming, rendered }]
     const inputText = ref('')
@@ -412,7 +413,7 @@ export const AIChatPanel = {
     })
 
     return {
-      ICONS_LOCAL, toolNames, messages, inputText, status, aiMode, tokenUsage,
+      ICONS_LOCAL, toolNames, appState, messages, inputText, status, aiMode, tokenUsage,
       inputEl, messagesEl, streamTextEl, thinkingTextEl, streamDisplayText, sendChat, sendConfirm, toggleBlock, toggleMode, onKeydown, stopChat, newSession,
       toolKeyParam, toolResultSummary
     }
@@ -565,7 +566,10 @@ export const AIChatPanel = {
       // _htmlSrc 一致性校验为防御性兜底（rendered 后内容变更 → 重算而非显示脏缓存）
       if (block._html === undefined || block._htmlSrc !== block.text) {
         block._htmlSrc = block.text
-        block._html = renderMarkdown(block.text)
+        // 软链解析：AI 面板 baseDir=null（回复中的相对链接走根相对 + 唯一文件名回退）
+        block._html = renderMarkdown(block.text, {
+          context: this.appState ? { baseDir: null, files: this.appState.files } : null,
+        })
       }
       return block._html
     }

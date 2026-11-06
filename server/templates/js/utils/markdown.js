@@ -1,6 +1,12 @@
 /* Markdown 渲染封装：marked + DOMPurify + hljs + mermaid */
 
+import { createLinkContext, resolveVaultLink, wikilinkToMd, WIKILINK_HREF_PREFIX } from './vaultLinks.js'
+
 let rendererConfigured = false
+
+// 渲染期链接解析上下文：marked.parse 是同步的，renderer.link 覆写在 parse 期间被调用，
+// 读此变量拿到「当前这篇文档」的 files + baseDir（见 renderMarkdownBody）。单线程下无并发问题。
+let _activeLinkCtx = null
 
 export function setupMarkdown() {
   if (rendererConfigured || !window.marked) return
@@ -21,16 +27,69 @@ export function setupMarkdown() {
     return `<div class="overflow-x-auto"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`
   }
 
-  marked.setOptions({ renderer })
+  // 链接：vault 软链分类（活链 / 死链 / 歧义）+ 外部链接新 tab。
+  // 三类输出：
+  //   活链   → <a class="md-softlink" data-vault-path data-vault-anchor>（点击委托 openDoc 跳转）
+  //   死/歧义 → <a class="md-softlink-dead" title>（无跳转，灰色虚线；title 文案区分）
+  //   外部   → <a target="_blank" rel="noopener">（修掉此前整页跳转隐患）
+  //   无解析上下文（监控页等）→ 原样 <a>（相对链接保持既有行为）
+  renderer.link = function (href, title, text) {
+    const t = title ? ` title="${escapeHtml(title)}"` : ''
+    if (typeof href === 'string' && href.startsWith(WIKILINK_HREF_PREFIX)) {
+      // wikilink（wikilinkToMd 写入的标记 href）：decode 后走根相对策略（baseDir 恒 null）
+      const dec = decodeURIComponent(href.slice(WIKILINK_HREF_PREFIX.length))
+      const ctx = (_activeLinkCtx ? Object.assign({}, _activeLinkCtx, { baseDir: null }) : null)
+      if (!ctx) return `<a href="${escapeHtml(href)}"${t}>${text}</a>`
+      const r = resolveVaultLink(dec, ctx)
+      if (r.kind === 'live') {
+        const a = r.anchor ? ` data-vault-anchor="${escapeHtml(r.anchor)}"` : ''
+        return `<a class="md-softlink" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
+      }
+      return `<a class="md-softlink-dead" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
+    }
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href || '')) {
+      // 外部链接：新 tab 打开（noopener 防 window.opener）
+      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener"${t}>${text}</a>`
+    }
+    if (_activeLinkCtx) {
+      const r = resolveVaultLink(href, _activeLinkCtx)
+      if (r.kind === 'live') {
+        const a = r.anchor ? ` data-vault-anchor="${escapeHtml(r.anchor)}"` : ''
+        return `<a class="md-softlink" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
+      }
+      return `<a class="md-softlink-dead" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
+    }
+    // 无解析上下文：原样渲染（监控页等）
+    return `<a href="${escapeHtml(href)}"${t}>${text}</a>`
+  }
+
+  // sanitize:false = 关闭 marked v4 的 href 白名单清洗（默认对自定义 scheme 行为不稳定）；
+  // 我们自产 href 已 escapeHtml，安全由 DOMPurify 兜底（sanitize 在 renderMarkdownBody 调用）。
+  marked.setOptions({ renderer, sanitize: false })
 }
 
 /**
  * 渲染 markdown 正文（marked + DOMPurify）
+ * @param {string} text - markdown 原文
+ * @param {ReturnType<typeof createLinkContext>} [linkCtx] - 链接解析上下文（null = 不解析 vault 链接）
  */
-function renderMarkdownBody(text) {
+function renderMarkdownBody(text, linkCtx) {
   setupMarkdown()
-  const raw = marked.parse(text || '')
-  return window.DOMPurify ? DOMPurify.sanitize(raw) : raw
+  _activeLinkCtx = linkCtx
+  // 有解析上下文才做 wikilink 预处理（缺上下文时 [[...]] 保留原样，不产生伪链接）
+  const src = linkCtx ? wikilinkToMd(text || '') : (text || '')
+  let raw
+  try {
+    raw = marked.parse(src)
+  } finally {
+    _activeLinkCtx = null
+  }
+  // ADD_ATTR 保留 data-vault-path / data-vault-anchor（DOMPurify 默认剥 data-*）
+  // 与 target（DOMPurify 默认剥 target 以御 reverse-tabnabbing，需显式放行，否则外部链接
+  // 的 target="_blank" 会被剥掉 → 新 tab 打开失效、退化为整页跳转）。rel 在默认放行表内，保留。
+  return window.DOMPurify
+    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-vault-path', 'data-vault-anchor', 'target'] })
+    : raw
 }
 
 /* ============ YAML frontmatter：提取 + 元数据卡片（变体 01「索引条」） ============ */
@@ -282,20 +341,24 @@ function buildFrontmatterCard(entries) {
 /**
  * 渲染 markdown 文本为安全 HTML
  * @param {string} text - markdown 原文
- * @param {{frontmatter?: boolean}} [opts] - frontmatter: true 时提取开头 frontmatter 块渲染为元数据卡片
+ * @param {{frontmatter?: boolean, context?: {baseDir?: string|null, files?: Array<{path:string}>|null}}} [opts]
+ *   - frontmatter: true 时提取开头 frontmatter 块渲染为元数据卡片
+ *   - context: 链接解析上下文（EditorPane 传 {baseDir:当前文档目录, files}；AI 面板传 {baseDir:null, files}；
+ *     缺省 = 不解析 vault 链接，wikilink/相对链接按原样渲染）。调用侧注入，markdown.js 不 import app state。
  * @returns {string} 安全 HTML
  */
 export function renderMarkdown(text, opts) {
+  const linkCtx = opts && opts.context ? createLinkContext(opts.context) : null
   if (opts && opts.frontmatter) {
     const split = splitFrontmatter(text)
     if (split) {
       const entries = parseFrontmatter(split.frontmatter)
       if (entries.length) {
-        return buildFrontmatterCard(entries) + renderMarkdownBody(split.rest)
+        return buildFrontmatterCard(entries) + renderMarkdownBody(split.rest, linkCtx)
       }
     }
   }
-  return renderMarkdownBody(text)
+  return renderMarkdownBody(text, linkCtx)
 }
 
 /**

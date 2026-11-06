@@ -587,6 +587,16 @@ export function createApp() {
           }
         })
 
+        // vault 软链跳转（单一委托 click）：作用域严格限定 #preview（预览区）与 #ai-messages（AI 聊天容器）；
+        // MemoryConsole 监控页不接跳转。活链带 data-vault-path（死链/歧义无该属性 → 选择器不命中，本就不可点）。
+        document.addEventListener('click', (e) => {
+          const a = e.target && e.target.closest ? e.target.closest('a.md-softlink[data-vault-path]') : null
+          if (!a) return
+          if (!a.closest('#preview') && !a.closest('#ai-messages')) return
+          e.preventDefault()
+          openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'))
+        })
+
         // 初始欢迎消息由 AIChatPanel 内部处理
       })
 
