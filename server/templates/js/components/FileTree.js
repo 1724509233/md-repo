@@ -43,6 +43,16 @@ const TreeNode = {
   },
   template: `
     <div>
+      <!-- 子目录新建输入 = 第一子行（与根输入同语义）：本目录内新建文件/文件夹的输入框，
+           插入该目录子流首位；rename 模式仍走行内输入（见下方 mode 守卫） -->
+      <div v-if="treeOps.editing && treeOps.editing.path === dirPath && treeOps.editing.mode !== 'rename'"
+        class="flex items-center gap-1.5 px-2 py-1.5 rounded-lg">
+        <span v-if="treeOps.editing.mode === 'new-folder'" class="w-4 inline-flex" v-html="ICONS_LOCAL.folder"></span>
+        <input id="child-new-input" type="text"
+          class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
+          v-model="treeOps.editing.name" @keydown="treeOps.onEditKeydown($event)"
+          @blur="treeOps.confirmEdit()">
+      </div>
       <!-- 子目录 -->
       <template v-for="(child, name) in node.dirs" :key="name">
         <div class="tree-group group" :class="{ open: isExpanded(childPath(name)) }">
@@ -63,12 +73,12 @@ const TreeNode = {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
             <span v-html="ICONS_LOCAL.folder"></span>
-            <input v-if="treeOps.editing && treeOps.editing.path === childPath(name)"
+            <input v-if="treeOps.editing && treeOps.editing.path === childPath(name) && treeOps.editing.mode === 'rename'"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
               @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
             <span v-else class="font-medium">{{ name }}</span>
-            <span v-if="child.count" class="tree-count ml-auto">{{ child.count }}</span>
+            <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
               @click.stop="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
               <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
@@ -95,7 +105,7 @@ const TreeNode = {
           draggable="true"
           @dragstart="treeOps.onDragStart($event, f.path, false)"
           @dragend="treeOps.onDragEnd()">
-          <input v-if="treeOps.editing && treeOps.editing.path === f.path"
+          <input v-if="treeOps.editing && treeOps.editing.path === f.path && treeOps.editing.mode === 'rename'"
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
             v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
             @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
@@ -219,8 +229,15 @@ export const FileTree = {
         })
         return
       }
+      // 新建输入渲染在该目录子流首位：目录折叠时 tree-children-inner 被 v-show 隐藏，必须先展开
+      expandedDirs.value.add(dirPath)
       editing.value = { path: dirPath, isDir: mode === 'new-folder', name: mode === 'new-file' ? '未命名' : '新建文件夹', mode }
       menu.value = null
+      // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪），对齐根分支
+      nextTick(() => {
+        const el = document.querySelector('#child-new-input')
+        if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+      })
     }
 
     async function confirmEdit() {
