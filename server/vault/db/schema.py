@@ -79,6 +79,22 @@ def _ensure_trigger_cols(conn: sqlite3.Connection) -> None:
             )
 
 
+def _ensure_session_cols(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add the per-session auto_approve column.
+
+    auto_approve is the session-level runtime switch that skips the per-write
+    confirm prompt (the Web UI checkbox; bgagent is unaffected — it runs with
+    auto_approve=True directly). Same idiom as
+    :func:`_ensure_notification_cols` — PRAGMA table_info check, ALTER only
+    when the column is missing, safe to call on every startup.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "auto_approve" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 def _ensure_recall_traffic_col(conn: sqlite3.Connection) -> None:
     """Idempotent migration: v1 recall_log DBs get the traffic column.
 
@@ -216,10 +232,12 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             messages TEXT NOT NULL,
             token_count INTEGER NOT NULL DEFAULT 0,
             last_active REAL NOT NULL,
-            created_at REAL NOT NULL
+            created_at REAL NOT NULL,
+            auto_approve INTEGER NOT NULL DEFAULT 0
         )
         """
     )
+    _ensure_session_cols(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS notifications (

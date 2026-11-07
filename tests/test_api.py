@@ -388,6 +388,74 @@ def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
     assert resp.status_code == 404
 
 
+def test_agent_settings_get_default_false(client):
+    """GET /api/agent/settings: 无行 → False（运行时设置，独立于 AI 配置）。"""
+    r = client.get("/api/agent/settings")
+    assert r.status_code == 200
+    assert r.json() == {"auto_approve": False}
+    # 显式 session_id（无行）同样 False
+    r2 = client.get("/api/agent/settings", params={"session_id": "no-such-session"})
+    assert r2.json() == {"auto_approve": False}
+
+
+def test_agent_settings_post_get_roundtrip(client):
+    """POST 持久化开关；二次 GET 读回（双向闭环）。"""
+    r = client.post("/api/agent/settings", json={"session_id": "s1", "auto_approve": True})
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "auto_approve": True}
+    assert client.get("/api/agent/settings", params={"session_id": "s1"}).json() == {"auto_approve": True}
+    # 再 POST false → GET false
+    client.post("/api/agent/settings", json={"session_id": "s1", "auto_approve": False})
+    assert client.get("/api/agent/settings", params={"session_id": "s1"}).json() == {"auto_approve": False}
+
+
+def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ai_config):
+    """POST 设值后，缓存未命中时新 Agent 从 DB 回灌 auto_approve：
+    写工具直接执行（无 confirm_request）+ 文件落盘，证明开关在重建后生效。"""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from server.api import create_app
+    from fastapi.testclient import TestClient
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    tc_client = TestClient(app)
+
+    # POST 设值（DB 行存在；此时尚无缓存 Agent → 下次 chat 触发 _get_agent 重建回灌）
+    tc_client.post("/api/agent/settings", json={"session_id": "s1", "auto_approve": True})
+
+    # LLM 回一个 write_doc 工具调用 + 收尾文本
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_w"
+    tc.function = MagicMock()
+    tc.function.name = "write_doc"
+    tc.function.arguments = '{"path": "s.md", "content": "# S"}'
+    c1 = MagicMock()
+    c1.choices = [MagicMock()]
+    c1.choices[0].delta.content = None
+    c1.choices[0].delta.tool_calls = [tc]
+    c1.usage = None
+    c2 = MagicMock()
+    c2.choices = [MagicMock()]
+    c2.choices[0].delta.content = "ok"
+    c2.choices[0].delta.tool_calls = None
+    c2.usage = None
+
+    async def stream():
+        yield c1
+        yield c2
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream())
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        resp = tc_client.post(
+            "/api/agent/chat", json={"message": "write s.md", "session_id": "s1"},
+        )
+    body = resp.text
+    assert '"type": "confirm_request"' not in body
+    assert (vault_dir / "s.md").is_file()
+
+
 def test_new_session_clean(client, db_conn):
     """New session is always clean — no old messages injected."""
     from server.vault import save_session, load_session

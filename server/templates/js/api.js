@@ -90,6 +90,24 @@ export const api = {
     return res.json()
   },
 
+  /** GET /api/agent/settings?session_id=X — 会话级自动批准开关 */
+  async getAgentSettings(sessionId) {
+    const res = await fetch('/api/agent/settings?session_id=' + encodeURIComponent(sessionId))
+    if (!res.ok) throw new Error(`GET /api/agent/settings → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/agent/settings {session_id, auto_approve} — 设置会话级自动批准开关 */
+  async setAgentSettings(sessionId, autoApprove) {
+    const res = await fetch('/api/agent/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, auto_approve: autoApprove })
+    })
+    if (!res.ok) throw new Error(`POST /api/agent/settings → ${res.status}`)
+    return res.json()
+  },
+
   /** GET /api/notifications?unread=1 — 未读通知（最新 50） */
   async getNotifications(unread = true) {
     const res = await fetch('/api/notifications?unread=' + (unread ? 1 : 0))

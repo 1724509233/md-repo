@@ -13,6 +13,7 @@ from ..agent.prompts import SYSTEM_PROMPT, sse
 from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
+from ..vault.db.sessions import get_auto_approve, set_auto_approve
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
 logger = logging.getLogger("md-vault.api")
@@ -55,6 +56,12 @@ def register(app, ctx) -> None:
         if agent is None:
             messages = session_mgr.get_or_create(session_id)
             agent = Agent(_build_agent_spec(ctx), messages=messages)
+            # Backfill the session-level auto_approve switch from the DB so a
+            # TTL-evicted / post-restart rebuild keeps the user's setting (the
+            # Agent is built fresh from the static spec, which defaults False).
+            # db None → no persistence, skip.
+            if ctx.db_conn is not None:
+                agent.spec.auto_approve = get_auto_approve(ctx.db_conn, session_id)
             agent_cache[session_id] = agent
         return agent
 
@@ -182,6 +189,37 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=404, detail="no pending confirm for this tool call")
 
         return {"ok": True}
+
+    @app.get("/api/agent/settings")
+    async def agent_settings_get(session_id: str = "default") -> dict:
+        """GET the session-level auto-approve switch.
+
+        ``session_id`` defaults to "default" (same convention as the other
+        agent endpoints). No DB connection → False.
+        """
+        if ctx.db_conn is None:
+            return {"auto_approve": False}
+        return {"auto_approve": get_auto_approve(ctx.db_conn, session_id)}
+
+    @app.post("/api/agent/settings")
+    async def agent_settings_set(request: Request) -> dict:
+        """Set the session-level auto-approve switch.
+
+        Writes the value to the DB, then mutates the cached Agent's spec in
+        place so the very next ask-tool call picks it up (the spec is the
+        mutable per-agent dataclass the runtime reads at each call). A confirm
+        that is ALREADY pending is unaffected — the switch only gates future
+        asks (intended semantics).
+        """
+        body = await request.json()
+        session_id = body.get("session_id", "default")
+        value = bool(body.get("auto_approve", False))
+        if ctx.db_conn is not None:
+            set_auto_approve(ctx.db_conn, session_id, value)
+        agent = agent_cache.get(session_id)
+        if agent is not None:
+            agent.spec.auto_approve = value
+        return {"ok": True, "auto_approve": value}
 
     @app.post("/api/agent/new-session")
     async def agent_new_session(request: Request) -> dict:

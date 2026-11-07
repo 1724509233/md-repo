@@ -314,6 +314,55 @@ def test_save_session_updates_existing(db_conn):
     assert result["token_count"] == 20
 
 
+def test_save_session_preserves_auto_approve(db_conn):
+    """先 set 再 save（消息持久化路径不带 auto_approve 参数），开关值不丢。"""
+    from server.vault import save_session
+    from server.vault.db.sessions import set_auto_approve, get_auto_approve
+
+    set_auto_approve(db_conn, "s-aa", True)
+    save_session(db_conn, "s-aa", [{"role": "user", "content": "hi"}], token_count=1)
+    assert get_auto_approve(db_conn, "s-aa") is True
+
+
+def test_load_session_returns_auto_approve(db_conn):
+    """load_session 带回 auto_approve（int）。"""
+    from server.vault import load_session
+    from server.vault.db.sessions import set_auto_approve
+
+    set_auto_approve(db_conn, "s-on", True)
+    assert load_session(db_conn, "s-on")["auto_approve"] == 1
+    set_auto_approve(db_conn, "s-off", False)
+    assert load_session(db_conn, "s-off")["auto_approve"] == 0
+
+
+def test_set_auto_approve_creates_empty_row(db_conn):
+    """无行时按 create_new 形态建空行（messages []、token_count 0）再写值。"""
+    from server.vault.db.sessions import set_auto_approve, get_auto_approve, load_session
+
+    set_auto_approve(db_conn, "s-new", True)
+    assert get_auto_approve(db_conn, "s-new") is True
+    row = load_session(db_conn, "s-new")
+    assert row is not None
+    assert row["messages"] == []
+    assert row["token_count"] == 0
+    assert row["auto_approve"] == 1
+
+
+def test_get_auto_approve_missing_returns_false(db_conn):
+    """无行 → False。"""
+    from server.vault.db.sessions import get_auto_approve
+
+    assert get_auto_approve(db_conn, "no-such-session") is False
+
+
+def test_set_auto_approve_none_conn_noop():
+    """conn None → 静默 no-op（不抛）。"""
+    from server.vault.db.sessions import set_auto_approve, get_auto_approve
+
+    set_auto_approve(None, "x", True)  # 不抛
+    assert get_auto_approve(None, "x") is False
+
+
 def test_update_references_wikilink(vault_dir):
     from server.vault import init_db
     from server.vault.orchestration.indexer import graph_extract_file
