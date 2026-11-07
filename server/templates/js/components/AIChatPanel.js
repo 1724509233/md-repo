@@ -501,7 +501,7 @@ export const AIChatPanel = {
           </div>
           <!-- AI 消息 -->
           <div v-else
-            class="msg-ai max-w-[85%] flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm"
+            class="msg-ai w-full flex-1 ai-turn rounded-2xl rounded-tl-md px-3.5 py-2.5 text-sm"
             :data-uitick="msg.uiTick">
             <template v-for="(block, bi) in msg.blocks" :key="bi">
               <!-- 文本块：三个分支的显示口径必须一致（bug 5dfce279）——
