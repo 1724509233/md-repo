@@ -309,10 +309,32 @@ pre code.hljs { background: transparent; padding: 0; }
 .conflict-accept:active, .conflict-keep:active { transform: scale(.95); }
 
 /* ============ AI 面板 chrome ============ */
-#ai-mode { font-family: 'Inter', sans-serif; background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
-#ai-mode:hover { background: color-mix(in srgb, var(--brass) 20%, transparent); }
-#btn-new-session { font-family: 'Inter', sans-serif; background: var(--surface); color: var(--ink); border-color: var(--line); }
-#btn-new-session:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); }
+/* ---- 头部 v2（design/ai-panel-header-v2.html，2026-11-07 评审定稿）：左展示层 / 右操作层 ----
+   左只读（品牌 + 标题/文档路径/状态）；右为三个 30px 同规格 icon 按钮（新会话 · 自动批准 · 关闭）。
+   唯一可压缩元素 = 文档路径（min-width:0 + ellipsis，窄屏截断，hover title 出全路径）；
+   自动批准 ON 态只由颜色表达（brass 图标 + 18% 底色 + 45% 边框），几何零变化，
+   是头部的唯一颜色载体；brand 显式 brass（tailwind.config 未注册，text-brass 系类为空操作）。 */
+.ai-head { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-family: 'Inter', sans-serif; }
+.ai-brand { width: 32px; height: 32px; border-radius: 9999px; border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ai-brand .icon { width: 14px; height: 14px; }
+.ai-id { flex: 1; min-width: 0; }
+.ai-line1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ai-title { font-size: 14px; font-weight: 600; letter-spacing: .01em; flex-shrink: 0; }
+.ai-doc { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1; color: var(--ink-soft); }
+.ai-doc .icon { width: 12px; height: 12px; opacity: .8; flex-shrink: 0; }
+.ai-doc-path { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-line2 { display: flex; align-items: center; margin-top: 2px; font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
+.ai-acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.ai-ibtn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid transparent; background: transparent; color: var(--ink-soft); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .1s ease; }
+.ai-ibtn .icon { width: 15px; height: 15px; }
+.ai-ibtn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.ai-ibtn:active { transform: scale(.95); }
+#auto-approve-toggle.is-on { background: color-mix(in srgb, var(--brass) 18%, transparent); border-color: color-mix(in srgb, var(--brass) 45%, transparent); color: var(--brass); }
+#auto-approve-toggle.is-on:hover { background: color-mix(in srgb, var(--brass) 25%, transparent); }
+/* Token 用量：整行并入头部底缘 2px hairline（恒在，宽度=用量比例，颜色 <50% brass / 50–80% 黄 / >80% 红，
+   数字进 hover tooltip；淡色轨道保证低用量时 hairline 可被发现） */
+.ai-token { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.ai-token-fill { height: 100%; border-radius: 0 2px 2px 0; transition: width .3s ease; }
 #ai-input { background: var(--surface); border-color: var(--line); color: var(--ink); min-height: 2.5rem; max-height: 40%; overflow-y: auto; transition: height .1s ease; }
 #ai-input::placeholder { color: var(--ink-soft); opacity: .7; }
 #ai-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
@@ -320,9 +342,6 @@ pre code.hljs { background: transparent; padding: 0; }
 #ai-send:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
 #ai-stop { background: #b91c1c; color: var(--paper); }
 #ai-stop:hover { background: #991b1b; }
-#token-fill { background: var(--brass); }
-#token-wrap { display: none; }
-#token-wrap:hover, #token-wrap.visible { display: flex; }
 
 /* ============ RAG 搜索下拉框（FileTree）============ */
 .search-dropdown {

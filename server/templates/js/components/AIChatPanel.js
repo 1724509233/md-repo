@@ -1,5 +1,5 @@
 /* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
-const { ref, reactive, shallowReactive, watch, nextTick, onUnmounted, inject } = Vue
+const { ref, reactive, shallowReactive, watch, nextTick, onMounted, onUnmounted, inject } = Vue
 import { ICONS } from '../utils/icons.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { api } from '../api.js'
@@ -38,6 +38,7 @@ export const AIChatPanel = {
     const inputText = ref('')
     const status = ref('ready')    // 'ready' | 'thinking'
     const aiMode = ref('当前文档')
+    const autoApprove = ref(false) // 会话级自动批准开关（本会话写操作不再逐条确认）
     const tokenUsage = reactive({ used: 0, total: 0, percent: 0 })
     const abortCtrl = ref(null)
     const inputEl = ref(null)
@@ -386,13 +387,39 @@ export const AIChatPanel = {
       emit('newSession')
     }
 
-    // sessionId 变化时重置会话（新会话按钮触发）
+    // 会话级自动批准开关：挂载时取初值（失败静默保持 false）；sessionId 变化时重取
+    async function loadAutoApprove() {
+      try {
+        const data = await api.getAgentSettings(props.sessionId)
+        autoApprove.value = !!data.auto_approve
+      } catch (e) { /* 失败静默保持 false */ }
+    }
+
+    // 切换：乐观更新 + 落库，失败回滚到旧值（改由整行 @click 触发，无事件参数；
+    // 原 e.target.checked 守卫随 change 事件一并移除——click 触发的 next 恒 ≠ 当前值）
+    function toggleAutoApprove() {
+      const next = !autoApprove.value
+      const prev = autoApprove.value
+      autoApprove.value = next
+      api.setAgentSettings(props.sessionId, next).catch(err => {
+        autoApprove.value = prev
+        console.error('[ai-settings] setAgentSettings failed', err)
+      })
+    }
+
+    // watch 无 immediate，挂载不触发 → 初值只在 onMounted 取一次，二者不重复请求
+    onMounted(() => {
+      loadAutoApprove()
+    })
+
+    // sessionId 变化时重置会话（新会话按钮触发）+ 重取自动批准开关（新会话 → 无行 → false）
     watch(() => props.sessionId, () => {
       if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
       messages.value = []
       currentTurn = null
       inputText.value = ''
       setStatus('ready')
+      loadAutoApprove()
     })
 
     // 输入框高度自动扩展（上限 40% 面板高度）
@@ -415,28 +442,52 @@ export const AIChatPanel = {
     return {
       ICONS_LOCAL, toolNames, appState, messages, inputText, status, aiMode, tokenUsage,
       inputEl, messagesEl, streamTextEl, thinkingTextEl, streamDisplayText, sendChat, sendConfirm, toggleBlock, toggleMode, onKeydown, stopChat, newSession,
+      autoApprove, toggleAutoApprove,
       toolKeyParam, toolResultSummary
     }
   },
   template: `
     <div class="flex flex-col h-full">
-      <!-- 头部 -->
-      <div class="flex items-center gap-3 px-4 py-3 border-b border-border shrink-0">
-        <div class="w-9 h-9 rounded-full border border-border flex items-center justify-center text-brass">
+      <!-- 头部 v2：左展示层（品牌 + 标题/文档路径/状态）/ 右操作层（新会话 · 自动批准 · 关闭）。
+           设计稿：design/ai-panel-header-v2.html（2026-11-07 评审定稿）。
+           死胶囊「当前文档」降为只读路径指示（形态 A）：title=全路径、无文档整块隐藏、无点击无 hover 变色；
+           自动批准图标化：30px icon 按钮与新会话/关闭同规格，状态只由颜色表达、几何零变化；
+           token 条整行并入头部底缘 2px hairline（恒在，宽度=用量，数字进 tooltip） -->
+      <div class="ai-head">
+        <div class="ai-brand">
           <svg class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>
         </div>
-        <div class="flex-1 min-w-0">
-          <div class="font-ui font-semibold text-sm">AI 助手</div>
-          <div class="font-ui text-xs text-muted flex items-center gap-2">
+        <div class="ai-id">
+          <div class="ai-line1">
+            <span class="ai-title">AI 助手</span>
+            <span v-if="docPath" class="ai-doc" :title="docPath">
+              <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              <span class="ai-doc-path">{{ docPath }}</span>
+            </span>
+          </div>
+          <div class="ai-line2">
             <span v-if="status === 'thinking'">思考中<span class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></span>
             <span v-else>就绪</span>
           </div>
         </div>
-        <span id="ai-mode" class="text-xs px-2.5 py-1 rounded-md cursor-pointer font-medium whitespace-nowrap" @click="toggleMode">{{ aiMode }}</span>
-        <button id="btn-new-session" class="text-[11px] px-2 py-1 border border-border rounded cursor-pointer" @click="newSession">新会话</button>
-        <button class="w-11 h-11 flex items-center justify-center text-muted hover:text-text" @click="$emit('close')" aria-label="关闭">
-          <span v-html="ICONS_LOCAL.x"></span>
-        </button>
+        <div class="ai-acts">
+          <button id="btn-new-session" class="ai-ibtn" title="新会话" aria-label="新会话" @click="newSession">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M12 7v6"/><path d="M9 10h6"/></svg>
+          </button>
+          <button id="auto-approve-toggle" class="ai-ibtn" role="switch" :aria-checked="autoApprove"
+            :class="{ 'is-on': autoApprove }"
+            title="自动批准：开启后本会话写操作不再逐条确认" aria-label="自动批准" @click="toggleAutoApprove">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+          </button>
+          <button class="ai-ibtn" @click="$emit('close')" aria-label="关闭">
+            <span v-html="ICONS_LOCAL.x"></span>
+          </button>
+        </div>
+        <div id="token-hairline" class="ai-token"
+          :title="'上下文用量 ' + Math.min(100, Math.round(tokenUsage.percent)) + '% · ' + (tokenUsage.used / 1000).toFixed(1) + 'K / ' + Math.round(tokenUsage.total / 1000) + 'K'">
+          <div id="token-fill" class="ai-token-fill"
+            :style="{ width: Math.min(100, tokenUsage.percent) + '%', background: tokenUsage.percent > 80 ? '#ef4444' : (tokenUsage.percent > 50 ? '#eab308' : 'var(--brass)') }"></div>
+        </div>
       </div>
 
       <!-- 消息列表 -->
@@ -525,16 +576,6 @@ export const AIChatPanel = {
               </div>
             </template>
           </div>
-        </div>
-      </div>
-
-      <!-- Token 用量 -->
-      <div id="token-wrap" class="flex items-center gap-2 px-4 py-1.5 border-t border-border shrink-0"
-        :class="{ visible: tokenUsage.percent > 50 }">
-        <span class="text-[11px] text-muted whitespace-nowrap">Token {{ (tokenUsage.used / 1000).toFixed(1) }}K / {{ Math.round(tokenUsage.total / 1000) }}K</span>
-        <div class="flex-1 h-1 bg-[color-mix(in_srgb,var(--ink)_8%,transparent)] rounded-full overflow-hidden">
-          <div id="token-fill" class="h-full rounded-full transition-all duration-300"
-            :style="{ width: Math.min(100, tokenUsage.percent) + '%', background: tokenUsage.percent > 80 ? '#ef4444' : (tokenUsage.percent > 50 ? '#eab308' : '#22c55e') }"></div>
         </div>
       </div>
 
