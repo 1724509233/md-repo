@@ -8,6 +8,157 @@ let rendererConfigured = false
 // 读此变量拿到「当前这篇文档」的 files + baseDir（见 renderMarkdownBody）。单线程下无并发问题。
 let _activeLinkCtx = null
 
+/* ============ TOC 标题注册表：sec-N id + 源行号（P4-3 目录导航） ============ */
+// sec-N（序号型）是机器私有命名空间：绝对唯一（渲染计数器）+ 零 Unicode 边界，与用户手写的
+// #anchor 结构性不冲突（后者走 data-vault-anchor 文本匹配通道，不产生 DOM id，见 D6）。
+// data-line = 全文 1-based 源行号（与编辑态 textarea 全值同行号制）→ 编辑态光标跳行；
+// walk 与渲染按文档顺序 1:1 配对；计数/层级错位（引用块 setext 等罕见态）→ raw 文本回退匹配。
+// DOMPurify 默认放行 id 属性（已确认）；data-* 需显式 ADD_ATTR（renderMarkdownBody 内）。
+let _headingCounter = 0
+let _headingWalk = null       // walkHeadings 结果：{ list: [{level, lineNo}], atx: [{level, lineNo, rest}] }
+let _rawCursor = 0            // raw 回退匹配的 atx 游标
+
+// ATX 判据同 marked@4.3.0 rules.block.heading：/^ {0,3}(#{1,6})(?=\s|$)/（`##foo` 无空格不是标题）
+const RE_FENCE = /^ {0,3}(`{3,}|~{3,})/
+const RE_ATX = /^ {0,3}(#{1,6})(?=\s|$)/
+// 一级引用内的 ATX（marked 在 blockquote token 内仍解析出 heading token，须同序计入）
+const RE_QUOTED_ATX = /^ {0,3}>[ ]{0,4}(#{1,6})(?=\s|$)/
+const RE_SETEXT = /^ {0,3}([=]+|-+)\s*$/
+// 列表行（setext「上一行是段落行」判据的排除项）
+const RE_LIST_LINE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]/
+
+/**
+ * 源串行走：登记每个标题的（层级, 1-based 行号）。
+ * 围栏感知（``` / ~~~，≤3 空格缩进；backtick 开栏 info 不得含反引号；
+ * 闭栏同字符 ≥ 开栏长度且无 infostring——与 marked@4.3.0 rules.block.fences 同口径；
+ * 与 wikilinkToMd 旧闭栏宽松口径分岔，勿互相"对齐"）；
+ * ATX（含一级引用内）；setext（下划线行 =+ / -+ 且前行为段落行——CommonMark/marked：段落行后紧跟
+ * 任意 dash 数均为 setext h2，`---` 不是 hr；hr 仅在前一无段落行时成立）。
+ * setext 条目的行号 = 段落 run 首行（标题文字所在行），非下划线行。
+ * 段落行判据对齐 marked paragraph-lookahead：排除引用/ATX/hr/列表/表格（| 行）等块起始行；
+ * 另按 CommonMark 懒续行排除：run 紧邻的前一行是引用/列表行时，run 被收进上一容器，
+ * 其后的 = / - 行是 hr 而非 setext 下划线。
+ * lineBase = frontmatter 块占用的行数（行号要对齐全文，编辑态 textarea 含 frontmatter）。
+ */
+function walkHeadings(src, lineBase) {
+  const lines = String(src).split('\n')
+  const list = []
+  const atx = []
+  let inFence = false, fenceChar = '', fenceLen = 0
+  let prevParaLike = false
+  let paraRunStart = -1   // 当前连续段落行 run 的首行索引（setext 条目行号落此）
+  const paraLikeOf = (line) => line.trim() !== '' &&
+    !/^( {0,3}>| {0,3}#{1,6}(?=\s|$)| {0,3}[-*_]{3,})/.test(line) &&
+    !RE_LIST_LINE.test(line) && !/^\s*\|/.test(line)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    const lineNo = lineBase + i + 1
+    const fm = line.match(RE_FENCE)
+    // 围栏判据 = marked v4 rules.block.fences：开栏 ≤3 空格缩进，backtick 开栏的 infostring
+    // 不得含反引号（否则是普通段落行）；闭栏 = 同字符、长度 ≥ 开栏、无 infostring
+    //（围栏字符后可跟 ~ ` 任意混合 + 空格，如 ```python 在围栏内只是内容不是闭栏）。
+    // 闭栏宽松（带 infostring）会让围栏状态与 marked 错位，后续所有标题配对漂移。
+    const rest = fm ? line.slice(fm[0].length) : ''
+    const isFenceLine = fm && (
+      !inFence
+        ? !(fm[1][0] === '`' && rest.includes('`'))
+        : fm[1][0] === fenceChar && fm[1].length >= fenceLen && /^[~`]*[ ]*\r?$/.test(rest)
+    )
+    if (isFenceLine) {
+      if (!inFence) { inFence = true; fenceChar = fm[1][0]; fenceLen = fm[1].length }
+      else { inFence = false; fenceChar = ''; fenceLen = 0 }
+      prevParaLike = false
+      paraRunStart = -1
+      continue
+    }
+    if (inFence) { prevParaLike = false; paraRunStart = -1; continue }
+    const am = line.match(RE_ATX)
+    if (am) {
+      list.push({ level: am[1].length, lineNo })
+      atx.push({ level: am[1].length, lineNo, rest: line.slice(am[0].length) })
+      prevParaLike = false
+      paraRunStart = -1
+      continue
+    }
+    const qm = line.match(RE_QUOTED_ATX)
+    if (qm) {
+      list.push({ level: qm[1].length, lineNo })
+      prevParaLike = false
+      paraRunStart = -1
+      continue
+    }
+    const sm = line.match(RE_SETEXT)
+    if (sm) {
+      if (prevParaLike) {
+        // CommonMark 懒续行：run 紧邻的前一行若是引用/列表行，整个 run 被收进上一容器
+        //（非独立段落），本行 `---` 是 hr 而非 setext 下划线（marked 实测一致）
+        const before = paraRunStart > 0 ? lines[paraRunStart - 1] : ''
+        const lazy = /^ {0,3}>/.test(before) || RE_LIST_LINE.test(before)
+        if (!lazy) {
+          list.push({ level: sm[1][0] === '=' ? 1 : 2, lineNo: lineBase + paraRunStart + 1 })
+        }
+      }
+      prevParaLike = false
+      paraRunStart = -1
+      continue
+    }
+    const isParaLike = paraLikeOf(line)
+    if (isParaLike && !prevParaLike) paraRunStart = i
+    if (!isParaLike) paraRunStart = -1
+    prevParaLike = isParaLike
+  }
+  return { list, atx }
+}
+
+// 行内标记剥离：marked 传给 heading renderer 的第三参数 raw 是 textRenderer 产出的纯文本
+//（code span 无反引号、链接只剩显示文本、实体已 unescape），与源行做回退匹配前先去掉标记
+function stripInlineMarkers(s) {
+  return String(s)
+    .replace(/\\(\S)/g, '$1')
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/`+([^`]*)`+/g, '$1')
+    .replace(/(\*\*|__)([^*][\s\S]*?)\1/g, '$2')
+    .replace(/(\*|_)([^*_\s][^*_]*?)\1/g, '$2')
+    .replace(/~{1,2}([^~][^~]*?)~{1,2}/g, '$1')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d))
+}
+
+/**
+ * raw 回退匹配：在 atx 登记里找第一条「层级相同、剥离标记后的行文本含 raw」的标题行。
+ * @returns {{lineNo: number, idx: number}|null}
+ */
+function findHeadingLineByRaw(walk, level, raw, fromIdx) {
+  const t = stripInlineMarkers(raw || '').trim()
+  if (!t) return null
+  for (let i = fromIdx; i < walk.atx.length; i++) {
+    const a = walk.atx[i]
+    if (a.level !== level) continue
+    const rest = stripInlineMarkers(a.rest).replace(/\s+#+\s*$/, '').trim()
+    if (rest === t || rest.includes(t)) return { lineNo: a.lineNo, idx: i }
+  }
+  return null
+}
+
+/**
+ * frontmatter 块占用的全文行数（= 开 `---` 到闭 `---` 含两端）。
+ * splitFrontmatter 只回传两个字符串，此处按同口径重新定位闭合行（首行 --- + 块内首个内容行 key: value）；
+ * 调用方仅在 split 成功时调用（首个内容行是 key: value），否则返回 0。
+ */
+function headingLineOffset(text, split) {
+  const lines = String(text).split(/\r\n|\r|\n/)
+  if (!lines.length || lines[0].trim() !== '---') return 0
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() !== '---') continue
+    for (let j = 1; j < i; j++) {
+      const t = lines[j].trim()
+      if (t !== '' && !t.startsWith('#')) return i + 1
+    }
+    return 0   // 块内全空/注释 → splitFrontmatter 亦不提取（同口径）
+  }
+  return 0
+}
+
 export function setupMarkdown() {
   if (rendererConfigured || !window.marked) return
   rendererConfigured = true
@@ -25,6 +176,25 @@ export function setupMarkdown() {
   // 表格：包裹 overflow-x-auto（marked v4: header/body 已是完整行 HTML）
   renderer.table = function (header, body) {
     return `<div class="overflow-x-auto"><table><thead>${header}</thead><tbody>${body}</tbody></table></div>`
+  }
+
+  // 标题：id=sec-N（序号型，每篇渲染重置，N 从 1 起）+ data-line（源行号，编辑态跳行）。
+  // 行号 = 源串 walk 与渲染输出序 1:1 配对（walkHeadings 在 marked.parse 前跑完）；
+  // 错位时回退 raw 纯文本匹配（findHeadingLineByRaw），再不成则 data-line 缺省。
+  // marked 4.x 签名：heading(text, level, raw, slugger)——raw 为 textRenderer 纯文本。
+  renderer.heading = function (text, level, raw) {
+    _headingCounter++
+    const w = _headingWalk && _headingWalk.list[_headingCounter - 1]
+    let lineNo = (w && w.level === level) ? w.lineNo : null
+    if (lineNo == null && _headingWalk && typeof raw === 'string' && raw) {
+      const found = findHeadingLineByRaw(_headingWalk, level, raw, _rawCursor)
+      if (found) {
+        lineNo = found.lineNo
+        _rawCursor = found.idx + 1
+      }
+    }
+    const ln = lineNo != null ? ` data-line="${lineNo}"` : ''
+    return `<h${level} id="sec-${_headingCounter}"${ln}>${text}</h${level}>\n`
   }
 
   // 链接：vault 软链分类（活链 / 死链 / 歧义）+ 外部链接新 tab。
@@ -63,6 +233,31 @@ export function setupMarkdown() {
     return `<a href="${escapeHtml(href)}"${t}>${text}</a>`
   }
 
+  // 修复 marked@4.3.0 lheading 缺陷：内置正则 ((?:.|\n(?!\n))+?) 把整段非空行 run（含中间
+  // 的标题/列表/表格行）全部吞成 setext 文本，直到撞上 = / - 下划线行——v2.1 spec 中
+  // ### 2.1/2.2 等 10 个 h3 因此被段末 `---` 吞进巨型 h2，TOC 注册表（walkHeadings，
+  // CommonMark 语义）与渲染序错位，编辑态跳行行号配对漂移。
+  // GFM 规范：setext 文本行必须全部可解释为段落。这里用 marked 自己的 paragraph 正则
+  // （空行 sentinel 收尾）复核候选 run，含块起始行则放弃 setext、各块按常归解析。
+  // 修复后 10 个最小用例输出与 marked v12 一致（含 1-2 dash setext、列表/表格后 --- = hr）。
+  marked.use({
+    tokenizer: {
+      lheading(src) {
+        const m = this.rules.block.lheading.exec(src)
+        if (!m) return undefined
+        const para = this.rules.block.paragraph.exec(m[1] + '\n\n')
+        if (!para || para[1] !== m[1]) return undefined
+        return {
+          type: 'heading',
+          raw: m[0],
+          depth: '=' === m[2].charAt(0) ? 1 : 2,
+          text: m[1],
+          tokens: this.lexer.inline(m[1]),
+        }
+      },
+    },
+  })
+
   // sanitize:false = 关闭 marked v4 的 href 白名单清洗（默认对自定义 scheme 行为不稳定）；
   // 我们自产 href 已 escapeHtml，安全由 DOMPurify 兜底（sanitize 在 renderMarkdownBody 调用）。
   marked.setOptions({ renderer, sanitize: false })
@@ -72,23 +267,29 @@ export function setupMarkdown() {
  * 渲染 markdown 正文（marked + DOMPurify）
  * @param {string} text - markdown 原文
  * @param {ReturnType<typeof createLinkContext>} [linkCtx] - 链接解析上下文（null = 不解析 vault 链接）
+ * @param {number} [lineBase] - 行号基准偏移（frontmatter 块占用的行数；缺省 0）
  */
-function renderMarkdownBody(text, linkCtx) {
+function renderMarkdownBody(text, linkCtx, lineBase) {
   setupMarkdown()
   _activeLinkCtx = linkCtx
   // 有解析上下文才做 wikilink 预处理（缺上下文时 [[...]] 保留原样，不产生伪链接）
   const src = linkCtx ? wikilinkToMd(text || '') : (text || '')
+  // 标题注册表按篇重置：计数器 + 源串 walk（须在 parse 前完成，renderer 按序读表）
+  _headingCounter = 0
+  _headingWalk = walkHeadings(src, lineBase || 0)
+  _rawCursor = 0
   let raw
   try {
     raw = marked.parse(src)
   } finally {
     _activeLinkCtx = null
   }
-  // ADD_ATTR 保留 data-vault-path / data-vault-anchor（DOMPurify 默认剥 data-*）
-  // 与 target（DOMPurify 默认剥 target 以御 reverse-tabnabbing，需显式放行，否则外部链接
-  // 的 target="_blank" 会被剥掉 → 新 tab 打开失效、退化为整页跳转）。rel 在默认放行表内，保留。
+  // ADD_ATTR 保留 data-vault-path / data-vault-anchor / data-line（DOMPurify 默认剥 data-*；
+  // 标题 id 在默认放行表内，无需显式）与 target（DOMPurify 默认剥 target 以御 reverse-tabnabbing，
+  // 需显式放行，否则外部链接的 target="_blank" 会被剥掉 → 新 tab 打开失效、退化为整页跳转）。
+  // rel 在默认放行表内，保留。
   return window.DOMPurify
-    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-vault-path', 'data-vault-anchor', 'target'] })
+    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-vault-path', 'data-vault-anchor', 'data-line', 'target'] })
     : raw
 }
 
@@ -354,7 +555,9 @@ export function renderMarkdown(text, opts) {
     if (split) {
       const entries = parseFrontmatter(split.frontmatter)
       if (entries.length) {
-        return buildFrontmatterCard(entries) + renderMarkdownBody(split.rest, linkCtx)
+        // 标题 data-line 行号制 = 全文（编辑态 textarea 含 frontmatter 块）→
+        // body 行号加 frontmatter 块占用行数偏移
+        return buildFrontmatterCard(entries) + renderMarkdownBody(split.rest, linkCtx, headingLineOffset(text, split))
       }
     }
   }

@@ -3,6 +3,7 @@ const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
+import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
 import { FileTree } from './components/FileTree.js'
 import { SearchPanel } from './components/SearchPanel.js'
 import { EditorPane } from './components/EditorPane.js'
@@ -29,6 +30,7 @@ const state = reactive({
   filePanelOpen: false,   // 移动端文件面板 overlay（<1024px，spec §3.5）
   searchDrawerOpen: false, // 移动端搜索抽屉（<1024px）
   moreMenuOpen: false,  // 移动端更多菜单
+  tocOpen: false,       // 本文目录浮层（P4-3）
   conflict: null,       // { toolName, path } | null
   docContent: '',        // 当前文档内容
   notifOpen: false,
@@ -50,6 +52,13 @@ const activePanel = ref('file')
 const editorPaneRef = ref(null)
 // ─── FileTree ref（spec §4.1：expandToPath / revealActive）───
 const fileTreeRef = ref(null)
+// ─── 目录条目（P4-3）：文档重渲染后重建（flush post = v-html 已 patch，与 renderedHtml 同款时机）───
+const tocItems = ref([])
+
+function refreshTocEntries() {
+  const pv = editorPaneRef.value && editorPaneRef.value.previewEl
+  tocItems.value = buildToc(pv)
+}
 
 // ─── 核心操作 ───
 let lastChangeTs = Date.now() / 1000
@@ -115,94 +124,25 @@ async function openDoc(path, heading) {
     state.filePanelOpen = false
   }
 
-  // RAG 搜索跳转：滚动到 heading + 持久标记线
-  // 先清理上一次的标记（如果存在）
-  if (state._dismissMarker) {
-    state._dismissMarker()
-    state._dismissMarker = null
-  }
-
+  // 跨文档软链 / 搜索跳转：落点到标题（id 优先、文本兜底——与 TOC 跳转抽成同一工具
+  // toc.scrollToHeading，D3 语言；h4+ 深链保留旧口径文本匹配）+ 闪光。
+  // D3 闪光语言 1.6s 自清，不挂滚动 dismiss（旧持久标记线与稳定门随之退役，_dismissMarker 废除）。
   if (heading) {
     await nextTick()
     const lastCrumb = heading.split(' > ').pop().trim()
-    // 按文本查找标题元素；挂 flash 时再查一次（搜索页跳转触发面板切换重渲染/reflow，
-    // 首个引用可能已脱钩；重查不到则跳过 flash，不崩）
-    const findHeadingEl = () => Array.from(
-      document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6')
-    ).find(h => h.textContent.trim() === lastCrumb)
-
-    const el = findHeadingEl()
-    if (el) {
-      el.scrollIntoView({ behavior: 'auto', block: 'center' })
+    const pv = editorPaneRef.value ? editorPaneRef.value.previewEl : null
+    const items = pv ? buildToc(pv) : []
+    // h1–h3 命中 = id 定位（重名不再错节）；未命中回退全文本匹配（h4–h6 与无 id 渲染兼容旧行为）
+    const hit = items.find(it => it.text.trim() === lastCrumb) || { id: null, text: lastCrumb }
+    // flash:false：闪光只走下方 200ms 延时那次（搜索页跳转触发面板宽度过渡，立即闪会命中
+    // 过渡中布局且与延时闪叠成双闪）；到时按 id（或文本）重查 DOM（期间可能已重渲染）
+    if (scrollToHeading({ mode: 'preview', id: hit.id, text: hit.text, flash: false })) {
       setTimeout(() => {
-        const cur = findHeadingEl()
-        if (!cur) return
-        // 强制清理旧标记 class（防止重复点击时 fade-out 未完成导致冲突）
-        cur.classList.remove('heading-flash', 'heading-flash-in', 'heading-flash-out')
-        void cur.offsetWidth // 强制 reflow，确保 class 移除生效
-        cur.classList.add('heading-flash', 'heading-flash-in')
-
-        // 滚动容器是 #preview 的祖先（app.js 中 .flex-1.overflow-y-auto），
-        // 向上查找最近的 overflow-y:auto/scroll 祖先
-        let scroller = cur.parentElement
-        while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
-          scroller = scroller.parentElement
-        }
-        if (!scroller) scroller = document.querySelector('#preview').parentElement
-
-        // 稳定门：搜索页跳转后面板宽度过渡（200ms）在监听挂上后仍在进行，其 reflow
-        // 引发的 scroll 会立刻 dismiss（待办 12c69570 高亮自动消失的根因）。门内
-        // 忽略滚动；门在「rAF 双帧稳定 且 无进行中的 CSS 过渡」时开启（树内跳转
-        // 无过渡 → 门立即开，行为不变）；上限 300ms（自挂载点，含 200ms 定时的
-        // 总时延 500ms 封顶）。
-        let gateOpen = false
-        let rAFDone = false
-        let transDone = !Array.from(document.querySelectorAll('body *'))
-          .some(n => typeof n.getAnimations === 'function' && n.getAnimations().length > 0)
-        function onTrans() {
-          transDone = true
-          tryOpenGate()
-        }
-        function tryOpenGate() {
-          if (!gateOpen && rAFDone && transDone) {
-            gateOpen = true
-            document.removeEventListener('transitionend', onTrans)
-          }
-        }
-        function scrollHandler() {
-          if (gateOpen) dismiss()
-        }
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          rAFDone = true
-          tryOpenGate()
-        }))
-        if (!transDone) document.addEventListener('transitionend', onTrans, { once: true })
-        scroller.addEventListener('scroll', scrollHandler)
-        setTimeout(() => {
-          transDone = true
-          tryOpenGate()
-        }, 300)
-
-        // 淡出标记；dismissed 幂等——滚动触发后下一次跳转再调它是 no-op，
-        // 避免 -out class 被重加导致 fade 动画重启闪回
-        let dismissed = false
-        function dismiss() {
-          if (dismissed) return
-          dismissed = true
-          cur.classList.remove('heading-flash-in')
-          cur.classList.add('heading-flash-out')
-          cur.addEventListener('animationend', function onOut(e2) {
-            if (e2.animationName === 'marker-fade-out') {
-              cur.classList.remove('heading-flash', 'heading-flash-out')
-            }
-          })
-          // 监听挂在 scroller 上（旧代码误引用未定义的 preview，任何一次 dismiss
-          // 都会在 fade-out 启动后抛 ReferenceError，监听泄漏）
-          scroller.removeEventListener('scroll', scrollHandler)
-          document.removeEventListener('transitionend', onTrans)
-        }
-
-        state._dismissMarker = dismiss
+        const el = hit.id
+          ? document.getElementById(hit.id)
+          : (Array.from(document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6'))
+              .find(h => h.textContent.trim() === lastCrumb) || null)
+        if (el) flashHeading(el)
       }, 200)
     }
   }
@@ -254,6 +194,67 @@ function downloadDoc() {
 function setMode(mode) {
   state.previewMode = mode === 'preview'
 }
+
+// ─── 目录（P4-3）：浮层开合 + scrollspy（仅浮层开启期间挂，rAF 节流，预览态高亮）───
+function tocScroller() {
+  return editorPaneRef.value && editorPaneRef.value.getScrollerEl ? editorPaneRef.value.getScrollerEl() : null
+}
+
+// 同步当前节高亮：预览态 = 最后一个「顶边越过容器顶 +96px」的标题（toc.computeActiveHeading）；
+// 编辑态/无条目/浮层关 = 清除高亮（textarea 滚动位置无章节语义，D4）
+function syncTocSpy() {
+  const dd = document.querySelector('.toc-dd')
+  const listEl = dd ? dd.querySelector('[data-toc-list]') : null
+  const btns = listEl ? Array.from(listEl.querySelectorAll('.toc-item')) : []
+  const active = (state.tocOpen && state.previewMode && tocItems.value.length)
+    ? computeActiveHeading(tocScroller(), editorPaneRef.value && editorPaneRef.value.previewEl, tocItems.value)
+    : null
+  btns.forEach(b => {
+    const item = tocItems.value.find(it => it.id === (b.getAttribute('data-id') || ''))
+    b.classList.toggle('toc-item-act', !!item && !!active && item.id === active.id)
+  })
+  if (active && listEl) {
+    const idx = tocItems.value.findIndex(it => it.id === active.id)
+    ensureVisible(listEl, idx >= 0 ? btns[idx] : null)
+  }
+}
+
+function toggleToc() {
+  state.tocOpen = !state.tocOpen
+  if (state.tocOpen) {
+    const scroller = tocScroller()
+    if (scroller) startScrollspy(scroller, editorPaneRef.value.previewEl, tocItems, syncTocSpy)
+    else syncTocSpy()
+  } else {
+    stopScrollspy(tocScroller())
+  }
+}
+
+function onTocClickItem(item) {
+  const pv = editorPaneRef.value
+  if (!pv) return
+  scrollToHeading({
+    mode: state.previewMode ? 'preview' : 'edit',
+    id: item.id,
+    text: item.text,
+    lineNo: item.lineNo,
+    value: state.docContent,
+    editorEl: pv.editorEl,
+  })
+  if (state.previewMode) syncTocSpy()   // 落点立即同步一次（平滑滚动中），后续 scroll 事件接管
+}
+
+// 移动 AI 底部抽屉打开（z-40 + backdrop z-30）会盖住 z-50 之下的浮层残影 → 同步关 TOC（桌面抽屉无 backdrop，不受限）
+watch(() => state.aiOpen, (open) => {
+  if (open && window.innerWidth < 1024 && state.tocOpen) toggleToc()
+})
+// 模式切换：编辑/预览互切时重算高亮（预览→编辑 清除；编辑→预览 落到当前节）
+watch(() => state.previewMode, () => syncTocSpy())
+// 文档换/内容变 → 重建条目（post flush 保证 v-html 已 patch；编辑态 preview DOM 是 v-show 隐藏非移除，DOM 恒同步）
+watch([() => state.currentPath, () => state.docContent], () => {
+  refreshTocEntries()
+  if (state.tocOpen) syncTocSpy()
+}, { flush: 'post' })
 
 // ─── 通知轮询 ───
 async function pollNotifications() {
@@ -675,7 +676,8 @@ export function createApp() {
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
-        onEditorInput, acceptConflict
+        onEditorInput, acceptConflict,
+        tocItems, toggleToc, onTocClickItem
       }
     },
     template: `
@@ -779,8 +781,10 @@ export function createApp() {
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
+              :toc-open="state.tocOpen" :toc-items="tocItems"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
+              @toggle-toc="toggleToc" @toc-click="onTocClickItem"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
             <!-- 编辑器面：监控页 L1 打开时收起（v-show 保持 DOM 与编辑态；两面互斥，

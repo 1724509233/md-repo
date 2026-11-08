@@ -1,5 +1,5 @@
-/* TopBar 组件：文件路径 + 模式按钮 + 保存/下载 */
-const { ref } = Vue
+/* TopBar 组件：文件路径 + 模式按钮 + 目录浮层（P4-3）+ 保存/下载 */
+const { ref, watch, onMounted, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
 
 export const TopBar = {
@@ -10,12 +10,15 @@ export const TopBar = {
     moreMenuOpen: { type: Boolean, default: true },
     notifOpen: { type: Boolean, default: false },
     unreadCount: { type: Number, default: 0 },
-    notifications: { type: Array, default: () => [] }
+    notifications: { type: Array, default: () => [] },
+    tocOpen: { type: Boolean, default: false },
+    tocItems: { type: Array, default: () => [] }
   },
-  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif'],
+  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
+    const rootEl = ref(null)
 
     function setMode(mode) {
       emit('setMode', mode)
@@ -29,10 +32,39 @@ export const TopBar = {
       emit('download')
     }
 
-    return { ICONS_LOCAL, setMode, save, download }
+    function toggleToc() {
+      emit('toggleToc')
+    }
+
+    function onTocClick(item) {
+      emit('tocClick', item)
+    }
+
+    // 点击外部关闭：委托到 document（同更多菜单模式）。顶栏内部（浮层、开关按钮、模式/铃铛等
+    // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理
+    function onDocClick(e) {
+      if (rootEl.value && rootEl.value.contains(e.target)) return
+      if (props.tocOpen) emit('toggleToc')
+    }
+    function onKeydown(e) {
+      if (e.key === 'Escape' && props.tocOpen) emit('toggleToc')
+    }
+    onMounted(() => {
+      document.addEventListener('click', onDocClick)
+      document.addEventListener('keydown', onKeydown)
+    })
+    onBeforeUnmount(() => {
+      document.removeEventListener('click', onDocClick)
+      document.removeEventListener('keydown', onKeydown)
+    })
+    // 其它浮层打开 → 互斥关闭（更多菜单 / 通知下拉）
+    watch(() => props.moreMenuOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
+    watch(() => props.notifOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
+
+    return { ICONS_LOCAL, rootEl, setMode, save, download, toggleToc, onTocClick }
   },
   template: `
-    <div class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0">
+    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative">
       <!-- logo（spec §3.1：从 rail 迁入顶栏） -->
       <div class="topbar-logo flex items-center gap-2">
         <span class="logo-mark logo-mark--top">M</span>
@@ -68,6 +100,21 @@ export const TopBar = {
         </button>
       </div>
 
+      <!-- 目录（P4-3）：桌面 图标+文字；移动 28px 图标钮（铃铛/更多同规格，文案进 tooltip）。
+           按钮恒定渲染（有无标题不显隐 → 顶栏零跳变，D5）；激活态 = 浮层开启反馈，只变色不变几何 -->
+      <button data-toc-toggle
+        class="topbar-btn hidden lg:inline-flex"
+        :class="{ 'toc-btn-open': tocOpen }"
+        @click="toggleToc" title="本文目录" aria-label="本文目录">
+        <span v-html="ICONS_LOCAL.list"></span>目录
+      </button>
+      <button data-toc-toggle
+        class="topbar-btn topbar-btn--icon lg:hidden"
+        :class="{ 'toc-btn-open': tocOpen }"
+        @click="toggleToc" title="本文目录" aria-label="本文目录">
+        <span v-html="ICONS_LOCAL.list"></span>
+      </button>
+
       <!-- 桌面端保存/下载：下载为幽灵，保存为主操作（实心黄铜） -->
       <button class="hidden lg:block topbar-btn"
         @click="download">
@@ -101,6 +148,20 @@ export const TopBar = {
             @click="$emit('download'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
           </button>
+        </div>
+      </div>
+
+      <!-- 目录浮层（P4-3）：锚内容区右缘（right:8px），260px / 移动 min(260px,100vw−48px)；
+           过渡与层级见 style.css .toc-dd（z-50 与通知下拉/更多菜单同层，AI 面板 15 / ai-btn 40 之下） -->
+      <div v-show="tocOpen" class="toc-dd" data-toc-dd>
+        <div class="toc-head">本文目录</div>
+        <div class="toc-list" data-toc-list>
+          <button v-for="it in tocItems" :key="it.id" type="button"
+            class="toc-item" :class="'lv' + it.level"
+            :data-id="it.id" :title="it.text" @click="onTocClick(it)">
+            {{ it.text }}
+          </button>
+          <div v-if="!tocItems.length" class="toc-empty">本文档没有标题</div>
         </div>
       </div>
     </div>

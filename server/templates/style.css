@@ -106,6 +106,59 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
   background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
+/* ============ 目录浮层（P4-3）============
+   锚内容区右缘（顶栏右端之下）：AI 抽屉打开时顶栏随 main padding-right:50% 收缩，
+   浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / ai-btn 40 之下）。
+   开 = display 恢复时 animation 正向播放（opacity + translateY(4px→0) + scale(.98→1)，transform 路径零 reflow）；
+   合 = v-show 直切（无退场，避免 display 切换的 JS 时序管理；浮层零常驻占用，代价可接受）。
+   浮层本体不参与 flex 布局：开关不改内容区尺寸/居中，文档滚动位置不动。 */
+.toc-dd {
+  position: absolute; right: 8px; top: calc(100% + 8px);
+  width: 260px; max-height: min(420px, 52vh);
+  z-index: 50;
+  display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(33,29,24,.12), 0 2px 6px rgba(33,29,24,.06);
+  transform-origin: top right;
+  animation: tocIn .14s ease-out both;
+}
+@keyframes tocIn {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (max-width: 1023px) {
+  .toc-dd { width: min(260px, calc(100vw - 48px)); }
+}
+.toc-head {
+  font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 600; letter-spacing: .06em;
+  color: var(--ink-soft); padding: 10px 14px 6px; flex-shrink: 0;
+}
+.toc-list { overflow-y: auto; min-height: 0; flex: 1; padding: 2px 6px 8px; }
+.toc-item {
+  display: block; width: 100%; text-align: left;
+  border: none; background: transparent; border-radius: 7px;
+  padding: 5px 10px; font-family: 'Inter', sans-serif; font-size: 12.5px; line-height: 1.5;
+  color: var(--ink-soft); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background-color .12s ease, color .12s ease;
+}
+.toc-item:hover { background: color-mix(in srgb, var(--brass) 9%, transparent); color: var(--ink); }
+/* 三级缩进 0/14/28（10px 基础内边距 + 14 步进）；h1 加粗，h3 降一档字号 */
+.toc-item.lv1 { font-weight: 600; color: var(--ink); }
+.toc-item.lv2 { padding-left: 24px; }
+.toc-item.lv3 { padding-left: 38px; font-size: 12px; }
+/* scrollspy 当前节：黄铜高亮（仅预览态、浮层开启期间） */
+.toc-item.toc-item-act { background: color-mix(in srgb, var(--brass) 14%, transparent); color: var(--brass); font-weight: 600; }
+.toc-empty { font-family: 'Inter', sans-serif; font-size: 12px; color: var(--ink-soft); text-align: center; padding: 22px 14px 26px; }
+/* 「目录」按钮激活态 = 浮层开启反馈：只变色不变几何（位置/尺寸不跳，D5） */
+.toc-btn-open { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.toc-btn-open:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+/* 预览跳转落点：scrollIntoView block:start 的 16px 上边距（TOC 与深链共用） */
+#preview :is(h1, h2, h3) { scroll-margin-top: 16px; }
+@media (prefers-reduced-motion: reduce) {
+  .toc-dd { animation: none; }
+}
+
 /* ============ 文档区 ============ */
 #content-area { background: var(--paper); }
 .doc-wrap { perspective: 1200px; }

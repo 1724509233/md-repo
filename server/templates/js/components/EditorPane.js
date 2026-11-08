@@ -126,6 +126,19 @@ export const EditorPane = {
       }
     }
 
+    // TOC 跳转/scrollspy 用的元素引用（P4-3）：previewEl / editorEl 即本组件 ref；
+    // scroller = 文档滚动容器（app.js .doc-enter 内的 .flex-1.overflow-y-auto，#preview 的最近
+    // overflow-y:auto 祖先——与 toc.js findPreviewScroller 同口径）
+    function getScrollerEl() {
+      let n = previewEl.value ? previewEl.value.parentElement : null
+      while (n) {
+        const ov = getComputedStyle(n).overflowY
+        if (ov === 'auto' || ov === 'scroll') return n
+        n = n.parentElement
+      }
+      return previewEl.value ? previewEl.value.parentElement : null
+    }
+
     function fallbackCopy(text, done) {
       const ta = document.createElement('textarea')
       ta.value = text
@@ -138,7 +151,7 @@ export const EditorPane = {
       done()
     }
 
-    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, triggerPageTurn }
+    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, triggerPageTurn, getScrollerEl }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
