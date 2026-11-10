@@ -116,3 +116,101 @@ def test_utils_markdown_exports():
     assert "renderMarkdown" in js
     assert "postProcessPreview" in js
     assert "setupMarkdown" in js
+
+
+# ============ 选区 → 源码编辑（spec 2026-11-09，oracle 一致性审查 F1–F5 静态钉住）============
+
+
+def test_editor_td_branch_guards_selection_and_localcontent_watch():
+    """F1/F8：onPreviewMouseUp 的 td 分支格级分流须先判选区为空（spec §2.2「点击 cell = mouseup 无文本选区」）。
+
+    旧实现在 td 命中时无条件 removeAllRanges + landCell 吞掉一切手势，跨块框选释放点落在
+    cell 上、格内拖选本应走框选/整表流程——断言 isCollapsed 选区守卫出现在 onPreviewMouseUp
+    函数体内（含 landCell 调用前的 cell 命中分支）。
+    """
+    js = read_js("components/EditorPane.js")
+    m = re.search(r"function onPreviewMouseUp\(e\) \{(.+?)\n    \}\n", js, re.S)
+    assert m, "missing onPreviewMouseUp in EditorPane.js"
+    fn = m.group(1)
+    assert "landCell" in fn, "td branch must dispatch to landCell"
+    head = fn[: fn.index("landCell")]
+    assert "isCollapsed" in head, (
+        "cell-level landing must be gated on an empty window selection "
+        "(isCollapsed check before landCell) — drag-selection released on a cell "
+        "must fall through to the block-selection flow (spec §2.2/§5.1)"
+    )
+
+
+def test_editor_preview_watch_uses_localcontent_not_renderedhtml():
+    """F3/F8：映射重建兜底 watch 挂 localContent（内容变更 = 映射重建不变量，spec §3.2）。
+
+    渲染对变更不可见（插入/删除空行、强调记号互换）时 HTML 可逐字节相同、v-html 不 patch——
+    旧实现的 watch(renderedHtml) 漏掉这类变更。断言钉住替换口径：watch(localContent 存在、
+    watch(renderedHtml 零残留。
+    """
+    js = read_js("components/EditorPane.js")
+    assert re.search(r"watch\(\s*localContent\s*[,)]", js), (
+        "mapping-rebuild fallback watch must observe localContent (preview state)"
+    )
+    assert "watch(renderedHtml" not in js, (
+        "stale watch(renderedHtml) must be gone — render-invisible content changes "
+        "(blank line insert/delete, **x** <-> __x__) keep v-html unpatched (spec §3.2)"
+    )
+
+
+def test_editor_endofline_strips_trailing_cr():
+    """F4/F8：endOfLine 须剔除行尾 \r（CRLF 文档口径，spec §9.4）。
+
+    CRLF 文档（Windows 同步）若选区含行尾 \r，替换输入会把该行行尾折成 LF → 混合行尾；
+    断言 endOfLine 函数体内出现 charCodeAt(n - 1) === 13 的 \r 剔除（n 回退一字符）。
+    """
+    js = read_js("components/EditorPane.js")
+    m = re.search(r"function endOfLine\([^)]*\)\s*\{(.+?)\n    \}", js, re.S)
+    assert m, "missing endOfLine in EditorPane.js"
+    assert re.search(r"charCodeAt\(\s*n\s*-\s*1\s*\)\s*===\s*13", m.group(1)), (
+        "endOfLine must strip trailing \\r (CRLF line ending) from the selection end"
+    )
+
+
+def test_markdown_dompurify_keeps_src_line_attrs():
+    """§9.2/F8：DOMPurify sanitize 的 ADD_ATTR 必须放行 data-src-line / data-src-line-end。
+
+    DOMPurify 默认剥 data-*；不放行则映射属性在 sanitize 后丢失、落位全部静默失败。
+    断言两属性都出现在 sanitize 调用的 ADD_ATTR 数组中。
+    """
+    js = read_js("utils/markdown.js")
+    m = re.search(r"ADD_ATTR:\s*\[([^\]]*)\]", js)
+    assert m, "missing DOMPurify ADD_ATTR array in markdown.js sanitize"
+    assert "data-src-line" in m.group(1), "ADD_ATTR must keep data-src-line"
+    assert "data-src-line-end" in m.group(1), "ADD_ATTR must keep data-src-line-end"
+
+
+def test_refreshpreview_postprocesses_before_mapping():
+    """§9.2/F8：refreshPreview 内顺序敏感——postProcessPreview 先于 writeSrcLineMapping。
+
+    映射须按 postProcess 后的最终 DOM 写（mermaid pre → div.mermaid 替换发生在 postProcess）；
+    顺序颠倒会把映射写到被替换掉的 pre 上。函数体内顺序正则钉住先后。
+    """
+    js = read_js("components/EditorPane.js")
+    m = re.search(r"async function refreshPreview\(\) \{(.+?)\n    \}", js, re.S)
+    assert m, "missing refreshPreview in EditorPane.js"
+    assert re.search(
+        r"postProcessPreview\([^)]*\)\s*\n\s*writeSrcLineMapping\(", m.group(0)
+    ), "refreshPreview must call postProcessPreview before writeSrcLineMapping (spec §9.2)"
+
+
+def test_toc_jump_prefix_sum_uses_actual_separator_length():
+    """C3/F8：toc.js jumpToEditorLine 前缀和须按实际分隔符长度累加（CRLF=2 / LF=CR=1）。
+
+    get_doc 原样返回 CRLF、JS 程序化 set textarea.value 不重新 sanitize → ta.value 可为
+    CRLF；旧实现 `start += lines[k].length + 1` 按 LF 对齐算偏移，应用到 CRLF 值上选区偏
+    CRLF 行数个字符。断言旧模式零残留、新交替数组累加（parts[k].length + parts[k+1].length）存在。
+    """
+    js = read_js("utils/toc.js")
+    assert re.search(r"start\s*\+=\s*lines\[k\]\.length\s*\+\s*1", js) is None, (
+        "stale LF-only prefix sum must be gone — CRLF documents (Windows sync) need "
+        "actual separator length (get_doc returns raw, JS set textarea.value is not re-sanitized)"
+    )
+    assert re.search(r"start\s*\+=\s*parts\[k\]\.length\s*\+\s*parts\[k\s*\+\s*1\]\.length", js), (
+        "prefix sum must add line length + actual separator length from the split alternation array"
+    )

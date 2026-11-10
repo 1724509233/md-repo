@@ -108,10 +108,20 @@ export function scrollToPreviewHeading(target, flash = true, previewEl = null) {
  */
 export function jumpToEditorLine(ta, value, lineNo) {
   if (!ta || !lineNo) return false
-  const lines = String(value).split(/\r\n|\r|\n/)
-  const ln = Math.max(0, Math.min(lineNo - 1, lines.length - 1))
+  // CRLF 口径（Windows 同步）：get_doc 原样返回（console.py read_bytes().decode() 无换行规范化），
+  // JS 程序化 set textarea.value 不重新 sanitize（HTML 的 value sanitize 只作用于解析期）→
+  // ta.value 可为 CRLF。前缀和须按**实际分隔符长度**（CRLF=2 / LF=CR=1）累加，
+  // 否则偏移按 LF 对齐算出却应用到 CRLF 值上 → 选区偏 CRLF 行数个字符。
+  const parts = String(value).split(/(\r\n|\r|\n)/)   // 交替数组：line0, sep1, line1, sep2, ...
+  const totalLines = Math.ceil(parts.length / 2)      // 尾随分隔符由 split 保留 → 行数 = 偶数位条目数
+  const ln = Math.max(0, Math.min(lineNo - 1, totalLines - 1))
+  const lines = []
   let start = 0
-  for (let k = 0; k < ln; k++) start += lines[k].length + 1
+  for (let k = 0; k < ln * 2; k += 2) {
+    lines.push(parts[k])
+    start += parts[k].length + parts[k + 1].length    // 分隔符实际长度（CRLF=2 / LF=CR=1），非固定 1
+  }
+  lines.push(parts[ln * 2])   // lines[k] 不含分隔符（探针/行长口径，同旧 split）
   ta.focus()
   ta.setSelectionRange(start, start + lines[ln].length)   // 选中整行 = 反馈本体（编辑器无逐行高亮，不加假闪光）
   let topY

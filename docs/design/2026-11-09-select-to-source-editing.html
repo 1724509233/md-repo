@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选区 → 源码编辑 · 交互 Mockup（2026-11-09）</title>
+<!--
+  spec：docs/design/2026-11-09-select-to-source-editing.md（唯一事实源；本稿未引入 spec 之外的应用内交互）
+  主题 / 组件 1:1 移植自 md-repo/server/templates/style.css「纸墨·书房」；CDN 栈与真应用一致
+  （Tailwind Play + Flowbite 2.5.2 + marked 4.3.0 + DOMPurify 3.0.8 + mermaid 10 + hljs 11.9.0 + Google Fonts）。
+  无后端、不真实保存：渲染管线按 spec §3/§9 模拟（marked lexer 行号闭区间 → hljs 高亮 → mermaid 渲染 → 最后写 data-src-line，§9.2 顺序敏感），状态全在 JS。
+  右侧「闭环脚本」为 demo chrome（演示脚手架），不属于应用 UI。
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = { theme: { extend: { colors: { bg: 'var(--paper)', surface: 'var(--surface)', border: 'var(--line)', text: 'var(--ink)', muted: 'var(--ink-soft)' }, fontFamily: { sans: ['Inter', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'], mono: ['JetBrains Mono', 'ui-monospace', 'monospace'] } } } };
+</script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.css">
+<script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.2/dist/flowbite.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@4.3.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.8/dist/purify.min.js"></script>
+<!-- 代码高亮 + mermaid：与真应用 index.html L21-22 同版本同 CDN 同顺序（jsdelivr） -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+<style>
+/* ============ 纸墨「书房」tokens（style.css :root 1:1）============ */
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A;
+  --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper);color:var(--ink)}
+body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 72px}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--ink-soft) 35%,transparent) transparent}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--ink-soft) 35%,transparent);border-radius:9999px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--brass);border-radius:6px}
+button{font-family:var(--sans);cursor:pointer}
+
+/* ============ 页面头部（设计稿页 chrome，非应用 UI）============ */
+.page-head{max-width:1520px;margin:0 auto 30px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.page-head h1{font-size:25px;font-weight:700;letter-spacing:.01em}
+.page-head .sub{font-family:var(--sans);font-size:13px;color:var(--ink-soft);margin-top:8px;max-width:1120px;line-height:1.85}
+.page-head .sub b{color:var(--ink);font-weight:600}
+.page-head .meta{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:8px;line-height:1.7}
+.body-grid{max-width:1520px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:26px;align-items:start}
+@media (max-width:1280px){.body-grid{grid-template-columns:1fr}.guide{position:static !important}}
+
+/* ============ 舞台与应用窗口 ============ */
+.stage-col{min-width:0;display:flex;flex-direction:column;gap:10px}
+.stage-cap{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.7;padding:0 4px}
+.stage-cap b{color:var(--brass);font-weight:500}
+.appframe{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow:hidden;height:690px;box-shadow:0 10px 30px rgba(33,29,24,.06),0 1px 0 rgba(33,29,24,.03)}
+
+/* rail（style.css .rail 1:1：64px · surface 底 · 52×44 按钮 · 激活左缘 3px 铜条） */
+.rail{width:64px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:12px 0;background:var(--surface);border-right:1px solid var(--line)}
+.rail .rsep{width:22px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:8px 0}
+.rail > .rbtn + .rbtn{margin-top:6px}
+.rbtn{border:none;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:52px;height:44px;border-radius:9px;color:var(--ink-soft);position:relative;transition:background-color .15s ease,color .15s ease}
+.rbtn .ricon{display:inline-flex}
+.rbtn .ricon svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1}
+.rbtn:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--ink)}
+.rbtn.on{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.rbtn.on::before{content:'';position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+
+/* 文件面板（style.css .panel-shell/.p-head 1:1，桌面 260px） */
+.panel-shell{width:260px;flex-shrink:0;position:relative;background:var(--paper);border-right:1px solid var(--line);overflow:hidden}
+.panel-face{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--paper)}
+.p-head{height:48px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface);font-family:var(--sans);position:relative}
+.p-head .ptitle{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--ink)}
+.p-head .pcount{font-size:11px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.p-head .pacts{margin-left:auto;display:flex;align-items:center;gap:4px}
+.ibtn{width:26px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;transition:background-color .15s ease,color .15s ease}
+.ibtn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.ibtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tree{flex:1;min-height:0;overflow-y:auto;font-family:var(--sans);font-size:13px;padding:8px;display:flex;flex-direction:column;gap:1px}
+.tree-file{display:flex;align-items:center;width:100%;text-align:left;border:none;background:transparent;color:var(--ink-soft);padding:4px 8px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background-color .15s ease,color .15s ease}
+.tree-file svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;flex-shrink:0;margin-right:6px;opacity:.7}
+.tree-file:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.tree-file.active{background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass);font-weight:500}
+
+/* 内容区 + 顶栏（TopBar.js 1:1：h-12 · px-16 · surface） */
+.content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--paper);position:relative}
+.topbar{height:48px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 16px;font-family:var(--sans);position:relative;z-index:30}
+.topbar .logo-mark{width:22px;height:22px;border:1px solid var(--brass);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:11px;color:var(--brass);flex-shrink:0}
+.topbar .logo-word{font-family:var(--serif);font-weight:600;font-size:15px;letter-spacing:.02em;flex-shrink:0}
+.topbar .fname{flex:1;min-width:0;font-family:var(--serif);font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-btn{font-family:var(--sans);font-size:12px;height:28px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:8px;background:transparent;color:var(--ink-soft);flex-shrink:0;transition:background-color .15s ease,color .15s ease}
+.topbar-btn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.topbar-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.mode-pill{display:flex;align-items:center;gap:2px;height:36px;padding:0 2px;border-radius:8px;background:color-mix(in srgb,var(--ink) 6%,transparent);flex-shrink:0}
+.mode-pill .mode-btn{height:28px;padding:0 12px;border:none;border-radius:7px;background:transparent;color:var(--ink-soft);font-size:12px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s ease,color .15s ease}
+.mode-pill .mode-btn.active{background:var(--brass);color:var(--paper);font-weight:500}
+.mode-pill .mode-btn:not(.active):hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.btn-save{font-weight:500;color:var(--paper);background:var(--brass)}
+.btn-save:hover{background:color-mix(in srgb,var(--brass) 85%,var(--ink));color:var(--paper)}
+@media (prefers-reduced-motion: reduce){.topbar-btn,.mode-pill .mode-btn,.rbtn,.tree-file{transition:none}}
+
+/* 文档滚动容器 + 680px 列（app.js .doc-scroll / .docwrap 1:1） */
+.docscroll{flex:1;min-height:0;overflow-y:auto;padding:24px}
+.docwrap{max-width:680px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+
+/* 预览排版（style.css #preview 1:1） */
+.preview{font-family:var(--serif);font-size:16px;line-height:1.75;color:var(--ink);flex:1;min-width:0}
+.preview h1{font-size:28px;font-weight:700;line-height:1.3;margin:2rem 0 1rem;padding-bottom:.5rem;border-bottom:1px solid color-mix(in srgb,var(--brass) 45%,transparent)}
+.preview h1:first-child{margin-top:0}
+.preview h2{font-size:20px;font-weight:600;line-height:1.4;margin:1.5rem 0 .75rem}
+.preview h3{font-size:17px;font-weight:600;line-height:1.4;margin:1.25rem 0 .5rem}
+.preview p{margin:1rem 0}
+.preview a{color:var(--brass);text-decoration:underline;text-underline-offset:3px}
+.preview ul,.preview ol{padding-left:1.25rem;margin:.75rem 0;list-style:disc}
+.preview ol{list-style:decimal}
+.preview li{margin:.375rem 0}
+.preview li::marker{color:var(--brass)}
+.preview hr{border:none;border-top:1px solid var(--line);margin:2rem 0}
+.preview strong{font-weight:600;color:var(--ink)}
+/* 行内 code：style.css #preview code:not(pre code) L183 口径（排除 pre 内 code，避免块代码被套行内 chip 底） */
+.preview code:not(pre code){font-family:var(--mono);font-size:.8125rem;background:color-mix(in srgb,var(--brass) 8%,transparent);color:color-mix(in srgb,var(--brass) 85%,var(--ink));padding:.125rem .375rem;border-radius:4px}
+/* 表格（style.css #preview table/th/td L184-187 1:1，scope 换 .preview；spec §5.1 渲染：按既有样式、与真应用一致）。
+   行 hover = 真应用既有规则；与 spec §2.1 整表块 hover 描边并存——前者作用于 tr/td，后者作用于 table 元素（整表一个块） */
+.preview table{width:100%;border-collapse:collapse;margin:1rem 0;font-size:14px}
+.preview th{background:color-mix(in srgb,var(--brass) 8%,transparent);font-weight:600;text-align:left}
+.preview th,.preview td{border:1px solid var(--line);padding:.5rem .75rem}
+.preview tr:hover td{background:color-mix(in srgb,var(--ink) 3%,transparent)}
+/* 格 hover 淡描边（已入 spec §2.1/§9.6，2026-11-09 评审定稿）：块级淡描边作用于 table 元素（整表一个块）；
+   td/th hover 再加一条更淡的描边（25% 铜 < 块描边 38%）提示格可点。 */
+.preview table td:hover,.preview table th:hover{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brass) 25%,transparent)}
+
+/* 代码块（style.css .code-block 系列 L275-281 1:1；markdown.js renderer.code 把 fence 包上
+   语言标签头 + 复制按钮——真应用既有渲染 chrome。复制按钮纯视觉复刻：无后端、不做剪贴板操作；
+   spec §2.1「无按钮、无常驻 chrome」针对块落位手势的 hover 发现性，与此既有 chrome 不同类） */
+.code-block{background:color-mix(in srgb,var(--ink) 4%,var(--surface));border-radius:8px;margin:12px 0;overflow:hidden;border:1px solid var(--line)}
+.code-block-header{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--ink-soft);font-family:var(--sans)}
+.code-copy-btn{opacity:0;transition:opacity .15s;background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;font-size:11px;color:var(--ink-soft);cursor:pointer;font-family:var(--sans)}
+.code-block:hover .code-copy-btn{opacity:1}
+.code-copy-btn:hover{color:var(--brass);border-color:var(--brass);background:color-mix(in srgb,var(--brass) 8%,transparent)}
+.code-block pre{margin:0;padding:12px;overflow-x:auto;font-size:13px;line-height:1.6}
+pre code.hljs{background:transparent;padding:0}
+/* hljs 色板——style.css L283-294 1:1（纸墨：暖色，适配纸白底） */
+.hljs-keyword,.hljs-selector-tag,.hljs-literal,.hljs-meta{color:#8a4f1d}
+.hljs-string,.hljs-selector-attr,.hljs-selector-class{color:#4d7c0f}
+.hljs-title,.hljs-title.function_,.hljs-title.class_{color:#1d5c8a}
+.hljs-comment,.hljs-quote{color:#94897a;font-style:italic}
+.hljs-number,.hljs-operator{color:#b45309}
+.hljs-built_in,.hljs-type{color:#0e7490}
+.hljs-attr,.hljs-attribute,.hljs-variable{color:#b91c1c}
+.hljs-regexp,.hljs-symbol{color:#a21caf}
+.hljs-bullet,.hljs-link,.hljs-section{color:#1d5c8a}
+.hljs-emphasis{font-style:italic}
+.hljs-strong{font-weight:700}
+
+/* Frontmatter 元数据卡片（style.css .fm-card/.v1-* 1:1，变体 01「索引条」） */
+.fm-card{border-radius:10px;margin:0 0 1.5rem}
+.fm-body{display:grid;grid-template-rows:0fr;transition:grid-template-rows .22s ease}
+.fm-card.open .fm-body{grid-template-rows:1fr}
+.fm-body-inner{overflow:hidden;min-height:0}
+@media (prefers-reduced-motion: reduce){.fm-body{transition:none}}
+.fm-chev{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;transition:transform .2s ease;flex-shrink:0}
+.fm-card.open .fm-chev{transform:rotate(90deg)}
+.fm-count{display:inline-flex;align-items:center;justify-content:center;min-width:1.25rem;height:1.125rem;padding:0 .375rem;border-radius:999px;font-family:var(--sans);font-size:10px;line-height:1;font-weight:500;font-variant-numeric:tabular-nums}
+.tag-chip{display:inline-block;margin:0 6px 0 0;padding:1px 8px;border-radius:999px;font-family:var(--mono);font-size:11px;background:color-mix(in srgb,var(--brass) 12%,transparent);color:color-mix(in srgb,var(--brass) 80%,var(--ink));border:1px solid color-mix(in srgb,var(--brass) 25%,transparent)}
+.v1-card{background:var(--surface);border:1px solid var(--line)}
+.v1-head{display:flex;align-items:center;gap:10px;width:100%;padding:9px 14px;background:none;border:none;cursor:pointer;font-family:var(--sans);transition:background-color .15s ease;text-align:left}
+.v1-head:hover{background:color-mix(in srgb,var(--brass) 6%,transparent)}
+.v1-head:hover .v1-chev{color:var(--brass)}
+.v1-icon{width:15px;height:15px;color:var(--brass);flex-shrink:0}
+.v1-icon svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;display:block}
+.v1-title{font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--ink-soft);white-space:nowrap;flex-shrink:0}
+.v1-count{background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);color:var(--ink-soft)}
+.v1-chev{color:color-mix(in srgb,var(--ink-soft) 80%,transparent);margin-left:auto;flex-shrink:0;transition:color .15s ease}
+.v1-summary{display:none;font-family:var(--mono);font-size:11.5px;color:var(--ink-soft);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;min-width:0}
+.v1-summary .sep{color:color-mix(in srgb,var(--ink-soft) 50%,transparent);margin:0 2px}
+.v1-card:not(.open) .v1-summary{display:inline}
+.v1-card:not(.open) .v1-count{display:none}
+.v1-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:2px;padding:4px 10px 8px}
+.v1-cell{padding:7px 10px;border-radius:7px;transition:background-color .12s ease;min-width:0}
+.v1-cell:hover{background:color-mix(in srgb,var(--brass) 7%,transparent)}
+.v1-k{display:block;font-family:var(--sans);font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-soft);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v1-v{font-family:var(--mono);font-size:12.5px;color:var(--ink);font-variant-numeric:tabular-nums;word-break:break-word}
+.v1-v .tag-chip{vertical-align:1px}
+
+/* ============ 闭环脚本（demo chrome，非应用 UI）============ */
+.guide{position:sticky;top:24px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.g-card{background:var(--surface);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);border-radius:10px;padding:14px 16px}
+.g-title{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--brass)}
+.g-title-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.g-step h3{font-family:var(--serif);font-size:14.5px;font-weight:700;display:inline}
+.g-step-head{display:flex;align-items:baseline;gap:8px;margin-bottom:2px}
+.g-stepnum{font-family:var(--serif);font-size:13px;color:var(--brass);font-weight:700}
+.g-desc{font-family:var(--sans);font-size:12px;line-height:1.7;color:var(--ink-soft)}
+.g-desc i{font-style:normal;font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+.g-row{display:flex;align-items:center;gap:10px;margin-top:10px}
+.demo-btn,.ghost-btn{font-family:var(--sans);font-size:12px;height:28px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;border-radius:8px;background:transparent;color:var(--ink-soft);border:1px solid var(--line);transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.demo-btn:hover,.ghost-btn:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--brass);border-color:color-mix(in srgb,var(--brass) 40%,var(--line))}
+.demo-btn:active,.ghost-btn:active{transform:scale(.96)}
+.demo-btn:disabled{opacity:.45;pointer-events:none}
+.g-status{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent)}
+.g-status.busy{color:var(--ink-soft)}
+.g-status.ok{color:var(--brass)}
+.g-status.warn{color:#b45309}
+
+/* 稿尾取舍说明 */
+.notes{max-width:1520px;margin:30px auto 0;padding-top:18px;border-top:1px solid var(--line)}
+.notes .g-title{margin-bottom:10px}
+.notes ul{margin:0;padding-left:18px;max-width:1150px}
+.notes li{font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--ink-soft);margin:6px 0}
+.notes li b{color:var(--ink);font-weight:600}
+.notes code{font-family:var(--mono);font-size:11px;background:color-mix(in srgb,var(--brass) 8%,transparent);color:color-mix(in srgb,var(--brass) 85%,var(--ink));padding:1px 5px;border-radius:4px}
+
+/* 视图切换淡入（style.css .view-fade 1:1） */
+@keyframes viewFade{from{opacity:0}to{opacity:1}}
+.view-fade{animation:viewFade .15s ease both}
+
+/* 源码模式（style.css #editor 1:1：JetBrains Mono 14px/1.75 · 透明底 · 整文档 textarea）
+   选区可见性 = 原生选区（spec §4.2，不另加高亮带）；仅把选区色纳入主题 */
+.editor{font-family:var(--mono);font-size:14px;line-height:1.75;color:var(--ink);background:transparent;width:100%;flex:1;border:0;resize:none;outline:none;display:block;padding:0}
+.editor::placeholder{color:var(--ink-soft);opacity:.6}
+.editor::selection{background:color-mix(in srgb,var(--brass) 26%,transparent)}
+
+/* ============ spec 新增（v1 唯一新机制的可见部分）============ */
+/* §2.1 hover 块 → 淡描边：无按钮、无角标、无常驻 chrome。
+   inset shadow 代替 1px border（零 reflow）；cursor:text 提示「这是文本」，瞬态、非常驻 */
+.preview [data-src-line]{cursor:text}
+.preview [data-src-line]:hover,.preview .demo-hover{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brass) 38%,transparent);border-radius:8px}
+/* §2.1 首次使用一行帮助文案（定稿，见 .hint-line 内容）：一次性，首次落位后淡出，不常驻 */
+.hint-line{font-family:var(--sans);font-size:12px;color:var(--ink-soft);line-height:1.65;padding:0 2px 16px;transition:opacity .3s ease,height .3s ease,padding-bottom .3s ease}
+.hint-line::before{content:'';display:inline-block;width:5px;height:5px;border-radius:999px;background:color-mix(in srgb,var(--brass) 70%,transparent);margin-right:8px;vertical-align:2px}
+.hint-line.gone{opacity:0;height:0;padding-bottom:0;overflow:hidden}
+
+/* demo 编排反馈（demo chrome，非应用 UI）：选区确认后目标块一次性描边闪烁 */
+@keyframes selFlash{0%{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--brass) 55%,transparent)}100%{box-shadow:inset 0 0 0 0 transparent}}
+.preview .sel-flash{animation:selFlash 1s ease-out both}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>选区 → 源码编辑 · 快速交互设计稿</h1>
+  <div class="sub">
+    预览是只读投影，<b>markdown 源码是唯一事实源</b>：在预览里点一下、或拖选一段，就落到源码模式对应行，直接改字；提交与既有 textarea input 同通道，零新路径。
+    下方是<b>可交互的应用窗口</b>（主题、顶栏、模式切换、文件面板均按真实应用 1:1 复刻；不接后端，保存由 JS 模拟）。
+  </div>
+  <div class="meta">spec 2026-11-09-select-to-source-editing.md · v1 唯一新增机制 = 块 → 行号闭区间映射（marked lexer 的 raw 前缀推出，随重渲染整体重建） · 渲染管线在 mockup 内按 §3/§9 真实模拟（marked → hljs 高亮 → mermaid 渲染 → 最后写映射，§9.2 顺序敏感）</div>
+</div>
+
+<div class="body-grid">
+  <section class="stage-col">
+    <div class="stage-cap">应用窗口（演示态：预览模式 · 文档「秋游笔记.md」已加载，行号映射已构建）—— 直接在里面动手，或点右侧脚本逐步演示</div>
+    <div class="appframe" id="appframe">
+      <!-- rail（图标 + 10px 标签；文件 / 搜索 / 记忆，文件激活） -->
+      <div class="rail">
+        <button class="rbtn on" title="文件页"><span class="ricon"><svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><span class="rlabel">文件</span></button>
+        <button class="rbtn" title="搜索页"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></span><span class="rlabel">搜索</span></button>
+        <div class="rsep"></div>
+        <button class="rbtn" title="记忆控制台页"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span><span class="rlabel">记忆</span></button>
+      </div>
+      <!-- 文件面板：260px · p-head「文档」· 树（演示文档高亮） -->
+      <div class="panel-shell">
+        <div class="panel-face">
+          <div class="p-head"><span class="ptitle">文档</span><span class="pcount">8</span><span class="pacts"><button class="ibtn" title="收起全部文件夹"><svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg></button></span></div>
+          <div class="tree">
+            <button class="tree-file"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>晨会纪要.md</button>
+            <button class="tree-file"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>读书笔记.md</button>
+            <button class="tree-file active"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>秋游笔记.md</button>
+            <button class="tree-file"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>产品脑暴.md</button>
+            <button class="tree-file"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>周报-45.md</button>
+            <button class="tree-file"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>接口草稿.md</button>
+          </div>
+        </div>
+      </div>
+      <!-- 内容区：顶栏 + 文档滚动容器 -->
+      <div class="content">
+        <div class="topbar">
+          <div class="flex items-center gap-2">
+            <span class="logo-mark">M</span>
+            <span class="logo-word">md-vault</span>
+          </div>
+          <span class="fname">秋游笔记.md</span>
+          <button class="topbar-btn" title="通知" aria-label="通知"><svg viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></button>
+          <!-- 模式分段控件：无外框，仅激活态黄铜（TopBar.js 1:1） -->
+          <div class="mode-pill">
+            <button class="mode-btn topbar-btn" data-mode="edit"><svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑</button>
+            <button class="mode-btn topbar-btn" data-mode="preview"><svg viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览</button>
+          </div>
+          <button class="topbar-btn" title="本文目录" aria-label="本文目录"><svg viewBox="0 0 24 24"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg>目录</button>
+          <button class="topbar-btn" title="下载"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载</button>
+          <button class="topbar-btn save-btn" title="保存"><svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>保存</button>
+        </div>
+        <div class="docscroll" id="docscroll">
+          <div class="docwrap" id="docwrap">
+            <div class="hint-line" id="hintLine">在预览里点一下、或拖选一个块，直接落到源码的对应行；表格里点一下某个格，就地改这一格</div>
+            <textarea id="editor" class="editor"></textarea>
+            <div id="preview" class="preview"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="stage-cap">保存 = 顶栏实心黄铜按钮（与真应用一致，唯一保存触发器）；保存后预览重渲染、行号映射整体重建（spec §3.2 / §9.5）</div>
+  </section>
+
+  <aside class="guide">
+    <div class="g-card">
+      <div class="g-title-row"><span class="g-title">闭环脚本</span><button class="ghost-btn" id="btnReset">重置演示</button></div>
+      <div class="g-desc">每步自动跑一遍「选区 → 落位 → 编辑 → 保存」；也可以<b style="color:var(--ink)">不点脚本，直接在左边窗口里动手</b>。脚本跑到哪步、你手滑到哪步，都不影响另一侧。</div>
+    </div>
+    <div class="g-card g-step" id="step1">
+      <div class="g-step-head"><span class="g-stepnum">①</span><h3>预览态：两种手势</h3></div>
+      <div class="g-desc">hover 任意块 → 淡描边（无按钮、无角标、无常驻 chrome）；<b style="color:var(--ink)">点击单块</b>或<b style="color:var(--ink)">拖选跨块</b>（从标题到正文），都收敛为同一结果：连续块区间 <i>L1–L2</i>。</div>
+      <div class="g-row"><button class="demo-btn" data-step="1">播放</button><span class="g-status" id="g-status-1">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step2">
+      <div class="g-step-head"><span class="g-stepnum">②</span><h3>块内改字</h3></div>
+      <div class="g-desc">点击正文段落 → 该段源行被选中，直接输入替换；改「光很好」为「光线很好」，其余文档逐字不动。</div>
+      <div class="g-row"><button class="demo-btn" data-step="2">播放</button><span class="g-status" id="g-status-2">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step3">
+      <div class="g-step-head"><span class="g-stepnum">③</span><h3>跨块合并两段</h3></div>
+      <div class="g-desc">从标题拖选到正文 → 选区覆盖两块的行及中间空行（<i>L7–L11</i>）；编辑成一段。</div>
+      <div class="g-row"><button class="demo-btn" data-step="3">播放</button><span class="g-status" id="g-status-3">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step4">
+      <div class="g-step-head"><span class="g-stepnum">④</span><h3>frontmatter 增删 tag</h3></div>
+      <div class="g-desc">点击 frontmatter 卡 → YAML 行区间（<i>L1–L5</i>）被选中；tags 行尾加一个条目，保存后预览卡片多一枚 tag。</div>
+      <div class="g-row"><button class="demo-btn" data-step="4">播放</button><span class="g-status" id="g-status-4">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step5">
+      <div class="g-step-head"><span class="g-stepnum">⑤</span><h3>删除一个块</h3></div>
+      <div class="g-desc">选正文块行，扩到<b style="color:var(--ink)">尾随空行</b>一起删（否则留下双空行）；保存后块消失，其余文档渲染正常。</div>
+      <div class="g-row"><button class="demo-btn" data-step="5">播放</button><span class="g-status" id="g-status-5">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step6">
+      <div class="g-step-head"><span class="g-stepnum">⑥</span><h3>改标题行</h3></div>
+      <div class="g-desc">点击 h1 → <i>#</i> 行被选中、滚动至可见、立即可输入；改完保存，预览重渲染、行号映射整体重建。</div>
+      <div class="g-row"><button class="demo-btn" data-step="6">播放</button><span class="g-status" id="g-status-6">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step7">
+      <div class="g-step-head"><span class="g-stepnum">⑦</span><h3>表格：改格 / 增行</h3></div>
+      <div class="g-desc">点击表格某格 → <b style="color:var(--ink)">该格文本</b>被选中（不含左右 <i>|</i>；转义 <i>\|</i> 不影响分列）→ 替换输入、保存 → 预览该格更新、其余逐字不动；点<b style="color:var(--ink)">空格</b> → caret 入格（零宽落位）。增行：<b style="color:var(--ink)">拖选</b>落整表区间（<i>L13–L18</i>：表头+分隔+4 数据行，拖选 = 整表），在末行行尾敲入一整行（列数与表头一致），保存 → 表格多一行，映射随重渲染重建。</div>
+      <div class="g-row"><button class="demo-btn" data-step="7">播放</button><span class="g-status" id="g-status-7">未播放</span></div>
+    </div>
+    <div class="g-card g-step" id="step8">
+      <div class="g-step-head"><span class="g-stepnum">⑧</span><h3>代码块 / mermaid：落整段 fence</h3></div>
+      <div class="g-desc">代码块 = 顶层块：hover 整卡描边（含语言标签头），点击 → <b style="color:var(--ink)">整段 fence</b> 被选中（含 <i>```python</i> 首行与 <i>```</i> 尾行，<i>L28–L33</i>）；<b style="color:var(--ink)">渲染出的 mermaid 图</b>点任意处 → 事件委托 <i>closest('[data-src-line]')</i> 命中 <i>div.mermaid</i>（映射写在 postProcess 后的最终 DOM 上）→ 落整段 fence 源码（<i>L37–L43</i>）；改图内节点保存 → 重渲染、映射整体重建，两类块落位仍精确。</div>
+      <div class="g-row"><button class="demo-btn" data-step="8">播放</button><span class="g-status" id="g-status-8">未播放</span></div>
+    </div>
+    <div class="g-card g-free">
+      <div class="g-title">自由探索</div>
+      <div class="g-desc">编辑态 = 既有整文档 textarea：IME、undo/redo、粘贴都是原生行为。表格与其他块同机制（无类型分支）：hover 整表淡描边（块级）、点格落该格文本范围（格级）、拖选落整表行区间。Esc 或点「预览」退出源码模式（沿用既有行为）。首次帮助文案只出现一次——</div>
+      <div class="g-row"><button class="ghost-btn" id="btnHint">重播首次帮助文案</button></div>
+    </div>
+  </aside>
+</div>
+
+<div class="notes">
+  <div class="g-title">稿外取舍（spec 未规定、由本稿定稿的视觉细节）</div>
+  <ul>
+    <li><b>hover 淡描边</b> = 1px 黄铜内描边（inset shadow，零 reflow）+ 圆角 8px + <code>cursor: text</code>；不引入按钮、角标或常驻 chrome（spec §2.1）。</li>
+    <li><b>首次帮助文案（定稿）</b>：「在预览里点一下、或拖选一个块，直接落到源码的对应行；表格里点一下某个格，就地改这一格」——文档区顶部一行小字，首次落位后淡出、不常驻（spec §2.1：文案由设计稿定稿；格点击是新增手势，文案点出发现性入口）。</li>
+    <li><b>落位可见性</b> = textarea 原生选区高亮（仅把选区色纳入黄铜主题），不加高亮带、不加行号栏（spec §4.2）。</li>
+    <li><b>frontmatter 卡的手势分区</b>：卡身点击落源码（spec §8.4）；头部折叠手柄沿用既有折叠行为，不触发落位——spec 未规定两者冲突，本稿取「手柄保既有」。</li>
+    <li><b>保存后切回预览</b>：真应用保存不强制切模式；本稿保存后切预览以直观展示「重渲染、编辑生效」（spec §6 只规定保存后重渲染）。</li>
+    <li><b>右侧闭环脚本与描边闪烁</b>：demo 编排（脚手架），不属于应用 UI，实现时不落地。</li>
+    <li><b>列表项目符号</b>：Tailwind preflight 会去掉 <code>ul</code>/<code>ol</code> 的 marker，真应用 style.css 未补回——演示里列表会像渲染故障，本稿补 <code>list-style: disc</code>（与本 spec 机制无关；真应用已于 2026-11-09 同步修复，scope <code>#preview</code>）。</li>
+    <li><b>预览按钮眼睛图标</b>：初版曾记录「真应用 path 截断」，2026-11-09 字节级核验（TopBar.js L99/L141，全量 <code>&lt;path&gt;</code> 解析扫描）确认真应用 path 原本完整，系目测密排坐标数错——真应用未做改动，本稿与真应用一致。</li>
+    <li><b>窗口比例</b>：rail 64px / 文件面板 260px / 文档列 680px / 顶栏 48px，均按真应用几何 1:1；窗口高度 690px 仅为演示，未做移动端。</li>
+    <li><b>表格样式</b>：style.css <code>#preview table/th/td</code>（L184-187：边框 <code>--line</code>、表头 8% 铜底、行 hover 3% 墨底）1:1 引入 <code>.preview</code> scope（spec §5.1：按既有样式渲染，与真应用一致）；行 hover 与整表块 hover 描边并存，各作用于 tr/td 与 table 元素。</li>
+    <li><b>块区间 = 块自身内容行</b>：marked 4.3 的 token raw 吸收尾随空行（table raw = 表行 + 尾随空行，heading 同）。若直接按 raw 前缀算闭区间，表格落位会扩到尾随空行，与 spec §5.1（表头行+分隔行+数据行）不符——<code>data-src-line-end</code> 取 raw 最后一条非空行，start 仍由 raw 前缀和推出（§9.1 不变）。</li>
+    <li><b>marked.lexer options 陷阱</b>：v4.3 传入 options 整体替换 defaults（不合并），原 <code>{mangle:false, headerIds:false}</code> 静默关闭 gfm → 表格退化为段落；改 <code>{...marked.defaults, mangle:false, headerIds:false}</code>（与真应用 marked.parse 的 gfm 口径一致）。</li>
+    <li><b>步骤⑦ 演示内容</b>：点格改「菜单换了，美式照旧」→「菜单换了，桂花拿铁新上榜」；空格点格展示 caret 入格（零宽）；增行「河桥 → 鼓楼巷北 / 12:00 / 桂花更浓，适合歇脚」（3 列，与表头一致），增行入口改用<b>拖选落整表</b>（与 spec §5.1「拖选 = 整表」口径一致）——demo 编排，内容本稿选定。</li>
+    <li><b>格落位机制（本轮新增，照 spec §9.7 实现）</b>：mockup JS 的 <code>cellCharRange(src, tbl, td)</code> 纯函数——DOM <code>tr/td</code> 取 (行,列) → 表格源行逐行按<b>未转义 |</b> split 定位该格 [start,end] 字符区间 → 行前缀和折算全文档偏移。<code>landCell</code> 点格才跑；映射层仍只写整表 <code>data-src-line</code>，不存格单元。空格（源文本仅 padding 空白）在 <code>landCell</code> 落零宽（caret 入格，§5.1）——纯函数本身仍返回格区间（含那个空格），零宽是落位语义层决定的。未转义判定按 spec §9.7 字面取单反斜杠口径（反斜杠链 <code>\\\\</code>+管道 不细分；格文本恰以反斜杠结尾的极端 case 不在验收项）。</li>
+    <li><b>示例表格扩为 4 数据行（L13–L18）</b>：为同表容纳两类验证格——L16 备注「A\|B 两班轮换」（转义管道，验证 split 不分列、渲染为 A|B）与 L18 空格（验证零宽落位）；「①–⑥ 不动」的约束下 ①–⑥ 只引用 L1–L11，不受影响。表格样式与行 hover 仍按既有规则（上条表格样式项）。</li>
+    <li><b>格 hover 淡描边（已入 spec，2026-11-09 评审定稿）</b>：td/th hover 一条<b>更淡</b>的描边（25% 铜 < 块描边 38%，inset shadow 零 reflow）提示「格可点」，已写入 spec §2.1/§9.6；本稿 CSS 与 spec 一致。</li>
+    <li><b>代码块包装（1:1 移植，本轮新增）</b>：此前本稿 fence 渲染为裸 <code>pre</code>；本轮照真应用移植 <code>renderer.code</code>（markdown.js L169-174：<code>div.code-block</code> 包装 + 语言标签头 + 复制按钮）与 style.css L275-281（4% 墨底 + surface、8px 圆角、1px 边、pre 13px/1.6 密排）。复制按钮为纯视觉复刻：本稿无后端、不做剪贴板操作（真应用由 EditorPane 事件委托写剪贴板）。代码 token 的顶层元素因此是 <code>div.code-block</code>（spec §9.2 元素列表中的 <code>pre</code> 指代码内容元素；映射仍逐 token 写在唯一顶层元素上，一对一对应语义不变）。</li>
+    <li><b>hljs 纸墨色板（1:1 移植，本轮新增）</b>：style.css L283-294 全量引入（关键词 #8a4f1d / 字符串 #4d7c0f / 标题 #1d5c8a 等暖色板）+ <code>pre code.hljs{background:transparent;padding:0}</code>（L281，盖 hljs 自带白底）；CDN 同真应用 index.html L21-22（<code>@highlightjs/cdn-assets@11.9.0</code>，jsdelivr）。行内 code 选择器同步改 <code>:not(pre code)</code>（真应用 #preview L183 口径；此前裸 <code>.preview code</code> 会连块内 code 一起套行内 chip 底）。</li>
+    <li><b>mermaid 管线保真（1:1，本轮新增）</b>：真应用全程无 <code>mermaid.initialize</code>（js 目录 grep 核实）、style.css 无任何 <code>.mermaid</code> 规则 → 图用 mermaid v10 默认主题 + 默认配色，本稿不另加样式；postProcess 先对全部 <code>pre code</code> 跑 <code>hljs.highlightElement</code>（含 mermaid code，真应用口径），再做 <code>pre code.language-mermaid</code> → <code>div.mermaid</code> 替换（文本取自 code.textContent）、<code>mermaid.run({nodes})</code>。CDN 同真应用（<code>mermaid@10</code>，jsdelivr，位于 marked/DOMPurify 之后）。</li>
+    <li><b>mermaid 映射写在最终 DOM（§9.2 注的落实，本轮新增）</b>：pre 被替换发生在 postProcess，映射<b>最后</b>写——容器 <code>div.code-block</code> 与图 <code>div.mermaid</code> 同写整段 fence 区间：容器 = 整块 hover 描边 / 点击落位（含语言标签头区域）；图 = 渲染图点击的最近命中（<code>closest</code> 自 SVG 先碰到 <code>div.mermaid</code>）。属性写在容器上，mermaid.run 异步把 innerHTML 换成 SVG 后仍存活（§9.2 注）。正常代码块只在 <code>div.code-block</code> 上写（pre 未被替换）。</li>
+    <li><b>示例文档尾部两块（本轮新增）</b>：追加在文档末尾（L26 起），不扰动 ①–⑦ 引用的 L1–L18 行号——①–⑦ 复验通过（L7 标题 / L9、L11 段落 / L13–L18 表格 / L1–L5 frontmatter 均不变）。内容：python 4 行（读回路线记录，验证 hljs 纸墨色板，fence = L28–L33 含 <code>```python</code> 首行与尾行）+ mermaid flowchart（秋游路线 5 节点，fence = L37–L43）。demo 编排，内容本稿选定。</li>
+    <li><b>步骤⑧ 演示内容</b>：(a) 点 python 代码卡 → 整段 fence（含 ```lang 首尾行）被选中；(b) 点渲染后的 mermaid 图任意处（SVG）→ 断言 <code>closest</code> 命中 <code>div.mermaid</code> → 落整段 fence；(c) 在 fence 选中态改终点节点「城河码头 → 城河码头 · 终点」→ 保存 → 重渲染（新图）+ 映射重建；(d) 再点 python 卡 → 仍落 L28–L33。demo 编排，内容本稿选定。</li>
+  </ul>
+</div>
+<script>
+/* ============ 状态（模拟，不接后端）============ */
+const state = {
+  mode: 'preview',          // 'preview' | 'edit'
+  doc: '',                  // 唯一事实源：markdown 源码（含 frontmatter）
+  saved: '',                // 已保存版本（脏判定）
+  mapping: null,            // 当前渲染的块 → 行映射（§3.2：随重渲染重建，禁止引用旧映射）
+  hintDismissed: false,     // 首次帮助文案：一次性
+  running: false,           // demo 脚本运行中
+};
+const DOC0 = `---
+title: 秋游笔记
+tags: [秋, 散步, 笔记]
+date: 2026-11-09
+---
+
+# 秋游笔记
+
+初秋第一次走老城区，光很好。巷子口的砖墙泛着午后金光，连台阶都显得软。
+
+巷口的咖啡馆还在，菜单换了。一杯美式、一本书，一个下午就这么过去了。
+
+| 路段 | 时间 | 备注 |
+| --- | --- | --- |
+| 老城南门 → 鼓楼巷 | 09:30 | 银杏初黄，适合慢走 |
+| 鼓楼巷 → 河桥 | 10:40 | A\\|B 两班轮换 |
+| 河桥 → 巷子口咖啡馆 | 11:20 | 菜单换了，美式照旧 |
+| 巷子口 → 城河码头 | 12:30 | |
+
+我想记下：
+
+- 巷口的银杏黄了
+- 桂花香在晨风里
+- 一只猫在窗台上晒太阳
+
+写个脚本把路线记录读回来：
+
+\`\`\`python
+with open("route.md", encoding="utf-8") as f:
+    lines = f.read().splitlines()
+for seg, time, note in lines[:3]:
+    print(f"{time}  {seg}")
+\`\`\`
+
+走法画出来是这样的：
+
+\`\`\`mermaid
+graph TD
+  A[老城南门] --> B[鼓楼巷]
+  B --> C[河桥]
+  C --> D[巷子口咖啡馆]
+  D --> E[城河码头]
+\`\`\`
+`;
+state.doc = DOC0; state.saved = DOC0;
+
+const $ = id => document.getElementById(id);
+const editorEl = $('editor'), previewEl = $('preview'), hintEl = $('hintLine');
+const EDITOR_LH = 24.5; // 14px × 1.75（行高与真应用同规格，落位滚动估算用）
+
+function setMode(mode) {
+  if (state.mode === mode) return;
+  state.mode = mode;
+  const previewVisible = mode === 'preview';
+  editorEl.style.display = previewVisible ? 'none' : 'block';
+  previewEl.style.display = previewVisible ? 'block' : 'none';
+  // 模式切换：内容淡入（style.css .view-fade 1:1）
+  const show = previewVisible ? previewEl : editorEl;
+  show.classList.remove('view-fade'); void show.offsetWidth; show.classList.add('view-fade');
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  if (previewVisible) applyRangeFlash();
+}
+/* ============ 工具 ============ */
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+/* ============ 渲染管线（模拟 spec §3/§9：markdown → 带 data-src-line 的块元素）============
+   §3.1：lexer 遍历，为每个顶层块 token 记录源码行号闭区间 [start, end]（1-based，含 frontmatter YAML 行）
+   §3.2：映射随每次重渲染整体重建，禁止引用旧映射
+   §9.2：token → 渲染元素一一对应（mockup 逐 token 渲染，元素即按序生成）；
+         顺序敏感：marked 渲染 → hljs 高亮 → mermaid 渲染 → **最后**写 data-src-line（映射写在 postProcess 后的最终 DOM） */
+/* renderer.code 1:1（markdown.js setupMarkdown：fence 包 .code-block，语言标签头 + 复制按钮）。
+   真应用 marked.setOptions({renderer}) 全局生效；mockup 逐 token 渲染，per-call 传 {renderer}
+   （marked 4.3.0 Parser 构造：options.renderer||new Renderer——同一机制） */
+const renderer = new marked.Renderer();
+renderer.code = function (code, infostring) { // marked v4: 第二参数是完整 infostring
+  const lang = (infostring || '').trim().split(/\s+/)[0];
+  const langLabel = lang || 'text';
+  const cls = lang ? ` class="language-${lang}"` : '';
+  return `<div class="code-block"><div class="code-block-header"><span>${langLabel}</span><button class="code-copy-btn" type="button">复制</button></div><pre><code${cls}>${code}</code></pre></div>`;
+};
+function splitFrontmatter(text) {
+  const lines = text.split('\n');
+  if (lines[0] !== '---') return null;
+  const close = lines.indexOf('---', 1);
+  if (close < 0) return null;
+  if (!/^[A-Za-z_][\w-]*\s*:/.test(lines[1] || '')) return null;
+  return { yaml: lines.slice(1, close).join('\n'), fmLines: close + 1, rest: lines.slice(close + 1).join('\n') };
+}
+function parseFm(yaml) { // 仅演示文档形态：key: value / key: [a, b]
+  const entries = [];
+  for (const line of yaml.split('\n')) {
+    const m = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim(), tags = null;
+    if (v.startsWith('[') && v.endsWith(']')) tags = v.slice(1, -1).split(',').map(s => s.trim().replace(/^["']|["']$/g, '')).filter(Boolean);
+    entries.push({ key: m[1], value: v, tags });
+  }
+  return entries;
+}
+function fmCardHtml(entries, l1, l2) { // 结构与 markdown.js buildFrontmatterCard 一致（演示文档 ≤6 项 → 默认展开）
+  const cells = entries.map(e =>
+    `<span class="v1-cell"><span class="v1-k">${esc(e.key)}</span><span class="v1-v">${e.tags ? e.tags.map(t => `<span class="tag-chip">${esc(t)}</span>`).join('') : esc(e.value)}</span></span>`).join('');
+  const summary = entries.map(e => esc(e.key) + ': ' + esc(e.tags ? e.tags.join(' ') : e.value)).join('<span class="sep">·</span>');
+  return `<div class="fm-card v1-card open" data-src-line="${l1}" data-src-line-end="${l2}">` +
+    `<button class="v1-head" type="button" data-fm-toggle aria-expanded="true">` +
+    `<span class="v1-icon"><svg viewBox="0 0 24 24"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42L12 2z"/><circle cx="7" cy="7" r="1"/></svg></span>` +
+    `<span class="v1-title">元数据</span><span class="fm-count v1-count">${entries.length} 项</span>` +
+    `<span class="v1-summary">${summary}</span>` +
+    `<svg class="fm-chev v1-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg></button>` +
+    `<div class="fm-body"><div class="fm-body-inner"><div class="v1-grid">${cells}</div></div></div></div>`;
+}
+/* postProcess 1:1（markdown.js postProcessPreview）：
+   ① hljs.highlightElement 原地高亮（加 hljs 类、换 innerHTML，不改元素顺序——§9.2）；
+   ② mermaid fence：pre 被**替换**为 div.mermaid（文本拷自 code），mermaid.run({nodes}) 渲染 SVG（异步；
+      真应用全程无 mermaid.initialize → mermaid v10 默认主题，照抄不加）。
+   必须在写 data-src-line 之前跑（§9.2 顺序敏感：映射写在 postProcess 后的最终 DOM 上） */
+function postProcess(container) {
+  container.querySelectorAll('pre code').forEach(el => { if (window.hljs) hljs.highlightElement(el); });
+  const mermaidBlocks = container.querySelectorAll('pre code.language-mermaid');
+  if (mermaidBlocks.length && window.mermaid) {
+    mermaidBlocks.forEach(block => {
+      const div = document.createElement('div');
+      div.className = 'mermaid';
+      div.textContent = block.textContent;
+      block.parentElement.replaceWith(div);
+    });
+    mermaid.run({ nodes: container.querySelectorAll('.mermaid') });
+  }
+}
+function render() {
+  const src = state.doc;
+  const fm = splitFrontmatter(src);
+  const parts = [];
+  const recs = [];   // 顶层块 token 记录（按序，尚未写 DOM）：{start, end, mermaid}
+  let body = src, offset = 0;
+  if (fm) { parts.push(fmCardHtml(parseFm(fm.yaml), 1, fm.fmLines)); body = fm.rest; offset = fm.fmLines; }
+  let nl = 0; // body 内已消费的新行数（§9.1：raw 前缀长度 → 行号）
+  // marked 4.3 特性：lexer 传入 options 会整体替换 defaults（不合并）——
+  // 原 {mangle,headerIds} 会静默关闭 gfm，表格退化为段落；展开 marked.defaults 恢复 gfm（与真应用 marked.parse 同口径）
+  for (const t of marked.lexer(body, { ...marked.defaults, mangle: false, headerIds: false })) {
+    const tnl = (t.raw.match(/\n/g) || []).length;
+    if (t.type === 'space') { nl += tnl; continue; }
+    const start = offset + nl + 1;
+    // end = 块自身最后一条内容行：marked 4.3 的 raw 会吸收尾随空行（table raw = 表行 + 尾随空行，heading 同），
+    // 直接用 raw 前缀算闭区间会让表格落位扩到尾随空行（与 spec §5.1「表头行+分隔行+数据行」不符）；start 仍由 raw 前缀和推出
+    const rawLines = t.raw.split('\n');
+    let lastContent = -1;
+    rawLines.forEach((L, i) => { if (L.trim()) lastContent = i; });
+    const end = start + Math.max(lastContent, 0);
+    const holder = document.createElement('div');
+    holder.innerHTML = DOMPurify.sanitize(marked.parser([t], { renderer }));
+    parts.push(holder.innerHTML);
+    // mermaid fence 判定与真应用同口径：renderer.code 按 infostring 首词写 class="language-*"
+    const lang = t.type === 'code' ? (t.lang || '').trim().split(/\s+/)[0] : '';
+    recs.push({ start, end, mermaid: lang === 'mermaid' });
+    nl += tnl;
+  }
+  state.mapping = { blocks: recs.map(r => ({ start: r.start, end: r.end })) }; // §3.2：随重渲染整体重建
+  previewEl.innerHTML = parts.join('');
+  postProcess(previewEl);        // ← 先高亮 / mermaid 渲染（产生最终 DOM）
+  writeMapping(fm, recs);        // ← 最后写映射（§9.2：按 postProcess 后的最终 DOM 写）
+  if (document.activeElement !== editorEl) editorEl.value = src;
+}
+/* 映射写入（§9.2 一一对应 + 失败整体放弃 → §2.3 静默）：
+   预览容器顶层子元素 = [frontmatter 卡?] + 各顶层块元素（逐 token 渲染保证单根、按序）；
+   代码块 = div.code-block 整块；mermaid 块的 pre 已被 postProcess 替换为 div.mermaid——
+   容器（div.code-block）与图（div.mermaid）同写区间：前者 = 整块 hover/落位（含语言标签头），
+   后者 = 渲染图点击的最近命中（closest 自 SVG 先碰到 div.mermaid，spec §9.2 注：映射按最终 DOM 写） */
+function writeMapping(fm, recs) {
+  const kids = [...previewEl.children];
+  const expect = (fm ? 1 : 0) + recs.length;
+  if (kids.length !== expect) return; // token 数 ≠ 元素数 → 整体放弃映射（§2.3：无描边、无反应、不报错）
+  recs.forEach((rec, i) => {
+    const el = kids[fm ? i + 1 : i];
+    el.setAttribute('data-src-line', String(rec.start));
+    el.setAttribute('data-src-line-end', String(rec.end));
+    if (rec.mermaid) {
+      const mm = el.querySelector(':scope > .mermaid');
+      if (mm) { mm.setAttribute('data-src-line', String(rec.start)); mm.setAttribute('data-src-line-end', String(rec.end)); }
+    }
+  });
+}
+
+/* ============ 落位（spec §4.1 流程 1:1；表格增格级分流 §2.2 / §5.1 / §9.7）============
+   块级 landOn(l1,l2) = 整块行区间（点击非表块 / 拖选 / 框选 / 跨块；表格拖选 = 整表，§5.1）。
+   格级 landCell(td)  = 点击表格 cell 时的纯函数（§9.7）：
+   DOM tr/td → (行,列) → 表格源行逐行按**未转义 |** split 定位该格 [start,end] 字符区间 → 行前缀和折算全文档偏移。
+   格内文本不含左右 |；空 cell → 零宽落位（caret 入格）。映射层只存整表区间（data-src-line），不存格单元（§3.1） */
+function offsetOfLine(src, l) { // 1-based 行 → 字符偏移（行首；§4.1 前缀和）
+  let off = 0;
+  for (let i = 0; i < l - 1; i++) { const n = src.indexOf('\n', off); if (n < 0) return off; off = n + 1; }
+  return off;
+}
+function endOfLine(src, l) { const s = offsetOfLine(src, l); const n = src.indexOf('\n', s); return n < 0 ? src.length : n; }
+function cellCharRange(src, tbl, td) { // §9.7（点击时纯函数）：(行,列) → 格字符区间 [start, end) + 格所在行号
+  const tr = td.closest('tr'); if (!tr) return null;
+  const rowEl = tr.parentElement.closest('tbody') ? tr.parentElement : tr; // th 在 thead tr 内，无 tbody 包裹
+  const allTr = rowEl.querySelectorAll('tr');
+  const r = rowEl === tr ? 0 : Array.prototype.indexOf.call(allTr, tr); // thead tr 自身即行；tbody tr 按序
+  const col = Array.prototype.indexOf.call(tr.children, td); // 列 = td 在行内顺序（tr.children 恒为单元格）
+  const s = +tbl.dataset.srcLine, e = +tbl.dataset.srcLineEnd;
+  // 行号折算：thead tr = 表头行（s）；tbody tr[i] = s+2+i（表头+分隔占两行，分隔行无 tr）
+  const lineNo = rowEl === tr ? s : s + 2 + r;
+  if (r < 0 || lineNo > e || col < 0) return null; // 行/列越界 → §2.3 静默
+  const line = src.slice(offsetOfLine(src, lineNo), endOfLine(src, lineNo)); // 表格源行
+  const cells = []; let i = 0;
+  while (true) { // 只按未转义 | split：\| 是格内文本（GFM），不参与分列
+    let j = i;
+    while (j < line.length) {
+      if (line[j] === '|') { if (line[j - 1] === '\\') { j++; continue; } break; }
+      j++;
+    }
+    cells.push(line.slice(i, j)); // [0]=左缘，[1..n]=各格，[n+1]=右缘
+    if (j >= line.length) break;
+    i = j + 1;
+  }
+  if (col >= cells.length) return null;
+  const base = offsetOfLine(src, lineNo);
+  const start = base + cells.slice(0, col + 1).join('|').length + 1; // 左 | + 各格间 | 全部计入（split 丢掉的管道要加回）
+  const end = start + cells[col + 1].length;                         // 右 | 不计入
+  return [start, end, lineNo];
+}
+let lastRange = null, lastLandedDoc = null; // 回到预览时对落位块做一次描边闪（demo 编排反馈）；编辑过文档则闪会指错行，故失效
+function landOn(l1, l2) {
+  lastRange = [l1, l2]; lastLandedDoc = state.doc;
+  setMode('edit'); // ② 切源码模式（既有整文档 textarea）
+  const src = state.doc;
+  const a = offsetOfLine(src, l1); // ③ 行号 → 字符偏移
+  const b = endOfLine(src, l2);
+  editorEl.value = src;
+  editorEl.focus(); // ⑤ 焦点进 textarea，立即可输入（替换选区）
+  editorEl.setSelectionRange(a, b); // 可见性 = 原生选区高亮（§4.2，不另加高亮带）
+  // ④ 滚动至 L1（textarea 无行盒，按行高 14px×1.75=24.5px 估算）
+  const target = (l1 - 1) * EDITOR_LH - 10;
+  if (target < editorEl.scrollTop) editorEl.scrollTop = target;
+  dismissHint();
+}
+function landCell(td) { // §2.2「点击表格 cell」→ §5.1 格内文本范围（不含左右 |）
+  const tbl = td.closest('table'); if (!tbl) return; // §2.3：无映射 → 静默
+  const r = cellCharRange(state.doc, tbl, td); if (!r) return;
+  lastRange = null; // 格落位是行下粒度，整块描边闪（applyRangeFlash）不适用
+  setMode('edit');
+  const src = state.doc;
+  editorEl.value = src;
+  editorEl.focus();
+  // 空 cell（渲染 td 为空 = 格源文本仅 padding 空白）→ 零宽落位：caret 入格（§5.1）；
+  // 非空格选整段格文本（输入即替换）
+  const empty = td.textContent.trim() === '';
+  const a = empty ? Math.floor((r[0] + r[1]) / 2) : r[0];
+  editorEl.setSelectionRange(a, empty ? a : r[1]);
+  const target = (r[2] - 1) * EDITOR_LH - 10; // ④ 滚动至格所在行
+  if (target < editorEl.scrollTop) editorEl.scrollTop = target;
+  dismissHint();
+}
+function applyRangeFlash() {
+  if (!lastRange || state.doc !== lastLandedDoc || state.mode !== 'preview') { lastRange = null; lastLandedDoc = null; return; }
+  const [l1, l2] = lastRange; lastRange = null;
+  previewEl.querySelectorAll('[data-src-line]').forEach(el => {
+    const s = +el.dataset.srcLine, e2 = +el.dataset.srcLineEnd;
+    if (e2 < l1 || s > l2) return;
+    el.classList.remove('sel-flash'); void el.offsetWidth; el.classList.add('sel-flash');
+  });
+}
+
+/* ============ 选区手势（spec §2.2 / §9.3：预览容器 mouseup 事件委托）============
+   点击表格 cell → 单格文本范围（§5.1，格级分流，先于块级判定）；
+   selection 非空 → anchor 块 → focus 块 + 中间块合并；为空 → 光标下所在块。
+   收敛为同一结果：连续块区间 [L1, L2]；行内元素按所在块判定，不做字符级映射 */
+previewEl.addEventListener('mouseup', (e) => {
+  if (state.mode !== 'preview' || state.running || e.button !== 0) return;
+  if (!e.target.closest) return;
+  // 操作意图而非编辑意图 → 不落位（spec §2.2，2026-11-09 定稿）：fm 手柄 / 活链（data-vault-path）/
+  // 外部链接（target）/ 复制按钮；死链（无跳转）= 落位；task list checkbox（disabled）不派发 mouseup，天然不落位。
+  if (e.target.closest('[data-fm-toggle]')) return;
+  const aEl = e.target.closest('a');
+  if (aEl && (aEl.hasAttribute('data-vault-path') || aEl.hasAttribute('target'))) return;
+  if (e.target.closest('.code-copy-btn')) return;
+  // §2.2「点击表格 cell」→ 单格文本范围（先于块级分流；td/th 不是映射块，其最近映射块是整表）
+  const td = e.target.closest('table td, table th');
+  if (td) { window.getSelection().removeAllRanges(); landCell(td); return; }
+  const sel = window.getSelection();
+  let l1 = null, l2 = null;
+  if (sel && !sel.isCollapsed && sel.toString()) {
+    const node = n => (n ? (n.nodeType === 1 ? n : n.parentElement) : null);
+    const aB = node(sel.anchorNode), fB = node(sel.focusNode);
+    const aEl = aB && aB.closest ? aB.closest('[data-src-line]') : null;
+    const fEl = fB && fB.closest ? fB.closest('[data-src-line]') : null;
+    if (aEl && fEl) {
+      const all = [...previewEl.querySelectorAll('[data-src-line]')];
+      let i = all.indexOf(aEl), j = all.indexOf(fEl);
+      if (i > j) [i, j] = [j, i];
+      let mn = Infinity, mx = -Infinity;
+      for (let k = i; k <= j; k++) { mn = Math.min(mn, +all[k].dataset.srcLine); mx = Math.max(mx, +all[k].dataset.srcLineEnd); }
+      l1 = mn; l2 = mx;
+    }
+  }
+  if (!l1) {
+    const b = e.target.closest ? e.target.closest('[data-src-line]') : null;
+    if (!b) return; // §2.3：无映射 / 非块区域 → 静默，不弹错误
+    l1 = +b.dataset.srcLine; l2 = +b.dataset.srcLineEnd;
+  }
+  window.getSelection().removeAllRanges();
+  landOn(l1, l2);
+});
+// frontmatter 卡折叠（既有行为，事件委托，与 app 同构）
+previewEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-fm-toggle]');
+  if (!btn) return;
+  const card = btn.closest('.fm-card');
+  if (!card) return;
+  const open = card.classList.toggle('open');
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+});
+
+/* ============ 既有控件：模式切换 / Esc 退出 / 保存（§4.2 / §6）============ */
+document.querySelectorAll('.mode-btn').forEach(b => {
+  b.addEventListener('click', () => { if (!state.running) setMode(b.dataset.mode); });
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && state.mode === 'edit' && !state.running) setMode('preview');
+});
+editorEl.addEventListener('input', () => { state.doc = editorEl.value; }); // 提交通道 = textarea input（既有路径）
+function performSave() {
+  state.doc = editorEl.value; state.saved = state.doc;
+  render();            // §6：保存后预览重渲染，行号映射整体重建
+  setMode('preview');  // mockup 编排：展示重渲染结果（真应用保存不强制切模式，见稿尾取舍）
+}
+const saveBtn = document.querySelector('.save-btn');
+saveBtn.addEventListener('click', () => { if (!state.running) performSave(); });
+
+/* ============ 首次帮助文案（spec §2.1，一次性）============ */
+function dismissHint() {
+  if (state.hintDismissed) return;
+  state.hintDismissed = true;
+  hintEl.style.height = hintEl.offsetHeight + 'px'; // 高度从当前值过渡到 0
+  requestAnimationFrame(() => hintEl.classList.add('gone'));
+}
+$('btnHint').addEventListener('click', () => {
+  state.hintDismissed = false;
+  hintEl.classList.remove('gone');
+  hintEl.style.height = '';
+  if (!state.running) setMode('preview');
+});
+
+/* ============ 闭环脚本（demo chrome：代替评审者执行手势 / 编辑 / 保存）============ */
+const demoBtns = [...document.querySelectorAll('.demo-btn')];
+function setStatus(n, cls, text) { const el = $('g-status-' + n); el.className = 'g-status ' + (cls || ''); el.textContent = text; }
+function blockEl(l) { // 覆盖行 l 的块
+  return [...previewEl.querySelectorAll('[data-src-line]')].find(el => +el.dataset.srcLine <= l && +el.dataset.srcLineEnd >= l);
+}
+function hoverFx(el, on) { if (el) el.classList.toggle('demo-hover', on); }
+function taSelect(ta, a, b) { ta.focus(); ta.setSelectionRange(a, b); }
+function insertText(ta, text) { // 整段落入（替换选区），模拟一次击键
+  ta.focus(); ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end');
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+}
+function typeText(ta, text, delay = 45) {
+  return (async () => {
+    ta.focus();
+    for (const ch of text) {
+      ta.setRangeText(ch, ta.selectionStart, ta.selectionEnd, 'end');
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(delay);
+    }
+  })();
+}
+async function doSave() { performSave(); await sleep(500); } // demo 内部保存：不受 running 守卫限制
+async function idleToPreview() { if (state.mode !== 'preview') setMode('preview'); await sleep(250); }
+async function runStep(n, fn) {
+  if (state.running) return;
+  state.running = true;
+  demoBtns.forEach(b => b.disabled = true);
+  setStatus(n, 'busy', '播放中…');
+  try {
+    state.doc = DOC0; state.saved = DOC0; render(); // 每步从基准文档起步，可重复播放
+    await idleToPreview();
+    await fn();
+  } catch (err) {
+    console.error(err);
+    setStatus(n, 'warn', '演示未完成：' + (err && err.message ? err.message : '未知原因'));
+  }
+  state.running = false;
+  demoBtns.forEach(b => b.disabled = false);
+}
+
+// ① 预览态：hover 淡描边 + 两种手势（点单块 → 落位）
+demoBtns.find(b => b.dataset.step === '1').addEventListener('click', () => runStep(1, async () => {
+  const p1 = blockEl(9); if (!p1) throw new Error('未找到 L9 段落');
+  p1.scrollIntoView({ block: 'center' });
+  hoverFx(p1, true); await sleep(1100); hoverFx(p1, false);
+  landOn(9, 9); // 手势确认 → 落位（演示代执行，等价于一次鼠标点击）
+  await sleep(700);
+  setStatus(1, 'ok', 'done：L9 在源码中被选中，可直接输入替换');
+}));
+
+// ② 块内改字：「光很好」→「光线很好」
+demoBtns.find(b => b.dataset.step === '2').addEventListener('click', () => runStep(2, async () => {
+  const p1 = blockEl(9); if (!p1) throw new Error('未找到 L9 段落');
+  hoverFx(p1, true); await sleep(900); hoverFx(p1, false);
+  landOn(9, 9); await sleep(600);
+  const a = offsetOfLine(state.doc, 9);
+  const i = state.doc.indexOf('光很好', a);
+  if (i < 0) throw new Error('未找到「光很好」');
+  taSelect(editorEl, i, i + 3); await sleep(500);
+  await typeText(editorEl, '光线很好');
+  await doSave();
+  setStatus(2, 'ok', 'done：预览已重渲染，其余文档逐字不变');
+}));
+
+// ③ 跨块合并：从标题拖选到正文（L7–L11，含中间空行）
+demoBtns.find(b => b.dataset.step === '3').addEventListener('click', () => runStep(3, async () => {
+  const h1 = blockEl(7); if (!h1) throw new Error('未找到 L7 标题');
+  h1.scrollIntoView({ block: 'start' });
+  hoverFx(h1, true); await sleep(500); hoverFx(h1, false);
+  landOn(7, 11); // 拖选跨块 → anchor(L7) → focus(L11) + 中间块合并
+  await sleep(900);
+  const a = offsetOfLine(state.doc, 8), b2 = endOfLine(state.doc, 11);
+  taSelect(editorEl, a, b2); await sleep(500); // 扩选掉标题、保留两段
+  insertText(editorEl, '初秋第一次走老城区，光很好。巷子口的砖墙泛着午后金光，连台阶都显得软。巷口的咖啡馆还在，菜单换了。一杯美式、一本书，一个下午就这么过去了。');
+  await doSave();
+  setStatus(3, 'ok', 'done：两段合并为一段（标题保留）');
+}));
+
+// ④ frontmatter 增 tag：tags 行尾加「银杏」
+demoBtns.find(b => b.dataset.step === '4').addEventListener('click', () => runStep(4, async () => {
+  const fm = blockEl(3); if (!fm) throw new Error('未找到 frontmatter 卡');
+  fm.scrollIntoView({ block: 'start' });
+  hoverFx(fm, true); await sleep(900); hoverFx(fm, false);
+  landOn(1, 5); await sleep(600);
+  const a = offsetOfLine(state.doc, 3);
+  const i = state.doc.indexOf(']', a);
+  if (i < 0) throw new Error('未找到 tags 数组');
+  taSelect(editorEl, i, i); await sleep(500); // 光标放到 ] 前
+  await typeText(editorEl, ', 银杏');
+  await doSave();
+  setStatus(4, 'ok', 'done：frontmatter 多一枚 tag「银杏」');
+}));
+
+// ⑤ 删除一个块（含尾随空行）：L11 段 + L12 空行
+demoBtns.find(b => b.dataset.step === '5').addEventListener('click', () => runStep(5, async () => {
+  const p2 = blockEl(11); if (!p2) throw new Error('未找到 L11 段落');
+  p2.scrollIntoView({ block: 'center' });
+  hoverFx(p2, true); await sleep(900); hoverFx(p2, false);
+  landOn(11, 11); await sleep(600);
+  const a = offsetOfLine(state.doc, 11), b2 = offsetOfLine(state.doc, 13); // 扩到尾随空行（§5：块行 + 尾随空行）
+  taSelect(editorEl, a, b2); await sleep(700);
+  editorEl.setRangeText('', editorEl.selectionStart, editorEl.selectionEnd, 'end');
+  editorEl.dispatchEvent(new Event('input', { bubbles: true }));
+  await doSave();
+  setStatus(5, 'ok', 'done：块消失，无双空行残留');
+}));
+
+// ⑥ 改标题行：# 行选中 → 输入新标题 → 保存
+demoBtns.find(b => b.dataset.step === '6').addEventListener('click', () => runStep(6, async () => {
+  const h1 = blockEl(7); if (!h1) throw new Error('未找到 L7 标题');
+  h1.scrollIntoView({ block: 'start' });
+  hoverFx(h1, true); await sleep(900); hoverFx(h1, false);
+  landOn(7, 7); await sleep(700);
+  const a = offsetOfLine(state.doc, 7), b2 = endOfLine(state.doc, 7);
+  taSelect(editorEl, a, b2); await sleep(400); // 整行选中（含 # 前缀）
+  await typeText(editorEl, '# 秋游笔记 · 一次');
+  await doSave();
+  setStatus(6, 'ok', 'done：标题已改，映射随重渲染重建');
+}));
+
+// ⑦ 表格（格级落位，§2.2 / §5.1 / §9.7）：
+//    点含 \| 格 → 该格文本被选中（不含 |，转义 | 不分列）；点空格 → caret 入格（零宽）；
+//    增行子例 = 拖选落整表区间（拖选 = 整表）→ 末行行尾敲入一整行 → 保存
+demoBtns.find(b => b.dataset.step === '7').addEventListener('click', () => runStep(7, async () => {
+  const tb = blockEl(15); if (!tb) throw new Error('未找到 L15 表格');
+  tb.scrollIntoView({ block: 'center' });
+  hoverFx(tb, true); await sleep(900); hoverFx(tb, false); // hover 描边仍为整表块级（spec §2.1 未变）
+  // (a) 点击含 \| 的格（L16 · 第 3 列）：格文本被选中——转义 \| 是格内文本，不参与分列
+  const c1 = [...tb.querySelectorAll('tbody tr')][1].children[2];
+  hoverFx(c1, true); await sleep(700); hoverFx(c1, false);
+  landCell(c1); await sleep(900);
+  setMode('preview'); await sleep(400); // 演示代执行回预览
+  // (b) 点击「美式照旧」格 → 替换输入 → 保存：选中即格文本范围（不含 |）
+  const c2 = [...tb.querySelectorAll('tbody tr')][2].children[2];
+  hoverFx(c2, true); await sleep(700); hoverFx(c2, false);
+  landCell(c2); await sleep(800);
+  await typeText(editorEl, '菜单换了，桂花拿铁新上榜');
+  await doSave(); await sleep(500); // 该格更新，其余逐字不动；行号映射随重渲染重建
+  // (c) 点击空格（L18 · 第 3 列）→ 零宽落位：caret 入格
+  const tb3 = blockEl(16); if (!tb3) throw new Error('重渲染后未找到 L16 表格');
+  const c3 = [...tb3.querySelectorAll('tbody tr')][3].children[2];
+  hoverFx(c3, true); await sleep(700); hoverFx(c3, false);
+  landCell(c3); await sleep(900);
+  setMode('preview'); await sleep(400);
+  // (d) 子例：增一行——拖选落整表区间（L13–L18：表头+分隔+4 数据行）→ 末行行尾敲入一整行（3 列与表头一致）
+  hoverFx(tb3, true); await sleep(600); hoverFx(tb3, false);
+  landOn(13, 18); await sleep(700); // 拖选 / 跨块手势 → 整表行区间（§5.1，不变）
+  const e18 = endOfLine(state.doc, 18);
+  taSelect(editorEl, e18, e18); await sleep(300); // 光标到表格末行行尾
+  await typeText(editorEl, '\n| 河桥 → 鼓楼巷北 | 12:00 | 桂花更浓，适合歇脚 |');
+  await doSave();
+  setStatus(7, 'ok', 'done：格区间不含 |（转义 \| 不分列）；空格 → caret 入格；增行落整表区间（拖选口径）');
+}));
+
+// ⑧ 代码块 / mermaid（spec §2.1/§9.2；本轮新增：两类块落整段 fence，映射写在 postProcess 后最终 DOM，随重渲染重建）：
+//    (a) python 代码卡（顶层块）hover 整卡描边 → 点击 → 落整段 fence（含 ```python 首行与尾行 ```）
+//    (b) 渲染出的 mermaid 图点任意处（SVG 上）→ closest('[data-src-line]') 须命中 div.mermaid → 落整段 fence 源码
+//    (c) 整段 fence 选中态下改图内节点 → 保存 → 重渲染 + 映射整体重建（新图、新区间）
+//    (d) 再点 python 代码卡 → 仍落对（重建后的映射精确）
+demoBtns.find(b => b.dataset.step === '8').addEventListener('click', () => runStep(8, async () => {
+  const cb = blockEl(30); if (!cb) throw new Error('未找到 L30 python 代码块');
+  cb.scrollIntoView({ block: 'center' });
+  hoverFx(cb, true); await sleep(900); hoverFx(cb, false); // hover 整卡描边（含语言标签头，§2.1）
+  landOn(28, 33); await sleep(900); // 点击 → 整段 fence 行区间（含 ```python 首行与尾行 ```）
+  setMode('preview'); await sleep(400);
+  // (b) 渲染后的 mermaid 图 = 落位目标：closest('[data-src-line]') 自 SVG 最近命中 div.mermaid（§9.2 注：映射按最终 DOM 写）
+  const wrap = blockEl(40); if (!wrap) throw new Error('未找到 L40 mermaid 块');
+  wrap.scrollIntoView({ block: 'center' });
+  const mm = wrap.querySelector(':scope > .mermaid');
+  if (!mm) throw new Error('未找到 div.mermaid（postProcess 的 pre 替换未发生）');
+  const svg = mm.querySelector('svg');
+  if (!svg) throw new Error('mermaid 未渲染出 SVG');
+  const hit = svg.closest('[data-src-line]');
+  if (!hit || hit !== mm) throw new Error('closest 应命中 div.mermaid，实际 ' + (hit ? hit.tagName + '.' + hit.className : 'null'));
+  hoverFx(mm, true); await sleep(800); hoverFx(mm, false);
+  landOn(+mm.dataset.srcLine, +mm.dataset.srcLineEnd); await sleep(900); // → 整段 mermaid fence 源码（L37–L43）
+  // (c) 在整段 fence 选中态下改图内节点（编辑发生在源码上，spec §0）→ 保存 → 重渲染 + 映射重建
+  const a = editorEl.selectionStart, b2 = editorEl.selectionEnd;
+  const k = state.doc.indexOf('E[城河码头]', a);
+  if (k < 0 || k + 'E[城河码头]'.length > b2) throw new Error('未在选中的 mermaid fence 内找到节点源');
+  taSelect(editorEl, k, k + 'E[城河码头]'.length); await sleep(500);
+  insertText(editorEl, 'E[城河码头 · 终点]');
+  await doSave(); await sleep(600); // 预览重渲染（新图），行号映射整体重建（§3.2/§9.5）
+  // (d) 重建后的映射仍精确：再点 python 代码卡 → 落位不变
+  const cb2 = blockEl(30); if (!cb2) throw new Error('重建后映射缺失 python 代码块');
+  hoverFx(cb2, true); await sleep(700); hoverFx(cb2, false);
+  landOn(28, 33); await sleep(700);
+  setStatus(8, 'ok', 'done：整段 fence 即块（含 ```lang 行）；渲染图可点、落整段（closest → div.mermaid）；重渲染后映射重建、落位仍精确');
+}));
+
+/* ============ 重置 ============ */
+$('btnReset').addEventListener('click', () => {
+  if (state.running) return;
+  state.doc = DOC0; state.saved = DOC0;
+  lastRange = null; state.hintDismissed = true; hintEl.classList.add('gone');
+  render(); setMode('preview');
+  for (let i = 1; i <= 8; i++) setStatus(i, '', '未播放');
+});
+
+/* ============ 启动 ============ */
+render();
+document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'preview'));
+editorEl.style.display = 'none';
+</script>
+</body>
+</html>

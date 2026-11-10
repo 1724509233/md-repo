@@ -175,7 +175,8 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #preview a { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
 #preview a:hover { color: color-mix(in srgb, var(--brass) 75%, var(--ink)); }
 #preview blockquote { border-left: 3px solid var(--brass); padding-left: 1rem; margin: 1rem 0; color: var(--ink-soft); font-style: italic; }
-#preview ul, #preview ol { padding-left: 1.25rem; margin: .75rem 0; }
+#preview ul, #preview ol { padding-left: 1.25rem; margin: .75rem 0; list-style: disc; }
+#preview ol { list-style: decimal; }
 #preview li { margin: .375rem 0; }
 #preview hr { border: none; border-top: 1px solid var(--line); margin: 2rem 0; }
 #preview strong { font-weight: 600; color: var(--ink); }
@@ -1329,3 +1330,19 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .notif-dropdown.notif-closing { animation: none; }
   #memory-console-shell [data-face="detail"].mp-deep .d-title::after { animation: none; }
 }
+
+/* ============ 选区 → 源码编辑（spec 2026-11-09-select-to-source-editing）============
+   预览是只读投影、源码是唯一事实源。v1 新增的可见 affordance（无按钮、无角标、无常驻 chrome）：
+   ① 块 hover 淡描边（1px 黄铜 inset shadow，零 reflow）+ cursor:text 提示「这是文本」；
+   ② 表格 cell hover 更淡描边（25% < 块 38%，提示格可点，§9.6）；
+   ③ 源码选区高亮纳入主题（= 原生选区，§4.2）。 */
+
+/* ① 块 hover 淡描边（[data-src-line] 由 writeSrcLineMapping 写到最终 DOM；inset shadow 代替 1px border = 零 reflow） */
+#preview [data-src-line] { cursor: text; }
+#preview [data-src-line]:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 38%, transparent); border-radius: 8px; }
+
+/* ② 表格 cell hover 更淡描边（整表块 hover = 上面 [data-src-line]:hover；格再加一条更淡的，各作用于 table 与 td/th） */
+#preview table td:hover, #preview table th:hover { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 25%, transparent); }
+
+/* ③ 源码选区可见性 = textarea 原生选区高亮，仅把选区色纳入主题（§4.2，不加高亮带/行号栏） */
+#editor::selection { background: color-mix(in srgb, var(--brass) 26%, transparent); }

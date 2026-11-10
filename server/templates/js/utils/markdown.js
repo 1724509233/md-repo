@@ -287,9 +287,10 @@ function renderMarkdownBody(text, linkCtx, lineBase) {
   // ADD_ATTR 保留 data-vault-path / data-vault-anchor / data-line（DOMPurify 默认剥 data-*；
   // 标题 id 在默认放行表内，无需显式）与 target（DOMPurify 默认剥 target 以御 reverse-tabnabbing，
   // 需显式放行，否则外部链接的 target="_blank" 会被剥掉 → 新 tab 打开失效、退化为整页跳转）。
-  // rel 在默认放行表内，保留。
+  // data-src-line / data-src-line-end：选区→源码的块行号映射（spec 2026-11-09 §3，由 writeSrcLineMapping
+  // 在 postProcess 后写到最终 DOM，§9.2 顺序敏感）。rel 在默认放行表内，保留。
   return window.DOMPurify
-    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-vault-path', 'data-vault-anchor', 'data-line', 'target'] })
+    ? DOMPurify.sanitize(raw, { ADD_ATTR: ['data-vault-path', 'data-vault-anchor', 'data-line', 'data-src-line', 'data-src-line-end', 'target'] })
     : raw
 }
 
@@ -599,6 +600,79 @@ export function postProcessPreview(container) {
       btn.setAttribute('aria-expanded', open ? 'true' : 'false')
     })
   }
+}
+
+/* ============ 选区 → 源码：块 → 行号闭区间映射（spec 2026-11-09-select-to-source-editing §3/§9.2/§9.7）============
+   v1 唯一新增机制：渲染管线 lexer 遍历顶层块 token，raw 前缀推出 [start, end]（1-based，含 frontmatter YAML 行）。
+   映射写在 postProcess 后的最终 DOM（mermaid fence 的 pre 已被替换为 div.mermaid，须最后写，§9.2 顺序敏感）。
+   对齐失败（token 数 ≠ 元素数）→ 该文档整体放弃映射（§2.3 静默：无描边、无反应、不报错）。 */
+
+/**
+ * 在预览容器最终 DOM 上写入块 → 行号映射（data-src-line / data-src-line-end）。
+ * 须在 v-html 已 patch、postProcessPreview 已跑完（mermaid pre→div.mermaid 替换发生）后调用。
+ * 与 renderMarkdown 同口径：frontmatter 卡是否渲染 + lineBase + body + wikilinkToMd 预处理，
+ * 保证 lexer 顶层 token 序列与 renderMarkdownBody 的 marked.parse 一致。
+ * @param {HTMLElement} container - #preview 容器
+ * @param {string} text - 文档 markdown 原文（含 frontmatter）
+ * @param {{frontmatter?: boolean, context?: object}} [opts] - 与 renderMarkdown 同口径
+ */
+export function writeSrcLineMapping(container, text, opts) {
+  if (!container || !window.marked) return
+  const linkCtx = opts && opts.context ? createLinkContext(opts.context) : null
+  // 与 renderMarkdown 完全同口径：frontmatter 卡是否渲染 + lineBase + body
+  let lineBase = 0, body = (text || ''), hasCard = false
+  if (opts && opts.frontmatter) {
+    const split = splitFrontmatter(text)
+    if (split) {
+      const entries = parseFrontmatter(split.frontmatter)
+      if (entries.length) {
+        hasCard = true
+        lineBase = headingLineOffset(text, split)
+        body = split.rest
+      }
+    }
+  }
+  const src = linkCtx ? wikilinkToMd(body) : body
+  // 重跑 lexer：与 renderMarkdownBody 的 marked.parse 同顶层 token 序列。
+  // v4.3 的 lexer 传 options 整体替换 defaults（不合并）→ 展开 marked.defaults 恢复 gfm，
+  // 否则 gfm 被静默关闭、表格退化为段落（§9.1）；mangle/headerIds 不影响块 token 序列。
+  const tokens = marked.lexer(src, { ...marked.defaults, mangle: false, headerIds: false })
+  const recs = []
+  let nl = 0
+  for (const t of tokens) {
+    const tnl = (t.raw.match(/\n/g) || []).length
+    if (t.type === 'space') { nl += tnl; continue }
+    const start = lineBase + nl + 1
+    // end = 块自身最后一条内容行：marked 4.3 的 raw 吸收尾随空行（table/heading 同），
+    // end 取最后非空行，区间端点不含尾随空行（否则表格落位扩进空行，替换输入会吃掉块间间距，§9.1）
+    const rawLines = t.raw.split('\n')
+    let lastContent = -1
+    rawLines.forEach((L, i) => { if (L.trim()) lastContent = i })
+    const end = start + Math.max(lastContent, 0)
+    const lang = t.type === 'code' ? (t.lang || '').trim().split(/\s+/)[0] : ''
+    recs.push({ start, end, mermaid: lang === 'mermaid' })
+    nl += tnl
+  }
+  // 对齐（§9.2：顶层 token 顺序 = 渲染后 HTML 顶层元素顺序；frontmatter 卡置顶，若有）
+  const kids = Array.from(container.children)
+  const expect = (hasCard ? 1 : 0) + recs.length
+  if (kids.length !== expect) return  // 对齐失败 → 整体放弃映射（§2.3 静默）
+  if (hasCard) {
+    // frontmatter 卡 = YAML 行区间 [1, lineBase]（点卡落 frontmatter 编辑，§8.4）
+    kids[0].setAttribute('data-src-line', '1')
+    kids[0].setAttribute('data-src-line-end', String(lineBase))
+  }
+  recs.forEach((rec, i) => {
+    const el = kids[hasCard ? i + 1 : i]
+    el.setAttribute('data-src-line', String(rec.start))
+    el.setAttribute('data-src-line-end', String(rec.end))
+    if (rec.mermaid) {
+      // 容器（div.code-block）与图（div.mermaid）同写整段 fence 区间：
+      // 容器 = 整块 hover/落位（含语言标签头），图 = 渲染图点击的最近命中（§9.2 注）
+      const mm = el.querySelector(':scope > .mermaid')
+      if (mm) { mm.setAttribute('data-src-line', String(rec.start)); mm.setAttribute('data-src-line-end', String(rec.end)) }
+    }
+  })
 }
 
 /**
