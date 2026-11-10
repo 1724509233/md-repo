@@ -136,10 +136,13 @@ async function openDoc(path, heading) {
     const hit = items.find(it => it.text.trim() === lastCrumb) || { id: null, text: lastCrumb }
     // flash:false：闪光只走下方 200ms 延时那次（搜索页跳转触发面板宽度过渡，立即闪会命中
     // 过渡中布局且与延时闪叠成双闪）；到时按 id（或文本）重查 DOM（期间可能已重渲染）
-    if (scrollToHeading({ mode: 'preview', id: hit.id, text: hit.text, flash: false })) {
+    if (scrollToHeading({ mode: 'preview', id: hit.id, text: hit.text, flash: false, previewEl: pv })) {
       setTimeout(() => {
+        // 作用域 = 文档预览元素（#preview 全局唯一；缺省组件 ref 时退回该唯一元素，
+        // sec-N 编号被 renderMarkdown 各消费者独立重置，不得用全局 getElementById 兜底）
+        const scope = pv || document.querySelector('#preview')
         const el = hit.id
-          ? document.getElementById(hit.id)
+          ? (scope ? scope.querySelector('#' + CSS.escape(hit.id)) : null)
           : (Array.from(document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6'))
               .find(h => h.textContent.trim() === lastCrumb) || null)
         if (el) flashHeading(el)
@@ -240,6 +243,7 @@ function onTocClickItem(item) {
     lineNo: item.lineNo,
     value: state.docContent,
     editorEl: pv.editorEl,
+    previewEl: pv.previewEl,   // id 查找作用域限定文档预览（sec-N 编号各消费者独立重置，防串控制台/聊天标题）
   })
   if (state.previewMode) syncTocSpy()   // 落点立即同步一次（平滑滚动中），后续 scroll 事件接管
 }

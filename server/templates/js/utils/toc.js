@@ -2,16 +2,15 @@
  *
  * 条目真值 = 渲染 DOM（#preview h1–h3，h4+ 忽略，D2）：renderer.heading 写入的
  * sec-N id + data-line（源串行走登记，见 markdown.js「TOC 标题注册表」）随条目读出。
- * 预览跳转 = getElementById → scrollIntoView + .heading-flash 闪光（与跨文档深链同一视觉语言，
- * app.js openDoc 抽成此处复用）；编辑态 = 行号 → 整行选中（selectionStart/End）+ scrollTop。
+ * 预览跳转 = previewEl 作用域内按 id 查找（sec-N 编号被 renderMarkdown 的三个消费者
+ * 各自重置，全局 getElementById 会命中记忆控制台/AI 聊天中的同序号标题）→ scrollIntoView +
+ * .heading-flash 闪光（与跨文档深链同一视觉语言，app.js openDoc 抽成此处复用）；
+ * 编辑态 = 行号 → 整行选中（selectionStart/End）+ scrollTop。
  * scrollspy 仅浮层开启期间挂（rAF 节流，关闭即解绑 = 常态零开销），仅预览态有效
  *（编辑态 textarea 滚动位置无章节语义，D4）。
  */
 
-// 编辑态行高常量：#editor = font-size 14px × line-height 1.75 = 24.5px（style.css #editor 同口径；
-// 该规则被 test_ui 钉住，改字号/行高须同步改这里）。仅作探针测量失败时的回退近似：
-// textarea 默认软换行，长逻辑行折成多条视觉行，ln × 行高会系统性偏小（越深偏移越大，且随机器字体漂移）。
-const EDITOR_LINE_HEIGHT = 24.5
+import { EDITOR_LINE_HEIGHT, LAND_ANCHOR, measureEditorLineTopY } from './editorGeom.js'
 
 export const TOC_EMPTY_TEXT = '本文档没有标题'
 
@@ -79,13 +78,16 @@ export function flashHeading(el) {
  * 预览态跳转：平滑滚动到标题 + 闪光一次（flash 可关：跨文档深链自己延时补闪，避免双闪）。
  * prefers-reduced-motion → 直跳（behavior:'auto'）。
  * 文本兜底覆盖 h1–h6（跨文档深链的旧口径：h4+ 标题不进 TOC 但深链仍可命中，行为不回归）。
- * @param {{id?: string, text?: string}} target - id 优先（getElementById），文本兜底
+ * @param {{id?: string, text?: string}} target - id 优先（previewEl 作用域内查找），文本兜底
  * @param {boolean} [flash] - 是否立即闪光（缺省 true；TOC 跳转即闪）
+ * @param {HTMLElement} [previewEl] - 文档预览元素（#preview）；提供时 id 查找限定其内部
+ *（sec-N 编号被 renderMarkdown 各消费者独立重置，全局 getElementById 会串到控制台/聊天标题）；
+ *缺省时退回全局 getElementById（调用方未接 scope 的兼容路径）。
  * @returns {boolean} 是否命中
  */
-export function scrollToPreviewHeading(target, flash = true) {
+export function scrollToPreviewHeading(target, flash = true, previewEl = null) {
   let el = null
-  if (target.id) el = document.getElementById(target.id)
+  if (target.id) el = previewEl ? previewEl.querySelector('#' + CSS.escape(target.id)) : document.getElementById(target.id)
   if (!el && target.text) {
     el = Array.from(document.querySelectorAll('#preview h1, #preview h2, #preview h3, #preview h4, #preview h5, #preview h6'))
       .find(h => h.textContent.trim() === target.text.trim()) || null
@@ -95,43 +97,6 @@ export function scrollToPreviewHeading(target, flash = true) {
   el.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'start' })
   if (flash) flashHeading(el)
   return true
-}
-
-/**
- * 探针用内容宽度（亚像素）：getComputedStyle(ta).width 为布局 used 外宽——小数像素、
- * 不随 transform 变（翻页动画 translateX/rotateY 期间仍可信，getBoundingClientRect 则不可）。
- * 再减去 offsetWidth−clientWidth（border+布局滚动条；本编辑器 border 0，即 Windows 经典滚动条宽）：
- * clientWidth 已剔除该差值且随外层同步取整，两口径的整数错位相互抵消，
- * 小数部分即真实内容宽度的小数（如 622.2px）——把「正好占满一行的文本（加一字符即折行）」
- * 的折行决策对齐到亚像素：非全屏时 doc 区宽为亚像素值，整数 clientWidth 下 ±0.5px 窄带内
- * 该行会在探针/真实编辑器间做出不同折行，累计高度差整条视觉行（24.5px → 跳转偏整一行）。
- * computed 回读异常（返回非 px 值）时退回整数 clientWidth，不劣于旧行为。
- */
-function editorContentWidth(ta) {
-  const cw = ta.clientWidth
-  const w = parseFloat(getComputedStyle(ta).width)
-  if (!Number.isFinite(w)) return cw
-  return w - (ta.offsetWidth - cw)
-}
-
-/**
- * 探针测量：textarea 内第 ln 行（0-based）逻辑行的视觉顶边 Y（相对内容盒顶）。
- * 克隆 textarea（同 class → 同字体/行高/换行行为）+ 真实内容宽度（亚像素，见 editorContentWidth），
- * 填入前 ln 行：scrollHeight 即这 ln 行含折行的累计高度。探针参与布局不绘制（visibility:hidden），
- * 同步测量后即移除。无折行场景测得值 = ln × 行高，两态皆兼容。
- * @returns {number} 顶边 Y；probe 异常时抛出（调用方回退常量近似）
- */
-function measureEditorLineTopY(ta, lines, ln) {
-  if (ln <= 0) return 0
-  const probe = ta.cloneNode(false)
-  probe.value = lines.slice(0, ln).join('\n')
-  const cs = getComputedStyle(ta)
-  probe.style.cssText = 'position:fixed; left:-10000px; top:0; visibility:hidden; margin:0; border:0; height:auto;'
-  probe.style.width = editorContentWidth(ta) + 'px'
-  document.body.appendChild(probe)
-  const y = probe.scrollHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom)
-  document.body.removeChild(probe)
-  return Math.max(0, y)
 }
 
 /**
@@ -155,7 +120,7 @@ export function jumpToEditorLine(ta, value, lineNo) {
   } catch {
     topY = ln * EDITOR_LINE_HEIGHT   // 探针失败回退：无折行口径近似
   }
-  ta.scrollTop = Math.max(0, topY - 48)
+  ta.scrollTop = Math.max(0, topY - LAND_ANCHOR)
   return true
 }
 
@@ -173,13 +138,17 @@ export function scrollToHeading(p) {
     if (!ta) return false
     return jumpToEditorLine(ta, p.value != null ? p.value : ta.value, p.lineNo)
   }
-  return scrollToPreviewHeading({ id: p.id, text: p.text }, p.flash !== false)
+  return scrollToPreviewHeading({ id: p.id, text: p.text }, p.flash !== false, p.previewEl)
 }
 
 /* ============ scrollspy（仅浮层开启期间挂，rAF 节流） ============
- * 当前节 = 最后一个「顶边越过 容器顶 + 96px」的标题（与 preview 跳转 block:'start' +
- * scroll-margin-top:16px 的落点口径一致：落点下方 80px 内容先入视口时仍判当前节）。
+ * 当前节 = 最后一个「顶边越过 容器顶 + SPY_LINE_OFFSET(96px)」的标题（与 preview 跳转 block:'start' +
+ * scroll-margin-top:16px 的落点口径一致）。scroller 盒顶不含 doc-enter 的 padding（app.js:793
+ * `p-4 md:p-6`）→ 实际提前量 = 96 − (padding + 16) = 56px（桌面 p-6=24px）/ 64px（移动 p-4=16px）：
+ * 落点下方这么多内容先入视口时仍判当前节。
  * 命中条目自动保持可见（列表内部溢出时）。 */
+
+export const SPY_LINE_OFFSET = 96
 
 let spyTimer = 0
 let spyOn = false
@@ -207,7 +176,7 @@ export function stopScrollspy(scroller) {
 }
 
 /**
- * 计算当前节：最后一个顶边越过「容器顶 + 96px」的标题。
+ * 计算当前节：最后一个顶边越过「容器顶 + SPY_LINE_OFFSET(96px)」的标题。
  * @returns {{id: string, el: HTMLElement}|null}
  */
 export function computeActiveHeading(scroller, previewEl, items) {
@@ -215,8 +184,8 @@ export function computeActiveHeading(scroller, previewEl, items) {
   const top = scroller.getBoundingClientRect().top
   let curEl = null
   items.forEach(it => {
-    const el = document.getElementById(it.id)
-    if (el && el.getBoundingClientRect().top - top < 96) curEl = el
+    const el = previewEl.querySelector('#' + CSS.escape(it.id))
+    if (el && el.getBoundingClientRect().top - top < SPY_LINE_OFFSET) curEl = el
   })
   return curEl ? { id: curEl.id, el: curEl } : null
 }

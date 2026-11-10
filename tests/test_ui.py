@@ -79,6 +79,37 @@ def test_api_js_exports_all_endpoints():
         assert method in js, f"api.{method} missing"
 
 
+def test_editor_line_height_pin():
+    """editorGeom.EDITOR_LINE_HEIGHT = 24.5 与 style.css #editor 的 14px × 1.75 同口径（双向钉住）。
+
+    探针测量失败时的回退近似（ln × 行高）依赖该口径；改字号/行高不同步会再次引入
+    系统性落点偏移。同时确认常量住在 editorGeom.js（toc.js 路径 A 与 EditorPane.js 路径 B 共用）。
+    """
+    css = read_template("style.css")
+    m = re.search(r"#editor\s*{[^}]*}", css)
+    assert m, "missing #editor rule in style.css"
+    assert "font-size: 14px" in m.group(0), "#editor must pin font-size: 14px"
+    assert "line-height: 1.75" in m.group(0), "#editor must pin line-height: 1.75"
+    assert "EDITOR_LINE_HEIGHT" in read_js("utils/editorGeom.js")
+
+
+def test_toc_heading_lookup_scoped():
+    """P0-1：sec-N id 查找必须作用域到文档预览元素。
+
+    renderMarkdown 有三个并存消费者（文档预览 / AI 聊天 / 记忆控制台报告），各自独立重置
+    sec-N 编号；#memory-console-shell 在 <main> 之前 → 全局 getElementById 会命中控制台的
+    同序号标题（TOC 点击 / 深链串台）。computeActiveHeading 与 scrollToPreviewHeading 均须
+    走 previewEl.querySelector。
+    """
+    js = read_js("utils/toc.js")
+    assert "document.getElementById(it.id)" not in js, (
+        "computeActiveHeading must scope id lookup to previewEl, not global getElementById"
+    )
+    assert "previewEl.querySelector" in js, (
+        "scrollToPreviewHeading must scope id lookup to previewEl"
+    )
+
+
 def test_utils_markdown_exports():
     """markdown.js 应导出渲染函数"""
     js = read_js("utils/markdown.js")
