@@ -27,14 +27,17 @@ logger = logging.getLogger(__name__)
 def _norm_rel(path: str, vault: Path) -> str | None:
     """Convert absolute path to vault-relative POSIX string.
 
-    Returns None if path is outside vault, in .sync/, or in .obsidian/.
+    Returns None if path is outside vault, in .sync/, .obsidian/, or
+    .trash/ (trash ops must not produce dirty events — the original path
+    is handled by the ledger skip mark; a .trash path must never reach
+    the ledger, or the files table would gain trash rows — P4-4).
     Uses normcase for Windows case-insensitive filesystems.
     """
     try:
         p = Path(os.path.normcase(os.path.normpath(path)))
         v = Path(os.path.normcase(os.path.normpath(str(vault))))
         rel = p.relative_to(v)
-        if ".sync" in rel.parts or ".obsidian" in rel.parts:
+        if ".sync" in rel.parts or ".obsidian" in rel.parts or ".trash" in rel.parts:
             return None
         return rel.as_posix()
     except (ValueError, OSError):
@@ -48,7 +51,8 @@ def _full_scan(
     """Scan vault for .md files and build a snapshot dict.
 
     Returns {rel_path: FileEntry(hash, size, mtime)}.
-    Skips .sync/, .obsidian/, non-files, and unreadable files.
+    Skips .sync/, .obsidian/, .trash/ (P4-4: reconcile must not see
+    trashed copies), non-files, and unreadable files.
 
     ``db`` (optional) is a {path: (hash, mtime)} map from the DB. When provided
     and a file's mtime is unchanged, the stored hash is reused and the file is
@@ -59,7 +63,7 @@ def _full_scan(
     snap: dict[str, FileEntry] = {}
     io_count = 0
     for f in vault.rglob("*.md"):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
+        if ".sync" in f.parts or ".obsidian" in f.parts or ".trash" in f.parts:
             continue
         if not f.is_file():
             continue

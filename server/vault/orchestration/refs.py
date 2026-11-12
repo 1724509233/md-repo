@@ -11,10 +11,14 @@ from ..db.graph_sql import _find_referrers
 
 
 def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
-    """Check if exactly one file with this name exists in the vault."""
+    """Check if exactly one file with this name exists in the vault.
+
+    ``.trash/`` copies are not "live" duplicates (P4-4: a trashed file
+    must not defeat the short-name uniqueness check).
+    """
     count = 0
     for f in vault_dir.rglob(filename):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
+        if ".sync" in f.parts or ".obsidian" in f.parts or ".trash" in f.parts:
             continue
         if f.is_file():
             count += 1
@@ -66,7 +70,8 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
             fname = Path(old_path).name
             count = sum(
                 1 for f in vault_dir.rglob(fname)
-                if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+                if ".sync" not in f.parts and ".obsidian" not in f.parts
+                and ".trash" not in f.parts and f.is_file()
             )
             old_name_unique = count <= 1
         patterns.append({
@@ -116,10 +121,19 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
     return modified_count
 
 
-def remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: str) -> int:
+def remove_dead_links(
+    conn: sqlite3.Connection,
+    vault_dir: Path,
+    deleted_path: str,
+    src_paths: list[str] | None = None,
+) -> int:
     """Remove wikilinks pointing to a deleted file from files that link to it.
 
-    Uses edges table to find referrer files (falls back to full scan if empty).
+    Uses edges table to find referrer files (falls back to full scan if
+    empty). ``src_paths`` overrides the referrer lookup when provided —
+    the trash purge passes its own list, because after a trash inbound the
+    referrer→target graph edges are already gone (graph_delete_file at
+    inbound), so the edges-based lookup would find nothing.
     Handles:
     - [[deleted_path]] / [[deleted_path_without_ext]] → removed
     - [[deleted_path|alias]] → removed
@@ -134,10 +148,11 @@ def remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: s
     stem = Path(deleted_path).stem      # e.g. "a"
     no_ext = deleted_path[:-3] if deleted_path.endswith(".md") else deleted_path  # e.g. "notes/a"
 
-    # Check if the short name is unique (no other file with same name)
+    # Check if the short name is unique (no other file with same name;
+    # .trash/ copies are not live files — P4-4)
     short_name_unique = True
     for f in vault_dir.rglob(filename):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
+        if ".sync" in f.parts or ".obsidian" in f.parts or ".trash" in f.parts:
             continue
         if f.is_file() and f.relative_to(vault_dir).as_posix() != deleted_path:
             short_name_unique = False
@@ -148,7 +163,8 @@ def remove_dead_links(conn: sqlite3.Connection, vault_dir: Path, deleted_path: s
     if short_name_unique:
         patterns.append(re.escape(stem))
 
-    src_paths = _find_referrers(conn, vault_dir, deleted_path)
+    if src_paths is None:
+        src_paths = _find_referrers(conn, vault_dir, deleted_path)
 
     modified_count = 0
     for rel in src_paths:

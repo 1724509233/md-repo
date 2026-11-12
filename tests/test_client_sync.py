@@ -1,13 +1,14 @@
 """Tests for client notification console output."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 
-from client.sync import sync_once
+from client.sync import scan_local_files, sync_once
 
 
 def _client_config(tmp_path: Path):
@@ -48,3 +49,15 @@ def test_sync_once_logs_notifications(tmp_path: Path, caplog):
 
     assert any("[bg:notes-organizer]" in r.message for r in caplog.records)
     assert any("整理完成" in r.message for r in caplog.records)
+
+
+def test_scan_local_files_excludes_trash_and_sync(tmp_path: Path):
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / ".trash" / "20261110T120000Z-a1b2c3d4" / "notes").mkdir(parents=True)
+    (vault / ".sync" / "logs").mkdir(parents=True)
+    (vault / "notes" / "live.md").write_bytes(b"live")
+    (vault / ".trash" / "20261110T120000Z-a1b2c3d4" / "notes" / "old.md").write_bytes(b"old")
+    (vault / ".sync" / "state.md").write_bytes(b"state")
+    scanned = scan_local_files(vault)
+    assert scanned == {"notes/live.md": hashlib.sha256(b"live").hexdigest()}

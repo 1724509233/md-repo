@@ -41,13 +41,15 @@ class ToolContext:
 # ── Shared path validators ──────────────────────────────────────────────
 
 def _check_md_path(v: str) -> str:
-    """Validate a required .md file path (boundary + extension + .sync)."""
+    """Validate a required .md file path (boundary + extension + .sync/.trash)."""
     if ".." in v or v.startswith("/"):
         raise ValueError(f"path outside vault: '{v}'")
     if not v.endswith(".md"):
         raise ValueError(f"only .md files are supported, got '{v}'")
     if ".sync" in v:
         raise ValueError("cannot access .sync/ internal files")
+    if ".trash" in v:
+        raise ValueError("cannot access .trash/ (trash is managed via the trash UI)")
     return v
 
 

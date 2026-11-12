@@ -154,7 +154,7 @@ def test_delete_doc_books_row_and_cleans_tables(vault_dir, db_conn, ledger_conn)
 
     result = execute_tool("delete_doc", {"path": "notes/test.md"},
                           ToolContext(vault_dir=vault_dir, run_id="run-d"))
-    assert "Deleted" in result
+    assert "Moved to trash" in result  # P4-4: move semantics, not unlink
     assert not (vault_dir / "notes" / "test.md").exists()
 
     rows = _change_rows(db_conn, "notes/test.md")

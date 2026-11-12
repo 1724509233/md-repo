@@ -6,6 +6,8 @@ def compare_files(
     local: dict[str, str],
     server: dict[str, str],
     recent_moves: list[dict] | None = None,
+    recent_deletes: list[dict] | None = None,
+    deleted_hashes: dict[str, str] | None = None,
 ) -> dict:
     """Compare local and server file manifests.
 
@@ -17,13 +19,23 @@ def compare_files(
             ``ts``. Used to detect renames so the client deletes its stale
             local copy instead of pushing it back (which would recreate the
             old path on the server).
+        recent_deletes: optional list of change_log deleted events since
+            the client's last sync. Each dict has keys ``path``, ``ts``.
+            A to_push path that was deleted on the server is a stale local
+            copy — pushing it back would resurrect the file.
+        deleted_hashes: optional mapping of original path -> pre-delete
+            sha256 hash (from the trash batches' meta.json). When present
+            for a deleted path, a local copy with a DIFFERENT hash is a
+            deliberate local rewrite/recreation and stays in to_push; an
+            identical hash (or a deletion with no recorded pre-hash, e.g.
+            an external delete) is a stale copy and moves to to_delete.
 
     Returns:
         {
             "to_pull": [paths in server but not in local],
             "to_push": [paths in local but not in server],
-            "to_delete": [local paths that were renamed on the server;
-                          client should delete them],
+            "to_delete": [local paths that were renamed or deleted on the
+                          server; client should delete them],
             "conflicts": [paths in both with different hashes],
         }
         All lists sorted alphabetically.
@@ -53,6 +65,26 @@ def compare_files(
             new_path = move_map.get(p)
             if new_path and local.get(p) == server.get(new_path):
                 to_delete.append(p)
+            else:
+                new_to_push.append(p)
+        to_push = new_to_push
+
+    # Deletion detection: a to_push path that was deleted on the server is
+    # a stale local copy (pushing it back resurrects the file). Exception:
+    # the trash recorded a pre-delete hash and the local copy differs — the
+    # user recreated/rewrote the file after the server-side deletion, so it
+    # is a genuine new file. (The move rule above runs first; a path that
+    # both a move and a delete claim is decided by the move rule.)
+    if recent_deletes:
+        deleted_paths = {c.get("path", "") for c in recent_deletes}
+        new_to_push = []
+        for p in to_push:
+            if p in deleted_paths:
+                pre_hash = (deleted_hashes or {}).get(p)
+                if pre_hash and local.get(p) != pre_hash:
+                    new_to_push.append(p)  # local rewrite after deletion
+                else:
+                    to_delete.append(p)  # stale copy (or external delete)
             else:
                 new_to_push.append(p)
         to_push = new_to_push

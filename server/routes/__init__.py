@@ -34,13 +34,13 @@ class WebContext:
     bg_targets: dict[str, dict] | None = None
 
 
-from . import agent, console, memory, notifications, recall, sync
+from . import agent, console, memory, notifications, recall, sync, trash
 
 # Fixed order. Cross-domain URL prefixes do not overlap today, so this
 # tuple is an explicit freeze, not a functional requirement; the
 # order-sensitive registrations are within each module (see module docs).
 # Pinned by tests/test_routes_order.py.
-ROUTE_MODULES = (console, notifications, sync, recall, memory, agent)
+ROUTE_MODULES = (console, notifications, sync, recall, memory, agent, trash)
 
 
 def register_all(app, ctx: WebContext) -> None:

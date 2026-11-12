@@ -217,6 +217,64 @@ def test_change_log_batch_id_migration(tmp_path):
     finally:
         conn.close()
 
+
+def test_change_log_restore_op_migration(tmp_path):
+    """Old change_log DB (CHECK without 'restore') gets the 5-op constraint
+    on init_db (design 2026-11-10 §12.1): rows preserved across the table
+    recreation, indexes rebuilt, op='restore' insertable, re-run is a no-op.
+    """
+    db_path = tmp_path / "index.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE change_log (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL NOT NULL,
+            source TEXT NOT NULL DEFAULT 'unknown',
+            op TEXT NOT NULL CHECK(op IN ('create','update','delete','move')),
+            path TEXT NOT NULL,
+            old_path TEXT DEFAULT '',
+            new_hash TEXT DEFAULT '',
+            batch_id TEXT DEFAULT ''
+        )
+        """
+    )
+    conn.execute("CREATE INDEX idx_changelog_ts ON change_log(ts)")
+    conn.execute("CREATE INDEX idx_changelog_path ON change_log(path)")
+    conn.execute(
+        "INSERT INTO change_log (ts, source, op, path) "
+        "VALUES (100.0, 'web', 'delete', 'old.md')"
+    )
+    conn.commit()
+    conn.close()
+
+    conn = init_db(db_path)
+    try:
+        # Row preserved across the table recreation.
+        rows = conn.execute(
+            "SELECT ts, source, op, path FROM change_log"
+        ).fetchall()
+        assert [(r[1], r[2], r[3]) for r in rows] == [("web", "delete", "old.md")]
+        # Indexes rebuilt on the new table.
+        idx = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='index' AND tbl_name='change_log' AND name LIKE 'idx_%'")}
+        assert {"idx_changelog_ts", "idx_changelog_path"} <= idx
+        # The 5th op is insertable now.
+        log_change(conn, "old.md", "restore", source="web")
+        assert conn.execute(
+            "SELECT op FROM change_log WHERE path = 'old.md' AND op = 'restore'"
+        ).fetchone() is not None
+    finally:
+        conn.close()
+
+    # Re-run: idempotent no-op (no data loss, no double migration).
+    conn = init_db(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM change_log").fetchone()[0] == 2
+    finally:
+        conn.close()
+
     # Idempotency: a second init_db on the migrated DB is a no-op.
     conn = init_db(db_path)
     try:

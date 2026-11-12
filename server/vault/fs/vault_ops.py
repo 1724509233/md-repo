@@ -16,13 +16,18 @@ def safe_rel_path(raw: str) -> Path | None:
     """Shared vault-path guard. Returns None if the path is unsafe.
 
     Normalizes backslashes to forward slashes (vault-relative). Rejects
-    empty paths, leading ``/``, and any ``..`` / empty path part.
+    empty paths, leading ``/``, any ``..`` / empty path part, and a first
+    segment of ``.trash`` (trash batch store — the web routes must never
+    touch it directly, P4-4) or ``.sync`` (machine area — bug 0eac2e40,
+    landed in the same batch).
     """
     raw = raw.replace("\\", "/")
     if not raw or raw.startswith("/"):
         return None
     parts = Path(raw).parts
     if any(p in ("..", "") for p in parts):
+        return None
+    if parts[0] in (".trash", ".sync"):
         return None
     return Path(*parts)
 
@@ -107,13 +112,15 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
 
 
 def _iter_vault_md(vault_dir: Path) -> Iterator[Path]:
-    """Yield all .md files in vault, skipping .sync/ and .obsidian/.
+    """Yield all .md files in vault, skipping .sync/, .obsidian/ and .trash/.
 
     Also skips the top-level suggestions/ and index/ directories
     (memory-runtime v1 index exclusion — see EXCLUDED_INDEX_DIRS).
+    ``.trash/`` holds trashed (restorable) copies — they never enter the
+    index (P4-4).
     """
     for f in vault_dir.rglob("*.md"):
-        if ".sync" in f.parts or ".obsidian" in f.parts:
+        if ".sync" in f.parts or ".obsidian" in f.parts or ".trash" in f.parts:
             continue
         if not f.is_file():
             continue

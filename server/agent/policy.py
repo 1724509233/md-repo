@@ -135,8 +135,8 @@ def validate_tool_call(name: str, args: dict, policy: ChannelPolicy) -> str | No
 
     1. pydantic schema (L1, simple ``{loc}: {msg}`` format)
     2. semantic boundaries (L2, authoritative): resolve + inside vault +
-       first segment not ``.sync``; write_scope / report_dir constrain ask
-       (write) tools only
+       first segment not ``.sync``/``.trash``; write_scope / report_dir
+       constrain ask (write) tools only
     3. gates: VAULT_GATES + policy.gates, in order, first non-None rejects
 
     Returns an error string, or None when the call may proceed.
@@ -161,8 +161,9 @@ def validate_tool_call(name: str, args: dict, policy: ChannelPolicy) -> str | No
         full = (policy.vault_dir / p).resolve()
         if not full.is_relative_to(vault_resolved):
             return f"Error: path '{p}' resolves outside vault"
-        if _first_segment(p) == ".sync":
-            return f"Error: path '{p}' ({label}) is in the protected .sync/ directory"
+        if _first_segment(p) in (".sync", ".trash"):
+            return (f"Error: path '{p}' ({label}) is in the protected "
+                    f"{_first_segment(p)}/ directory")
         if is_ask and policy.write_scope is not None and not full.is_relative_to(policy.write_scope):
             return f"Error: path '{p}' ({label}) is outside the allowed write scope"
         if is_ask and policy.report_dir is not None and full.is_relative_to(policy.report_dir):

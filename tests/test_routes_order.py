@@ -1,4 +1,4 @@
-"""Route-table order snapshot: the 33 routes' (methods, path) sequence,
+"""Route-table order snapshot: the 35 routes' (methods, path) sequence,
 the /static mount, and the no-duplicate invariant.
 
 Starlette matches the FIRST fully-matching route in registration order
@@ -17,7 +17,7 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
-# notifications → sync → recall → memory → agent). 33 routes.
+# notifications → sync → recall → memory → agent → trash). 35 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -58,6 +58,9 @@ EXPECTED = (
     (("GET",), "/api/agent/settings"),                  # 31
     (("POST",), "/api/agent/settings"),                 # 32
     (("POST",), "/api/agent/new-session"),              # 33
+    # trash (2).
+    (("GET",), "/api/trash"),                           # 34 list
+    (("POST",), "/api/trash"),                          # 35 restore/purge/empty
 )
 
 

@@ -303,8 +303,12 @@ def test_execute_delete_doc(tmp_path: Path):
     (notes / "del.md").write_bytes(b"content")
 
     result = execute_tool("delete_doc", {"path": "notes/del.md"}, ToolContext(vault_dir=vault))
-    assert "Deleted" in result
+    assert "Moved to trash" in result
     assert not (vault / "notes" / "del.md").exists()
+    # P4-4: deletion is a move into the trash (restorable), not an unlink.
+    trashed = list((vault / ".trash").rglob("del.md"))
+    assert len(trashed) == 1
+    assert trashed[0].read_bytes() == b"content"
 
 
 def test_execute_delete_doc_not_found(tmp_path: Path):

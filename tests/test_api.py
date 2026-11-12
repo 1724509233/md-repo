@@ -717,8 +717,16 @@ def test_manage_delete_file(client, vault_dir, db_conn) -> None:
         "/api/docs/manage", json={"action": "delete", "path": "notes/test.md"}
     )
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "path": "notes/test.md", "deleted_count": 1}
+    body = r.json()
+    assert body["ok"] is True
+    assert body["path"] == "notes/test.md"
+    assert body["deleted_count"] == 1
+    assert body["batch"]  # P4-4: deletion = move into the trash
     assert not (vault_dir / "notes" / "test.md").exists()
+    # The file lands in the trash batch, original relative path preserved.
+    trashed = vault_dir / ".trash" / body["batch"] / "notes" / "test.md"
+    assert trashed.is_file()
+    assert trashed.read_bytes() == SAMPLE_CONTENT
     paths = [f["path"] for f in get_all_files(db_conn)]
     assert "notes/test.md" not in paths
 

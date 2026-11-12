@@ -125,3 +125,97 @@ def test_to_delete_always_present() -> None:
     result = compare_files(local, server)
     assert "to_delete" in result
     assert result["to_delete"] == []
+
+
+# ── deletion detection (recent_deletes / deleted_hashes, design 2026-11-10 §6) ──
+
+
+def test_stale_copy_after_trash_delete_goes_to_delete() -> None:
+    # Server moved a.md to the trash; client still has the identical copy.
+    # It must go to to_delete, not to_push (pushing would resurrect it).
+    local = {"a.md": "h1"}
+    server = {}
+    recent_deletes = [{"path": "a.md", "ts": 1000.0}]
+    result = compare_files(
+        local, server,
+        recent_deletes=recent_deletes, deleted_hashes={"a.md": "h1"},
+    )
+    assert result["to_push"] == []
+    assert result["to_delete"] == ["a.md"]
+    assert result["to_pull"] == []
+    assert result["conflicts"] == []
+
+
+def test_local_rewrite_after_trash_delete_stays_to_push() -> None:
+    # Server moved a.md to the trash; user then rewrote a.md locally
+    # (hash differs from the pre-delete hash) — a genuine new file.
+    local = {"a.md": "h1-rewritten"}
+    server = {}
+    recent_deletes = [{"path": "a.md", "ts": 1000.0}]
+    result = compare_files(
+        local, server,
+        recent_deletes=recent_deletes, deleted_hashes={"a.md": "h1"},
+    )
+    assert result["to_push"] == ["a.md"]
+    assert result["to_delete"] == []
+
+
+def test_external_delete_without_pre_hash_goes_to_delete() -> None:
+    # External delete (direct disk edit): change_log row exists but the
+    # path has no trash batch, so no pre-hash — always a stale copy.
+    local = {"a.md": "h1"}
+    server = {}
+    recent_deletes = [{"path": "a.md", "ts": 1000.0}]
+    result = compare_files(
+        local, server,
+        recent_deletes=recent_deletes, deleted_hashes={},
+    )
+    assert result["to_push"] == []
+    assert result["to_delete"] == ["a.md"]
+
+
+def test_no_recent_deletes_backward_compatible() -> None:
+    # Without recent_deletes, a server-side deletion looks like a local
+    # new file (the old resurrection behavior) — regression guard.
+    local = {"a.md": "h1"}
+    server = {}
+    result = compare_files(local, server)
+    assert result["to_push"] == ["a.md"]
+    assert result["to_delete"] == []
+
+
+def test_move_rule_wins_over_delete_rule() -> None:
+    # A path claimed by BOTH a recent move (from_path) and a recent delete
+    # is decided by the move rule (runs first): the rename matches the
+    # server's new path, so a.md goes to to_delete via the move rule —
+    # the delete rule's rewrite-exception must not rescue it back to
+    # to_push even though the pre-hash differs from the local hash.
+    local = {"a.md": "h1"}
+    server = {"b.md": "h1"}
+    recent_moves = [{"from_path": "a.md", "path": "b.md", "ts": 1000.0}]
+    recent_deletes = [{"path": "a.md", "ts": 1000.0}]
+    result = compare_files(
+        local, server,
+        recent_moves=recent_moves,
+        recent_deletes=recent_deletes,
+        deleted_hashes={"a.md": "h999"},
+    )
+    assert result["to_pull"] == ["b.md"]
+    assert result["to_push"] == []
+    assert result["to_delete"] == ["a.md"]
+    assert result["conflicts"] == []
+
+
+def test_delete_rule_only_touches_to_push_paths() -> None:
+    # A deleted path that is NOT in to_push (client already deleted it
+    # locally) is not reported in to_delete — nothing to clean up.
+    local = {}
+    server = {}
+    recent_deletes = [{"path": "a.md", "ts": 1000.0}]
+    result = compare_files(
+        local, server,
+        recent_deletes=recent_deletes, deleted_hashes={"a.md": "h1"},
+    )
+    assert result["to_push"] == []
+    assert result["to_delete"] == []
+    assert result["to_pull"] == []

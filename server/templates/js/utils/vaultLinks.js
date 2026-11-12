@@ -14,7 +14,7 @@
  */
 
 // 系统目录兜底（前端 files 清单已由 get_all_files 过滤；建索引时再排除一次，防外部注入）
-const EXCLUDED_TOP = new Set(['.sync', '.obsidian', '.reports', 'index', 'suggestions'])
+const EXCLUDED_TOP = new Set(['.sync', '.obsidian', '.reports', 'index', 'suggestions', '.trash'])
 
 // wikilink 转换后写入 markdown href 的标记前缀：'#' 片段 URL（DOMPurify 保留、marked 合法），
 // renderer.link 据此前缀识别「wikilink」并走根相对策略（baseDir=null）。

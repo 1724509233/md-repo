@@ -128,6 +128,66 @@ def _ensure_change_log_batch_id(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE change_log ADD COLUMN batch_id TEXT DEFAULT ''")
 
 
+# change_log DDL — the single source for both the fresh-DB CREATE in
+# :func:`init_db` and the table recreation in
+# :func:`_ensure_change_log_restore_op` (the two must not drift).
+# op is the 5-set: 'restore' is the 5th canonical op (design 2026-11-10
+# §12.1) — a restored file is not a new file, and the bgagent arm surface
+# deliberately does NOT include it.
+_CHANGE_LOG_DDL = """
+    CREATE TABLE change_log (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL NOT NULL,
+        source TEXT NOT NULL DEFAULT 'unknown',
+        op TEXT NOT NULL
+            CHECK(op IN ('create','update','delete','move','restore')),
+        path TEXT NOT NULL,
+        old_path TEXT DEFAULT '',
+        new_hash TEXT DEFAULT '',
+        batch_id TEXT DEFAULT ''
+    )
+    """
+
+
+def _ensure_change_log_restore_op(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: the change_log.op CHECK constraint gains
+    'restore' (5th canonical op, design 2026-11-10 §12.1).
+
+    SQLite cannot ALTER a CHECK constraint — when the stored DDL is stale,
+    recreate the table (rename → create → copy → drop → reindex) inside one
+    transaction. Rows are preserved: the sync lane's 200-row window and the
+    UI change feed must not reset. Must run after
+    :func:`_ensure_change_log_batch_id` (the copy carries the batch_id
+    column) and after the legacy file_changes merge.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='change_log'"
+    ).fetchone()
+    if row and "'restore'" in (row[0] or ""):
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("ALTER TABLE change_log RENAME TO change_log_old")
+        # Indexes follow the renamed table (names unchanged) — drop them
+        # explicitly so the reindex below recreates them on the new table.
+        conn.execute("DROP INDEX IF EXISTS idx_changelog_ts")
+        conn.execute("DROP INDEX IF EXISTS idx_changelog_path")
+        conn.execute(_CHANGE_LOG_DDL)
+        conn.execute(
+            "INSERT INTO change_log "
+            "(seq, ts, source, op, path, old_path, new_hash, batch_id) "
+            "SELECT seq, ts, source, op, path, old_path, new_hash, batch_id "
+            "FROM change_log_old"
+        )
+        conn.execute("DROP TABLE change_log_old")
+        conn.execute("CREATE INDEX idx_changelog_ts ON change_log(ts)")
+        conn.execute("CREATE INDEX idx_changelog_path ON change_log(path)")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def init_db(db_path: Path) -> sqlite3.Connection:
     """Create (or open) the index database and ensure the schema exists.
 
@@ -148,18 +208,9 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         """
     )
     conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS change_log (
-            seq INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts REAL NOT NULL,
-            source TEXT NOT NULL DEFAULT 'unknown',
-            op TEXT NOT NULL CHECK(op IN ('create','update','delete','move')),
-            path TEXT NOT NULL,
-            old_path TEXT DEFAULT '',
-            new_hash TEXT DEFAULT '',
-            batch_id TEXT DEFAULT ''
+        _CHANGE_LOG_DDL.replace(
+            "CREATE TABLE change_log", "CREATE TABLE IF NOT EXISTS change_log", 1
         )
-        """
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_changelog_ts ON change_log(ts)"
@@ -296,6 +347,10 @@ def init_db(db_path: Path) -> sqlite3.Connection:
             """
         )
         conn.execute("DROP TABLE file_changes")
+
+    # Stale-DB constraint migration (after the merge above, so the copy
+    # carries the legacy rows too): old change_log tables reject op='restore'.
+    _ensure_change_log_restore_op(conn)
 
     conn.commit()
     return conn

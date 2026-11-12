@@ -254,11 +254,13 @@ def _find_referrers(conn: sqlite3.Connection | None, vault_dir: Path, target_pat
         candidates.add(target_path)
 
     # Short-name resolution: rglob by filename or stem, if unique
+    # (.trash/ copies are not live files — P4-4)
     tp = Path(target_path)
     for name in {tp.name, tp.stem + ".md"}:
         matches = [
             f for f in vault_dir.rglob(name)
-            if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+            if ".sync" not in f.parts and ".obsidian" not in f.parts
+            and ".trash" not in f.parts and f.is_file()
         ]
         if len(matches) == 1:
             candidates.add(matches[0].relative_to(vault_dir).as_posix())

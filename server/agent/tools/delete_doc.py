@@ -7,7 +7,7 @@ from .tool import DocTool, ToolContext, _check_md_path
 
 
 class DeleteDocArgs(BaseModel):
-    """Permanently delete a document. Irreversible — confirm with user before calling."""
+    """Move a document to the trash (restorable via the trash UI). Not permanent."""
     path: str = Field(description="Relative path")
 
     @field_validator("path")
@@ -29,7 +29,7 @@ class DeleteDocTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture
         from ...vault.db.conn import get_index_conn, get_ledger_conn
-        from ... import ledger
+        from ...vault.orchestration import trash
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
@@ -45,13 +45,20 @@ class DeleteDocTool(DocTool):
 
         # 新约定：change_log 行同步入库（record → apply_change），必须在
         # tool_result SSE 前到位（UI 快路径 loadDocs 得 200）；skip 标记使
-        # watcher 事件记零行，恰好一行。
+        # watcher 事件记零行，恰好一行。P4-4：删除 = 移入回收站（move 语义，
+        # remove_links=False —— 引用方内容不动，恢复可逆）；move_to_trash
+        # 内部经 ledger.record 记账，失败时整批回滚（无半回收站态）。
         index_conn = get_index_conn()
-        fp.unlink()
-        if index_conn is not None:
-            ledger.record(index_conn, ctx.vault_dir, args.path, "deleted",
-                          ctx.write_source, batch_id=ctx.run_id)
+        try:
+            trash.move_to_trash(index_conn, ctx.vault_dir, [args.path],
+                                ctx.write_source, batch_id=ctx.run_id)
+        except trash.TrashError as e:
+            if snap is not None:
+                from ...snapshots import discard
+
+                discard(conn, ctx.vault_dir, snap)
+            return f"Error: failed to move to trash: {e}"
         if snap is not None:
-            finalize(conn, snap, "")  # post-state: file absent
+            finalize(conn, snap, "")  # post-state: file absent from original path
             gc_after_capture(conn, ctx.vault_dir)
-        return f"Deleted: {args.path}"
+        return f"Moved to trash: {args.path} (restorable via the trash UI)"

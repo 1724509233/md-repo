@@ -6,6 +6,7 @@ import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
 import { FileTree } from './components/FileTree.js'
 import { SearchPanel } from './components/SearchPanel.js'
+import { TrashPanel } from './components/TrashPanel.js'
 import { EditorPane } from './components/EditorPane.js'
 import { TopBar } from './components/TopBar.js'
 import { AIChatPanel } from './components/AIChatPanel.js'
@@ -42,7 +43,8 @@ const state = reactive({
   memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回 + snapshot 降级计数）
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
-  monitoring: false       // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
+  monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
+  trashItems: []          // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -163,12 +165,21 @@ async function saveDoc() {
 
 // 当前文档受变更影响时的状态同步（pollChanges 与 manage 共用）
 async function _applyChangeToCurrentDoc(changes) {
+  // 删除判定 = 精确匹配 或 文件夹包含（当前文档位于被删文件夹内时 c.path ≠ currentPath，
+  // 精确匹配漏判 → currentPath 不清 → chat doc_path 预检 409；design 2026-11-10 §12.3）
+  // currentPath 为 null（未打开文档）时包含谓词需空值保护（回归：2026-11-12 实测
+  // 未开文档删除任意文件 → null.startsWith 抛错；design 2026-11-10 §12.3）
+  const cur = state.currentPath
   const curAffected = changes.some(c =>
-    c.path === state.currentPath || (c.action === 'moved' && c.from_path === state.currentPath)
+    c.path === cur || (cur && cur.startsWith(c.path + '/')) ||
+    (c.action === 'moved' && c.from_path === cur)
   )
-  if (!curAffected || !state.currentPath) return
-  const deleted = changes.some(c => c.path === state.currentPath && c.action === 'deleted')
-  const moved = changes.find(c => c.action === 'moved' && c.from_path === state.currentPath)
+  if (!curAffected || !cur) return
+  // 早退后 cur 非 null，包含谓词无需再保护
+  const deleted = changes.some(c =>
+    (c.path === cur || cur.startsWith(c.path + '/')) && c.action === 'deleted'
+  )
+  const moved = changes.find(c => c.action === 'moved' && c.from_path === cur)
   if (deleted) {
     state.docContent = ''
     state.currentPath = null
@@ -282,7 +293,7 @@ async function pollChanges() {
     if (!changes.length) return
 
     // 树结构变化？
-    const treeChanged = changes.some(c => ['created', 'deleted', 'moved'].includes(c.action))
+    const treeChanged = changes.some(c => ['created', 'deleted', 'moved', 'restore'].includes(c.action))
     if (treeChanged) await loadDocs()
 
     // 当前文档受影响？
@@ -324,7 +335,9 @@ async function handleToolResult(evt) {
     lastChangeTs = Date.now() / 1000 + 3
   }
   if (name === 'delete_doc') {
-    if (args.path === state.currentPath) {
+    // 文件夹包含谓词同 _applyChangeToCurrentDoc（design §12.3；agent 现仅单文件，统一防御）；
+    // currentPath 为 null 时短路，防 null.startsWith（同 §12.3 回归）
+    if (args.path === state.currentPath || (state.currentPath && state.currentPath.startsWith(args.path + '/'))) {
       state.docContent = ''
       // 清 path 防 /chat doc-path 预检 409（回归：agent 删除当前文档后再次发消息 409）；
       // 文档已不存在，脏态无意义（saveDoc 对 null path 本就 early-return）
@@ -333,6 +346,7 @@ async function handleToolResult(evt) {
     }
     // 304（DB 未消费到新数据）→ 不推进游标，轮询兜底自愈
     if (await loadDocs()) lastChangeTs = Date.now() / 1000 + 3
+    loadTrash()   // agent 删除 = 移入回收站（P4-4）：rail 徽标计数同步
   } else if (name === 'move_docs') {
     const moves = args.moves || []
     for (const m of moves) {
@@ -400,6 +414,7 @@ async function manage(action, payload) {
     const changes = []
     if (action === 'delete' && payload.path) {
       changes.push({ path: payload.path, action: 'deleted' })
+      loadTrash()   // 删除 = 移入回收站（P4-4）：rail 徽标计数即时更新
     } else if ((action === 'rename' || action === 'move') && payload.from_path) {
       changes.push({ path: payload.to_path, from_path: payload.from_path, action: 'moved' })
     }
@@ -411,10 +426,38 @@ async function manage(action, payload) {
   }
 }
 
+// ─── 回收站（P4-4，design 2026-11-10 §8）：列表 + 操作（TrashPanel 经 inject('trashAct') 调用）───
+async function loadTrash() {
+  try {
+    const data = await api.trashList()
+    state.trashItems = (data && data.items) || []
+  } catch (e) { /* silent：保留旧列表 */ }
+}
+
+// 操作成功 → 刷新回收站列表；restore 影响文件树 → loadDocs（+ 当前文档即恢复对象时重开）
+async function trashAct(action, payload) {
+  try {
+    const data = await api.trashAct(action, payload)
+    await loadTrash()
+    if (action === 'restore') {
+      await loadDocs()
+      const restored = (data && data.restored) || []
+      if (state.currentPath && restored.includes(state.currentPath)) openDoc(state.currentPath)
+    }
+    return true
+  } catch (e) {
+    // 409 = 恢复冲突（原路径已存在，如记忆控制台 rollback 已回滚，design §11-6）
+    if (String(e.message).includes('409')) alert('原路径已存在，无法恢复')
+    else alert('操作失败: ' + e.message)
+    return false
+  }
+}
+
 // ─── 二级边栏：面板注册表（spec §3.4：registry 驱动 rail；face 在模板接线）───
 const panels = [
   { id: 'file', label: '文件', icon: ICONS.folder, width: 260 },
-  { id: 'search', label: '搜索', icon: ICONS.search, width: 260 }
+  { id: 'search', label: '搜索', icon: ICONS.search, width: 260 },
+  { id: 'trash', label: '回收站', icon: ICONS.trash, width: 260 }
 ]
 function activePanelCfg() {
   return panels.find(p => p.id === activePanel.value) || panels[0]
@@ -428,6 +471,9 @@ const badgeParts = computed(() => {
   const failed = bs.failed || 0
   return { awaiting, failed, total: awaiting + failed }
 })
+
+// rail 回收站徽标 = 回收站文件总数（0 → 不渲染，同记忆徽标模式）
+const trashCount = computed(() => state.trashItems.reduce((n, b) => n + ((b.files || []).length), 0))
 
 function onMemoryRailClick() {
   state.memoryDetail = null   // 重新进入总是回队列面
@@ -455,6 +501,8 @@ function openMonitorPage() {
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
+// 移动端 file/trash 共用同一 overlay（panel-shell 的 open 态 = filePanelOpen，face 由 activePanel 切换）：
+// 关 → 开并切 face；开且已在该 face → 关（原 toggle 语义）；开但在另一 face → 只切 face 不关
 function onRailClick(p) {
   if (window.innerWidth >= 1024) {
     activePanel.value = p.id
@@ -466,7 +514,12 @@ function onRailClick(p) {
     state.searchDrawerOpen = !state.searchDrawerOpen
   } else {
     state.searchDrawerOpen = false       // 互斥：关搜索抽屉
-    state.filePanelOpen = !state.filePanelOpen
+    if (state.filePanelOpen && activePanel.value === p.id) {
+      state.filePanelOpen = false
+    } else {
+      activePanel.value = p.id
+      state.filePanelOpen = true
+    }
   }
 }
 
@@ -555,6 +608,10 @@ export function createApp() {
       provide('state', state)
       provide('api', api)
       provide('manage', manage)
+      provide('trashAct', trashAct)
+
+      // 面板切到回收站 → 刷新列表（trash 小，每次进入都取新；操作后另在 trashAct 内刷新）
+      watch(activePanel, (p) => { if (p === 'trash') loadTrash() })
 
       // 桌面→移动 resize：强制 activePanel 回 'file'（防止搜索 face 带进文件 overlay）
       watch(
@@ -573,6 +630,7 @@ export function createApp() {
 
       onMounted(() => {
         loadDocs()
+        loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
         // 通知 + 记忆共用一个 30s 定时器：同周期串行触发两次取数（合并前为两个独立 30s 定时器）
         setInterval(() => { pollNotifications(); pollMemory() }, 30000)
@@ -675,7 +733,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
-        onMemoryRailClick, onMemoryOpenDoc, badgeParts, openMonitorPage, exitMonitorPage, pollMemory,
+        onMemoryRailClick, onMemoryOpenDoc, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
@@ -691,11 +749,13 @@ export function createApp() {
           <!-- rail（桌面 64px / 移动 48px） -->
           <div class="rail">
             <button v-for="p in panels" :key="p.id" type="button"
-              class="rbtn" :class="{ on: (activePanel === p.id && !state.filePanelOpen && !state.searchDrawerOpen) || (p.id === 'search' && state.searchDrawerOpen) || (p.id === 'file' && state.filePanelOpen) }"
+              class="rbtn" :class="{ on: (activePanel === p.id && !state.filePanelOpen && !state.searchDrawerOpen) || (p.id === 'search' && state.searchDrawerOpen) || ((p.id === 'file' || p.id === 'trash') && state.filePanelOpen && activePanel === p.id) }"
               :title="p.label" :aria-label="p.label + '页'"
               @click="onRailClick(p)">
               <span class="ricon" v-html="p.icon"></span>
               <span class="rlabel">{{ p.label }}</span>
+              <!-- 回收站徽标 = 文件总数（0 不渲染，同记忆徽标 .badge 模式） -->
+              <span v-if="p.id === 'trash' && trashCount > 0" class="badge">{{ trashCount > 99 ? '99+' : trashCount }}</span>
             </button>
             <div class="rsep"></div>
             <!-- 记忆控制台槽位（节点图标 = 记忆网络，设计稿场景 04；真通知 = 顶栏铃铛，唯一）：
@@ -730,6 +790,9 @@ export function createApp() {
             </div>
             <div v-show="activePanel === 'search'" class="panel-face">
               <SearchPanel :on-pick="onSearchPick" />
+            </div>
+            <div v-show="activePanel === 'trash'" class="panel-face">
+              <TrashPanel :items="state.trashItems" />
             </div>
           </div>
         </aside>
@@ -883,6 +946,7 @@ export function createApp() {
 
   app.component('FileTree', FileTree)
   app.component('SearchPanel', SearchPanel)
+  app.component('TrashPanel', TrashPanel)
   app.component('EditorPane', EditorPane)
   app.component('TopBar', TopBar)
   app.component('AIChatPanel', AIChatPanel)

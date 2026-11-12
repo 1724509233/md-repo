@@ -51,6 +51,7 @@ def apply_change(
     new_hash: str = "",
     update_refs: bool = True,
     batch_id: str = "",
+    remove_links: bool = True,
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
@@ -71,9 +72,15 @@ def apply_change(
 
     ``batch_id`` is the run_id that produced the change (passed through to
     the change_log row); '' when the caller has no batch.
+
+    ``remove_links`` (deletions only) controls whether ``remove_dead_links``
+    rewrites the referrer documents. The trash inbound path passes False —
+    referrer content stays untouched so restore is fully reversible (the
+    link is temporarily dead); the cleanup is deferred to the trash purge.
+    External deletions keep the default True.
     """
     with _db_lock:
-        if action in ("created", "modified", "create", "update"):
+        if action in ("created", "modified", "create", "update", "restore"):
             fp = vault_dir / path
             if not fp.is_file():
                 logger.warning("apply_change: %s not found on disk, skipping", path)
@@ -93,7 +100,7 @@ def apply_change(
             # Targeted O(1) pop — no blanket clear, no eager re-rglob.
             # (Pure content modification does not change the filename→path
             # existence map, so only create invalidates here.)
-            if action in ("created", "create"):
+            if action in ("created", "create", "restore"):
                 _invalidate_wikilink_filename(Path(path).name)
             if not _is_index_excluded(path):
                 index_segments(conn, vault_dir, path)
@@ -107,7 +114,8 @@ def apply_change(
             if not _is_index_excluded(path):
                 delete_segments(conn, path)
                 graph_delete_file(conn, path)
-                remove_dead_links(conn, vault_dir, path)
+                if remove_links:
+                    remove_dead_links(conn, vault_dir, path)
         elif action in ("moved", "move"):
             # Rename: the old filename disappears and the new one appears —
             # drop both cached entries so later resolutions re-scan disk.

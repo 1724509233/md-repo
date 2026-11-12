@@ -321,7 +321,7 @@ def test_agent_delete_tool_captures_full_preimage(vault_dir, ledger_conn):
     (vault_dir / "notes" / "gone.md").write_bytes(b"precious content")
     result = execute_tool("delete_doc", {"path": "notes/gone.md"},
                           ToolContext(vault_dir=vault_dir))
-    assert "Deleted" in result
+    assert "Moved to trash" in result  # P4-4: move semantics, not unlink
     assert not (vault_dir / "notes" / "gone.md").exists()
     live = snapshots.live_preimage(ledger_conn, "notes/gone.md")
     assert live is not None and live["op"] == "delete"

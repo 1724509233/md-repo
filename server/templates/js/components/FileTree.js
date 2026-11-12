@@ -311,11 +311,10 @@ export const FileTree = {
       const m = menu.value
       if (!m) return
       const count = fileState.files.filter(f => f.path === m.path || f.path.startsWith(m.path + '/')).length
-      const msg = m.isDir
-        ? (count === 0
-          ? `将删除空文件夹「${m.path.split('/').pop()}」，确定？`
-          : `将删除该文件夹及其中 ${count} 个文档，确定？`)
-        : `确定删除「${m.path.split('/').pop()}」？`
+      // 回收站语义（P4-4）：删除 = 移入回收站（可恢复），文案同口径
+      const msg = m.isDir && count > 0
+        ? `将把该文件夹及其中 ${count} 个文档移入回收站，确定？`
+        : `确定将「${m.path.split('/').pop()}」移入回收站？`
       if (confirm(msg)) {
         manage('delete', { path: m.path })
         menu.value = null
@@ -615,7 +614,7 @@ export const FileTree = {
           <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="moveItem()">移动</button>
           <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
-            @click="confirmDelete()">删除</button>
+            @click="confirmDelete()">移入回收站</button>
         </div>
       </Teleport>
     </div>

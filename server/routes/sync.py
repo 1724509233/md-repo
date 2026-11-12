@@ -36,20 +36,38 @@ def register(app, ctx) -> None:
         try:
             server_files = {f["path"]: f["hash"] for f in get_all_files(ctx.db_conn)}
 
-            # Fetch recent moved events since the client's last sync to
-            # detect renames (prevents the client from pushing back a stale
-            # pre-rename copy, which would recreate the old path).
+            # Fetch recent moved + deleted events since the client's last
+            # sync (one query, 200-row window). Moves detect renames
+            # (prevents pushing back a stale pre-rename copy, which would
+            # recreate the old path); deletes detect server-side deletions
+            # (prevents pushing back a stale copy, which would resurrect
+            # the file). deleted_hashes maps original path -> pre-delete
+            # hash from the trash batches, so a local rewrite after a
+            # deletion is still pushed.
             recent_moves = None
+            recent_deletes = None
+            deleted_hashes = None
             if last_sync:
                 from ..vault.db.changes import get_changes as _get_changes
+                from ..vault.orchestration.trash import deleted_hash_map
 
                 all_changes = _get_changes(ctx.db_conn, since=float(last_sync), limit=200)
                 recent_moves = [
                     c for c in all_changes
                     if c["action"] == "moved" and c.get("from_path")
                 ]
+                recent_deletes = [
+                    c for c in all_changes
+                    if c["action"] == "deleted" and c.get("path")
+                ]
+                deleted_hashes = deleted_hash_map(ctx.vault_dir)
 
-            result = compare_files(local_files, server_files, recent_moves=recent_moves)
+            result = compare_files(
+                local_files, server_files,
+                recent_moves=recent_moves,
+                recent_deletes=recent_deletes,
+                deleted_hashes=deleted_hashes,
+            )
 
             # Background agent notifications since the client's last sync (cap 50).
             rows = ctx.db_conn.execute(

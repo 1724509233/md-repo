@@ -47,6 +47,24 @@ export const api = {
     return res.json()
   },
 
+  /** GET /api/trash — 回收站列表（batch 按 deleted_at 降序；files = [{path, size}]） */
+  async trashList() {
+    const res = await fetch('/api/trash')
+    if (!res.ok) throw new Error(`trash list → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/trash — {action: restore|purge|empty, batch?, path?}；非 ok 抛错带 status（409 = 恢复冲突） */
+  async trashAct(action, payload = {}) {
+    const res = await fetch('/api/trash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload })
+    })
+    if (!res.ok) throw new Error(`trash ${action} → ${res.status}`)
+    return res.json()
+  },
+
   /** POST /api/ai/search — RAG 搜索（recall: strict/near/relaxed/fuzzy，缺省 strict） */
   async aiSearch(query, topK = 5, signal, recall = 'strict') {
     const res = await fetch('/api/ai/search', {

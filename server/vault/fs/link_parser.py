@@ -67,7 +67,8 @@ def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
         matches = [
             f.relative_to(vault_dir).as_posix()
             for f in vault_dir.rglob(filename)
-            if ".sync" not in f.parts and ".obsidian" not in f.parts and f.is_file()
+            if ".sync" not in f.parts and ".obsidian" not in f.parts
+            and ".trash" not in f.parts and f.is_file()
         ]
         _wikilink_cache[filename] = matches
     if len(matches) == 1:

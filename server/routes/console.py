@@ -116,6 +116,11 @@ def move(db_conn, vault_dir, body) -> dict:
 def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
     # Two-conn (2026-10-31 ledger-file split): snapshots live in ledger.db
     # (ledger_conn); the change_log rows live in index.db (db_conn).
+    # Deletion = move into the trash (P4-4): the file lands in
+    # .trash/<batch>/ (restorable via /api/trash); the snapshot capture
+    # stays as the 30-day backstop (design §5.1).
+    from ..vault.orchestration import trash
+
     rel = _safe_rel_path(body.get("path") or "")
     if rel is None:
         raise HTTPException(status_code=400, detail="invalid path")
@@ -130,26 +135,26 @@ def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
 
         snap = capture(ledger_conn, vault_dir, rel.as_posix(), "delete", actor="web")
         try:
-            target.unlink()
-        except OSError as e:
+            batch = trash.move_to_trash(db_conn, vault_dir, [rel.as_posix()], "web")
+        except trash.TrashError as e:
             if snap is not None:
                 from ..snapshots import discard
 
                 discard(ledger_conn, vault_dir, snap)
-            raise HTTPException(status_code=500, detail=f"failed to delete: {e}")
+            raise HTTPException(status_code=500, detail=f"failed to move to trash: {e}")
         if snap is not None:
-            finalize(ledger_conn, snap, "")  # post-state: file absent
+            finalize(ledger_conn, snap, "")  # post-state: file absent from original path
             gc_after_capture(ledger_conn, vault_dir)
-        # Web op: logged synchronously; record() marks skip —
-        # consumer books nothing.
-        ledger.record(db_conn, vault_dir, rel.as_posix(), "deleted", "web")
-        return {"ok": True, "path": rel.as_posix(), "deleted_count": 1}
-    # Folder: delete .md files one by one, clean up empty dirs bottom-up
+        # Inbound ledger rows (remove_links=False) are booked inside
+        # move_to_trash; record() marks skip — consumer books nothing.
+        return {"ok": True, "path": rel.as_posix(), "deleted_count": 1, "batch": batch}
+    # Folder: move all internal .md files into one trash batch, then clean
+    # up empty dirs bottom-up (same scope as the old recursive delete).
     from ..snapshots import capture, discard, finalize, gc_after_capture, new_call_id
 
     md_files = sorted(p for p in target.rglob("*.md") if p.is_file())
     # One human action, many files → one call_id rollback group:
-    # capture every member's full pre-image before any unlink.
+    # capture every member's full pre-image before any move.
     call_id = new_call_id()
     snaps = [
         (p.relative_to(vault_dir).as_posix(),
@@ -157,36 +162,26 @@ def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
                  "delete", actor="web", call_id=call_id))
         for p in md_files
     ]
-    rels = []
-    failed = None
-    for p in md_files:
-        r = p.relative_to(vault_dir).as_posix()
+    rels = [p.relative_to(vault_dir).as_posix() for p in md_files]
+    batch = None
+    if rels:
         try:
-            p.unlink()
-        except OSError as e:
-            failed = (r, str(e))
-            break
-        rels.append(r)
-    # Reconcile the capture group with what actually happened
-    # (partial failure leaves the call rollback-able for exactly
-    # the files that were deleted; the rest are discarded, oracle
-    # gate P1-B1):
-    done = set(rels)
+            batch = trash.move_to_trash(db_conn, vault_dir, rels, "web")
+        except trash.TrashError as e:
+            # move_to_trash rolled the batch back — nothing moved; discard
+            # the capture group (no partial state, design §5.1).
+            for r, snap in snaps:
+                if snap is not None:
+                    discard(ledger_conn, vault_dir, snap)
+            raise HTTPException(status_code=500, detail=f"failed to move to trash: {e}")
+    # Reconcile the capture group: every member moved (move_to_trash is
+    # all-or-nothing) → finalize each snapshot (post-state: file absent
+    # from the original path).
     for r, snap in snaps:
-        if snap is None:
-            continue
-        if r in done:
-            finalize(ledger_conn, snap, "")  # post-state: file absent
-        else:
-            discard(ledger_conn, vault_dir, snap)
+        if snap is not None:
+            finalize(ledger_conn, snap, "")
     if any(s is not None for _, s in snaps):
         gc_after_capture(ledger_conn, vault_dir)
-    if failed:
-        raise HTTPException(
-            status_code=500,
-            detail=f"partial delete: {failed[0]}: {failed[1]}; "
-                   f"{len(rels)} file(s) already deleted "
-                   f"(recoverable via /api/memory/rollback)")
     for d in sorted(
         [target] + list(target.rglob("*")),
         key=lambda x: len(x.parts),
@@ -213,12 +208,10 @@ def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
             pass  # non-empty (contains non-.md files) → keep
     if not target.exists():
         ledger.record_folder(db_conn, vault_dir, rel.as_posix(), "deleted", "web")
-    # Web op: per-file rows logged synchronously; record() marks
-    # skip — consumer books nothing.
-    # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
-    for r in rels:
-        ledger.record(db_conn, vault_dir, r, "deleted", "web")
-    return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels)}
+    # Per-file inbound rows (remove_links=False) are booked inside
+    # move_to_trash; record() marks skip — consumer books nothing.
+    return {"ok": True, "path": rel.as_posix(), "deleted_count": len(rels),
+            "batch": batch}
 
 
 def register(app, ctx) -> None:
