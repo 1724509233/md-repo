@@ -57,8 +57,9 @@ export function countRows(items) {
 
 // #tag 解析（芯片选中态与 API 参数同一来源，spec 2026-11-13 §2）：
 // 与服务端 _TAG_QUERY_RE（server/ai/search.py）同语义——Python \w 为 Unicode、
-// JS \w 仅 ASCII，两侧均用显式字符集 [\w\u4e00-\u9fff]（CJK tag 如 #设计 也是 tag）。
-const TAG_QUERY_RE = /(?:^|\s)#([\w\u4e00-\u9fff]+)/g
+// JS \w 仅 ASCII，两侧均用显式字符集 [\w\u4e00-\u9fff]（CJK tag 如 #设计 也是 tag）；
+// 词字符间的连字符 = 同一 tag（#md-repo 是一个 tag，Obsidian 语法；尾部连字符不算）。
+const TAG_QUERY_RE = /(?:^|\s)#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)/g
 
 /** 输入 → {keywords, tags}：tags 小写去重保序；keywords = 剥离 tag token 后 trim */
 export function parseTagQuery(q) {

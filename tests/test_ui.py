@@ -223,7 +223,10 @@ def test_search_js_tag_parser_and_weights():
     """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；权重读 localStorage。"""
     js = read_js("utils/search.js")
     assert "parseTagQuery" in js
-    assert r"#([\w\u4e00-\u9fff]+)" in js, "tag regex must use explicit CJK char set (JS \\w is ASCII-only)"
+    assert r"#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)" in js, (
+        "tag regex must use explicit CJK char set + hyphen group "
+        "(JS \\w is ASCII-only; #md-repo is one tag)"
+    )
     assert "mdvault.searchWeights" in js
     assert "readWeights" in js
 

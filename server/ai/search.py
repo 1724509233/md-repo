@@ -14,11 +14,16 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]", text.lower())
 
 
-# A `#tag` query token (Obsidian semantics: an explicit tag lookup). The
-# shape mirrors the indexer's inline-tag extraction regex exactly
-# (ADR-0003, graph_extract_file): `#` at the start of the query or after
-# whitespace, then word characters.
-_TAG_QUERY_RE = re.compile(r"(?:^|\s)#(\w+)")
+# A `#tag` query token (Obsidian semantics: an explicit tag lookup): `#` at
+# the start of the query or after whitespace, then word characters with
+# hyphens between word characters — `#md-repo` is ONE tag (Obsidian tag
+# syntax allows hyphens; frontmatter `tags: [md-repo]` is stored whole), a
+# trailing hyphen is not part of the tag. Deliberate superset of the
+# indexer's inline-extraction regex (ADR-0003 `\w+` — inline hyphenated
+# tags still extract as their leading word; extraction-side fix is a
+# separate backlog). The client regex in utils/search.js must stay in sync
+# (explicit CJK char set on both sides: Python \w is Unicode, JS \w ASCII).
+_TAG_QUERY_RE = re.compile(r"(?:^|\s)#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)")
 
 def _parse_tag_query(query: str) -> tuple[list[str], str]:
     """Extract `#tag` tokens from a raw query.

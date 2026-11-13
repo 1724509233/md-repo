@@ -100,12 +100,16 @@ server/ai/rerank.py（新模块）
   **全量不过滤**；来源 graph edges/entities 单条 SQL，无缓存
 - **agent/MCP 通道**：不传 tags/weights（服务端解析 + 默认权重）；`via` 随 JSON 形状带出，
   文本渲染不变
-- **客户端解析**：`utils/search.js` 用正则 `(?:^|\s)#([\w\u4e00-\u9fff]+)` 把输入解析为
+- **客户端解析**：`utils/search.js` 用正则 `(?:^|\s)#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)` 把输入解析为
   {keywords, tags}（芯片选中态与 API 参数同一来源，单一事实源）；归一化规则与服务端
   `_normalize_tag` 一致（strip/去前导#/小写）。**Python `\w` 为 Unicode（含 CJK）、JS `\w`
   仅 ASCII**——裸 `\w` 两侧不同形（indexer 抽取正则在 Python 侧，CJK tag 如 `#设计` 可入图），
-  故两侧均用显式字符集，代码注释互相引用。客户端解析出 0 个 tag 时**不发 `tags` 字段**
-  （或发 `[]`，路由归一为 None）——删除芯片后纯关键词查询必须保持全库 FTS
+  故两侧均用显式字符集，代码注释互相引用。**连字符**：词字符间的 `-` 属同一 tag
+  （Obsidian 语法，frontmatter `tags: [md-repo]` 整体入图）——查询侧正则是 indexer 内联
+  抽取（ADR-0003 `\w+`）的**超集**，内联连字符 tag 仍按首词抽取（抽取端修复另记 backlog）；
+  尾部连字符不入 tag（`#md-` → tag `md`）。bugfix 2026-11-13：原正则把 `#md-repo`
+  拆成 tag `md` + 关键词 `repo`，生产 top-1 tag 不可搜。客户端解析出 0 个 tag 时**不发
+  `tags` 字段**（或发 `[]`，路由归一为 None）——删除芯片后纯关键词查询必须保持全库 FTS
 
 ## §3 UI：搜索子页（SearchPanel）+ 提示
 

@@ -328,3 +328,33 @@ def test_invalid_weights_raise_value_error(db_conn, vault_dir):
             pass
         else:
             raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+# ---------------------------------------------------------------------------
+# Hyphenated tags (Obsidian syntax: frontmatter tags: [md-repo])
+# ---------------------------------------------------------------------------
+
+def test_hyphenated_tag_is_one_token(db_conn, vault_dir):
+    """``#md-repo`` parses as ONE tag (Obsidian tag syntax allows hyphens;
+    frontmatter ``tags: [md-repo]`` is stored whole) — not tag ``md`` +
+    keyword ``repo``. A trailing hyphen is not part of the tag."""
+    _index(vault_dir, db_conn, "notes/proj.md",
+           "---\ntags: [md-repo]\n---\n\n# Proj\n\nrepo 内容。".encode("utf-8"))
+
+    results = rag_search(str(vault_dir), "#md-repo", top_k=5)
+    assert _paths(results) == ["notes/proj.md"]
+    assert results[0]["via"] == "tag"
+    assert results[0]["score"] == 1
+
+
+def test_hyphenated_tag_mixed_query_filters(db_conn, vault_dir):
+    """``#md-repo 内容``: tag = md-repo (hard constraint), 内容 = keyword —
+    the untagged doc matching 内容 must not appear (no pollution)."""
+    _index(vault_dir, db_conn, "notes/proj.md",
+           "---\ntags: [md-repo]\n---\n\n# Proj\n\n内容 说明。".encode("utf-8"))
+    _index(vault_dir, db_conn, "notes/other.md",
+           "# Other\n\n内容 说明。".encode("utf-8"))
+
+    results = rag_search(str(vault_dir), "#md-repo 内容", top_k=5)
+    assert _paths(results) == ["notes/proj.md"]
+    assert results[0]["via"] == "both"
