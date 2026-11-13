@@ -345,3 +345,37 @@ def test_agent_tier_attribute_present_without_escalation(db_conn, vault_dir):
     result = _agent_search(vault_dir, "搜索引擎 分层召回")
     assert 'tier="strict"' in result
     assert "notes/dense.md" in result
+
+
+# ---------------------------------------------------------------------------
+# paths= SQL constraint (spec 2026-11-13-tag-fts-fusion-rerank Task 3)
+# ---------------------------------------------------------------------------
+
+def test_paths_constraint_all_tiers(vault_dir, db_conn):
+    """paths= 把 FTS 匹配限定在给定 path 集内（SQL 约束非后过滤），四档均尊重；
+    paths=None 行为不变。"""
+    for rel, body in (("notes/inside.md", "# In\n\n路由 冲突 规则。"),
+                      ("notes/outside.md", "# Out\n\n路由 冲突 规则。")):
+        fp = vault_dir / rel
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_bytes(body.encode("utf-8"))
+        index_segments(db_conn, vault_dir, rel)
+
+    for tier in ("strict", "near", "relaxed", "fuzzy"):
+        all_paths = {r["path"] for r in segments_search(db_conn, "路由 冲突", top_k=10, recall=tier)}
+        assert "notes/inside.md" in all_paths and "notes/outside.md" in all_paths, tier
+        constrained = segments_search(db_conn, "路由 冲突", top_k=10, recall=tier,
+                                      paths=["notes/inside.md"])
+        assert [r["path"] for r in constrained] == ["notes/inside.md"], tier
+        # 非后过滤判据：top_k=1 时集外高分文档不得挤掉集内文档
+        one = segments_search(db_conn, "路由 冲突", top_k=1, recall=tier,
+                              paths=["notes/inside.md"])
+        assert [r["path"] for r in one] == ["notes/inside.md"], tier
+    # paths=None 不变
+    assert segments_search(db_conn, "路由 冲突", top_k=10, recall="strict", paths=None) \
+        == segments_search(db_conn, "路由 冲突", top_k=10, recall="strict")
+
+
+def test_paths_empty_list_returns_empty(vault_dir, db_conn):
+    from server.vault.db.segments_sql import segments_search
+    assert segments_search(db_conn, "路由", top_k=5, paths=[]) == []

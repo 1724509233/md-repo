@@ -166,16 +166,28 @@ def _group_rows(rows, expand: bool, top_k: int) -> list[dict]:
     return results
 
 
-def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, expand: bool, limit: int) -> list[dict]:
-    """Run one segment-level (S1) MATCH query and group the rows."""
+def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, expand: bool, limit: int,
+                         paths: list[str] | None = None) -> list[dict]:
+    """Run one segment-level (S1) MATCH query and group the rows.
+
+    ``paths`` (optional) constrains the match to the given document paths
+    via an ``AND s.path IN (...)`` clause — a hard SQL filter, not a
+    post-filter (post-filtering would let the ``LIMIT``/top_k truncation
+    squeeze in-set docs out of the result window).
+    """
+    where = "WHERE segments_fts MATCH ?"
+    params: list = [fts_expr]
+    if paths is not None:
+        where += f" AND s.path IN ({','.join('?' * len(paths))})"
+        params.extend(paths)
     cursor = conn.execute(
-        """SELECT s.path, s.heading_path, s.kind, s.content,
-                  bm25(segments_fts, 1.0, 0.4, 0.1) as score
-           FROM segments_fts f
-           JOIN segments s ON s.id = f.rowid
-           WHERE segments_fts MATCH ?
-           ORDER BY score LIMIT ?""",
-        (fts_expr, limit),
+        f"""SELECT s.path, s.heading_path, s.kind, s.content,
+                   bm25(segments_fts, 1.0, 0.4, 0.1) as score
+            FROM segments_fts f
+            JOIN segments s ON s.id = f.rowid
+            {where}
+            ORDER BY score LIMIT ?""",
+        (*params, limit),
     )
     return _group_rows(cursor.fetchall(), expand, top_k)
 
@@ -187,6 +199,7 @@ def segments_search(
     expand: bool = True,
     recall: str = "strict",
     include_code: bool = False,
+    paths: list[str] | None = None,
 ) -> list[dict]:
     """Tiered FTS5 search over segments (spec: 2026-10-15-tiered-recall-design).
 
@@ -206,12 +219,22 @@ def segments_search(
     - ``fuzzy``   (T4 × OR × document-level): single OR query with prefix
       shapes (ASCII word* / CJK char*), code column excluded by default.
 
+    ``paths`` (optional) constrains the match to the given document paths —
+    every tier applies the same ``s.path IN (...)`` SQL clause (spec
+    2026-11-13-tag-fts-fusion-rerank: the tag-set filter). ``paths=None``
+    leaves the query untouched; an empty list means "no docs allowed" and
+    returns ``[]`` without touching the index. (A tag set with >999 paths
+    would exceed SQLite's default variable limit — not applicable at the
+    current vault scale; batch or use a temp table if it ever does.)
+
     Returns list of {"path": str, "score": float,
     "segments": [{"heading_path", "kind", "content", "score"}]}, top_k files,
     3 segments each. Raises ValueError for an unknown ``recall`` tier.
     """
     if recall not in RECALL_TIERS:
         raise ValueError(f"unknown recall tier: {recall!r} (expected one of {', '.join(RECALL_TIERS)})")
+    if paths is not None and not paths:
+        return []
 
     if recall == "fuzzy":
         # T4 = T3 + single-char CJK retention (char* prefixing below).
@@ -226,7 +249,7 @@ def segments_search(
         if not selected:
             return []
         expr = and_expr([phrase(t) for t in selected])
-        return _search_single_match(conn, expr, top_k, expand, top_k * 3)
+        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths)
 
     if recall == "near":
         selected = _select_t3(tokens)
@@ -237,7 +260,7 @@ def segments_search(
             expr = phrase(selected[0])
         else:
             expr = near_expr(selected, NEAR_DISTANCE)
-        return _search_single_match(conn, expr, top_k, expand, top_k * 3)
+        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths)
 
     if recall == "relaxed":
         selected = _select_t3(tokens)
@@ -252,13 +275,18 @@ def segments_search(
             expr = phrase(t)
             if not include_code:
                 expr = exclude_code(expr)
+            where = "WHERE segments_fts MATCH ?"
+            params: list = [expr]
+            if paths is not None:
+                where += f" AND s.path IN ({','.join('?' * len(paths))})"
+                params.extend(paths)
             cursor = conn.execute(
-                """SELECT f.rowid, s.path, s.heading_path, s.kind, s.content,
+                f"""SELECT f.rowid, s.path, s.heading_path, s.kind, s.content,
                           bm25(segments_fts, 1.0, 0.4, 0.1) as score
                    FROM segments_fts f
                    JOIN segments s ON s.id = f.rowid
-                   WHERE segments_fts MATCH ?""",
-                (expr,),
+                   {where}""",
+                params,
             )
             for rowid, path, heading_path, kind, content, score in cursor.fetchall():
                 if -score > best.get(path, float("-inf")):
@@ -316,6 +344,6 @@ def segments_search(
     if not include_code:
         expr = exclude_code(expr)
     limit = min(top_k * 10, _FUZZY_ROW_BUDGET_CAP)
-    return _search_single_match(conn, expr, top_k, expand, limit)
+    return _search_single_match(conn, expr, top_k, expand, limit, paths)
 
 
