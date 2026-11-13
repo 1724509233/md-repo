@@ -145,6 +145,13 @@ FileTree →「快速跳转… #tag 按标签搜」（窄框截断可接受）
 
 - **未来轴**：relatedness（v2b②）/ 点击反馈（P1-C/D）= 新 scorer 模块 + 新权重键 +
   权重参数加键；`fuse`、滑杆结构、`via` 枚举不动。本 spec 不接线（recall-data-chain 挂起）
+- **后续计划（本次不实现，2026-11-13 用户裁决）**：检索范围缩小手段——
+  ① **路径/目录限定**：`segments_search` paths 约束的姊妹功能（`path LIKE 'prefix%'`，
+  与 tag 集同交），API 加 scope 参数 + UI 控件（输入框前缀或目录选择器）；与 tag 正交
+  可叠加，通用缩小手段（不依赖 tag 体系）
+  ② **多 tag 交集语义**（`#beta #gamma` = 同时带两个，现行是并集 OR）：SQL 加
+  `HAVING count(DISTINCT dst.name) = N`；代价是集内「命中 tag 数」恒等于 N、tag 轴失去
+  区分度，且与 Obsidian OR 行为分叉——需 UI 提供 OR/AND 显式选择后再实施
 - **不做**：① 抽取端噪音修复（纯数字 tag 照写 graph，选择器不过滤）② 输入框 # 自动补全
   （选择器替代；FileTree 下拉仅提示）③ agent/MCP 权重 UI ④ 权重跨设备同步
   （localStorage 每设备）
