@@ -1346,3 +1346,87 @@ details.d-sec .body { padding: 8px 12px 14px; }
 
 /* ③ 源码选区可见性 = textarea 原生选区高亮，仅把选区色纳入主题（§4.2，不加高亮带/行号栏） */
 #editor::selection { background: color-mix(in srgb, var(--brass) 26%, transparent); }
+
+/* ============ 搜索子页 · tag 选择器 + 权重 popover + via 徽标（spec 2026-11-13 §3，2026-11-13）============
+   纯追加：既有类零改动，色调沿用 --ink/--line/--brass/--surface。
+   新增件 = .sp-chips/.sp-chip/.sp-chip-toggle（tag 选择器行，输入区与 meta 行之间；
+   展开态 max-height 40% 滚动，「收起」sticky 钉底）
+   / .sp-sort-btn + .sp-sort-pop（权重 popover：absolute 右对齐贴面板头下缘，开/关不挤压布局，z-30 压结果区）
+   / .sp-seg 三预设 segmented / .sp-wrange 滑杆 / .sp-wreset 恢复默认
+   / .sp-via-badge 结果卡 tag 徽标（outline chip，.sp-hchip 缩小规格）。 ============ */
+
+/* ① tag 选择器行：sp-root 直接子（max-height 40% 需对确定高度容器解析）；默认态前 5 芯片 + 展开更多 */
+.sp-chips { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 14px 10px; }
+.sp-chips.expanded { flex-shrink: 1; max-height: 40%; overflow-y: auto; padding-bottom: 4px; }
+.sp-chip {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; cursor: pointer;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.sp-chip:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.sp-chip.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.sp-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-chip-count { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); }
+.sp-chip.on .sp-chip-count { color: color-mix(in srgb, var(--brass) 75%, transparent); }
+.sp-chip-toggle {
+  padding: 3px 9px; border: 1px dashed color-mix(in srgb, var(--line) 90%, transparent); border-radius: 999px;
+  background: transparent; cursor: pointer;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft);
+  transition: color .15s ease, border-color .15s ease;
+}
+.sp-chip-toggle:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+/* 展开态「收起」钉在滚动区底（芯片流可滚走，按钮恒可见） */
+.sp-chips.expanded .sp-chip-toggle { position: sticky; bottom: 0; background: var(--surface); }
+
+/* ② 权重控件：面板头 .pacts 槽入口 + absolute popover（.p-head 为 position:relative 锚点） */
+.sp-sort-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px;
+  background: transparent; cursor: pointer;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.sp-sort-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+.sp-sort-btn svg circle { fill: currentColor; stroke: none; }
+.sp-sort-btn:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); }
+.sp-sort-btn.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
+
+.sp-sort-pop {
+  position: absolute; right: 14px; top: 48px; z-index: 30; width: 232px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(33,29,24,.14), 0 2px 8px rgba(33,29,24,.08);
+  padding: 12px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+}
+.sp-sort-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--ink-soft); margin-bottom: 8px; }
+/* 三预设 segmented：tag 优先 2.0 / 均衡 1.0 / 关键词优先 0.5（高亮 = wTag 值匹配，滑杆双向同步） */
+.sp-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; background: color-mix(in srgb, var(--ink) 5%, transparent); border-radius: 8px; }
+.sp-seg-btn {
+  border: none; background: transparent; cursor: pointer; border-radius: 6px;
+  font-family: inherit; font-size: 10.5px; color: var(--ink-soft); padding: 5px 2px;
+  white-space: nowrap; transition: background-color .15s ease, color .15s ease;
+}
+.sp-seg-btn:hover { color: var(--ink); }
+.sp-seg-btn.on { background: var(--surface); color: var(--brass); font-weight: 500; box-shadow: 0 1px 3px rgba(33,29,24,.12); }
+.sp-wrow { display: flex; align-items: baseline; justify-content: space-between; margin: 10px 0 4px; }
+.sp-wlabel { font-size: 11px; color: var(--ink-soft); }
+.sp-wval { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--brass); font-variant-numeric: tabular-nums; }
+/* 滑杆：原生 input[type=range]，accent 走黄铜 */
+.sp-wrange { width: 100%; height: 18px; margin: 0; accent-color: var(--brass); cursor: pointer; }
+.sp-wreset {
+  margin-top: 8px; width: 100%; padding: 5px 0;
+  border: 1px solid var(--line); border-radius: 7px; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: 11px; color: var(--ink-soft);
+  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+}
+.sp-wreset:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+
+/* ③ via 徽标：sp-top 行 sp-name 前；via=tag|both 才渲染，缺失不渲染 */
+.sp-via-badge {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  font-size: 9px; font-weight: 500; letter-spacing: .04em; line-height: 1.5;
+  color: var(--brass); background: transparent;
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); border-radius: 999px;
+  padding: 0 6px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+}

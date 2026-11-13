@@ -532,7 +532,7 @@ export const FileTree = {
       <div class="sp-input">
         <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
-          placeholder="快速跳转…" @keydown="onKeydown">
+          placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" @click="searchQuery = ''">
           <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
