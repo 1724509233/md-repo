@@ -18,8 +18,18 @@ def register(app, ctx) -> None:
         recall = body.get("recall", "strict")
         if recall not in ("strict", "near", "relaxed", "fuzzy"):
             raise HTTPException(status_code=400, detail="invalid recall tier")
+        # Structured tag condition (spec 2026-11-13 §2): missing or [] → no
+        # tag condition (None); the client strips #tag tokens from the query.
+        tags = body.get("tags")
+        if isinstance(tags, list) and not tags:
+            tags = None
+        weights = body.get("weights")
         from ..ai import rag_search
-        results = rag_search(str(ctx.vault_dir), query, top_k=top_k, recall=recall)
+        try:
+            results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
+                                 recall=recall, tags=tags, weights=weights)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         # Recall telemetry (memory-runtime v2): one recall_queries row per
         # search + one recall_log row per hit. Must never break the response.
         from ..vault.db import recall as recall_db
@@ -28,6 +38,13 @@ def register(app, ctx) -> None:
         except Exception:
             logger.exception("recall telemetry insert failed")
         return {"results": results, "recall": recall}
+
+    @app.get("/api/tags")
+    async def tags() -> dict:
+        """All tags with doc counts (tag selector): doc_count desc, name asc.
+        Legacy vault without graph tables → 200 with an empty list."""
+        from ..vault.db.graph_sql import graph_tag_counts
+        return {"tags": [{"name": n, "doc_count": c} for n, c in graph_tag_counts(ctx.db_conn)]}
 
     @app.get("/api/recall")
     async def recall_log(since: float = 0.0) -> list[dict]:

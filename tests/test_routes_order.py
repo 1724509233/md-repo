@@ -1,4 +1,4 @@
-"""Route-table order snapshot: the 35 routes' (methods, path) sequence,
+"""Route-table order snapshot: the 36 routes' (methods, path) sequence,
 the /static mount, and the no-duplicate invariant.
 
 Starlette matches the FIRST fully-matching route in registration order
@@ -17,7 +17,7 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
-# notifications → sync → recall → memory → agent → trash). 35 routes.
+# notifications → sync → recall → memory → agent → trash). 36 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -35,32 +35,33 @@ EXPECTED = (
     (("POST",), "/api/notifications/read"),            # 12
     # sync (1).
     (("POST",), "/api/sync"),                          # 13
-    # recall (3).
+    # recall (4).
     (("POST",), "/api/ai/search"),                     # 14
-    (("GET",), "/api/recall"),                         # 15
-    (("GET",), "/api/recall/stats"),                   # 16
+    (("GET",), "/api/tags"),                           # 15
+    (("GET",), "/api/recall"),                         # 16
+    (("GET",), "/api/recall/stats"),                   # 17
     # memory (11): {relpath}/subpath ⪯ detail (all four ⪯ the catchall).
-    (("GET",), "/api/memory/proposals"),               # 17 list
-    (("POST",), "/api/memory/proposals/{relpath:path}/adopt"),   # 18 ⪯ detail
-    (("POST",), "/api/memory/proposals/{relpath:path}/revive"),  # 19 ⪯ detail
-    (("POST",), "/api/memory/proposals/{relpath:path}/reject"),  # 20 ⪯ detail
-    (("GET",), "/api/memory/proposals/{relpath:path}/trail"),    # 21 ⪯ detail
-    (("GET",), "/api/memory/proposals/{relpath:path}"),          # 22 detail (catchall)
-    (("POST",), "/api/memory/rollback"),                # 23
-    (("GET",), "/api/memory/rollback-calls"),           # 24
-    (("GET",), "/api/memory/reports"),                  # 25
-    (("GET",), "/api/memory/reports/{relpath:path}"),   # 26
-    (("GET",), "/api/memory/status"),                   # 27
+    (("GET",), "/api/memory/proposals"),               # 18 list
+    (("POST",), "/api/memory/proposals/{relpath:path}/adopt"),   # 19 ⪯ detail
+    (("POST",), "/api/memory/proposals/{relpath:path}/revive"),  # 20 ⪯ detail
+    (("POST",), "/api/memory/proposals/{relpath:path}/reject"),  # 21 ⪯ detail
+    (("GET",), "/api/memory/proposals/{relpath:path}/trail"),    # 22 ⪯ detail
+    (("GET",), "/api/memory/proposals/{relpath:path}"),          # 23 detail (catchall)
+    (("POST",), "/api/memory/rollback"),                # 24
+    (("GET",), "/api/memory/rollback-calls"),           # 25
+    (("GET",), "/api/memory/reports"),                  # 26
+    (("GET",), "/api/memory/reports/{relpath:path}"),   # 27
+    (("GET",), "/api/memory/status"),                   # 28
     # agent (6).
-    (("POST",), "/api/ai/chat"),                        # 28
-    (("POST",), "/api/agent/chat"),                     # 29
-    (("POST",), "/api/agent/confirm"),                  # 30
-    (("GET",), "/api/agent/settings"),                  # 31
-    (("POST",), "/api/agent/settings"),                 # 32
-    (("POST",), "/api/agent/new-session"),              # 33
+    (("POST",), "/api/ai/chat"),                        # 29
+    (("POST",), "/api/agent/chat"),                     # 30
+    (("POST",), "/api/agent/confirm"),                  # 31
+    (("GET",), "/api/agent/settings"),                  # 32
+    (("POST",), "/api/agent/settings"),                 # 33
+    (("POST",), "/api/agent/new-session"),              # 34
     # trash (2).
-    (("GET",), "/api/trash"),                           # 34 list
-    (("POST",), "/api/trash"),                          # 35 restore/purge/empty
+    (("GET",), "/api/trash"),                           # 35 list
+    (("POST",), "/api/trash"),                          # 36 restore/purge/empty
 )
 
 

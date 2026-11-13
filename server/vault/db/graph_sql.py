@@ -113,6 +113,31 @@ def graph_docs_for_tags(conn: sqlite3.Connection, tags: list[str]) -> dict[str, 
     return {name: n for name, n in rows}
 
 
+def graph_tag_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
+    """All tags with their document counts, for the tag selector.
+
+    Single SQL over edges/entities: ``count(DISTINCT src.name)`` is the
+    doc_count (a doc holding the same tag twice counts once); ordered
+    doc_count desc, then name asc (deterministic). A legacy vault without
+    graph tables → ``[]`` (the route answers 200 with an empty list,
+    not 500). Pure SQL (no disk I/O).
+    """
+    try:
+        rows = conn.execute(
+            """
+            SELECT dst.name, count(DISTINCT src.name) AS doc_count FROM edges ed
+            JOIN entities src ON src.id = ed.src_id
+            JOIN entities dst ON dst.id = ed.dst_id
+            WHERE dst.type = 'tag' AND src.type = 'doc'
+            GROUP BY dst.name
+            ORDER BY doc_count DESC, dst.name ASC
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    return [(name, count) for name, count in rows]
+
+
 # Relevance weights and via-type priority for tie-breaking (10-01 spec §3.3).
 # A tag hop is the weakest signal; on a score tie we prefer the stronger
 # relation type and the shorter (fewer-step) path.

@@ -896,3 +896,67 @@ def test_manage_rename_empty_folder_logs_moved(client, vault_dir, db_conn) -> No
         and c["source"] == "web"
         for c in changes
     )
+
+
+# ---------------------------------------------------------------------------
+# Tag 搜索 + FTS 融合 rerank（spec 2026-11-13 §2 API 面）
+# ---------------------------------------------------------------------------
+
+def test_ai_search_tags_parameter(client, vault_dir, db_conn):
+    """结构化 tags 参数：过滤语义生效，结果项带 via。"""
+    (vault_dir / "spec.md").write_bytes("---\ntags: [spec]\n---\n\n# Spec\n\nYARA pattern 设计。".encode("utf-8"))
+    (vault_dir / "other.md").write_bytes("# Other\n\nYARA pattern 设计。".encode("utf-8"))
+    # 索引（segments + graph）——参考 tests/test_tag_recall.py::_index 的写法
+    from server.vault.orchestration.indexer import graph_extract_file, index_segments
+    for rel in ("spec.md", "other.md"):
+        index_segments(db_conn, vault_dir, rel)
+        graph_extract_file(db_conn, vault_dir, rel)
+    resp = client.post("/api/ai/search", json={"query": "YARA pattern", "tags": ["spec"], "top_k": 5})
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert [r["path"] for r in results] == ["spec.md"]
+    assert results[0]["via"] == "both"
+
+
+def test_ai_search_tags_empty_array_is_no_condition(client, vault_dir, db_conn):
+    """tags: [] 归一为无 tag 条件（Review Focus 2）——全库 FTS，不得空结果。"""
+    (vault_dir / "a.md").write_bytes("# A\n\nYARA pattern。".encode("utf-8"))
+    from server.vault.orchestration.indexer import index_segments
+    index_segments(db_conn, vault_dir, "a.md")
+    resp = client.post("/api/ai/search", json={"query": "YARA pattern", "tags": [], "top_k": 5})
+    assert resp.status_code == 200
+    assert len(resp.json()["results"]) >= 1
+
+
+def test_ai_search_invalid_weights_400(client, vault_dir):
+    for bad in ({"tag": 0.0}, {"tag": 3.1}, {"fts": 0.5}, {"tag": "2"}, "2"):
+        resp = client.post("/api/ai/search", json={"query": "x", "weights": bad})
+        assert resp.status_code == 400, bad
+
+
+def test_ai_search_valid_weights_accepted(client, vault_dir):
+    resp = client.post("/api/ai/search", json={"query": "x", "weights": {"tag": 0.1}})
+    assert resp.status_code == 200
+
+
+def test_tags_endpoint(client, vault_dir, db_conn):
+    """GET /api/tags：全量、doc_count 降序 + name 升序。"""
+    (vault_dir / "a.md").write_bytes("---\ntags: [spec, plan]\n---\n\n# A\n\n内容。".encode("utf-8"))
+    (vault_dir / "b.md").write_bytes("---\ntags: [spec]\n---\n\n# B\n\n内容。".encode("utf-8"))
+    from server.vault.orchestration.indexer import graph_extract_file, index_segments
+    for rel in ("a.md", "b.md"):
+        index_segments(db_conn, vault_dir, rel)
+        graph_extract_file(db_conn, vault_dir, rel)
+    resp = client.get("/api/tags")
+    assert resp.status_code == 200
+    tags = resp.json()["tags"]
+    assert {"name": "spec", "doc_count": 2} in tags
+    assert tags[0]["name"] == "spec"  # doc_count 2 排最前
+
+
+def test_graph_tag_counts_no_graph_tables():
+    """legacy 无 graph 表 → []（路由层据此返回 200 空列表，不 500）。"""
+    import sqlite3
+    from server.vault.db.graph_sql import graph_tag_counts
+    conn = sqlite3.connect(":memory:")  # 无 entities/edges 表
+    assert graph_tag_counts(conn) == []

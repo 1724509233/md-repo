@@ -19,7 +19,7 @@ def _mock_rag_search(monkeypatch, results):
 
     calls = []
 
-    def stub(vault_dir, query, top_k=5, recall="strict"):
+    def stub(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None):
         calls.append({"query": query, "top_k": top_k, "recall": recall})
         return results
 
