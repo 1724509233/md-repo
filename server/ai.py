@@ -12,6 +12,106 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-zA-Z0-9_]+|[\u4e00-\u9fff]", text.lower())
 
 
+# A `#tag` query token (Obsidian semantics: an explicit tag lookup). The
+# shape mirrors the indexer's inline-tag extraction regex exactly
+# (ADR-0003, graph_extract_file): `#` at the start of the query or after
+# whitespace, then word characters.
+_TAG_QUERY_RE = re.compile(r"(?:^|\s)#(\w+)")
+
+# Fixed score for a document hit through the #tag axis. The tag axis ranks
+# above the FTS axis (an explicit tag is the strongest intent signal); the
+# constant only affects the displayed score and the dual-hit sum
+# (TAG_HIT_SCORE + fts_score). See docs/design/2026-11-13-tag-recall.md.
+TAG_HIT_SCORE = 10.0
+
+
+def _parse_tag_query(query: str) -> tuple[list[str], str]:
+    """Extract `#tag` tokens from a raw query.
+
+    Returns ``(tags, rest)``: the normalized tags (first-appearance order,
+    deduped) and the query with the tag tokens removed (the FTS part).
+    Normalization reuses the ADR-0003 canonical form (``_normalize_tag``),
+    so ``#Beta`` matches a doc tagged ``beta``.
+    """
+    from .vault.orchestration.indexer import _normalize_tag
+
+    tags: list[str] = []
+    for m in _TAG_QUERY_RE.finditer(query):
+        t = _normalize_tag(m.group(1))
+        if t and t not in tags:
+            tags.append(t)
+    rest = _TAG_QUERY_RE.sub(" ", query).strip()
+    return tags, rest
+
+
+def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
+                  include_code: bool, limit: int = 3) -> list[dict]:
+    """Segments for a doc hit through the tag axis only (no FTS row).
+
+    The first ``limit`` segments in index order: the frontmatter meta
+    segment (which carries the ``tags:`` line — the hit evidence) comes
+    first, then the earliest body segments. Code blocks are excluded
+    unless ``include_code`` — the same default as ``segments_search``'s
+    ``exclude_code`` FTS filter, so the two axes agree on what a segment
+    may be.
+    """
+    where = "path = ?"
+    if not include_code:
+        where += " AND kind != 'code'"
+    rows = conn.execute(
+        f"SELECT heading_path, kind, content FROM segments "
+        f"WHERE {where} ORDER BY seg_index LIMIT ?",
+        (path, limit),
+    ).fetchall()
+    return [
+        {
+            "heading_path": hp,
+            "kind": k,
+            "content": c if expand else None,
+            "score": TAG_HIT_SCORE,
+        }
+        for hp, k, c in rows
+    ]
+
+
+def _merge_tag_and_fts(
+    conn: sqlite3.Connection,
+    fts_results: list[dict],
+    tag_hits: dict[str, int],
+    top_k: int,
+    expand: bool,
+    include_code: bool,
+) -> list[dict]:
+    """Merge the tag axis and the FTS axis (docs/design/2026-11-13-tag-recall).
+
+    Tag hits come first — ordered by matched-tag count desc, then path asc
+    (deterministic) — so an explicit tag always outranks plain keyword
+    matches. A doc hit on both axes appears once, keeps its FTS segments,
+    and scores ``TAG_HIT_SCORE + fts_score``. FTS-only docs follow in FTS
+    order. The merged list is capped at ``top_k``.
+    """
+    fts_by_path = {r["path"]: r for r in fts_results}
+    merged: list[dict] = []
+    for path in sorted(tag_hits, key=lambda p: (-tag_hits[p], p)):
+        fts = fts_by_path.get(path)
+        if fts is not None:
+            merged.append({
+                "path": path,
+                "score": TAG_HIT_SCORE + fts["score"],
+                "segments": fts["segments"],
+            })
+        else:
+            merged.append({
+                "path": path,
+                "score": TAG_HIT_SCORE,
+                "segments": _tag_segments(conn, path, expand, include_code),
+            })
+    for r in fts_results:
+        if r["path"] not in tag_hits:
+            merged.append(r)
+    return merged[:top_k]
+
+
 def _get_or_open_conn(vault: Path):
     """Open a read-write connection to the vault's index db, or None if absent.
 
@@ -92,9 +192,18 @@ def rag_search(
     Passes the RAW query to ``segments_search``, which owns tokenization
     (jieba cut_for_search + stopword filter) and the recall-tier selection.
     Falls back to TF-overlap if the index is unavailable.
+
+    `#tag` tokens in the query (Obsidian semantics) are parsed here and
+    resolved through the graph tag entities written by ADR-0003 extraction
+    (same normalization, same canonical entity names). Tag hits are merged
+    above the FTS results (see ``_merge_tag_and_fts``); the recall tier
+    applies only to the FTS part. A query without `#tag` tokens takes the
+    exact pre-existing path — zero behavior change.
+
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     from .vault.db.segments_sql import segments_search
+    from .vault.db.graph_sql import graph_docs_for_tags
     from .vault.orchestration.indexer import rebuild_segments_all
 
     vault = Path(vault_dir)
@@ -110,9 +219,28 @@ def rag_search(
     except Exception:
         return _legacy_rag_search(vault_dir, query, top_k)
 
-    return segments_search(
-        conn, query, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+    tags, rest = _parse_tag_query(query)
+    if not tags:
+        return segments_search(
+            conn, query, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+        )
+
+    # Tag axis: the recall tier governs only the FTS part; tag hits are
+    # exact canonical-entity matches and are tier-independent.
+    fts_results = (
+        segments_search(
+            conn, rest, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+        )
+        if rest
+        else []
     )
+    try:
+        tag_hits = graph_docs_for_tags(conn, tags)
+    except sqlite3.Error:
+        # Legacy index.db without the graph tables: degrade to FTS-only
+        # instead of failing the whole search.
+        tag_hits = {}
+    return _merge_tag_and_fts(conn, fts_results, tag_hits, top_k, expand, include_code)
 
 
 import httpx

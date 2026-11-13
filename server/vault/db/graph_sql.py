@@ -88,6 +88,31 @@ def graph_get_backlinks(conn: sqlite3.Connection, path: str) -> list[dict]:
     return [{"path": row[0], "type": row[1]} for row in cursor.fetchall()]
 
 
+def graph_docs_for_tags(conn: sqlite3.Connection, tags: list[str]) -> dict[str, int]:
+    """Documents that have an edge to any of the given canonical tag names.
+
+    ``tags`` must already be normalized with the ADR-0003 canonical form
+    (``_normalize_tag`` in orchestration/indexer.py) — entity names are
+    matched exactly. Returns ``{doc_path: number of matched tags}`` (a doc
+    carrying two of the requested tags counts twice), or ``{}`` when no tags
+    are given. Pure SQL over the graph tables (no disk I/O).
+    """
+    if not tags:
+        return {}
+    ph = ",".join("?" * len(tags))
+    rows = conn.execute(
+        f"""
+        SELECT src.name, count(*) FROM edges ed
+        JOIN entities src ON src.id = ed.src_id
+        JOIN entities dst ON dst.id = ed.dst_id
+        WHERE dst.name IN ({ph}) AND dst.type = 'tag' AND src.type = 'doc'
+        GROUP BY src.name
+        """,
+        tags,
+    ).fetchall()
+    return {name: n for name, n in rows}
+
+
 # Relevance weights and via-type priority for tie-breaking (10-01 spec §3.3).
 # A tag hop is the weakest signal; on a score tie we prefer the stronger
 # relation type and the shorter (fewer-step) path.
