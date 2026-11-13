@@ -33,7 +33,7 @@ def _parse_tag_query(query: str) -> tuple[list[str], str]:
     Normalization reuses the ADR-0003 canonical form (``_normalize_tag``),
     so ``#Beta`` matches a doc tagged ``beta``.
     """
-    from .vault.orchestration.indexer import _normalize_tag
+    from ..vault.orchestration.indexer import _normalize_tag
 
     tags: list[str] = []
     for m in _TAG_QUERY_RE.finditer(query):
@@ -202,9 +202,9 @@ def rag_search(
 
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
-    from .vault.db.segments_sql import segments_search
-    from .vault.db.graph_sql import graph_docs_for_tags
-    from .vault.orchestration.indexer import rebuild_segments_all
+    from ..vault.db.segments_sql import segments_search
+    from ..vault.db.graph_sql import graph_docs_for_tags
+    from ..vault.orchestration.indexer import rebuild_segments_all
 
     vault = Path(vault_dir)
 
@@ -241,39 +241,3 @@ def rag_search(
         # instead of failing the whole search.
         tag_hits = {}
     return _merge_tag_and_fts(conn, fts_results, tag_hits, top_k, expand, include_code)
-
-
-import httpx
-
-
-async def chat_stream(
-    base_url: str,
-    api_key: str,
-    model: str,
-    messages: list[dict],
-    max_tokens: int = 4096,
-    temperature: float = 0.7,
-):
-    """Stream chat completion from OpenAI-compatible API.
-
-    Yields raw SSE lines (e.g. 'data: {...}', 'data: [DONE]').
-    """
-    url = f"{base_url.rstrip('/')}/chat/completions"
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "stream": True,
-    }
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as resp:
-            resp.raise_for_status()
-            async for line in resp.aiter_lines():
-                if line:
-                    yield line
