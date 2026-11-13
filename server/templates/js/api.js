@@ -65,16 +65,28 @@ export const api = {
     return res.json()
   },
 
-  /** POST /api/ai/search — RAG 搜索（recall: strict/near/relaxed/fuzzy，缺省 strict） */
-  async aiSearch(query, topK = 5, signal, recall = 'strict') {
+  /** POST /api/ai/search — RAG 搜索（recall: strict/near/relaxed/fuzzy，缺省 strict；
+   *  tags = 结构化 tag 条件（spec 2026-11-13，非空数组才发送）；weights = {tag: number}） */
+  async aiSearch(query, topK = 5, signal, recall = 'strict', tags, weights) {
+    const body = { query, top_k: topK, recall }
+    if (Array.isArray(tags) && tags.length) body.tags = tags
+    if (weights && typeof weights.tag === 'number') body.weights = { tag: weights.tag }
     const res = await fetch('/api/ai/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, top_k: topK, recall }),
+      body: JSON.stringify(body),
       signal
     })
     const data = await res.json()
     return data.results || []
+  },
+
+  /** GET /api/tags — 全量 tag + 文档数（tag 选择器；doc_count 降序、name 升序；legacy 无 graph 表 → []） */
+  async getTags() {
+    const res = await fetch('/api/tags')
+    if (!res.ok) throw new Error(`GET /api/tags → ${res.status}`)
+    const data = await res.json()
+    return data.tags || []
   },
 
   /** POST /api/agent/chat — Agent 聊天（SSE 流式，返回 Response） */

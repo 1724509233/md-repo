@@ -11,9 +11,10 @@
  *     state: { results: ref([]), ... }, // 裸对象，字段为 ref（控制器经 .value 读写；包 reactive 会被解包破坏）
  *     focusInput,             // () => void，"展示更多"后把焦点还给输入框
  *   })
- *   search.setInput('orchestr')   // 防抖入口
+ *   search.setInput('orchestr')   // 防抖入口（自动解析 #tag 条件）
  *   search.showMore()             // 同步追加预取结果
  *   search.resetToIdle()          // 清空（输入为空 / Esc / 组件卸载）
+ *   search.rerun()                // 以最后输入重跑（权重变更后重排用）
  *
  * state 需包含 resultTier: ref('strict')，记录「产出当前结果的档位」。
  * strict 有结果 → 'strict'；strict 零结果续档 → 实际产出档（如 'near'）。
@@ -54,24 +55,50 @@ export function countRows(items) {
   return n
 }
 
+// #tag 解析（芯片选中态与 API 参数同一来源，spec 2026-11-13 §2）：
+// 与服务端 _TAG_QUERY_RE（server/ai/search.py）同语义——Python \w 为 Unicode、
+// JS \w 仅 ASCII，两侧均用显式字符集 [\w\u4e00-\u9fff]（CJK tag 如 #设计 也是 tag）。
+const TAG_QUERY_RE = /(?:^|\s)#([\w\u4e00-\u9fff]+)/g
+
+/** 输入 → {keywords, tags}：tags 小写去重保序；keywords = 剥离 tag token 后 trim */
+export function parseTagQuery(q) {
+  const tags = []
+  for (const m of q.matchAll(TAG_QUERY_RE)) {
+    const tag = m[1].toLowerCase()
+    if (!tags.includes(tag)) tags.push(tag)
+  }
+  const keywords = q.replace(TAG_QUERY_RE, '').trim()
+  return { keywords, tags }
+}
+
+// 排序权重（localStorage 每设备；形状 {"tag": 2.0}；两表面读同一权重）
+export function readWeights() {
+  try {
+    return JSON.parse(localStorage.getItem('mdvault.searchWeights') || '{}')
+  } catch {
+    return {} // 损坏 JSON → 默认权重
+  }
+}
+
 export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput }) {
   let debounceTimer = null
   let abortController = null
   let requestId = 0
+  let lastRaw = '' // 最后一次输入（权重变更后 rerun() 重跑用）
 
   // 预取循环：按 TIER_ORDER 顺序逐档 fetch（fromIdx 起），新增项按 path 对
   // results 去重后暂存 prefetched；results + prefetched 达到 top_k 即提前停止。
   // 复用 requestId 过期守卫 + AbortController；query 变化/resetToIdle 时中止。
   // strict 零结果时由 runSearch 以 loading=true 调用（"搜索中…"可见）：
   // 某档有结果 → 显示并转入后台预取；全空 → 耗尽终态。
-  async function runPrefetch(q, id, controller, fromIdx) {
+  async function runPrefetch(keywords, tags, id, controller, fromIdx) {
     state.prefetching.value = true
     const seen = new Set(state.results.value.map(r => r.path))
     for (let i = fromIdx; i < TIER_ORDER.length; i++) {
       if (state.results.value.length + state.prefetched.value.length >= topK) break // 够了就不多取
       let data
       try {
-        data = await api.aiSearch(q, topK, controller.signal, TIER_ORDER[i])
+        data = await api.aiSearch(keywords, topK, controller.signal, TIER_ORDER[i], tags, readWeights())
       } catch (err) {
         if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
         if (id !== requestId) return
@@ -100,7 +127,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.prefetchDone.value = true
   }
 
-  async function runSearch(q) {
+  async function runSearch(keywords, tags) {
     if (abortController) abortController.abort()
     const controller = new AbortController()
     abortController = controller
@@ -112,7 +139,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     if (state.resultTier) state.resultTier.value = 'strict' // 重置：每次查询回到 strict
     let data
     try {
-      data = await api.aiSearch(q, topK, controller.signal) // 缺省 recall=strict
+      data = await api.aiSearch(keywords, topK, controller.signal, 'strict', tags, readWeights())
     } catch (err) {
       if (err.name === 'AbortError') return // 中止：忽略，不修改 results
       if (id !== requestId) return
@@ -132,20 +159,22 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     // 不足 top_k → 预取剩余档位（near→relaxed→fuzzy，顺序执行）
     // strict 有结果：loading=false；strict 零结果：loading 保持 true，自动续档
     if (state.results.value.length > 0) state.loading.value = false
-    await runPrefetch(q, id, controller, 1) // 1 = 'near'
+    await runPrefetch(keywords, tags, id, controller, 1) // 1 = 'near'
   }
 
-  // debounceMs 尾随防抖；query 变化即重置预取状态，回到 strict
-  function setInput(q) {
+  // debounceMs 尾随防抖；#tag 解析为结构化条件（芯片与 API 参数同一来源）
+  function setInput(raw) {
     if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null }
-    const trimmed = q.trim()
-    if (!trimmed) {
+    const { keywords, tags } = parseTagQuery(raw)
+    if (!keywords && !tags.length) {
+      lastRaw = ''
       resetToIdle()
       return
     }
+    lastRaw = raw
     debounceTimer = setTimeout(() => {
       debounceTimer = null
-      runSearch(trimmed)
+      runSearch(keywords, tags)
     }, debounceMs)
   }
 
@@ -174,5 +203,11 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     resetToIdle()
   }
 
-  return { setInput, showMore, resetToIdle, destroy, TIER_ORDER }
+  // 以最后输入重走 setInput（权重变更后重跑用；lastRaw 为空则 no-op）
+  function rerun() {
+    if (!lastRaw) return
+    setInput(lastRaw)
+  }
+
+  return { setInput, showMore, resetToIdle, destroy, rerun, TIER_ORDER }
 }

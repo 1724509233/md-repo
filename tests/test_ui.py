@@ -74,7 +74,7 @@ def test_api_js_exports_all_endpoints():
     """api.js 应导出所有 API 端点方法"""
     js = read_js("api.js")
     for method in ["getDocs", "getDoc", "saveDoc", "uploadDoc", "getChanges",
-                   "aiSearch", "agentChat", "agentConfirm", "newSession",
+                   "aiSearch", "getTags", "agentChat", "agentConfirm", "newSession",
                    "graphBacklinks", "graphRelated"]:
         assert method in js, f"api.{method} missing"
 
@@ -214,3 +214,23 @@ def test_toc_jump_prefix_sum_uses_actual_separator_length():
     assert re.search(r"start\s*\+=\s*parts\[k\]\.length\s*\+\s*parts\[k\s*\+\s*1\]\.length", js), (
         "prefix sum must add line length + actual separator length from the split alternation array"
     )
+
+
+# ============ Tag 搜索 + FTS 融合 rerank（spec 2026-11-13 §2 客户端解析）============
+
+
+def test_search_js_tag_parser_and_weights():
+    """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；权重读 localStorage。"""
+    js = read_js("utils/search.js")
+    assert "parseTagQuery" in js
+    assert r"#([\w\u4e00-\u9fff]+)" in js, "tag regex must use explicit CJK char set (JS \\w is ASCII-only)"
+    assert "mdvault.searchWeights" in js
+    assert "readWeights" in js
+
+
+def test_api_js_ai_search_structured():
+    js = read_js("api.js")
+    assert "getTags" in js
+    m = re.search(r"async aiSearch\(([^)]*)\)", js)
+    assert m and "tags" in m.group(1) and "weights" in m.group(1), \
+        "aiSearch must accept structured tags/weights"
