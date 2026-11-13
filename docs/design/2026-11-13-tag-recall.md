@@ -1,5 +1,7 @@
 # #tag 召回（2026-11-13）
 
+> 注：合并语义（tag 轴恒排 FTS 轴前、TAG_HIT_SCORE）已由 `docs/design/2026-11-13-tag-fts-fusion-rerank.md` 取代（过滤语义 + 加权融合）；本文档保留为 v1 实现记录。
+
 todo 98356298「P1 #tag 召回」：搜索策略增加 `#tag` 召回。补齐 ADR-0003 的缺口——
 tag 此前只写（indexer 抽取进 graph）不读（搜索面不可见）。
 

@@ -1,9 +1,16 @@
-"""Tests for #tag recall in rag_search (docs/design/2026-11-13-tag-recall).
+"""Tests for #tag recall in rag_search.
+
+v1: docs/design/2026-11-13-tag-recall (tag axis always ranked above FTS,
+TAG_HIT_SCORE constant) — superseded by
+docs/design/2026-11-13-tag-fts-fusion-rerank: the tag condition is a
+first-class filter (FTS runs inside the tag-hit set) and the two axes are
+combined by weighted normalized fusion (server/ai/rerank.py).
 
 Covers:
 - tag hit / no hit (frontmatter tags and inline body tags)
 - normalization parity with ADR-0003 (``#Beta`` hits ``tags: [beta]``)
-- merge + ranking of the tag axis above the FTS axis (dual hits, FTS-only)
+- filter semantics (non-tagged docs never appear when tags are present)
+  + weighted fusion of the tag and FTS axes (via=tag/both)
 - segment shape of tag-only hits (meta segment first; expand=False)
 - recall-tier orthogonality (tier governs only the FTS part)
 - zero regression: queries without a #tag token take the exact
@@ -16,7 +23,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from server.ai import TAG_HIT_SCORE, rag_search
+from server.ai import rag_search
 from server.vault.db.segments_sql import init_segments, segments_search
 from server.vault.orchestration.indexer import graph_extract_file, index_segments
 
@@ -47,7 +54,8 @@ def test_tag_hit_frontmatter(db_conn, vault_dir):
 
     results = rag_search(str(vault_dir), "#beta", top_k=5)
     assert _paths(results) == ["notes/beta.md"]
-    assert results[0]["score"] == TAG_HIT_SCORE
+    assert results[0]["score"] == 1  # single axis: matched-tag count (original value)
+    assert results[0]["via"] == "tag"
 
 
 def test_tag_hit_inline_body(db_conn, vault_dir):
@@ -95,28 +103,26 @@ def test_tag_not_extracted_from_heading_stays_unsearchable(db_conn, vault_dir):
 
 
 # ---------------------------------------------------------------------------
-# Merge + ranking of the tag axis above the FTS axis
+# Filter semantics + weighted fusion of the tag and FTS axes
 # ---------------------------------------------------------------------------
 
 def test_tag_and_fts_merge_ranking(db_conn, vault_dir):
-    """``#beta 用法``: the tagged doc (dual hit) ranks first with
-    TAG_HIT_SCORE + fts_score and keeps its FTS segments; the untagged
-    FTS-only doc follows with a plain FTS score. Each doc appears once."""
+    """``#beta 用法``: the tag condition is a hard filter — the untagged
+    FTS-only doc never appears; the tagged doc is a dual hit (via=both)
+    with a fused score and keeps its FTS segments."""
     _index(vault_dir, db_conn, "notes/beta.md",
            "---\ntags: [beta]\n---\n\n# Beta Doc\n\n这里讲 beta 的用法。\n".encode("utf-8"))
     _index(vault_dir, db_conn, "notes/plain.md",
            "# Plain\n\n用法 用法 用法 用法 用法。\n".encode("utf-8"))
 
     results = rag_search(str(vault_dir), "#beta 用法", top_k=5)
-    assert _paths(results) == ["notes/beta.md", "notes/plain.md"]
+    assert _paths(results) == ["notes/beta.md"]  # filter semantics: plain.md excluded
 
     dual = results[0]
-    assert dual["score"] > TAG_HIT_SCORE  # TAG_HIT_SCORE + fts_score
+    assert dual["via"] == "both"
+    assert dual["score"] > 0  # fused score (w_tag×norm(tag) + w_fts×norm(fts))
     # dual hit keeps the FTS segments (body text, not the meta block)
     assert all(s["kind"] == "text" for s in dual["segments"])
-
-    fts_only = results[1]
-    assert fts_only["score"] < TAG_HIT_SCORE
 
 
 def test_tag_token_stripped_from_fts_part(db_conn, vault_dir):
@@ -127,7 +133,8 @@ def test_tag_token_stripped_from_fts_part(db_conn, vault_dir):
 
     results = rag_search(str(vault_dir), "#beta 内容", top_k=5)
     assert _paths(results) == ["notes/beta.md"]
-    assert results[0]["score"] > TAG_HIT_SCORE  # 内容 also FTS-matches
+    assert results[0]["via"] == "both"  # 内容 also FTS-matches
+    assert results[0]["score"] > 0
 
 
 def test_multi_tag_query_ranks_by_matched_count(db_conn, vault_dir):
@@ -140,8 +147,10 @@ def test_multi_tag_query_ranks_by_matched_count(db_conn, vault_dir):
 
     results = rag_search(str(vault_dir), "#beta #gamma", top_k=5)
     assert _paths(results) == ["notes/both.md", "notes/beta_only.md"]
+    assert results[0]["score"] == 2  # single axis: matched-tag count (original value)
+    assert results[1]["score"] == 1
 
-    # top_k truncates the merged list, tag hits first.
+    # top_k truncates the tag set.
     assert _paths(rag_search(str(vault_dir), "#beta #gamma", top_k=1)) == ["notes/both.md"]
 
 
@@ -162,7 +171,7 @@ def test_tag_only_hit_segment_shape(db_conn, vault_dir):
     assert segs[0]["kind"] == "meta"
     assert "tags:" in segs[0]["content"]
     assert segs[1]["kind"] == "text"
-    assert all(s["score"] == TAG_HIT_SCORE for s in segs)
+    assert all(s["score"] == 1 for s in segs)  # segment score = doc's matched-tag count
 
 
 def test_tag_only_hit_expand_false(db_conn, vault_dir):
@@ -204,7 +213,7 @@ def test_tag_axis_independent_of_recall_tier(db_conn, vault_dir):
     for tier in ("strict", "near", "relaxed", "fuzzy"):
         results = rag_search(str(vault_dir), "#beta", top_k=5, recall=tier)
         assert _paths(results) == ["notes/beta.md"], tier
-        assert results[0]["score"] == TAG_HIT_SCORE, tier
+        assert results[0]["score"] == 1, tier
 
 
 def test_mixed_query_tag_hit_survives_tier(db_conn, vault_dir):
@@ -248,9 +257,11 @@ def test_hash_in_word_is_not_a_tag(db_conn, vault_dir):
 # Degradation: legacy index.db without the graph tables
 # ---------------------------------------------------------------------------
 
-def test_tag_query_without_graph_tables_degrades_to_fts(tmp_path):
+def test_tag_query_without_graph_tables_returns_empty(tmp_path):
     """A pre-ADR-0003 index.db (segments only, no entities/edges) must not
-    crash a #tag query — it degrades to the FTS part only."""
+    crash a #tag query — with tags present the tag axis is ∅ and the
+    result is empty. It does NOT fall back to whole-vault FTS: that would
+    re-introduce the v1 pollution (spec 2026-11-13 §2)."""
     (tmp_path / ".sync").mkdir()
     conn = sqlite3.connect(str(tmp_path / ".sync" / "index.db"))
     init_segments(conn)
@@ -269,6 +280,51 @@ def test_tag_query_without_graph_tables_degrades_to_fts(tmp_path):
 
     # Pure tag query: no graph → no tag hits, no crash.
     assert rag_search(str(tmp_path), "#beta", top_k=5) == []
-    # Mixed query: the FTS part still works.
-    results = rag_search(str(tmp_path), "#beta 用法", top_k=5)
-    assert _paths(results) == ["notes/beta.md"]
+    # Mixed query: tags present + no graph tables → empty (NOT whole-vault FTS).
+    assert rag_search(str(tmp_path), "#beta 用法", top_k=5) == []
+
+
+# ---------------------------------------------------------------------------
+# Fusion semantics (spec 2026-11-13-tag-fts-fusion-rerank)
+# ---------------------------------------------------------------------------
+
+def test_empty_tag_set_with_keywords_returns_empty(db_conn, vault_dir):
+    """tag 是硬约束：#nosuchtag 带关键词 → 空结果（不返回非 tag 文档）。"""
+    _index(vault_dir, db_conn, "notes/beta.md",
+           "---\ntags: [beta]\n---\n\n# Beta Doc\n\n设计 内容。".encode("utf-8"))
+    assert rag_search(str(vault_dir), "#nosuchtag 设计", top_k=5) == []
+
+
+def test_cjk_tag_filter(db_conn, vault_dir):
+    """CJK tag（frontmatter tags: [设计]）：tags 参数过滤生效（web 通道同语义）。"""
+    _index(vault_dir, db_conn, "notes/cn.md",
+           "---\ntags: [设计]\n---\n\n# 中文\n\n设计 内容。".encode("utf-8"))
+    _index(vault_dir, db_conn, "notes/other.md",
+           "# 其他\n\n设计 内容。".encode("utf-8"))
+    results = rag_search(str(vault_dir), "设计", top_k=5, tags=["设计"])
+    assert _paths(results) == ["notes/cn.md"]
+    assert results[0]["via"] == "both"
+
+
+def test_weights_never_filter(db_conn, vault_dir):
+    """权重只调排序不过滤：w_tag=0.1 与默认权重返回同一路径集（Review Focus 3）。"""
+    _index(vault_dir, db_conn, "notes/beta.md",
+           "---\ntags: [beta]\n---\n\n# Beta Doc\n\nbeta 的用法。".encode("utf-8"))
+    _index(vault_dir, db_conn, "notes/gamma.md",
+           "---\ntags: [beta]\n---\n\n# Gamma\n\n用法 说明。".encode("utf-8"))
+    default = _paths(rag_search(str(vault_dir), "#beta 用法", top_k=5))
+    low = _paths(rag_search(str(vault_dir), "#beta 用法", top_k=5, weights={"tag": 0.1}))
+    assert set(default) == set(low) == {"notes/beta.md", "notes/gamma.md"}
+
+
+def test_invalid_weights_raise_value_error(db_conn, vault_dir):
+    """weights 非法（越界/未知键/非数）→ ValueError（路由层 catch → 400）。"""
+    _index(vault_dir, db_conn, "notes/beta.md",
+           "---\ntags: [beta]\n---\n\n# Beta Doc\n\n内容。".encode("utf-8"))
+    for bad in ({"tag": 0.0}, {"tag": 3.1}, {"fts": 0.5}, {"tag": "2"}):
+        try:
+            rag_search(str(vault_dir), "#beta", top_k=5, weights=bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad!r}")

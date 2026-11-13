@@ -6,6 +6,8 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from .rerank import ScoredItem, fuse, validate_weights
+
 
 def _tokenize(text: str) -> list[str]:
     """Simple whitespace + CJK character tokenizer."""
@@ -17,13 +19,6 @@ def _tokenize(text: str) -> list[str]:
 # (ADR-0003, graph_extract_file): `#` at the start of the query or after
 # whitespace, then word characters.
 _TAG_QUERY_RE = re.compile(r"(?:^|\s)#(\w+)")
-
-# Fixed score for a document hit through the #tag axis. The tag axis ranks
-# above the FTS axis (an explicit tag is the strongest intent signal); the
-# constant only affects the displayed score and the dual-hit sum
-# (TAG_HIT_SCORE + fts_score). See docs/design/2026-11-13-tag-recall.md.
-TAG_HIT_SCORE = 10.0
-
 
 def _parse_tag_query(query: str) -> tuple[list[str], str]:
     """Extract `#tag` tokens from a raw query.
@@ -45,7 +40,7 @@ def _parse_tag_query(query: str) -> tuple[list[str], str]:
 
 
 def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
-                  include_code: bool, limit: int = 3) -> list[dict]:
+                  include_code: bool, limit: int = 3, score: float = 1) -> list[dict]:
     """Segments for a doc hit through the tag axis only (no FTS row).
 
     The first ``limit`` segments in index order: the frontmatter meta
@@ -53,7 +48,8 @@ def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
     first, then the earliest body segments. Code blocks are excluded
     unless ``include_code`` — the same default as ``segments_search``'s
     ``exclude_code`` FTS filter, so the two axes agree on what a segment
-    may be.
+    may be. ``score`` is the doc's matched-tag count (the replacement for
+    the retired v1 ``TAG_HIT_SCORE`` constant, spec 2026-11-13 §1).
     """
     where = "path = ?"
     if not include_code:
@@ -68,48 +64,10 @@ def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
             "heading_path": hp,
             "kind": k,
             "content": c if expand else None,
-            "score": TAG_HIT_SCORE,
+            "score": score,
         }
         for hp, k, c in rows
     ]
-
-
-def _merge_tag_and_fts(
-    conn: sqlite3.Connection,
-    fts_results: list[dict],
-    tag_hits: dict[str, int],
-    top_k: int,
-    expand: bool,
-    include_code: bool,
-) -> list[dict]:
-    """Merge the tag axis and the FTS axis (docs/design/2026-11-13-tag-recall).
-
-    Tag hits come first — ordered by matched-tag count desc, then path asc
-    (deterministic) — so an explicit tag always outranks plain keyword
-    matches. A doc hit on both axes appears once, keeps its FTS segments,
-    and scores ``TAG_HIT_SCORE + fts_score``. FTS-only docs follow in FTS
-    order. The merged list is capped at ``top_k``.
-    """
-    fts_by_path = {r["path"]: r for r in fts_results}
-    merged: list[dict] = []
-    for path in sorted(tag_hits, key=lambda p: (-tag_hits[p], p)):
-        fts = fts_by_path.get(path)
-        if fts is not None:
-            merged.append({
-                "path": path,
-                "score": TAG_HIT_SCORE + fts["score"],
-                "segments": fts["segments"],
-            })
-        else:
-            merged.append({
-                "path": path,
-                "score": TAG_HIT_SCORE,
-                "segments": _tag_segments(conn, path, expand, include_code),
-            })
-    for r in fts_results:
-        if r["path"] not in tag_hits:
-            merged.append(r)
-    return merged[:top_k]
 
 
 def _get_or_open_conn(vault: Path):
@@ -186,6 +144,8 @@ def rag_search(
     expand: bool = True,
     recall: str = "strict",
     include_code: bool = False,
+    tags: list[str] | None = None,
+    weights: dict | None = None,
 ) -> list[dict]:
     """Segments-based search over vault markdown files.
 
@@ -193,18 +153,32 @@ def rag_search(
     (jieba cut_for_search + stopword filter) and the recall-tier selection.
     Falls back to TF-overlap if the index is unavailable.
 
-    `#tag` tokens in the query (Obsidian semantics) are parsed here and
-    resolved through the graph tag entities written by ADR-0003 extraction
-    (same normalization, same canonical entity names). Tag hits are merged
-    above the FTS results (see ``_merge_tag_and_fts``); the recall tier
-    applies only to the FTS part. A query without `#tag` tokens takes the
-    exact pre-existing path — zero behavior change.
+    Tag condition (spec 2026-11-13-tag-fts-fusion-rerank §1): an explicit
+    ``tags`` list (web channel — the client parsed ``#tag`` out of the
+    input, so the whole query is the keyword part) takes priority;
+    ``tags=None`` parses ``#tag`` tokens from the query (agent/MCP string
+    channel, legacy clients) — both converge on the same filter semantics.
+    With tags present the result set IS the tag-hit set (non-tagged docs
+    never appear; the FTS axis runs inside the set via
+    ``segments_search(paths=...)``) and the two axes are combined by
+    weighted normalized fusion (``server/ai/rerank.fuse``): no keywords →
+    single-axis passthrough (score = matched-tag count, count desc / path
+    asc); keywords → fused score. The final list is truncated to ``top_k``
+    (same as v1). Result items on the tag path carry
+    ``via`` ("tag" / "both"); the no-tag path returns exactly what
+    ``segments_search`` returns (zero regression, no ``via``). An empty
+    tag hit set — or a legacy index.db without the graph tables — returns
+    ``[]``: never a whole-vault FTS fallback (that would re-introduce the
+    v1 pollution). ``weights`` is validated at the entry (invalid →
+    ValueError, the route layer answers 400).
 
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     from ..vault.db.segments_sql import segments_search
     from ..vault.db.graph_sql import graph_docs_for_tags
     from ..vault.orchestration.indexer import rebuild_segments_all
+
+    weights = validate_weights(weights)
 
     vault = Path(vault_dir)
 
@@ -219,7 +193,12 @@ def rag_search(
     except Exception:
         return _legacy_rag_search(vault_dir, query, top_k)
 
-    tags, rest = _parse_tag_query(query)
+    if tags is None:
+        tags, rest = _parse_tag_query(query)
+    else:
+        # Explicit structured tags (web channel): the client already
+        # stripped the #tag tokens, so the whole query is the FTS part.
+        rest = query
     if not tags:
         return segments_search(
             conn, query, top_k=top_k, expand=expand, recall=recall, include_code=include_code
@@ -227,17 +206,55 @@ def rag_search(
 
     # Tag axis: the recall tier governs only the FTS part; tag hits are
     # exact canonical-entity matches and are tier-independent.
+    try:
+        tag_hits = graph_docs_for_tags(conn, tags)
+    except sqlite3.Error:
+        # Legacy index.db without the graph tables: the tag axis is ∅ —
+        # return empty instead of falling back to whole-vault FTS (that
+        # would re-introduce the v1 pollution, spec 2026-11-13 §2).
+        return []
+    if not tag_hits:
+        # Empty tag hit set: the tag condition is a hard constraint —
+        # ``#nosuchtag 关键词`` returns nothing, never non-tagged docs.
+        return []
+
     fts_results = (
         segments_search(
-            conn, rest, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+            conn, rest, top_k=top_k, expand=expand, recall=recall,
+            include_code=include_code, paths=list(tag_hits),
         )
         if rest
         else []
     )
-    try:
-        tag_hits = graph_docs_for_tags(conn, tags)
-    except sqlite3.Error:
-        # Legacy index.db without the graph tables: degrade to FTS-only
-        # instead of failing the whole search.
-        tag_hits = {}
-    return _merge_tag_and_fts(conn, fts_results, tag_hits, top_k, expand, include_code)
+    fts_by_path = {r["path"]: r for r in fts_results}
+
+    # Tag axis items (count desc, path asc — the axis's own order); each
+    # payload is the final result doc, so fuse's first-seen-axis payload
+    # rule yields the right segments/via without a second pass.
+    tag_items = []
+    for path in sorted(tag_hits, key=lambda p: (-tag_hits[p], p)):
+        count = tag_hits[path]
+        fts = fts_by_path.get(path)
+        if fts is not None:
+            doc = dict(fts)
+            doc["via"] = "both"
+        else:
+            doc = {
+                "path": path,
+                "score": count,
+                "segments": _tag_segments(conn, path, expand, include_code, score=count),
+                "via": "tag",
+            }
+        tag_items.append(ScoredItem(path, count, doc))
+    fts_items = [
+        ScoredItem(r["path"], r["score"], {**r, "via": "both"})
+        for r in fts_results
+    ]
+
+    fused = fuse({"tag": tag_items, "fts": fts_items}, weights)[:top_k]
+    results = []
+    for item in fused:
+        doc = dict(item.payload)
+        doc["score"] = item.score  # fused score (== axis score on single-axis passthrough)
+        results.append(doc)
+    return results
