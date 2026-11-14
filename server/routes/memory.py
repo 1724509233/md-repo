@@ -253,10 +253,12 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=400, detail="call_id is required")
         result = snap_mod.rollback(ctx.ledger_conn, ctx.vault_dir, call_id)
         if not result["ok"]:
-            return JSONResponse(
-                status_code=409,
-                content={"ok": False, "conflicts": result["conflicts"]},
-            )
+            content = {"ok": False, "conflicts": result["conflicts"]}
+            if result.get("restored"):
+                # Phase 2 half-state (disk error mid-restore): surface what
+                # was already restored so the human sees the mixed state.
+                content["restored"] = result["restored"]
+            return JSONResponse(status_code=409, content=content)
         # Attribute the restored writes to the watcher ("web" = human via UI).
         for path in result["restored"]:
             ledger.register(path, "web", ctx.vault_dir)

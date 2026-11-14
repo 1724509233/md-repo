@@ -48,7 +48,8 @@ const state = reactive({
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
-  trashItems: []          // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
+  trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
+  rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -319,6 +320,10 @@ async function pollMemory() {
   try {
     const rd = await api.getMemoryReports()
     state.memoryReports = (rd && rd.reports) || []
+  } catch (e) { /* silent：保留旧列表 */ }
+  try {
+    const rc = await api.getRollbackCalls(20)
+    state.rollbackCalls = (rc && rc.calls) || []
   } catch (e) { /* silent：保留旧列表 */ }
 }
 
@@ -911,7 +916,8 @@ export function createApp() {
               </aside>
             </div>
             <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
-            <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc" />
+            <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc"
+              @restored="loadDocs()" />
           </main>
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->

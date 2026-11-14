@@ -403,6 +403,35 @@ def test_rollback_endpoint_requires_call_id(client):
     assert r.status_code == 400
 
 
+def test_rollback_endpoint_half_state_surfaces_restored(client, vault_dir, ledger_conn):
+    """Phase 2 half-state (disk error mid-restore): the 409 body carries both
+    the failure reason AND the files already restored, so the human sees the
+    mixed state (spec 2026-11-14 ⑦ conflict card renders both segments)."""
+    (vault_dir / "notes" / "two.md").write_bytes(b"# Two\n\norigin\n")
+    test_orig = (vault_dir / "notes" / "test.md").read_bytes()
+    call_id = snapshots.new_call_id()
+    snaps = {}
+    for rel, new_bytes in [("notes/test.md", b"changed A"), ("notes/two.md", b"changed B")]:
+        fp = vault_dir / rel
+        snap = snapshots.capture(ledger_conn, vault_dir, rel, "update", "agent",
+                                 run_id="rb", call_id=call_id)
+        fp.write_bytes(new_bytes)
+        snapshots.finalize(ledger_conn, snap, snapshots.hash_bytes(new_bytes))
+        snaps[rel] = snap
+    # simulate a disk failure: two.md's blob is gone when Phase 2 reaches it
+    (vault_dir / ".sync" / "snapshots" / snaps["notes/two.md"]["blob_name"]).unlink()
+
+    r = client.post("/api/memory/rollback", json={"call_id": call_id})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["ok"] is False
+    assert any("two.md" in c for c in body["conflicts"])
+    # path order: test.md restored before two.md failed → surfaced in the body
+    assert body["restored"] == ["notes/test.md"]
+    assert (vault_dir / "notes" / "test.md").read_bytes() == test_orig
+    assert (vault_dir / "notes" / "two.md").read_bytes() == b"changed B"
+
+
 def test_rollback_calls_endpoint_lists_call_groups(client, vault_dir, ledger_conn):
     """Oracle gate P1-B2: GET /api/memory/rollback-calls is how a human
     discovers the call_id for the rollback POST. Also pins the recent_calls

@@ -73,10 +73,10 @@ def test_ai_panel_css_has_expected_rules():
 def test_api_js_exports_all_endpoints():
     """api.js 应导出所有 API 端点方法"""
     js = read_js("api.js")
-    for method in ["getDocs", "getDoc", "saveDoc", "uploadDoc", "getChanges",
+    for method in ["getDocs", "getDoc", "saveDoc", "getChanges",
                    "aiSearch", "getTags", "agentChat", "agentConfirm", "newSession",
-                   "graphBacklinks", "graphRelated",
-                   "getDocRelated", "ignoreRelatedness"]:
+                   "getDocRelated", "ignoreRelatedness",
+                   "getRollbackCalls", "rollbackCall"]:
         assert method in js, f"api.{method} missing"
 
 

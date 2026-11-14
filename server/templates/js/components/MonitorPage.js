@@ -1,11 +1,15 @@
 /* MonitorPage 组件：后台监控页 · L1（定稿设计 design/console-v5-prune.html 场景 03 · 非对称网格 02E）
- * 六区块 row-major：组 1「状态（健康吗）」①九态 ∣ ②异常清单 / 组 2「系统（在干什么）」
- *   ③后台任务 ∣ ④执行器 / ⑤召回（通栏）/ ⑥采纳提案（通栏）。
+ * 七区块 row-major：组 1「状态（健康吗）」①九态 ∣ ②异常清单 / 组 2「系统（在干什么）」
+ *   ③后台任务 ∣ ④执行器 / ⑤召回（通栏）/ ⑥采纳提案（通栏）/ ⑦回滚（通栏，spec 2026-11-14）。
  * 空间：≥1024px 网格 1200px（列比 1:1.6）· ≤1023px 单列零重排（= 场景 04 窄屏回退）。
- * 零态 = 常驻淡显：六网格单元永远在场，计数 = 0 → 卡内容 = 淡显占位（.zline：无异常 / 无终态 / 无召回流量）。
+ * 零态 = 常驻淡显：七网格单元永远在场，计数 = 0 → 卡内容 = 淡显占位（.zline：无异常 / 无终态 / 无召回流量 / 无最近调用）。
  * 快照口径：30s 轮询 = 无时序数据，刻度条 / 比例条静态，不画动画填充 / 趋势曲线。
- * 数据：state.memoryStatus / state.memoryProposals 由 app 30s 轮询注入（后端成本为零）；
+ * 数据：state.memoryStatus / state.memoryProposals / state.rollbackCalls 由 app 30s 轮询注入（后端成本为零）；
  *   L2 = 全页唯一按需层：点召回卡按钮触发一次 GET /api/recall/stats（docs / failed_queries 各 ≤200 行）。
+ * ⑦回滚（spec 2026-11-14）：行 = op 徽章 + actor + 相对时间（relRun）+ 文件数（title = 全路径列表）+ 回滚按钮，
+ *   最新在前；动作 = 行内确认态（确认回滚 / 取消，5s 自动复位）→ POST；200 → 行内提示 + 立即重拉 + loadDocs
+ *   （emit restored，app 接线）；409 → 行下冲突卡逐条服务端原文、唯一动作「保留现状」（半态 body 含 restored → 两段都展示）。
+ *   红线：无 force / 无 run 级批量 / 不进 agent 工具表与 bgagent 配置面。
  * 互斥契约：与记忆控制台面板互斥（app 开页时收起面板；「← 返回文档」不自动重开面板，重入走 rail【记忆】）。
  */
 const { ref, computed, watch, nextTick, inject } = Vue
@@ -58,9 +62,16 @@ function relRun(ts) {
   return new Date(ts * 1000).toISOString().slice(0, 10)
 }
 
+/* ⑦ 回滚块 Tailwind 工具串（style.css 零改动；token 沿用监控页既有：--ink-soft / --brass / --st-error / --line，
+ * 形态对齐 .rcl-l2btn / .run-health 的 pill 与红边卡） */
+const RB_META = 'font-mono text-[9.5px] whitespace-nowrap text-[color-mix(in_srgb,var(--ink-soft)_80%,transparent)]'
+const RB_BTN = 'rounded-full border border-[var(--line)] bg-transparent px-3 py-1 font-mono text-[10px] text-[color-mix(in_srgb,var(--ink-soft)_85%,transparent)] transition-colors hover:border-[color-mix(in_srgb,var(--brass)_45%,var(--line))] hover:text-[var(--brass)] cursor-pointer'
+const RB_BTN_DANGER = 'rounded-full border border-[color-mix(in_srgb,var(--st-error)_40%,var(--line))] bg-[color-mix(in_srgb,var(--st-error)_7%,transparent)] px-3 py-1 font-mono text-[10px] text-[var(--st-error)] transition-colors hover:border-[color-mix(in_srgb,var(--st-error)_60%,var(--line))] cursor-pointer'
+const RB_CONFLICT = 'rounded-[7px] border border-[color-mix(in_srgb,var(--st-error)_35%,var(--line))] bg-[color-mix(in_srgb,var(--st-error)_4%,transparent)] px-3 py-2.5'
+
 export const MonitorPage = {
   name: 'MonitorPage',
-  emits: ['back', 'open-doc'],
+  emits: ['back', 'open-doc', 'restored'],
   setup(props, { emit }) {
     const state = inject('state')
     const mwrapRef = ref(null)
@@ -296,6 +307,66 @@ export const MonitorPage = {
         .slice(0, 3)
         .map(p => ({ ...p, mergedDisp: fmtMerged(p.merged_at) })))
 
+    // ─── ⑦ 回滚（spec 2026-11-14）：最近调用列表 + 调用粒度回滚（人独占，无 force / 无 run 级批量）。
+    //     行状态机（call_id 键，列表重拉后按 key 存活）：
+    //     常态 → 确认态（5s 自动复位）→ busy（POST 在途）→ 成功（行内提示，按钮保留可再点 → 409 裁决）
+    //     / 409（行下冲突卡，唯一动作「保留现状」）/ 其余错误 → alert（代码库惯例）─────
+    const rowState = ref({})   // call_id → { confirming, busy, restoredN, conflict }
+    const rowTimers = {}       // call_id → 确认态 5s 自动复位 timer（组件局部，非响应式）
+    const calls = computed(() => state.rollbackCalls || [])
+    function rowOf(callId) {
+      if (!rowState.value[callId]) rowState.value[callId] = {}
+      return rowState.value[callId]
+    }
+    function clearTimer(callId) {
+      if (rowTimers[callId]) { clearTimeout(rowTimers[callId]); delete rowTimers[callId] }
+    }
+    function armReset(callId) {
+      clearTimer(callId)
+      rowTimers[callId] = setTimeout(() => {
+        const rs = rowState.value[callId]
+        if (rs && rs.confirming && !rs.busy) rs.confirming = false
+        delete rowTimers[callId]
+      }, 5000)
+    }
+    function askRollback(call) {
+      rowOf(call.call_id).confirming = true
+      armReset(call.call_id)
+    }
+    function cancelRollback(call) {
+      clearTimer(call.call_id)
+      const rs = rowState.value[call.call_id]
+      if (rs) rs.confirming = false
+    }
+    async function confirmRollback(call) {
+      const callId = call.call_id
+      clearTimer(callId)
+      const rs = rowOf(callId)
+      rs.confirming = false
+      if (rs.busy) return
+      rs.busy = true
+      try {
+        const data = await api.rollbackCall(callId)
+        if (data && data.ok) {
+          rs.restoredN = (data.restored || []).length
+          // 立即重拉（不等下一轮 30s 轮询）：列表 + 文件树（恢复写入经 route 内 ledger.register("web") 落 change_log）
+          const rc = await api.getRollbackCalls(20)
+          state.rollbackCalls = (rc && rc.calls) || []
+          emit('restored')   // app 接线 → loadDocs()
+        } else if (data && data.status === 409) {
+          rs.conflict = { conflicts: data.conflicts, restored: data.restored }
+        }
+      } catch (e) {
+        alert('回滚失败: ' + e.message)
+      } finally {
+        rs.busy = false
+      }
+    }
+    function dismissConflict(call) {
+      const rs = rowState.value[call.call_id]
+      if (rs) rs.conflict = null
+    }
+
     function back() { emit('back') }
     function openReport(h) { if (h && h.report) emit('open-doc', h.report) }
 
@@ -304,6 +375,8 @@ export const MonitorPage = {
       recall, recallError, recallSum, recallMax, wLines, allZeroRecall,
       l2Open, l2Loading, l2Error, l2Data, l2FailedRows, toggleL2, refreshL2, l2Busy, bySourceLine,
       finals, back, openReport, fmtDT, relRun,
+      calls, rowState, askRollback, cancelRollback, confirmRollback, dismissConflict,
+      RB_META, RB_BTN, RB_BTN_DANGER, RB_CONFLICT,
       typeIcons: TYPE_ICONS, typeIconDefault: TYPE_ICON_DEFAULT,
       mwrapRef, alertFresh, updatedAt
     }
@@ -487,6 +560,50 @@ export const MonitorPage = {
               </div>
             </div>
             <div v-else class="zline">无采纳提案</div>
+          </div>
+
+          <!-- ⑦ 回滚 = 最近调用列表 + 调用粒度回滚（spec 2026-11-14，通栏，组 2 尾部；
+               行 = op 徽章 + actor + 相对时间（relRun）+ 文件数（title = 全路径列表）+ 回滚按钮，最新在前；
+               零态 = 常驻淡显（第七网格单元永远在场）；无 force / 无 run 级批量（红线） -->
+          <div class="mcard full mm-card">
+            <div class="mc-h"><span class="mc-t">回滚</span></div>
+            <div v-if="calls.length" class="rev-rows">
+              <div v-for="c in calls" :key="c.call_id" class="rev-row flex flex-col gap-1.5">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="spill">{{ c.op }}</span>
+                  <span :class="RB_META" class="truncate" :title="c.actor">{{ c.actor }}</span>
+                  <span :class="RB_META" class="text-[color-mix(in_srgb,var(--ink-soft)_70%,transparent)]">{{ relRun(c.ts) }}</span>
+                  <span :class="RB_META" :title="(c.files || []).join('\n')">{{ (c.files || []).length }} 个文件</span>
+                  <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                    <template v-if="rowState[c.call_id] && rowState[c.call_id].busy">
+                      <span :class="RB_META">回滚中…</span>
+                    </template>
+                    <template v-else-if="rowState[c.call_id] && rowState[c.call_id].confirming">
+                      <button type="button" :class="RB_BTN_DANGER" @click="confirmRollback(c)">确认回滚</button>
+                      <button type="button" :class="RB_BTN" @click="cancelRollback(c)">取消</button>
+                    </template>
+                    <template v-else>
+                      <span v-if="rowState[c.call_id] && rowState[c.call_id].restoredN"
+                        class="font-mono text-[9.5px] whitespace-nowrap text-[color-mix(in_srgb,var(--st-ok)_80%,var(--ink))]">
+                        已恢复 {{ rowState[c.call_id].restoredN }} 个文件
+                      </span>
+                      <button type="button" :class="RB_BTN" @click="askRollback(c)">回滚</button>
+                    </template>
+                  </span>
+                </div>
+                <div v-if="rowState[c.call_id] && rowState[c.call_id].conflict" :class="RB_CONFLICT" class="flex flex-col gap-1.5">
+                  <div class="font-mono text-[10px] font-semibold text-[var(--st-error)]">回滚未完成</div>
+                  <div v-for="(cf, i) in rowState[c.call_id].conflict.conflicts" :key="i"
+                    class="font-mono text-[9.5px] text-[var(--ink)] break-all">{{ cf }}</div>
+                  <div v-if="rowState[c.call_id].conflict.restored && rowState[c.call_id].conflict.restored.length"
+                    class="font-mono text-[9.5px] text-[color-mix(in_srgb,var(--ink-soft)_85%,transparent)] break-all">
+                    已恢复：{{ rowState[c.call_id].conflict.restored.join('、') }}
+                  </div>
+                  <button type="button" :class="RB_BTN" class="self-start mt-0.5" @click="dismissConflict(c)">保留现状</button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="zline">无最近调用</div>
           </div>
 
         </div>

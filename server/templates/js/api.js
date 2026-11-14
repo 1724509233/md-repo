@@ -256,6 +256,35 @@ export const api = {
   async ignoreRelatedness(edgeId) {
     const res = await fetch('/api/memory/relatedness/' + edgeId + '/ignore', { method: 'POST' })
     return _jsonOrDetail(res)
+  },
+
+  // ── 回滚（spec 2026-11-14：人独占，调用粒度 = call_id；监控页⑦块消费）──
+
+  /** GET /api/memory/rollback-calls?limit= — 最近调用组（最新在前；
+   * {call_id, ts, actor, run_id, op, files: [path...]}） */
+  async getRollbackCalls(limit = 20) {
+    const res = await fetch('/api/memory/rollback-calls?limit=' + limit)
+    if (!res.ok) throw new Error(`rollback-calls → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/memory/rollback {call_id} — 回滚一次调用（verify-all-then-write-all，服务端不变量）。
+   * 不复用 _jsonOrDetail：其对 409 抛错且丢弃 body，而 409 body = {ok, conflicts}（无 detail 字段，
+   * 只剩 "HTTP 409"）→ 409 时解析 body 返回可区分结果（半态 body 含 restored = 已恢复部分）；
+   * 其余非 2xx 抛错 */
+  async rollbackCall(callId) {
+    const res = await fetch('/api/memory/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ call_id: callId })
+    })
+    if (res.status === 409) {
+      let data = {}
+      try { data = await res.json() } catch (e) { /* 非 JSON body → 空 conflicts */ }
+      return { ok: false, conflicts: Array.isArray(data.conflicts) ? data.conflicts : [], restored: data.restored, status: 409 }
+    }
+    if (!res.ok) throw new Error(`rollback → ${res.status}`)
+    return res.json()
   }
 }
 
