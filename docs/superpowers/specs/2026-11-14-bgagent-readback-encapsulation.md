@@ -84,6 +84,8 @@ class ReadbackSystemReminder(SystemReminder):
 - 驳回 #id [type] relpath: 人写理由           ← 新，top 5 + 「…另有 N 条驳回未列出」
 ```
 
+理由取 `reject_reason` 列原值，回读不二次加工：UI 渠道（`POST .../reject`）存原始理由，对话 `reject_proposal` 渠道存 `via: 主agent: <理由>`（两渠道均必填非空）；仅空值回退 `(no reason recorded)`（防御）。
+
 ### 3.3 框架契约（server/agent/reminders.py + agent.py）
 
 - `SystemReminder.render() -> str | None`（ABC 签名 + docstring：**None 或空 = 跳过注入**）。
@@ -140,14 +142,14 @@ class ReadbackSystemReminder(SystemReminder):
 
 **tests/test_agent.py**：reminder render() → None 或空 → 无 `<system-reminder>` 消息；TimeSystemReminder 照常注入。
 
-**基线**：pytest 1018 passed / 5 failed（5 个基线失败不修不计）。
+**基线**：pytest 1014 passed / 9 failed（HEAD 090be8f 实测；9 个既有失败不修不计——3 个日期依赖 prune 测试、5 个 Windows 路径/os.rename 问题、1 个 api.js 缺 uploadDoc 导出，均与本 spec 无关）。
 
 ## 6. 验收
 
 1. `grep _readback_block server/bgagent/runner.py` → 无输出（逻辑整体移出）。
 2. 非提案角色（sentinel）run_once → messages 无回读内容；提案角色（consolidator）→ 三段全在。
 3. rejected 行（含人写理由）在回读可见，格式符合 §3.2。
-4. pytest：基线 + 新测试全绿。
+4. pytest：1014 个基线通过项保持绿 + 新测试全绿（9 个既有失败不修不计，见 §5 基线注）。
 5. sentinel 可调 recall_feedback_stats（config.yaml 白名单就位）。
 6. sentinel.md / narrator.md 无回读死文本（gate 后引用不存在的行为已清理）。
 
