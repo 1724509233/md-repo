@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>关联呈现：候选① 预览区侧栏（备选设计稿 2026-11-14）</title>
+<!--
+  方案名：候选① —— relatedness 呈现落位「文档预览区侧栏」（spec §6.4 备选落位；本稿为备选设计，非当前已实现方案）
+  对照基准（当前方案）：MemoryConsole 第四面「文档面」——300px 左面板，入口 = 顶栏「关联」按钮，
+  GET /api/memory/doc/{path}，「你的链接」/「机器建议」两块纵向堆叠（已实现，MemoryConsole.js 文档面 + TopBar.js）。
+
+  前轮否决候选①的理由（仅记录于此，不进 UI 正文）：
+  1. 改主阅读布局（680px 中栏 → 栏+侧栏）
+  2. 常驻空侧栏违反 copy norms
+  3. 只读预览承载写动作（忽略 = mark_ignored，ledger 状态迁移）
+  4. 移动需另做 bottom sheet
+
+  与当前方案的核心权衡（≤3）：
+  1. 落位：候选① = 预览区右侧 280px 侧栏（关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，680px 列在剩余空间一次性重居中，
+     同 console-shell 开合纪律）；当前方案 = 300px 左面板第四面，复用面切换/深链/轮询/移动 overlay 全套既有基建。
+     候选① 上下文亲和更强（侧栏贴正文，「关联」离正在读的内容一步之遥），但打开时主阅读列左移。
+  2. 移动：候选① 需另做 bottom sheet（≤860px，80vh，复用既有 .search-drawer 规格 1:1，入口 = 顶栏「更多」→「关联」）；
+     当前方案的控制台在移动端本就是全屏 overlay（既有 .console-shell ≤860px 规则），零新机制。
+  3. 写动作归属：候选① 的忽略按钮落在侧栏 chrome（只读预览正文之外）——部分回应否决理由 3；
+     但侧栏仍是只读上下文的投影，且没有当前方案「文档 path vs 审查 relpath」的维度分离与独立深链位（state.memoryDoc）。
+-->
+<style>
+/* ============ 纸墨「书房」tokens（style.css :root 1:1；无外部字体，回退系统字体）============ */
+:root{
+  --paper:#F4EFE6; --ink:#211D18; --ink-soft:#6E655A;
+  --brass:#9A6B32; --line:#D8CFBF; --surface:#FBF8F2;
+  --serif:'Source Serif 4','PingFang SC','Microsoft YaHei',serif;
+  --sans:'Inter',-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --ease:cubic-bezier(.32,.72,0,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--paper);color:var(--ink)}
+body{font-family:var(--serif);font-size:16px;line-height:1.75;padding:32px 28px 72px}
+button{font-family:var(--sans);cursor:pointer}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--ink-soft) 35%,transparent) transparent}
+*::-webkit-scrollbar{width:5px;height:5px}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--ink-soft) 35%,transparent);border-radius:9999px}
+:focus-visible{outline:none;box-shadow:0 0 0 2px var(--paper),0 0 0 3px var(--brass);border-radius:6px}
+
+/* ============ 设计稿页 chrome（非应用 UI，先例 2026-11-09 稿同规格）============ */
+.page-head{max-width:1520px;margin:0 auto 28px;padding-bottom:20px;border-bottom:1px solid var(--line)}
+.page-head h1{font-size:25px;font-weight:700;letter-spacing:.01em}
+.page-head .sub{font-family:var(--sans);font-size:13px;color:var(--ink-soft);margin-top:8px;max-width:920px;line-height:1.85}
+.page-head .sub b{color:var(--ink);font-weight:600}
+.page-head .meta{font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);margin-top:8px;line-height:1.7}
+.body-grid{max-width:1520px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 336px;gap:26px;align-items:start}
+@media (max-width:1280px){.body-grid{grid-template-columns:1fr}.guide{position:static !important}}
+.stage-col{min-width:0;display:flex;flex-direction:column;gap:22px}
+.stage-cap{font-family:var(--mono);font-size:11px;color:var(--ink-soft);line-height:1.75;padding:0 4px}
+.stage-cap b{color:var(--brass);font-weight:500}
+.guide{position:sticky;top:24px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.g-card{background:var(--surface);border:1px solid color-mix(in srgb,var(--line) 85%,transparent);border-radius:10px;padding:14px 16px}
+.g-title{font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--brass);margin-bottom:8px}
+.g-desc{font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--ink-soft)}
+.g-desc b{color:var(--ink);font-weight:600}
+.g-desc i{font-style:normal;font-family:var(--mono);font-size:11px;color:color-mix(in srgb,var(--brass) 80%,var(--ink));background:color-mix(in srgb,var(--brass) 8%,transparent);border-radius:4px;padding:1px 5px}
+.g-list{margin-top:6px;padding-left:16px}
+.g-list li{font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--ink-soft);margin:5px 0}
+.g-list li b{color:var(--ink);font-weight:600}
+.demo-btn,.ghost-btn{font-family:var(--sans);font-size:12px;height:28px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;border-radius:8px;background:transparent;color:var(--ink-soft);border:1px solid var(--line);transition:background-color .15s ease,color .15s ease,border-color .15s ease}
+.demo-btn:hover,.ghost-btn:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--brass);border-color:color-mix(in srgb,var(--brass) 40%,var(--line))}
+.demo-btn:active,.ghost-btn:active{transform:scale(.96)}
+.demo-btn:disabled{opacity:.45;pointer-events:none}
+.seg{display:inline-flex;gap:4px;padding:3px;background:color-mix(in srgb,var(--ink) 5%,transparent);border-radius:8px}
+.seg-btn{border:none;background:transparent;cursor:pointer;font-family:var(--sans);font-size:11px;color:var(--ink-soft);padding:5px 10px;border-radius:6px;white-space:nowrap;transition:background-color .15s ease,color .15s ease}
+.seg-btn:hover{color:var(--ink)}
+.seg-btn.on{background:var(--surface);color:var(--brass);font-weight:500;box-shadow:0 1px 3px rgba(33,29,24,.12)}
+.ctrl-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ctrl-label{font-family:var(--sans);font-size:11px;color:var(--ink-soft);min-width:56px}
+
+/* ============ 应用窗口（appframe，先例 1:1）============ */
+.appframe{display:flex;background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow:hidden;height:690px;box-shadow:0 10px 30px rgba(33,29,24,.06),0 1px 0 rgba(33,29,24,.03)}
+
+/* rail（style.css .rail 1:1：64px · surface 底 · 52×44 按钮 · 激活左缘 3px 铜条） */
+.rail{width:64px;flex-shrink:0;display:flex;flex-direction:column;align-items:center;padding:12px 0;background:var(--surface);border-right:1px solid var(--line)}
+.rail .rsep{width:22px;height:1px;background:color-mix(in srgb,var(--line) 90%,transparent);margin:8px 0}
+.rail > .rbtn + .rbtn{margin-top:6px}
+.rbtn{border:none;background:transparent;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;width:52px;height:44px;border-radius:9px;color:var(--ink-soft);position:relative;transition:background-color .15s ease,color .15s ease}
+.rbtn .ricon{display:inline-flex}
+.rbtn .ricon svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.rbtn .rlabel{font-family:var(--sans);font-size:10px;letter-spacing:.02em;line-height:1}
+.rbtn:hover{background:color-mix(in srgb,var(--brass) 8%,transparent);color:var(--ink)}
+.rbtn.on{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--brass)}
+.rbtn.on::before{content:'';position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:var(--brass)}
+
+/* 文件面板（style.css .panel-shell/.p-head 1:1，桌面 260px） */
+.panel-shell{width:260px;flex-shrink:0;position:relative;background:var(--paper);border-right:1px solid var(--line);overflow:hidden;display:flex;flex-direction:column}
+.p-head{height:48px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--surface);font-family:var(--sans);position:relative}
+.p-head .picon{width:15px;height:15px;color:var(--brass);display:flex}
+.p-head .picon svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.p-head .ptitle{font-size:13px;font-weight:600;letter-spacing:.02em;color:var(--ink)}
+.p-head .pcount{font-size:11px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.p-head .pacts{margin-left:auto;display:flex;align-items:center;gap:4px}
+.ibtn{width:26px;height:26px;border-radius:7px;border:none;background:transparent;color:var(--ink-soft);display:flex;align-items:center;justify-content:center;transition:background-color .15s ease,color .15s ease}
+.ibtn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.ibtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tree{flex:1;min-height:0;overflow-y:auto;font-family:var(--sans);font-size:13px;padding:8px;display:flex;flex-direction:column;gap:1px}
+.tree-dir{display:flex;align-items:center;gap:6px;color:var(--ink-soft);padding:4px 8px;font-size:12px;user-select:none}
+.tree-dir svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.5;opacity:.7}
+.tree-file{display:flex;align-items:center;width:100%;text-align:left;border:none;background:transparent;color:var(--ink-soft);padding:4px 8px 4px 26px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:background-color .15s ease,color .15s ease;font-size:13px}
+.tree-file svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;flex-shrink:0;margin-right:6px;opacity:.7}
+.tree-file:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.tree-file.active{background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass);font-weight:500}
+.tree-file.active svg{opacity:1}
+
+/* 内容区 + 顶栏（TopBar.js 1:1：h-12 · px-16 · surface） */
+.content{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--paper);position:relative}
+.topbar{height:48px;flex-shrink:0;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 16px;font-family:var(--sans);position:relative;z-index:30}
+.topbar .logo-mark{width:22px;height:22px;border:1px solid var(--brass);border-radius:6px;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-weight:700;font-size:11px;color:var(--brass);flex-shrink:0}
+.topbar .logo-word{font-family:var(--serif);font-weight:600;font-size:14px;letter-spacing:.02em;flex-shrink:0}
+.topbar .fname{flex:1;min-width:0;font-family:var(--serif);font-size:15px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.topbar-btn{font-family:var(--sans);font-size:12px;height:28px;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:8px;background:transparent;color:var(--ink-soft);flex-shrink:0;transition:background-color .15s ease,color .15s ease}
+.topbar-btn:hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.topbar-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.topbar-btn:disabled{opacity:.4;cursor:default}
+.topbar-btn:disabled:hover{background:transparent;color:var(--ink-soft)}
+.topbar-btn--icon{width:28px;padding:0}
+/* 「关联」激活态 = 侧栏开启反馈（.toc-btn-open 同口径：只变色不变几何，顶栏零跳变） */
+.topbar-btn.rel-open{background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass)}
+.topbar-btn.rel-open:hover{background:color-mix(in srgb,var(--brass) 12%,transparent);color:var(--brass)}
+.mode-pill{display:flex;align-items:center;gap:2px;height:36px;padding:0 2px;border-radius:8px;background:color-mix(in srgb,var(--ink) 6%,transparent);flex-shrink:0}
+.mode-pill .mode-btn{height:28px;padding:0 12px;border:none;border-radius:7px;background:transparent;color:var(--ink-soft);font-size:12px;display:inline-flex;align-items:center;gap:6px;transition:background-color .15s ease,color .15s ease}
+.mode-pill .mode-btn.active{background:var(--brass);color:var(--paper);font-weight:500}
+.mode-pill .mode-btn:not(.active):hover{background:color-mix(in srgb,var(--brass) 10%,transparent);color:var(--ink)}
+.mode-pill .mode-btn svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.btn-save{font-weight:500;color:var(--paper);background:var(--brass)}
+.btn-save:hover{background:color-mix(in srgb,var(--brass) 85%,var(--ink));color:var(--paper)}
+/* ============ 文档区 + 预览排版（app.js .doc-enter / EditorPane .doc-wrap / style.css #preview 1:1）============ */
+.docarea{flex:1;min-height:0;display:flex;overflow:hidden;position:relative;background:var(--paper)}
+.docscroll{flex:1;min-width:0;overflow-y:auto;padding:24px}
+.docwrap{max-width:680px;margin:0 auto;min-height:100%;display:flex;flex-direction:column}
+.preview{font-family:var(--serif);font-size:16px;line-height:1.75;color:var(--ink);flex:1;min-width:0}
+.preview h1{font-size:28px;font-weight:700;line-height:1.3;margin:2rem 0 1rem;padding-bottom:.5rem;border-bottom:1px solid color-mix(in srgb,var(--brass) 45%,transparent)}
+.preview h1:first-child{margin-top:0}
+.preview h2{font-size:20px;font-weight:600;line-height:1.4;margin:1.5rem 0 .75rem}
+.preview h3{font-size:17px;font-weight:600;line-height:1.4;margin:1.25rem 0 .5rem}
+.preview p{margin:1rem 0}
+.preview a{color:var(--brass);text-decoration:underline;text-underline-offset:3px}
+.preview ul,.preview ol{padding-left:1.25rem;margin:.75rem 0;list-style:disc}
+.preview ol{list-style:decimal}
+.preview li{margin:.375rem 0}
+.preview li::marker{color:var(--brass)}
+.preview blockquote{border-left:3px solid var(--brass);padding-left:1rem;margin:1rem 0;color:var(--ink-soft);font-style:italic}
+.preview code:not(pre code){font-family:var(--mono);font-size:.8125rem;background:color-mix(in srgb,var(--brass) 8%,transparent);color:color-mix(in srgb,var(--brass) 85%,var(--ink));padding:.125rem .375rem;border-radius:4px}
+
+/* 翻页动效（style.css 1:1：换文档 = 唯一签名 pageIn .45s；移动/减动效 = 纯淡入） */
+@keyframes pageIn{from{opacity:0;transform:translateX(12%) rotateY(-5deg)}to{opacity:1;transform:translateX(0) rotateY(0)}}
+@keyframes pageFade{from{opacity:0}to{opacity:1}}
+.docwrap.page-turn{animation:pageIn .45s var(--ease) both}
+.docwrap.page-turn-fade{animation:pageFade .2s ease both}
+@keyframes viewFade{from{opacity:0}to{opacity:1}}
+.view-fade{animation:viewFade .15s ease both}
+
+/* ============ 文档面内容件（style.css L1246-1286 1:1：候选① 与当前方案共用同一套内容件）============ */
+.doc-path-line{flex-shrink:0;padding:7px 14px 0;font-family:var(--mono);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 75%,transparent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-sec{padding:12px 12px 4px}
+.c-sec-h{display:flex;align-items:center;gap:8px;font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--ink-soft);padding:0 4px 8px;text-transform:uppercase}
+.c-sec-h .cnt{font-family:var(--mono);font-size:10px;font-weight:500;min-width:1.25rem;height:1.125rem;padding:0 .375rem;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:color-mix(in srgb,var(--ink) 7%,var(--surface));border:1px solid color-mix(in srgb,var(--line) 70%,transparent);color:var(--ink-soft)}
+.c-sec-h .cnt.hot{background:color-mix(in srgb,var(--brass) 12%,transparent);border-color:color-mix(in srgb,var(--brass) 35%,var(--line));color:var(--brass)}
+.doc-row{display:block;width:100%;text-align:left;background:transparent;border:none;font-family:var(--sans);padding:7px 8px;margin:0 0 6px;border-radius:7px;cursor:pointer;transition:background-color .15s ease,opacity .2s ease}
+.doc-row:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.doc-row-line{display:flex;align-items:center;gap:7px;min-width:0}
+.doc-ic{display:inline-flex;width:13px;height:13px;flex-shrink:0;color:var(--ink-soft)}
+.doc-ic svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;display:block}
+.doc-row-path{flex:1;min-width:0;font-family:var(--mono);font-size:11px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 机器行：黄铜左缘 2px + 4% 黄铜底（唯一强调色；左缘直边 → 左侧圆角归零） */
+.doc-row.mach{background:color-mix(in srgb,var(--brass) 4%,transparent);border-left:2px solid var(--brass);border-radius:0 7px 7px 0;padding-left:7px;cursor:default}
+.doc-row.mach:hover{background:color-mix(in srgb,var(--brass) 7%,transparent)}
+.doc-ic.mach-ic{color:var(--brass)}
+/* 忽略按钮：小号 ghost 文字（10px muted 行内右对齐；不用红——红 = 提案驳回更重动作；hover → 墨色） */
+.doc-ignore{flex-shrink:0;border:none;background:transparent;font-family:var(--sans);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 80%,transparent);cursor:pointer;padding:1px 5px;border-radius:5px;transition:color .15s ease,background-color .15s ease}
+.doc-ignore:hover:not(:disabled){color:var(--ink);background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.doc-ignore:disabled{cursor:default;opacity:.6}
+/* 依据摘要：1 行 ellipsis，hover title 全值；缩进对齐路径（图标 13px + gap 7px） */
+.doc-basis{margin-top:3px;padding-left:20px;font-family:var(--sans);font-size:10px;color:color-mix(in srgb,var(--ink-soft) 85%,transparent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 无出链（块1 空态节仍渲染；块2 空态整节不渲染 = 无常驻空位） */
+.doc-none{font-family:var(--sans);font-size:10.5px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);padding:2px 4px 8px}
+/* 忽略淡出（opacity .2s，200ms 后移除行；单边否决无确认） */
+.doc-row.fading{opacity:0}
+/* 块2 整节退场（最后一条被忽略 → 节淡出移除，无常驻空位） */
+.c-sec.leaving{opacity:0;transition:opacity .2s ease}
+
+/* ============ 候选① 新增件：预览区右侧栏（本稿唯一新机制）============
+   开合纪律 = console-shell 同口径：关闭态 width 0 零占位、不可点；.open 瞬时 width 280px（无 width 过渡，
+   主区一次性重布局，不做逐帧回流），680px 列在剩余空间重居中；面入场 = cFaceIn（opacity + 8px 位移 .2s）。
+   与预览间距 = 侧栏自身 padding（左 16px）+ 1px 左缘线；侧栏纸底，机器行黄铜自浮。 */
+@keyframes cFaceIn{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:translateX(0)}}
+.rel-side{width:0;flex-shrink:0;position:relative;overflow:hidden;background:var(--paper);border-left:0;pointer-events:none}
+.rel-side.open{width:280px;border-left:1px solid var(--line);pointer-events:auto}
+.rel-face{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--paper)}
+.rel-face.anim{animation:cFaceIn .2s var(--ease) both}
+.rel-scroll{flex:1;min-height:0;overflow-y:auto}
+
+/* ============ 当前方案对照件：300px 控制台文档面（style.css .console-shell 1:1，静态参照）============ */
+.console-shell{width:300px;flex-shrink:0;position:relative;overflow:hidden;background:var(--paper);border-right:1px solid var(--line)}
+.console-shell > .c-face{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--paper)}
+.c-scroll{flex:1;overflow-y:auto;min-height:0;position:relative;z-index:1}
+
+/* ============ 对照表（设计稿 chrome，.mtable 规格缩小）============ */
+.cmp-wrap{display:grid;grid-template-columns:300px minmax(0,1fr);gap:18px;align-items:start}
+@media (max-width:900px){.cmp-wrap{grid-template-columns:1fr}}
+.cmp-label{font-family:var(--mono);font-size:11px;color:var(--ink-soft);margin-bottom:8px;line-height:1.7}
+.cmp-label b{color:var(--brass);font-weight:500}
+.cmp-table{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.cmp-table table{border-collapse:collapse;width:100%;font-family:var(--sans);font-size:11.5px}
+.cmp-table th{font-size:10px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft);text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--ink) 3%,transparent);white-space:nowrap}
+.cmp-table th.hl{color:var(--brass)}
+.cmp-table td{padding:7px 12px;border-bottom:1px solid color-mix(in srgb,var(--line) 70%,transparent);color:var(--ink);line-height:1.6;vertical-align:top}
+.cmp-table tr:last-child td{border-bottom:none}
+.cmp-table td.dim{color:var(--ink-soft)}
+.cmp-table td .win{color:var(--brass);font-weight:600}
+
+/* ============ 移动端（≤860px）：手机框 + bottom sheet（.search-drawer 规格 1:1）============ */
+.phone-row{display:flex;gap:26px;align-items:flex-start;flex-wrap:wrap}
+.phone{width:390px;height:760px;flex-shrink:0;border:1px solid var(--line);border-radius:36px;background:var(--paper);overflow:hidden;position:relative;box-shadow:0 12px 36px rgba(33,29,24,.10)}
+.phone .topbar{padding:0 14px;gap:10px}
+.phone .docscroll{padding:18px 16px}
+.phone .docwrap{max-width:none}
+/* 底部抽屉：圆角 24、2px 铜顶边、backdrop、拖拽手柄（#ai-panel / .search-drawer 移动规格）。
+   高度 = 手机框的 80%（框 = 移动视口的替身；真实实现为移动视口的 80vh，比例一致）。
+   关闭态 visibility:hidden：双值在不同视口下解析不一致时（子像素/无头渲染）也不露边；
+   开 = 立即可见再上滑，合 = 下滑完成后隐藏（visibility 延迟 .38s） */
+.sheet{position:absolute;left:0;right:0;bottom:-80%;height:80%;background:var(--surface);border-top:2px solid var(--brass);border-radius:24px 24px 0 0;box-shadow:0 -16px 48px rgba(33,29,24,.25),0 -1px 0 color-mix(in srgb,var(--brass) 45%,transparent);z-index:40;display:flex;flex-direction:column;visibility:hidden;transition:bottom .38s var(--ease),visibility 0s .38s}
+.sheet.open{bottom:0;visibility:visible;transition:bottom .38s var(--ease),visibility 0s 0s}
+.sheet-handle{display:flex;align-items:center;justify-content:center;height:40px;cursor:grab;touch-action:none;flex-shrink:0}
+.sheet-handle::before{content:'';width:44px;height:5px;border-radius:999px;background:var(--line);transition:background .15s}
+.sheet-handle:active::before{background:var(--brass)}
+.sheet-backdrop{position:absolute;inset:0;background:rgba(33,29,24,.4);z-index:30;opacity:0;pointer-events:none;transition:opacity .3s ease}
+.sheet-backdrop.show{opacity:1;pointer-events:auto}
+
+/* 稿尾取舍说明 */
+.notes{max-width:1520px;margin:34px auto 0;padding-top:18px;border-top:1px solid var(--line)}
+.notes .g-title{margin-bottom:10px}
+.notes ul{margin:0;padding-left:18px;max-width:1150px}
+.notes li{font-family:var(--sans);font-size:12px;line-height:1.75;color:var(--ink-soft);margin:6px 0}
+.notes li b{color:var(--ink);font-weight:600}
+.notes code{font-family:var(--mono);font-size:11px;background:color-mix(in srgb,var(--brass) 8%,transparent);color:color-mix(in srgb,var(--brass) 85%,var(--ink));padding:1px 5px;border-radius:4px}
+
+/* 动效降级 */
+@media (prefers-reduced-motion: reduce){
+  .docwrap.page-turn{animation:pageFade .2s ease both}
+  .rel-face.anim,.view-fade{animation:none}
+  .rel-side,.sheet,.sheet-backdrop,.topbar-btn,.tree-file,.doc-row,.doc-ignore,.c-sec.leaving{transition:none}
+}
+</style>
+</head>
+<body>
+<header class="page-head">
+  <h1>关联呈现：候选① 预览区侧栏（备选设计稿）</h1>
+  <div class="sub">
+    spec §6.4 给了两个落位候选，当前已实现的是<b>候选②：MemoryConsole 第四面「文档面」</b>（300px 左面板）。本稿把<b>候选①：文档预览区侧栏</b>完整做出来供对比拍板——
+    680px 预览中栏右侧挂一条 280px 侧栏，呈现内容与当前方案完全相同（「你的链接」/「机器建议」两块，同一套内容件）。
+    下方是<b>可交互的应用窗口</b>（主题、顶栏、文件面板、预览排版均按真实应用 1:1 复刻；不接后端，数据与状态全在 JS 模拟）。
+  </div>
+  <div class="meta">来源 spec §6.4 relatedness 呈现面；对照基准 = MemoryConsole 第四面（已实现）。<br>自包含单文件、无外部依赖；前轮否决理由与核心权衡见文件头注释。</div>
+</header>
+
+<div class="body-grid">
+  <section class="stage-col">
+
+    <!-- ── 桌面态（≥861px）：680px 预览中栏 + 280px 右侧栏 ── -->
+    <div>
+      <div class="stage-cap">
+        桌面态 —— 侧栏 <b>280px</b> 贴预览区右缘（1px 左缘线 + 16px 内距与中栏留白）；关闭态 width 0 零占位，
+        680px 列在<b>剩余空间</b>重居中（瞬时切换，同 console-shell 开合纪律）。<br>
+        切文档时侧栏<b>跟随</b>：内容原地换（viewFade），开合状态保留。顶栏「关联」开合侧栏，激活态只变色不变几何。
+      </div>
+      <div class="appframe" id="deskFrame">
+        <!-- rail（64px：文件 / 搜索 / 记忆 / 回收站） -->
+        <div class="rail">
+          <button class="rbtn on" title="文件页"><span class="ricon"><svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span><span class="rlabel">文件</span></button>
+          <button class="rbtn" title="搜索页"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg></span><span class="rlabel">搜索</span></button>
+          <button class="rbtn" title="记忆"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span><span class="rlabel">记忆</span></button>
+          <span class="rsep"></span>
+          <button class="rbtn" title="回收站"><span class="ricon"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg></span><span class="rlabel">回收站</span></button>
+        </div>
+
+        <!-- 文件面板（260px） -->
+        <div class="panel-shell">
+          <div class="p-head">
+            <span class="picon"><svg viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg></span>
+            <span class="ptitle">文件</span>
+            <span class="pcount">12</span>
+          </div>
+          <div class="tree" id="treeEl">
+            <div class="tree-dir" style="padding-left:8px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>projects</div>
+            <div class="tree-dir" style="padding-left:22px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>md-repo</div>
+            <div class="tree-dir" style="padding-left:36px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>specs</div>
+            <button class="tree-file active" data-doc="a" style="padding-left:44px"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>2026-09-27-md-sync-design.md</button>
+            <div class="tree-file" style="padding-left:44px;cursor:default"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>2026-10-21-memory-console.md</div>
+            <div class="tree-dir" style="padding-left:36px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>plans</div>
+            <button class="tree-file" data-doc="c" style="padding-left:44px"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>2026-11-02-console-v5.md</button>
+            <div class="tree-dir" style="padding-left:36px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>adr</div>
+            <div class="tree-file" style="padding-left:44px;cursor:default"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>2026-10-31-ledger-file-split.md</div>
+            <div class="tree-dir" style="padding-left:8px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>notes</div>
+            <div class="tree-dir" style="padding-left:22px"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/></svg>reading</div>
+            <button class="tree-file" data-doc="b" style="padding-left:36px"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/></svg>2026-09-12-linking-essays.md</button>
+          </div>
+        </div>
+
+        <!-- 内容区：顶栏 + 文档区（中栏 + 侧栏） -->
+        <div class="content">
+          <div class="topbar">
+            <span class="logo-mark">M</span>
+            <span class="logo-word">md-vault</span>
+            <span class="fname" id="fnameEl">projects/md-repo/specs/2026-09-27-md-sync-design.md</span>
+            <div class="mode-pill">
+              <button class="mode-btn"><svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑</button>
+              <button class="mode-btn active"><svg viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览</button>
+            </div>
+            <!-- 关联：候选① 入口（顶栏按钮，同当前方案）；激活态 = 侧栏开启反馈 -->
+            <button class="topbar-btn rel-open" id="relBtn" title="本文档的关联文档" aria-label="本文档的关联文档">
+              <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
+            </button>
+            <button class="topbar-btn" title="本文目录"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>目录</button>
+            <button class="topbar-btn"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载</button>
+            <button class="topbar-btn btn-save"><svg viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>保存</button>
+          </div>
+
+          <div class="docarea">
+            <div class="docscroll">
+              <div class="docwrap" id="docWrap">
+                <div class="preview" id="previewEl"></div>
+              </div>
+            </div>
+            <!-- 候选① 新增件：280px 右侧栏（关闭态 width 0；内容件与当前方案文档面同一套） -->
+            <aside class="rel-side open" id="relSide">
+              <div class="rel-face anim" id="relFace">
+                <div class="p-head">
+                  <span class="picon"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
+                  <span class="ptitle">关联</span>
+                  <span class="pacts"><button class="ibtn" id="relClose" title="收起侧栏"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+                </div>
+                <div class="doc-path-line" id="relPath" title=""></div>
+                <div class="rel-scroll" id="relScroll"></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 状态控制（demo chrome） -->
+    <div class="g-card">
+      <div class="g-title">状态控制（演示脚手架 · 非应用 UI）</div>
+      <div class="ctrl-row" style="margin-bottom:10px">
+        <span class="ctrl-label">数据状态</span>
+        <span class="seg" id="modeSeg">
+          <button class="seg-btn on" data-mode="full">有数据（两块都有）</button>
+          <button class="seg-btn" data-mode="nomach">无机器建议</button>
+          <button class="seg-btn" data-mode="nolinks">无用户链接</button>
+        </span>
+      </div>
+      <div class="ctrl-row" style="margin-bottom:10px">
+        <span class="ctrl-label">文档</span>
+        <span class="seg" id="docSeg">
+          <button class="seg-btn on" data-doc="a">md-sync 设计</button>
+          <button class="seg-btn" data-doc="b">双向链接笔记</button>
+          <button class="seg-btn" data-doc="c">console v5</button>
+        </span>
+      </div>
+      <div class="g-desc">
+        应用窗口可直接动手：顶栏 <b>关联</b> 开合侧栏，文件树点文件切文档（侧栏跟随，开合状态保留），
+        机器行 <b>忽略</b> 点击淡出，分段按钮切换数据状态。完整清单见「本稿可切换状态」卡片。
+      </div>
+    </div>
+
+    <!-- 对照区：当前方案（第四面） -->
+    <div>
+      <div class="stage-cap">对照 · <b>当前方案</b>（MemoryConsole 第四面「文档面」，300px 左面板，已实现）—— 与候选① 同数据、同内容件，同屏对比</div>
+      <div class="cmp-wrap">
+        <div>
+          <div class="cmp-label">当前方案 · 300px 控制台文档面（静态参照 · 数据 = 文档 A）</div>
+          <div class="console-shell" style="border:1px solid var(--line);border-radius:10px;height:430px">
+            <div class="c-face">
+              <div class="p-head">
+                <button class="ibtn" title="返回队列"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+                <span class="ptitle">关联</span>
+                <span class="pacts"><button class="ibtn" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+              </div>
+              <div class="doc-path-line" title="projects/md-repo/specs/2026-09-27-md-sync-design.md">projects/md-repo/specs/2026-09-27-md-sync-design.md</div>
+              <div class="c-scroll" id="cmpScroll"></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="cmp-label">同屏对比 · 候选① vs 当前方案（落位 / 移动 / 写动作归属）</div>
+          <div class="cmp-table">
+            <table>
+              <thead>
+                <tr><th style="width:84px">维度</th><th class="hl">候选① 预览侧栏</th><th>当前方案 · 控制台第四面</th></tr>
+              </thead>
+              <tbody>
+                <tr><td class="dim">入口</td><td>顶栏「关联」按钮（两者相同）</td><td>顶栏「关联」按钮（两者相同）</td></tr>
+                <tr><td class="dim">落位</td><td>预览区右侧 280px 侧栏，关闭态零占位；打开时 680px 列左移重居中</td><td>300px 左面板第四面，复用面切换 / 深链 / 轮询既有基建</td></tr>
+                <tr><td class="dim">上下文亲和</td><td><span class="win">贴正文</span>：关联内容就在正在读的内容旁边</td><td>切面查看，与正文隔一个面板</td></tr>
+                <tr><td class="dim">文档切换</td><td>侧栏跟随当前文档，开合状态保留</td><td>深链 state.memoryDoc，切面后需重新进入</td></tr>
+                <tr><td class="dim">移动</td><td>需另做 bottom sheet（80vh，复用 .search-drawer 规格）</td><td><span class="win">既有全屏 overlay</span>（≤860px 规则），零新机制</td></tr>
+                <tr><td class="dim">写动作</td><td>忽略在侧栏 chrome（只读正文之外，部分回应「只读承载写动作」）</td><td>忽略在控制台面（独立只读投影，与审查维度分离）</td></tr>
+                <tr><td class="dim">深链</td><td>无（侧栏 = 当前文档的状态，无独立维度）</td><td>state.memoryDoc 独立维度（文档 path vs 审查 relpath）</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- 右侧说明（sticky） -->
+  <aside class="guide">
+    <div class="g-card">
+      <div class="g-title">本稿可切换状态</div>
+      <ul class="g-list">
+        <li><b>有数据</b>：「你的链接」+「机器建议」两块都渲染</li>
+        <li><b>无机器建议</b>：块2 整节不渲染（无常驻空位）</li>
+        <li><b>无用户链接</b>：块1 单行「本文档没有出链」</li>
+        <li><b>忽略淡出</b>：点忽略 → 行 0.2s 淡出移除；最后一条消失后块2 整节淡出</li>
+        <li><b>文档切换</b>：3 篇文档，预览翻页 + 侧栏内容跟随</li>
+        <li><b>侧栏开合</b>：顶栏「关联」/ 侧栏头关闭钮</li>
+        <li><b>移动 bottom sheet</b>：下方独立一节的手机框</li>
+      </ul>
+    </div>
+    <div class="g-card">
+      <div class="g-title">候选① 关键决策</div>
+      <ul class="g-list">
+        <li><b>280px</b> 右侧栏：1px 左缘线 + 16px 左内距 = 与预览的间距</li>
+        <li>开合 = <b>瞬时 width 切换</b>（无 width 过渡，同 console-shell 纪律）+ 面入场 cFaceIn（opacity + 8px 位移）</li>
+        <li>关闭态 <b>零占位</b>：无常驻空侧栏（回应前轮否决理由 2）</li>
+        <li>移动 = <b>bottom sheet</b> 80vh（本稿手机框 = 视口替身，抽屉 = 框高 80%）：复用 .search-drawer 规格 1:1（圆角 24 / 2px 铜顶边 / backdrop / 手柄）</li>
+        <li>内容件与当前方案<b>同一套</b>：<i>.doc-row</i> / <i>.mach</i> / <i>.doc-basis</i> / <i>.doc-ignore</i> / <i>.c-sec-h</i> / <i>.cnt.hot</i></li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<!-- ── 移动态（≤860px）：bottom sheet ── -->
+<section style="max-width:1520px;margin:34px auto 0">
+  <div class="stage-cap">
+    移动态（≤860px）—— 侧栏放不下，改为 <b>bottom sheet</b>：80vh 底部抽屉（本稿手机框 = 移动视口替身，抽屉 = 框高 80%），
+    复用既有 .search-drawer 规格 1:1（圆角 24 / 2px 铜顶边 / 阴影 / backdrop / 拖拽手柄）；入口 = 顶栏「更多」→「关联」（与当前方案移动入口相同）。<br>
+    抽屉内容跟随当前文档，与桌面侧栏同一数据。
+  </div>
+  <div class="phone-row" style="margin-top:12px">
+    <div class="phone">
+      <div class="topbar">
+        <span class="logo-mark">M</span>
+        <span class="logo-word">md-vault</span>
+        <span class="fname" id="phoneFname">projects/md-repo/specs/2026-09-27-md-sync-design.md</span>
+        <button class="topbar-btn topbar-btn--icon" title="更多操作"><svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg></button>
+        <button class="topbar-btn topbar-btn--icon" title="本文目录"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+      </div>
+      <div class="docscroll">
+        <div class="docwrap" id="phoneDocWrap">
+          <div class="preview" id="phonePreview"></div>
+        </div>
+      </div>
+      <!-- bottom sheet（.search-drawer 规格 1:1） -->
+      <div class="sheet-backdrop" id="sheetBackdrop"></div>
+      <div class="sheet" id="sheet">
+        <div class="sheet-handle" id="sheetHandle"></div>
+        <div class="p-head" style="border-top:none">
+          <span class="picon"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
+          <span class="ptitle">关联</span>
+          <span class="pacts"><button class="ibtn" id="sheetClose" title="关闭"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        </div>
+        <div class="doc-path-line" id="sheetPath" title=""></div>
+        <div class="rel-scroll" id="sheetScroll"></div>
+      </div>
+    </div>
+    <div class="g-card" style="max-width:340px">
+      <div class="g-title">移动态说明</div>
+      <div class="g-desc" style="margin-bottom:10px">
+        点 backdrop 或关闭钮收起；手柄可拖（演示态仅点击收起）。
+      </div>
+      <button class="demo-btn" id="sheetToggle">打开「关联」底部抽屉</button>
+      <div class="g-desc" style="margin-top:10px">
+        入口路径：顶栏「更多」→「关联」（现有移动入口，与当前方案相同，零新增入口）。
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 稿尾取舍说明 -->
+<footer class="notes">
+  <div class="g-title">取舍说明（本稿立场）</div>
+  <ul>
+    <li><b>内容件零分叉</b>：候选① 与当前方案共用同一套「你的链接 / 机器建议」内容件与空态规则，两方案的差异只在<b>落位与容器</b>，对比时内容不构成变量。</li>
+    <li><b>候选① 的代价</b>：打开侧栏时 680px 中栏左移（主阅读布局变化）；移动端需新增 bottom sheet 机制；侧栏没有独立深链维度（无法单独分享/直达「某文档的关联」）。</li>
+    <li><b>候选① 的收益</b>：关联内容贴正文（读的时候一眼可见，不用切面）；文档切换时侧栏自动跟随，浏览多篇文档时「关联」始终在场；关闭态零占位，无常驻空侧栏。</li>
+    <li><b>写动作归属</b>：忽略按钮在侧栏 chrome 而非只读预览正文内——前轮否决理由 3 被部分回应，但侧栏仍是只读上下文的投影，与当前方案「控制台 = 状态迁移面」的维度分离相比，语义边界更模糊。</li>
+  </ul>
+</footer>
+<script>
+(function(){
+  'use strict';
+  /* ── 数据（mock；形状 = GET /api/memory/doc/{path} 的 {path, links, suggestions}）── */
+  var DOCS = {
+    a: {
+      path: 'projects/md-repo/specs/2026-09-27-md-sync-design.md',
+      preview: '<h1>md-sync 设计</h1>'
+        + '<p>vault 目录既是数据存储，也是 Obsidian vault。本文档描述服务端–客户端同步协议、索引子系统与变更台账的总体设计。</p>'
+        + '<h2>目标</h2><ul>'
+        + '<li>LAN 内多设备同步，无认证、无 HTTPS</li>'
+        + '<li>两级 SQLite：<code>index.db</code>（可重建）+ <code>ledger.db</code>（权威）</li>'
+        + '<li>删除进 <code>.trash</code>，完全可恢复</li></ul>'
+        + '<h2>同步协议</h2>'
+        + '<p>客户端轮询 <code>/api/sync</code>，按 hash 比对得到 to_push / to_pull / to_delete / conflict 与 recent_moves 两组增量。</p>'
+        + '<blockquote>冲突文件存为 {stem}.conflict-{device}{suffix}，本地版本保持不动。</blockquote>'
+        + '<h2>变更台账</h2>'
+        + '<p><code>change_log</code> 的唯一写面是 ledger：agent 写工具在写入后同步记账，watcher 消费端兜底归因未登记的外部写入。</p>'
+        + '<h2>关联呈现</h2>'
+        + '<p>文档关联分两层：用户 wikilink（正文事实）与机器建议（relatedness DB 投影，可忽略）。打开顶栏「关联」查看右侧栏。</p>',
+      links: [
+        'projects/md-repo/adr/2026-10-31-ledger-file-split.md',
+        'projects/md-repo/plans/2026-11-02-console-v5.md'
+      ],
+      suggestions: [
+        { path: 'projects/md-repo/specs/2026-10-21-memory-console.md', basis: '共享 3 个来源 · 共现 12 次（30d）' },
+        { path: 'projects/md-repo/adr/2026-11-04-agent-write-ledger.md', basis: '引用同一术语 change_log · 近 7d 共同编辑' },
+        { path: 'notes/reading/2026-09-12-linking-essays.md', basis: 'embedding 相似度 0.82 · 主题「双向链接」' }
+      ]
+    },
+    b: {
+      path: 'notes/reading/2026-09-12-linking-essays.md',
+      preview: '<h1>双向链接笔记</h1>'
+        + '<p>wikilink 是 vault 的原子单位。一条链接同时是导航、引用和图边。</p>'
+        + '<h2>为什么反向链接重要</h2>'
+        + '<p>写作者只维护出链；反向链接由索引重建。机器的任务是把「应该存在但尚未写出」的边找出来。</p>'
+        + '<h2>与同步的关系</h2>'
+        + '<p>链接解析发生在索引侧，不进入同步协议；<code>graph</code> 表可随 index.db 整体重建。</p>',
+      links: [],
+      suggestions: [
+        { path: 'projects/md-repo/specs/2026-09-27-md-sync-design.md', basis: '引用同一术语 wikilink · 共现 5 次（30d）' },
+        { path: 'notes/reading/2026-08-30-zettelkasten-notes.md', basis: 'embedding 相似度 0.78 · 主题「笔记链接」' }
+      ]
+    },
+    c: {
+      path: 'projects/md-repo/plans/2026-11-02-console-v5.md',
+      preview: '<h1>console v5 剪枝计划</h1>'
+        + '<p>面板回到纯审查队列：L0 状态行 + feed 时间轴，九格脉搏与触发行整体移除。</p>'
+        + '<h2>剪枝清单</h2><ul>'
+        + '<li>v3 九格脉搏 → 监控页①九格</li>'
+        + '<li>触发条 → 监控页③后台任务</li>'
+        + '<li>召回块 → 监控页⑤召回</li></ul>'
+        + '<p>面板只保留人要做判断的东西：待审、在途、终态痕迹。</p>',
+      links: ['projects/md-repo/specs/2026-10-21-memory-console.md'],
+      suggestions: []
+    }
+  };
+
+  var state = { doc: 'a', mode: 'full', sideOpen: true, sheetOpen: false };
+
+  var $ = function(id){ return document.getElementById(id); };
+  var IC = {
+    file: '<svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>',
+    rel: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>'
+  };
+
+  /* 当前文档的关联数据（mode = 演示用数据状态覆盖） */
+  function curData(){
+    var d = DOCS[state.doc];
+    return {
+      path: d.path,
+      links: state.mode === 'nolinks' ? [] : d.links.slice(),
+      suggestions: state.mode === 'nomach' ? [] : d.suggestions.slice()
+    };
+  }
+
+  /* 侧栏内容（与当前方案文档面同构：块1 你的链接 / 块2 机器建议；
+     块1 空态 = 单行「本文档没有出链」节仍渲染；块2 空态 = 整节不渲染，无常驻空位） */
+  function blocksHTML(data){
+    var h = '';
+    h += '<div class="c-sec"><div class="c-sec-h"><span>你的链接</span><span class="cnt">' + data.links.length + '</span></div>';
+    if (!data.links.length) {
+      h += '<div class="doc-none">本文档没有出链</div>';
+    } else {
+      data.links.forEach(function(p){
+        h += '<button class="doc-row" type="button" title="' + p + '"><div class="doc-row-line">'
+          + '<span class="doc-ic">' + IC.file + '</span><span class="doc-row-path">' + p + '</span></div></button>';
+      });
+    }
+    h += '</div>';
+    if (data.suggestions.length) {
+      h += '<div class="c-sec"><div class="c-sec-h" title="系统发现、正文尚未收录的关联"><span>机器建议</span><span class="cnt hot">' + data.suggestions.length + '</span></div>';
+      data.suggestions.forEach(function(s){
+        h += '<div class="doc-row mach" title="' + s.path + '"><div class="doc-row-line">'
+          + '<span class="doc-ic mach-ic">' + IC.rel + '</span><span class="doc-row-path">' + s.path + '</span>'
+          + '<button class="doc-ignore" type="button">忽略</button></div>'
+          + '<div class="doc-basis" title="' + s.basis + '">依据：' + s.basis + '</div></div>';
+      });
+      h += '</div>';
+    }
+    return h;
+  }
+
+  function renderSidebar(){
+    var data = curData();
+    $('relPath').textContent = data.path;   $('relPath').title = data.path;
+    $('relScroll').innerHTML = blocksHTML(data);
+    $('sheetPath').textContent = data.path; $('sheetPath').title = data.path;
+    $('sheetScroll').innerHTML = blocksHTML(data);
+  }
+
+  function renderPreview(){
+    var d = DOCS[state.doc];
+    $('previewEl').innerHTML = d.preview;
+    $('phonePreview').innerHTML = d.preview;
+    $('fnameEl').textContent = d.path;
+    $('phoneFname').textContent = d.path;
+  }
+
+  function replayAnim(el, cls){
+    el.classList.remove(cls);
+    void el.offsetWidth;
+    el.classList.add(cls);
+  }
+
+  /* 切文档：预览翻页（换文档唯一签名）+ 侧栏内容原地跟随（viewFade），开合状态保留 */
+  function switchDoc(key){
+    if (state.doc === key) return;
+    state.doc = key;
+    replayAnim($('docWrap'), 'page-turn');
+    replayAnim($('phoneDocWrap'), 'page-turn-fade');
+    renderPreview();
+    renderSidebar();
+    if (state.sideOpen) replayAnim($('relFace'), 'anim');
+    document.querySelectorAll('#treeEl .tree-file[data-doc]').forEach(function(b){
+      b.classList.toggle('active', b.getAttribute('data-doc') === key);
+    });
+    document.querySelectorAll('#docSeg .seg-btn').forEach(function(b){
+      b.classList.toggle('on', b.getAttribute('data-doc') === key);
+    });
+  }
+
+  function setMode(m){
+    if (state.mode === m) return;
+    state.mode = m;
+    document.querySelectorAll('#modeSeg .seg-btn').forEach(function(b){
+      b.classList.toggle('on', b.getAttribute('data-mode') === m);
+    });
+    renderSidebar();
+    if (state.sideOpen) replayAnim($('relFace'), 'anim');
+  }
+
+  /* 忽略 = 单边否决无确认：行淡出 .2s → 移除；计数更新；最后一条消失 → 块2 整节淡出移除 */
+  function onIgnoreClick(e){
+    var btn = e.target.closest('.doc-ignore');
+    if (!btn || btn.disabled) return;
+    var row = btn.closest('.doc-row.mach');
+    var sec = row && row.parentElement;
+    if (!sec) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    row.classList.add('fading');
+    setTimeout(function(){
+      row.remove();
+      var remaining = sec.querySelectorAll('.doc-row.mach:not(.fading)').length;
+      var cnt = sec.querySelector('.c-sec-h .cnt.hot');
+      if (cnt) cnt.textContent = remaining;
+      if (remaining === 0) {
+        sec.classList.add('leaving');
+        setTimeout(function(){ sec.remove(); }, 200);
+      }
+    }, 200);
+  }
+
+  /* 桌面侧栏开合 = 瞬时 width 切换（无 width 过渡，同 console-shell 纪律）+ 面入场 */
+  function setSide(open){
+    state.sideOpen = open;
+    $('relSide').classList.toggle('open', open);
+    $('relBtn').classList.toggle('rel-open', open);
+    if (open) replayAnim($('relFace'), 'anim');
+  }
+
+  /* 移动 bottom sheet */
+  function setSheet(open){
+    state.sheetOpen = open;
+    $('sheet').classList.toggle('open', open);
+    $('sheetBackdrop').classList.toggle('show', open);
+    $('sheetToggle').textContent = open ? '收起「关联」底部抽屉' : '打开「关联」底部抽屉';
+  }
+
+  /* ── 事件 ── */
+  $('relBtn').addEventListener('click', function(){ setSide(!state.sideOpen); });
+  $('relClose').addEventListener('click', function(){ setSide(false); });
+  $('sheetToggle').addEventListener('click', function(){ setSheet(!state.sheetOpen); });
+  $('sheetClose').addEventListener('click', function(){ setSheet(false); });
+  $('sheetBackdrop').addEventListener('click', function(){ setSheet(false); });
+  $('sheetHandle').addEventListener('click', function(){ setSheet(false); });
+  document.querySelectorAll('#treeEl .tree-file[data-doc]').forEach(function(b){
+    b.addEventListener('click', function(){ switchDoc(b.getAttribute('data-doc')); });
+  });
+  document.querySelectorAll('#docSeg .seg-btn').forEach(function(b){
+    b.addEventListener('click', function(){ switchDoc(b.getAttribute('data-doc')); });
+  });
+  document.querySelectorAll('#modeSeg .seg-btn').forEach(function(b){
+    b.addEventListener('click', function(){ setMode(b.getAttribute('data-mode')); });
+  });
+  document.addEventListener('click', onIgnoreClick);
+
+  /* ── 对照区（当前方案静态参照：文档 A 全数据，同内容件）── */
+  (function(){
+    var d = DOCS.a;
+    var h = '<div class="c-sec"><div class="c-sec-h"><span>你的链接</span><span class="cnt">' + d.links.length + '</span></div>';
+    d.links.forEach(function(p){
+      h += '<button class="doc-row" type="button" title="' + p + '"><div class="doc-row-line">'
+        + '<span class="doc-ic">' + IC.file + '</span><span class="doc-row-path">' + p + '</span></div></button>';
+    });
+    h += '</div>';
+    h += '<div class="c-sec"><div class="c-sec-h" title="系统发现、正文尚未收录的关联"><span>机器建议</span><span class="cnt hot">' + d.suggestions.length + '</span></div>';
+    d.suggestions.forEach(function(s){
+      h += '<div class="doc-row mach" title="' + s.path + '"><div class="doc-row-line">'
+        + '<span class="doc-ic mach-ic">' + IC.rel + '</span><span class="doc-row-path">' + s.path + '</span>'
+        + '<button class="doc-ignore" type="button">忽略</button></div>'
+        + '<div class="doc-basis" title="' + s.basis + '">依据：' + s.basis + '</div></div>';
+    });
+    h += '</div>';
+    $('cmpScroll').innerHTML = h;
+  })();
+
+  /* ── 初始渲染 ── */
+  renderPreview();
+  renderSidebar();
+})();
+</script>
+</body>
+</html>
