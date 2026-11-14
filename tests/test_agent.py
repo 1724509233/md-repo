@@ -1498,3 +1498,34 @@ def test_tool_result_meta_in_sse_not_in_llm_channel(tmp_path: Path):
     assert tool_msgs, "expected a tool message in agent.messages"
     assert tool_msgs[0].get("content") == "notes/a.md"
     assert "meta" not in tool_msgs[0], "meta must not leak into the LLM channel"
+
+
+def test_system_reminder_none_and_empty_skipped(tmp_path: Path):
+    """R4: a SystemReminder whose render() returns None or '' is NOT injected
+    (no <system-reminder>None</system-reminder> / empty message); a non-empty
+    one (TimeSystemReminder) still injects exactly one reminder message."""
+    from server.agent import Agent, AgentSpec, ModelConfig
+    from server.agent.reminders import SystemReminder, TimeSystemReminder
+
+    class NoneReminder(SystemReminder):
+        def render(self) -> str | None:
+            return None
+
+    class EmptyReminder(SystemReminder):
+        def render(self) -> str | None:
+            return ""
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    spec = AgentSpec(
+        system_prompt="base",
+        model=ModelConfig(model_id="m", base_url="http://x", api_key="k"),
+        tools=[],
+        system_reminders=[NoneReminder(), EmptyReminder(), TimeSystemReminder()],
+        vault_dir=vault,
+    )
+    agent = Agent(spec)
+    reminder_msgs = [m for m in agent.messages
+                     if m["role"] == "system"
+                     and m["content"].startswith("<system-reminder>")]
+    assert len(reminder_msgs) == 1  # only TimeSystemReminder; None + '' skipped

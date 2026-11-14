@@ -13,11 +13,15 @@ from abc import ABC, abstractmethod
 
 
 class SystemReminder(ABC):
-    """Injected once at agent initialization as a system message."""
+    """Injected once at agent initialization as a system message.
+
+    ``render()`` returns the reminder body, or ``None``/empty to skip
+    injection (the agent wraps a non-empty body in ``<system-reminder>``).
+    """
 
     @abstractmethod
-    def render(self) -> str:
-        """Return the reminder body (the agent wraps it in <system-reminder>)."""
+    def render(self) -> str | None:
+        """Return the reminder body, or None/empty to skip injection."""
 
 
 class UserReminder(ABC):

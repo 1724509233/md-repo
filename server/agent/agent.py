@@ -26,7 +26,9 @@ class Agent:
         if not messages:
             messages = [{"role": "system", "content": spec.system_prompt}]
             for r in spec.system_reminders:
-                messages.append({"role": "system", "content": f"<system-reminder>{r.render()}</system-reminder>"})
+                body = r.render()
+                if body:
+                    messages.append({"role": "system", "content": f"<system-reminder>{body}</system-reminder>"})
         self._messages = messages
         self._pending_confirms: dict[str, dict] = {}
         self._last_read_ts: dict[str, float] = {}
