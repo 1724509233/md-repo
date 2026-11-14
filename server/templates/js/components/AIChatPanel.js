@@ -48,6 +48,12 @@ export const AIChatPanel = {
 
     let currentTurn = null
     let sendChain = Promise.resolve()
+    // 会话内最近一次 search_docs 的 query（tool_call 事件已知）——ai 面点击
+    // 落账的 query 归因（spec 2026-11-13 §4.4：可空，无搜索时 ''）
+    let lastSearchQuery = ''
+    // 本会话已见的工具调用数（spec 2026-11-13 §5.4 降级口径）：citations 全 ungrounded
+    // 且会话无工具调用 = 重启后证据集空的误报场景 → 摘要不显示警示色
+    let sessionToolCalls = 0
 
     // 流式直写文本的展示归一（仅显示用，lastBlock.text 保留原文供 finishTurn 的 markdown 渲染）：
     // LLM 流式原文常带行首/行尾换行与多个连续空行（如 "\n" 前导 chunk、段尾 "\n\n\n"），
@@ -260,6 +266,10 @@ export const AIChatPanel = {
                   }
                   break
                 case 'tool_call':
+                  if (evt.name === 'search_docs' && evt.args && evt.args.query != null) {
+                    lastSearchQuery = String(evt.args.query)
+                  }
+                  sessionToolCalls++ // §5.4 降级口径计数（会话级，新会话重置）
                   if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = false }
                   { const prev = currentTurn.blocks[currentTurn.blocks.length - 1]
                     if (prev && prev.type === 'thinking') prev.expanded = false } // 工具块垫底 → 思考块自动收起（随下方 blocksLen 写入的 re-render 生效）
@@ -291,6 +301,8 @@ export const AIChatPanel = {
                     // emit 前必须合并 tool_call 块的 name/args（等价旧 HTML UI 从 dataset.toolName/
                     // args 恢复的做法），否则 app.js 快速路径整体失效（回归史见其 handleToolResult 注）
                     emit('toolResult', { ...evt, name: tool.name, args: tool.args })
+                    // §2 D2 事件失效：AI 面 search_docs 结果到达 → 召回数据必变（监控页 L2 静默重拉）
+                    if (tool.name === 'search_docs' && appState) appState.recallDataVersion++
                   } else {
                     console.warn('[ai-chat] tool_result: no matching tool for id', evt.id)
                   }
@@ -310,7 +322,17 @@ export const AIChatPanel = {
                   tokenUsage.percent = evt.percent
                   break
                 case 'done':
-                  if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
+                  if (currentTurn) {
+                    currentTurn.streaming = false
+                    // 仅 reason=final 的 done 带 message_id/citations（spec §5.2）；
+                    // error/round_limit 与旧服务端（legacy 无字段）不带 → 不渲染反馈行（验收 5/8）
+                    if (evt.message_id) {
+                      currentTurn.messageId = evt.message_id
+                      currentTurn.citations = evt.citations || []
+                    }
+                    finishTurn(currentTurn)
+                    currentTurn = null
+                  }
                   break
               }
             } catch (e) { }
@@ -344,6 +366,35 @@ export const AIChatPanel = {
         if (tool) { tool.status = approved ? 'confirmed' : 'rejected' }
       }
       api.agentConfirm(id, approved, props.sessionId).catch(err => console.error('[ai-confirm]', err))
+    }
+
+    // ── 引用摘要 + 回答反馈（spec 2026-11-13 §5.3）──
+
+    // 摘要文案：「n 个来源，m 个未 grounded」（m=0 时省略后半——零信息不占正文，AGENTS 文案规范）
+    function citationSummary(msg) {
+      const c = msg.citations || []
+      if (!c.length) return ''
+      const ungrounded = c.filter(x => x.grounded === 'ungrounded').length
+      return ungrounded > 0 ? `${c.length} 个来源，${ungrounded} 个未 grounded` : `${c.length} 个来源`
+    }
+
+    // 警示色仅 m>0；降级口径（§5.4）：全 ungrounded 且会话无工具调用记录
+    //（重启后证据集空，首轮引用全 ungrounded 是误报）→ 不警示
+    function citationWarn(msg) {
+      const c = msg.citations || []
+      const ungrounded = c.filter(x => x.grounded === 'ungrounded').length
+      if (ungrounded === 0) return false
+      if (ungrounded === c.length && sessionToolCalls === 0) return false
+      return true
+    }
+
+    // 反馈切换：再点已选按钮 = 撤回。客户端永远 POST 按钮当前状态（D22：无隐式 toggle）；
+    // 服务端 null → 删行（幂等），非 null → upsert。失败静默（console），按钮态不回滚
+    //（单人工具，落账失败不阻塞交互；重试 = 再点一次）
+    function toggleFeedback(msg, verdict) {
+      const next = msg.verdict === verdict ? null : verdict
+      msg.verdict = next // shallowReactive 顶层属性 → 触发 1 次 re-render（aria-pressed/类名更新）
+      api.agentFeedback(props.sessionId, msg.messageId, next).catch(err => console.error('[ai-feedback]', err))
     }
 
     function toggleMode() {
@@ -418,6 +469,8 @@ export const AIChatPanel = {
       messages.value = []
       currentTurn = null
       inputText.value = ''
+      lastSearchQuery = '' // 新会话：清空搜索归因
+      sessionToolCalls = 0 // 新会话：重置 §5.4 降级口径计数
       setStatus('ready')
       loadAutoApprove()
     })
@@ -442,8 +495,10 @@ export const AIChatPanel = {
     return {
       ICONS_LOCAL, toolNames, appState, messages, inputText, status, aiMode, tokenUsage,
       inputEl, messagesEl, streamTextEl, thinkingTextEl, streamDisplayText, sendChat, sendConfirm, toggleBlock, toggleMode, onKeydown, stopChat, newSession,
+      citationSummary, citationWarn, toggleFeedback,
       autoApprove, toggleAutoApprove,
-      toolKeyParam, toolResultSummary
+      toolKeyParam, toolResultSummary,
+      lastSearchQuery: () => lastSearchQuery
     }
   },
   template: `
@@ -575,6 +630,18 @@ export const AIChatPanel = {
                 </div>
               </div>
             </template>
+            <!-- 引用摘要 + 反馈行（spec 2026-11-13 §5.3）：done 后气泡底部出现。
+                 仅 done 带 message_id 时渲染（reason=final；error/round_limit 与 legacy 无字段 → 不出现，验收 5/8）；
+                 citations 空（非问答轮）→ 只出按钮不出摘要（§5.4）；
+                 警示色仅 m>0，全 ungrounded 且会话无工具调用 → 降级不警示（§5.4，验收 3） -->
+            <div v-if="!msg.streaming && msg.messageId" class="feedback-row">
+              <span v-if="msg.citations && msg.citations.length" class="cite-summary"
+                :class="{ 'cite-warn': citationWarn(msg) }">{{ citationSummary(msg) }}</span>
+              <button class="fb-btn" :class="{ 'is-on': msg.verdict === 'useful' }" title="有用"
+                :aria-pressed="msg.verdict === 'useful'" @click="toggleFeedback(msg, 'useful')">👍</button>
+              <button class="fb-btn" :class="{ 'is-on': msg.verdict === 'not_useful' }" title="没用"
+                :aria-pressed="msg.verdict === 'not_useful'" @click="toggleFeedback(msg, 'not_useful')">👎</button>
+            </div>
           </div>
         </div>
       </div>

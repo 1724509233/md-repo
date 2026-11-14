@@ -12,9 +12,10 @@ export const TopBar = {
     unreadCount: { type: Number, default: 0 },
     notifications: { type: Array, default: () => [] },
     tocOpen: { type: Boolean, default: false },
-    tocItems: { type: Array, default: () => [] }
+    tocItems: { type: Array, default: () => [] },
+    relOpen: { type: Boolean, default: false }   // 关联侧栏开启（spec §6.4 候选①；激活态反馈，只变色不变几何）
   },
-  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick'],
+  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
@@ -34,6 +35,10 @@ export const TopBar = {
 
     function toggleToc() {
       emit('toggleToc')
+    }
+
+    function openDocFace() {
+      emit('open-doc-face')
     }
 
     function onTocClick(item) {
@@ -61,7 +66,7 @@ export const TopBar = {
     watch(() => props.moreMenuOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
     watch(() => props.notifOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
 
-    return { ICONS_LOCAL, rootEl, setMode, save, download, toggleToc, onTocClick }
+    return { ICONS_LOCAL, rootEl, setMode, save, download, toggleToc, onTocClick, openDocFace }
   },
   template: `
     <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative">
@@ -99,6 +104,17 @@ export const TopBar = {
           <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
         </button>
       </div>
+
+      <!-- 关联（spec §6.4 候选①）：当前文档的关联侧栏（「你的链接」/「机器建议」两块）；
+           按钮恒定渲染（顶栏零跳变，D5 同口径）；未选文档 → disabled（无指针、无 hover）；
+           激活态 = 侧栏开启反馈（.rel-open 同 .toc-btn-open 口径：只变色不变几何，顶栏零跳变） -->
+      <button data-doc-face-toggle
+        class="topbar-btn hidden lg:inline-flex"
+        :class="{ 'rel-open': relOpen }"
+        :disabled="!currentPath"
+        @click="openDocFace" title="本文档的关联文档" aria-label="本文档的关联文档">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
+      </button>
 
       <!-- 目录（P4-3）：桌面 图标+文字；移动 28px 图标钮（铃铛/更多同规格，文案进 tooltip）。
            按钮恒定渲染（有无标题不显隐 → 顶栏零跳变，D5）；激活态 = 浮层开启反馈，只变色不变几何 -->
@@ -139,6 +155,11 @@ export const TopBar = {
           <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('setMode', 'preview'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
+          </button>
+          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
+            :disabled="!currentPath"
+            @click="$emit('open-doc-face'); $emit('toggleMoreMenu')">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
           </button>
           <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('save'); $emit('toggleMoreMenu')">

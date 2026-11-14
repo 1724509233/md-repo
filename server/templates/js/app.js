@@ -13,6 +13,7 @@ import { AIChatPanel } from './components/AIChatPanel.js'
 import { MobileSheet } from './components/MobileSheet.js'
 import { ConflictBanner } from './components/ConflictBanner.js'
 import { MemoryConsole } from './components/MemoryConsole.js'
+import { DocRelated } from './components/DocRelated.js'
 import { MonitorPage } from './components/MonitorPage.js'
 import { ICONS } from './utils/icons.js'
 
@@ -40,7 +41,10 @@ const state = reactive({
   memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
   memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
   memoryReport: null,     // 报告深链 relpath（index/reports/**，通知 report_paths[0]；null = 未开；渲染归 L5）
+  relOpen: false,         // 关联侧栏开合（spec §6.4 候选①：预览区右侧 280px；≥861px；内容 = 当前文档）
+  relSheetOpen: false,    // 关联 bottom sheet 开合（spec §6.4 候选① 移动 ≤860px：80vh 抽屉）
   memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回 + snapshot 降级计数）
+  recallDataVersion: 0,   // 召回数据版本号：每次搜索完成 / search_docs tool_result ++（§2 D2 事件失效：监控页 L2 静默重拉的客户端信号）
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
@@ -54,6 +58,8 @@ const activePanel = ref('file')
 const editorPaneRef = ref(null)
 // ─── FileTree ref（spec §4.1：expandToPath / revealActive）───
 const fileTreeRef = ref(null)
+// ─── AIChatPanel ref（点击落账：ai 面 query 归因 = 会话内最近 search_docs query）───
+const aiChatRef = ref(null)
 // ─── 目录条目（P4-3）：文档重渲染后重建（flush post = v-html 已 patch，与 renderedHtml 同款时机）───
 const tocItems = ref([])
 
@@ -481,6 +487,14 @@ function onMemoryRailClick() {
   state.memoryOpen = !state.memoryOpen
 }
 
+// 顶栏「关联」（spec §6.4 候选①）：切换关联侧栏（≥861px）/ bottom sheet（≤860px）；
+// 未选文档 → 按钮 disabled（openDoc 前置守卫双保险）；无独立深链维度（侧栏 = 当前文档的状态）
+function openDocFace() {
+  if (!state.currentPath) return
+  if (window.innerWidth <= 860) state.relSheetOpen = !state.relSheetOpen
+  else state.relOpen = !state.relOpen
+}
+
 // 详情面「来源」跳转：打开原文（移动端先收起 console overlay，否则 editor 被盖住）
 function onMemoryOpenDoc(path) {
   if (window.innerWidth <= 860) state.memoryOpen = false
@@ -613,6 +627,13 @@ export function createApp() {
       // 面板切到回收站 → 刷新列表（trash 小，每次进入都取新；操作后另在 trashAct 内刷新）
       watch(activePanel, (p) => { if (p === 'trash') loadTrash() })
 
+      // 关联呈现跟随当前文档（spec §6.4 候选①）：内容跟随由 DocRelated 组件的 props.path watch 承担
+      // （侧栏/sheet 打开期间切换文档 → 内容原地换，开合状态保留）；文档消失（null）→ 收起容器
+      watch(
+        () => state.currentPath,
+        (p) => { if (!p) { state.relOpen = false; state.relSheetOpen = false } }
+      )
+
       // 桌面→移动 resize：强制 activePanel 回 'file'（防止搜索 face 带进文件 overlay）
       watch(
         () => window.innerWidth,
@@ -624,6 +645,8 @@ export function createApp() {
             state.memoryOpen = false    // resize 切入移动端：关闭控制台（不携 in-flow 态进 overlay 态）
             state.memoryDetail = null
             state.memoryReport = null
+            state.relOpen = false       // resize 切入移动端：收起关联侧栏（同纪律；sheet 由入口重开）
+            state.relSheetOpen = false
           }
         }
       )
@@ -652,11 +675,24 @@ export function createApp() {
 
         // vault 软链跳转（单一委托 click）：作用域严格限定 #preview（预览区）与 #ai-messages（AI 聊天容器）；
         // MemoryConsole 监控页不接跳转。活链带 data-vault-path（死链/歧义无该属性 → 选择器不命中，本就不可点）。
+        // 点击落账（spec 2026-11-13 §4.4）：openDoc 之前发出、不 await（fire-and-forget，恒 204）；
+        // filetree 点击无 md-softlink 不经过此处（D5 不落账）；未遂点击（openDoc 404）不补记（D8）。
         document.addEventListener('click', (e) => {
           const a = e.target && e.target.closest ? e.target.closest('a.md-softlink[data-vault-path]') : null
           if (!a) return
-          if (!a.closest('#preview') && !a.closest('#ai-messages')) return
+          const inAi = !!a.closest('#ai-messages')
+          if (!inAi && !a.closest('#preview')) return
           e.preventDefault()
+          if (inAi) {
+            api.recallClick({
+              path: a.getAttribute('data-vault-path'),
+              via: 'ai',
+              query: aiChatRef.value ? aiChatRef.value.lastSearchQuery() : '',
+              session_id: state.sessionId
+            })
+          } else {
+            api.recallClick({ path: a.getAttribute('data-vault-path'), via: 'preview' })
+          }
           openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'))
         })
 
@@ -730,10 +766,10 @@ export function createApp() {
       }
 
       return {
-        state, editorPaneRef, fileTreeRef, isDesktop, ICONS,
+        state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
-        onMemoryRailClick, onMemoryOpenDoc, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
+        onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
@@ -848,21 +884,31 @@ export function createApp() {
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
-              :toc-open="state.tocOpen" :toc-items="tocItems"
+              :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"
+              @open-doc-face="openDocFace"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
             <!-- 编辑器面：监控页 L1 打开时收起（v-show 保持 DOM 与编辑态；两面互斥，
                  监控页 = 定稿设计场景 02 独立页面，组件自持 .mwrap 滚动层）；
-                 .doc-enter = 自监控页返回时的入场（display:none→block 自动重放；reduced-motion → 纯 opacity） -->
-            <div v-show="!state.monitoring" class="doc-enter flex-1 overflow-y-auto p-4 md:p-6">
-              <ConflictBanner v-if="state.conflict"
-                :tool-name="state.conflict.toolName" :path="state.conflict.path"
-                @accept="acceptConflict" @dismiss="state.conflict = null" />
-              <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
-                @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
+                 .doc-enter = 自监控页返回时的入场（display:none→block 自动重放；reduced-motion → 纯 opacity）；
+                 文档区 = 横向 flex（spec §6.4 候选①）：滚动中栏（680px 列在剩余空间一次性重居中）
+                 + 关联侧栏（右侧 280px，关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
+                 ≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
+            <div v-show="!state.monitoring" class="doc-enter flex-1 flex overflow-hidden">
+              <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
+                <ConflictBanner v-if="state.conflict"
+                  :tool-name="state.conflict.toolName" :path="state.conflict.path"
+                  @accept="acceptConflict" @dismiss="state.conflict = null" />
+                <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+                  @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
+              </div>
+              <aside class="rel-side" :class="{ open: state.relOpen }">
+                <DocRelated v-if="state.relOpen" :path="state.currentPath"
+                  @open-doc="onMemoryOpenDoc($event)" @close="state.relOpen = false" />
+              </aside>
             </div>
             <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
             <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc" />
@@ -917,10 +963,22 @@ export function createApp() {
           <!-- 移动端 backdrop + 拖拽手柄 -->
           <MobileSheet :open="state.aiOpen" @close="toggleAI(false)" />
 
+          <!-- 关联 bottom sheet（spec §6.4 候选① 移动 ≤860px：80vh 底部抽屉，.search-drawer 规格 1:1；
+               四路关闭 = 关闭钮 / backdrop / 手柄点击 / 顶栏「更多」→「关联」再点一次；
+               ≥861px 由 style.css ID 规则隐藏，侧栏承载） -->
+          <div id="rel-sheet-backdrop" class="rel-sheet-backdrop"
+            :class="{ show: state.relSheetOpen }"
+            @click="state.relSheetOpen = false"></div>
+          <div id="rel-sheet" class="rel-sheet" :class="{ open: state.relSheetOpen }">
+            <div class="rel-sheet-handle" @click="state.relSheetOpen = false"></div>
+            <DocRelated v-if="state.relSheetOpen" :path="state.currentPath"
+              @open-doc="onMemoryOpenDoc($event)" @close="state.relSheetOpen = false" />
+          </div>
+
           <!-- AI 面板 -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
             :class="{ open: state.aiOpen }">
-            <AIChatPanel v-show="state.aiOpen"
+            <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
               @tool-result="handleToolResult" @new-session="startNewSession"
               @close="toggleAI(false)" />
@@ -953,6 +1011,7 @@ export function createApp() {
   app.component('MobileSheet', MobileSheet)
   app.component('ConflictBanner', ConflictBanner)
   app.component('MemoryConsole', MemoryConsole)
+  app.component('DocRelated', DocRelated)
   app.component('MonitorPage', MonitorPage)
 
   return app

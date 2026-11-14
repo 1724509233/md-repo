@@ -1,9 +1,9 @@
 /* SearchPanel 组件：搜索边栏页（spec §3.3）
- * 输入框 + tag 选择器行 + 分层召回 meta 行 + 平铺富卡片（相关性条 + via 徽标）+ 键盘导航 + 展示更多
+ * 输入框 + tag 选择器行 + 召回 meta 行（relaxed/fuzzy 档）+ 平铺富卡片（相关性条 + via 徽标）+ 键盘导航 + 展示更多（显式 fuzzy）
  * 权重控件（面板头右侧 popover）+ 共享搜索控制器（utils/search.js），行为与树内下拉一致（spec §4.3）。
  * tag 融合搜索面（spec 2026-11-13 §3）：tag 选择器 / 排序权重 popover / via 徽标 / #tag 提示。
  */
-const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } = Vue
+const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights } from '../utils/search.js'
 
@@ -67,19 +67,20 @@ export const SearchPanel = {
       results: ref([]),
       loading: ref(false),
       activeIndex: ref(-1),
-      prefetched: ref([]),
-      prefetching: ref(false),
-      prefetchDone: ref(false),
-      resultTier: ref('strict') // 产出当前结果的档位（strict/near/relaxed/fuzzy）
+      moreLoading: ref(false),  // 显式 fuzzy 请求进行中（「展示更多」点击后）
+      fuzzyDone: ref(false),    // fuzzy 通道已关闭（跑过 / 零命中已耗尽 / 请求失败）
+      resultTier: ref('relaxed') // 产出当前结果的档位（relaxed/fuzzy，spec 2026-11-13 §3）
     }
 
+    const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state,
-      focusInput() { if (inputEl.value) inputEl.value.focus() }
+      focusInput() { if (inputEl.value) inputEl.value.focus() },
+      onSearchComplete() { if (appState) appState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
 
     // 模板用顶层 ref（嵌套 ref 写入如 activeIndex = i 会把 ref 替换成裸值）
-    const { results, loading, activeIndex, prefetched, prefetching, prefetchDone, resultTier } = state
+    const { results, loading, activeIndex, moreLoading, fuzzyDone, resultTier } = state
 
     watch(searchQuery, (q) => search.setInput(q))
 
@@ -163,10 +164,13 @@ export const SearchPanel = {
 
     const segmentCount = computed(() => shaped.value.length)
     const docCount = computed(() => new Set(results.value.map(r => r.path)).size)
-    const moreRowCount = computed(() => countRows(prefetched.value))
     const shownRowCount = computed(() => countRows(results.value))
 
-    function pickItem(item) {
+    // 点击落账（spec 2026-11-13 §4）：via=search + query（产出当前结果的
+    // keywords，与服务端 recall_queries.query 同值）+ rank（1-based 项序号）；
+    // openDoc（onPick）之前发出、不 await（fire-and-forget，恒 204）
+    function pickItem(item, i) {
+      api.recallClick({ path: item.path, via: 'search', query: search.lastQuery(), rank: i + 1 })
       props.onPick(item.path, item.heading)
     }
 
@@ -181,7 +185,7 @@ export const SearchPanel = {
         scrollActiveIntoView()
       } else if (e.key === 'Enter') {
         const idx = activeIndex.value >= 0 ? activeIndex.value : 0
-        if (shaped.value[idx]) pickItem(shaped.value[idx])
+        if (shaped.value[idx]) pickItem(shaped.value[idx], idx)
       } else if (e.key === 'Escape') {
         showSort.value = false
         searchQuery.value = ''
@@ -202,8 +206,8 @@ export const SearchPanel = {
 
     return {
       searchQuery, inputEl, rootEl, shaped, segmentCount, docCount, resultTier,
-      results, loading, activeIndex, prefetched, prefetching, prefetchDone,
-      moreRowCount, shownRowCount, SEARCH_TOP_K,
+      results, loading, activeIndex, moreLoading, fuzzyDone,
+      shownRowCount, SEARCH_TOP_K,
       pickItem, onKeydown, renderSnippet, search,
       // ① tag 选择器
       tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
@@ -260,7 +264,7 @@ export const SearchPanel = {
           {{ tagsExpanded ? '收起' : '展开更多' }}
         </button>
       </div>
-      <!-- 分层召回 meta 行（spec §3.3）：真实档位 + 片段计数；加载态显示「检索中」 -->
+      <!-- 召回 meta 行（spec §3.3）：真实档位 + 片段计数；加载态显示「检索中」 -->
       <div v-if="searchQuery.trim()" class="sp-meta">
         <span v-if="loading && !results.length">检索中…</span>
         <span v-else>{{ segmentCount }} 个片段</span>
@@ -269,25 +273,25 @@ export const SearchPanel = {
 
       <!-- 结果区 -->
       <div class="sp-results">
-        <!-- 加载（含 strict 零结果时的自动续档） -->
+        <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
         <div v-if="loading && !results.length" class="sp-loading">
           <span class="search-spinner"></span>
           <span>搜索中…</span>
         </div>
-        <!-- 空态（全档位取完仍零结果） -->
-        <div v-else-if="!loading && !results.length && prefetchDone" class="sp-empty">
+        <!-- 空态（relaxed → fuzzy 回退后仍零结果 = 内容不在库里） -->
+        <div v-else-if="!loading && !results.length && fuzzyDone" class="sp-empty">
           <div class="sp-empty-ring">
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           </div>
           <div class="sp-empty-t1">无匹配</div>
-          <div class="sp-empty-t2">所有召回档位（strict → fuzzy）均未命中，换个关键词试试</div>
+          <div class="sp-empty-t2">换个关键词试试</div>
         </div>
         <!-- 平铺卡片：每个 segment 独立成卡 -->
         <template v-else>
           <div v-for="(item, i) in shaped" :key="item.path + '-' + i"
             class="sp-card" :class="{ active: i === activeIndex }"
             :title="item.path"
-            @click="pickItem(item)" @mouseenter="activeIndex = i">
+            @click="pickItem(item, i)" @mouseenter="activeIndex = i">
             <div class="sp-top">
               <span v-if="item.via === 'tag' || item.via === 'both'" class="sp-via-badge">tag</span>
               <span class="sp-name">{{ item.name }}</span>
@@ -298,21 +302,20 @@ export const SearchPanel = {
             <div class="sp-bar"><i :style="{ width: item.rel + '%' }"></i></div>
           </div>
 
-          <!-- 底部：预取占位 → 展示更多 + 进度行 → 耗尽终态 -->
-          <div v-if="prefetching && results.length > 0" class="sp-prefetching">
+          <!-- 底部：显式 fuzzy 请求进行中 → 展示更多（relaxed 有命中且 fuzzy 未跑）→ 耗尽终态 -->
+          <div v-if="moreLoading && results.length > 0" class="sp-prefetching">
             <span class="search-spinner search-spinner-sm"></span>
             <span>正在加载更多…</span>
           </div>
-          <div v-else-if="!prefetching && prefetchDone && prefetched.length > 0" class="sp-more-wrap">
+          <div v-else-if="!moreLoading && !fuzzyDone && results.length > 0" class="sp-more-wrap">
             <button class="search-more" @click="search.showMore()">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
-              展示 {{ moreRowCount }} 条更多
+              展示更多
             </button>
-            <div class="search-more-no sp-progress">已展示 {{ shownRowCount }}/{{ shownRowCount + moreRowCount }} 条匹配</div>
           </div>
-          <div v-else-if="!prefetching && prefetchDone && !prefetched.length && results.length > 0 && results.length < SEARCH_TOP_K" class="search-more-no">
+          <div v-else-if="!moreLoading && fuzzyDone && results.length > 0" class="search-more-no">
             已展示全部 {{ shownRowCount }} 条匹配
           </div>
         </template>

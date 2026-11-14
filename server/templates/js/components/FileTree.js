@@ -415,29 +415,31 @@ export const FileTree = {
       results: ref([]),
       loading: ref(false),
       activeIndex: ref(-1),
-      prefetched: ref([]),
-      prefetching: ref(false),
-      prefetchDone: ref(false)
+      moreLoading: ref(false),  // 显式 fuzzy 请求进行中（「展示更多」点击后）
+      fuzzyDone: ref(false)     // fuzzy 通道已关闭（跑过 / 零命中已耗尽 / 请求失败）
     }
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
       focusInput() {
         const input = document.querySelector('#search-input')
         if (input) input.focus() // 保证 ArrowUp/Down 继续可用
-      }
+      },
+      onSearchComplete() { fileState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
-    const { results, loading, activeIndex, prefetched, prefetching, prefetchDone } = searchState
+    const { results, loading, activeIndex, moreLoading, fuzzyDone } = searchState
     const searchOpen = computed(() => searchQuery.value.trim().length > 0)
 
     // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
     const shapedResults = computed(() => shapeSegments(results.value))
-    const moreRowCount = computed(() => countRows(prefetched.value))
     const shownRowCount = computed(() => countRows(results.value))
 
-    // 300ms 尾随防抖；query 变化即重置预取状态，回到 strict
+    // 300ms 尾随防抖；query 变化即重置状态，回到 relaxed
     watch(searchQuery, (q) => search.setInput(q))
 
-    function pickResult(item) {
+    // 点击落账（spec 2026-11-13 §4）：via=search + query（产出当前结果的
+    // keywords）+ rank（1-based 项序号）；select（openDoc）之前发出、不 await
+    function pickResult(item, i) {
+      api.recallClick({ path: item.path, via: 'search', query: search.lastQuery(), rank: i + 1 })
       emit('select', item.path, item.heading)
       searchQuery.value = ''
       search.resetToIdle()
@@ -454,7 +456,7 @@ export const FileTree = {
         scrollActiveIntoView()
       } else if (e.key === 'Enter') {
         const idx = activeIndex.value >= 0 ? activeIndex.value : 0
-        if (shapedResults.value[idx]) pickResult(shapedResults.value[idx])
+        if (shapedResults.value[idx]) pickResult(shapedResults.value[idx], idx)
       } else if (e.key === 'Escape') {
         searchQuery.value = ''
         search.resetToIdle()
@@ -523,7 +525,7 @@ export const FileTree = {
       ICONS, menu, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
-      prefetched, prefetching, prefetchDone, showMore: search.showMore, moreRowCount, shownRowCount, SEARCH_TOP_K,
+      moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
       expandToPath, revealActive, collapseAll
     }
   },
@@ -539,13 +541,13 @@ export const FileTree = {
 
         <!-- RAG 搜索下拉框 -->
         <div class="search-dropdown" v-show="searchOpen">
-          <!-- 加载（含 strict 零结果时的自动续档） -->
+          <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
           <div v-if="loading && !results.length" class="search-loading">
             <span class="search-spinner"></span>
             <span>搜索中…</span>
           </div>
-          <!-- 全空终态：所有档位取完仍零结果 -->
-          <div v-else-if="!loading && !results.length && prefetchDone" class="search-empty">
+          <!-- 全空终态：relaxed → fuzzy 回退后仍零结果 -->
+          <div v-else-if="!loading && !results.length && fuzzyDone" class="search-empty">
             <div class="search-empty-title">无匹配</div>
             <div class="search-empty-hint">换个关键词试试</div>
           </div>
@@ -553,26 +555,26 @@ export const FileTree = {
           <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
             class="search-item" :class="{ active: i === activeIndex }"
             :title="item.path"
-            @click="pickResult(item)" @mouseenter="activeIndex = i">
+            @click="pickResult(item, i)" @mouseenter="activeIndex = i">
             <div class="flex items-center gap-1.5">
               <span class="search-item-name">{{ item.name }}</span>
             </div>
             <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
           </button>
-          <!-- 底部区域：预取占位 → "展示 N 条更多"按钮 → 耗尽终态 -->
-          <div v-if="prefetching && results.length > 0" class="search-prefetching">
+          <!-- 底部区域：显式 fuzzy 请求进行中 → "展示更多"按钮（relaxed 有命中且 fuzzy 未跑）→ 耗尽终态 -->
+          <div v-if="moreLoading && results.length > 0" class="search-prefetching">
             <span class="search-spinner search-spinner-sm"></span>
             <span>正在加载更多…</span>
           </div>
-          <div v-else-if="!prefetching && prefetchDone && prefetched.length > 0" class="search-more-wrap">
+          <div v-else-if="!moreLoading && !fuzzyDone && results.length > 0" class="search-more-wrap">
             <button class="search-more" @click="showMore">
               <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
-              展示 {{ moreRowCount }} 条更多
+              展示更多
             </button>
           </div>
-          <div v-else-if="!prefetching && prefetchDone && !prefetched.length && results.length > 0 && results.length < SEARCH_TOP_K" class="search-more-no">
+          <div v-else-if="!moreLoading && fuzzyDone && results.length > 0" class="search-more-no">
             已展示全部 {{ shownRowCount }} 条匹配
           </div>
         </div>

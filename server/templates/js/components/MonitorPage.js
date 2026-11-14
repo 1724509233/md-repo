@@ -224,27 +224,61 @@ export const MonitorPage = {
     const allZeroRecall = computed(() =>
       !recallError.value && !recall.value.failed_7d && !recall.value.docs_tracked && recallTop.value.length === 0)
 
-    // L2 = 全页唯一按需层：按钮触发一次 GET /api/recall/stats（0fr→1fr 展开，aria-expanded 同步）；
+    // L2 = 全页唯一按需层：按钮触发 GET /api/recall/stats（0fr→1fr 展开，aria-expanded 同步）；
     // docs 行附真实 counts.human/on_demand/synthetic 细分列（增强，超出设计稿三列形态）；
     // failed 行「7d 次数」= 窗口内同 query 出现次数（≤200 行内口径）
+    // 刷新三件套（spec 2026-11-13 §2 D2，全客户端）：TTL 5min + 事件失效静默重拉 + 手动刷新
+    const L2_TTL_MS = 5 * 60 * 1000 // 5min = 10 个轮询周期，深钻足够新鲜（常量进组件，不进 config）
     const l2Open = ref(false)
     const l2Loading = ref(false)
     const l2Error = ref(null)
     const l2Data = ref(null)   // 原始端点对象 {docs, failed_queries, failed_count, ...}
-    async function toggleL2() {
-      l2Open.value = !l2Open.value
-      if (l2Open.value && !l2Data.value && !l2Loading.value) {
-        l2Loading.value = true
+    const l2LoadedAt = ref(0)  // ms epoch；0 = 尚未加载
+    const l2Busy = ref(false)  // 在途标志（silent 重拉不设 l2Loading → 需独立防并发；刷新按钮禁用态）
+    // silent = 事件失效静默重拉：l2Data 原子替换，不折叠、不闪 loading；失败保留旧数据（best-effort）
+    async function loadL2(silent) {
+      if (l2Busy.value) return
+      l2Busy.value = true
+      if (!silent) { l2Loading.value = true; l2Error.value = null }
+      try {
+        l2Data.value = await api.getRecallStats()
+        l2LoadedAt.value = Date.now()
         l2Error.value = null
-        try {
-          l2Data.value = await api.getRecallStats()
-        } catch (e) {
-          l2Error.value = e.message
-        } finally {
-          l2Loading.value = false
-        }
+      } catch (e) {
+        if (!silent) l2Error.value = e.message
+      } finally {
+        l2Busy.value = false
+        if (!silent) l2Loading.value = false
       }
     }
+    async function toggleL2() {
+      l2Open.value = !l2Open.value
+      // TTL：展开时数据缺失或 >5min → 重拉（loading 态可见）
+      if (l2Open.value && !l2Busy.value && (!l2Data.value || Date.now() - l2LoadedAt.value > L2_TTL_MS)) {
+        await loadL2(false)
+      }
+    }
+    // 事件失效：搜索完成 / search_docs tool_result → recallDataVersion++（app.js state）
+    // → L2 已展开则静默重拉（原子替换，不折叠不闪 loading）
+    watch(
+      () => state.recallDataVersion,
+      () => {
+        if (l2Open.value && l2Data.value) loadL2(true)
+      }
+    )
+    // 手动刷新：覆盖「我在别处搜过、这里想立刻看」（loading 态可见）
+    function refreshL2() { loadL2(false) }
+
+    // §2.4 通道行：recall_queries 7d 按 source 计数（数据已在 /api/memory/status，零服务端改动）；
+    // 全零 → 空串（行隐藏）；降序排列（示例口径「web 12 · agent 8 · mcp 3」）
+    const bySourceLine = computed(() => {
+      const src = (state.memoryStatus && state.memoryStatus.recall && state.memoryStatus.recall.by_source_7d) || {}
+      const parts = Object.entries(src)
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => k + ' ' + n)
+      return parts.length ? '7d 搜索：' + parts.join(' · ') : ''
+    })
     const l2FailedRows = computed(() => {
       const rows = (l2Data.value && l2Data.value.failed_queries) || []
       const count = {}
@@ -268,7 +302,7 @@ export const MonitorPage = {
     return {
       nine, failedCount, anomalies, agents, executor,
       recall, recallError, recallSum, recallMax, wLines, allZeroRecall,
-      l2Open, l2Loading, l2Error, l2Data, l2FailedRows, toggleL2,
+      l2Open, l2Loading, l2Error, l2Data, l2FailedRows, toggleL2, refreshL2, l2Busy, bySourceLine,
       finals, back, openReport, fmtDT, relRun,
       typeIcons: TYPE_ICONS, typeIconDefault: TYPE_ICON_DEFAULT,
       mwrapRef, alertFresh, updatedAt
@@ -370,11 +404,11 @@ export const MonitorPage = {
             <div class="mc-h"><span class="mc-t">召回</span></div>
             <template v-if="!recallError">
               <div class="rcl-stats">
-                <div class="rcl-stat"><div class="k">7d 无命中</div><div class="v">{{ recall.failed_7d || 0 }}</div></div>
+                <div class="rcl-stat"><div class="k" title="窗口内零命中搜索次数（1 行 = 1 次搜索动作，§3 F1 修复后无分档重复）">7d 无命中</div><div class="v">{{ recall.failed_7d || 0 }}</div></div>
                 <div class="rcl-stat"><div class="k">在轨文档</div><div class="v">{{ recall.docs_tracked || 0 }}</div></div>
                 <div class="rcl-stat"><div class="k">top5 加权</div><div class="v">{{ recallSum.toFixed(1) }}</div></div>
               </div>
-              <div v-if="wLines.length" class="wbar" title="宽度 ∝ weighted（最大 = 100%）· 静态快照">
+              <div v-if="wLines.length" class="wbar" title="加权 = 每次命中按 0.5^(距今天数/30) 累加，合成流量不计 · 宽度按 top5 最大值归一">
                 <div v-for="t in wLines" :key="t.path" class="wline mm-wline">
                   <span class="p" :title="t.path">{{ t.path }}<span v-if="t.lh" class="lh">{{ t.lh }}</span></span>
                   <span class="bar"><i :style="{ width: t.pct + '%' }"></i></span>
@@ -392,6 +426,13 @@ export const MonitorPage = {
             <div class="fold" :class="{ open: l2Open }" id="mp-fold-l2">
               <div>
                 <div class="l2-pad">
+                  <!-- L2 头部：§2.4 通道行（7d 按 source，全零隐藏）+ §2 D2 手动刷新 -->
+                  <div class="l2-top">
+                    <span v-if="bySourceLine" class="l2-src">{{ bySourceLine }}</span>
+                    <button class="l2-refresh" type="button" title="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
+                      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+                    </button>
+                  </div>
                   <div v-if="l2Error" class="tcount" style="align-self:flex-start">GET /api/recall/stats → {{ l2Error }}</div>
                   <div v-else-if="l2Loading">加载明细…</div>
                   <template v-else>
@@ -400,7 +441,7 @@ export const MonitorPage = {
                       <div class="l2-sub">召回文档榜</div>
                       <div class="mtable mm-t-docs">
                         <table>
-                          <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th>加权</th><th>last_hit</th></tr></thead>
+                          <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th title="加权 = 每次命中按 0.5^(距今天数/30) 累加，合成流量不计">加权</th><th>last_hit</th></tr></thead>
                           <tbody>
                             <tr v-if="!l2Data.docs.length"><td colspan="6">窗口内无召回流量</td></tr>
                             <tr v-for="d in l2Data.docs" :key="d.path">

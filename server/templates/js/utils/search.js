@@ -1,7 +1,14 @@
-/* 共享 RAG 搜索控制器（spec §4.3）
+/* 共享 RAG 搜索控制器（spec 2026-11-13 §3 F1：一次用户动作 = 一行落账）
  *
- * 封装：防抖 / 分层预取（strict→near→relaxed→fuzzy）/ abort / 展示更多 / 结果整形。
- * 树内下拉（FileTree）与搜索页（SearchPanel）共用同一状态机，保证行为一致。
+ * 封装：防抖 / abort / 展示更多 / 结果整形。
+ * 树内下拉（FileTree）与搜索页（SearchPanel）共用同一控制器，保证行为一致。
+ *
+ * 检索流（取代 10-18 的分层预取状态机 strict→near→relaxed→fuzzy）：
+ *   - runSearch = 一个请求（recall=relaxed，默认档）；零命中时服务端同请求内
+ *     已回退 fuzzy（响应 recall=fuzzy），客户端无需再放宽重试。
+ *   - 「展示更多」= 用户显式点击 → 一个 fuzzy 请求（仅当 relaxed 有命中且
+ *     fuzzy 未跑过；结果按 path 去重合并展示）。
+ *   - 一次搜索意图 ≤2 行落账（relaxed + 显式 fuzzy）。
  *
  * 用法：
  *   const search = createSearchController({
@@ -10,17 +17,18 @@
  *     debounceMs: 300,
  *     state: { results: ref([]), ... }, // 裸对象，字段为 ref（控制器经 .value 读写；包 reactive 会被解包破坏）
  *     focusInput,             // () => void，"展示更多"后把焦点还给输入框
+ *     onSearchComplete,       // () => void，每次搜索完成（runSearch / 展示更多预取结束）→ 调用方
+ *                             //   bump state.recallDataVersion（spec 2026-11-13 §2 D2 事件失效信号）
  *   })
  *   search.setInput('orchestr')   // 防抖入口（自动解析 #tag 条件）
- *   search.showMore()             // 同步追加预取结果
+ *   search.showMore()             // 显式 fuzzy 请求（异步）
  *   search.resetToIdle()          // 清空（输入为空 / Esc / 组件卸载）
  *   search.rerun()                // 以最后输入重跑（权重变更后重排用）
+ *   search.lastQuery()            // 产出当前结果的 keywords（#tag 剥离后；点击落账用）
  *
- * state 需包含 resultTier: ref('strict')，记录「产出当前结果的档位」。
- * strict 有结果 → 'strict'；strict 零结果续档 → 实际产出档（如 'near'）。
+ * state 需包含 resultTier: ref('relaxed')，记录「产出当前结果的档位」
+ * （relaxed / fuzzy）。
  */
-
-const TIER_ORDER = ['strict', 'near', 'relaxed', 'fuzzy']
 
 // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
 export function shapeSegments(results) {
@@ -81,86 +89,49 @@ export function readWeights() {
   }
 }
 
-export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput }) {
+export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput, onSearchComplete }) {
   let debounceTimer = null
   let abortController = null
   let requestId = 0
   let lastRaw = '' // 最后一次输入（权重变更后 rerun() 重跑用）
+  let lastKeywords = '' // 产出当前结果的 keywords（点击落账的 query 来源）
+  let lastTags = []
 
-  // 预取循环：按 TIER_ORDER 顺序逐档 fetch（fromIdx 起），新增项按 path 对
-  // results 去重后暂存 prefetched；results + prefetched 达到 top_k 即提前停止。
-  // 复用 requestId 过期守卫 + AbortController；query 变化/resetToIdle 时中止。
-  // strict 零结果时由 runSearch 以 loading=true 调用（"搜索中…"可见）：
-  // 某档有结果 → 显示并转入后台预取；全空 → 耗尽终态。
-  async function runPrefetch(keywords, tags, id, controller, fromIdx) {
-    state.prefetching.value = true
-    const seen = new Set(state.results.value.map(r => r.path))
-    for (let i = fromIdx; i < TIER_ORDER.length; i++) {
-      if (state.results.value.length + state.prefetched.value.length >= topK) break // 够了就不多取
-      let data
-      try {
-        data = await api.aiSearch(keywords, topK, controller.signal, TIER_ORDER[i], tags, readWeights())
-      } catch (err) {
-        if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
-        if (id !== requestId) return
-        if (state.results.value.length === 0) state.loading.value = false // 避免"搜索中…"卡死
-        state.prefetching.value = false
-        state.prefetchDone.value = true // 网络/服务端错误：停止预取，保留当前结果
-        return
-      }
-      if (id !== requestId) return // 过期响应，丢弃
-      for (const item of data) {
-        if (!seen.has(item.path)) {
-          seen.add(item.path)
-          state.prefetched.value.push(item)
-        }
-      }
-      if (state.results.value.length === 0 && state.prefetched.value.length > 0) {
-        // strict 零结果 → 该档有结果：显示，记录产出档位，转入后台预取剩余档位
-        state.results.value = state.prefetched.value
-        state.prefetched.value = []
-        state.loading.value = false
-        if (state.resultTier) state.resultTier.value = TIER_ORDER[i]
-      }
-    }
-    if (state.results.value.length === 0) state.loading.value = false // 全空 → 进入全空终态
-    state.prefetching.value = false
-    state.prefetchDone.value = true
-  }
-
+  // 一次 runSearch = 一个 relaxed 请求（F1：一次用户动作一行落账）。
+  // 零命中时服务端已在同请求内回退 fuzzy（响应 recall=fuzzy），
+  // 客户端收到空结果 = fuzzy 亦零 → 终态，无「放宽再试」。
   async function runSearch(keywords, tags) {
     if (abortController) abortController.abort()
     const controller = new AbortController()
     abortController = controller
     const id = ++requestId
     state.loading.value = true
-    state.prefetching.value = false
-    state.prefetchDone.value = false
-    state.prefetched.value = []
-    if (state.resultTier) state.resultTier.value = 'strict' // 重置：每次查询回到 strict
+    state.moreLoading.value = false
+    state.fuzzyDone.value = false
+    if (state.resultTier) state.resultTier.value = 'relaxed'
     let data
     try {
-      data = await api.aiSearch(keywords, topK, controller.signal, 'strict', tags, readWeights())
+      data = await api.aiSearch(keywords, topK, controller.signal, 'relaxed', tags, readWeights())
     } catch (err) {
-      if (err.name === 'AbortError') return // 中止：忽略，不修改 results
+      if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
       if (id !== requestId) return
       state.loading.value = false
       state.results.value = []
-      state.prefetchDone.value = true // 搜索失败 → 终态（全空文案）
+      state.fuzzyDone.value = true // 搜索失败 → 终态（全空文案）
       return
     }
     if (id !== requestId) return // 过期响应，丢弃
-    state.results.value = data
+    lastKeywords = keywords
+    lastTags = tags
+    state.results.value = data.results || []
     state.activeIndex.value = -1
-    if (state.results.value.length >= topK) {
-      state.loading.value = false // 够了：不预取，无底部区域
-      state.prefetchDone.value = true
-      return
-    }
-    // 不足 top_k → 预取剩余档位（near→relaxed→fuzzy，顺序执行）
-    // strict 有结果：loading=false；strict 零结果：loading 保持 true，自动续档
-    if (state.results.value.length > 0) state.loading.value = false
-    await runPrefetch(keywords, tags, id, controller, 1) // 1 = 'near'
+    state.loading.value = false
+    // 档位以响应为准：零命中时服务端已同请求内回退 fuzzy（响应 recall=fuzzy，
+    // 落账同值）→ meta 行显示终点档 fuzzy，而非请求档 relaxed（spec §3.3）
+    if (state.resultTier) state.resultTier.value = data.recall || 'relaxed'
+    // 零命中 = 服务端 relaxed→fuzzy 回退后仍无 → fuzzy 通道已耗尽
+    state.fuzzyDone.value = (data.results || []).length === 0
+    if (onSearchComplete) onSearchComplete() // §2 D2：搜索完成 → 召回数据必变（监控页 L2 静默重拉信号）
   }
 
   // debounceMs 尾随防抖；#tag 解析为结构化条件（芯片与 API 参数同一来源）
@@ -179,13 +150,40 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     }, debounceMs)
   }
 
-  // "展示 N 条更多"：同步追加全部预取结果（无异步），清空 prefetched，焦点回输入框
-  function showMore() {
-    if (state.prefetching.value || !state.prefetchDone.value || !state.prefetched.value.length) return
-    state.results.value = state.results.value.concat(state.prefetched.value)
-    state.prefetched.value = []
+  // 「展示更多」= 用户显式点击 → 一个 fuzzy 请求（F1：第二个用户动作 = 第二行）。
+  // 仅当 relaxed 有命中且 fuzzy 未跑过（fuzzyDone=false）；结果按 path 去重
+  // 合并进 results；fuzzy 跑过后 fuzzyDone=true → 按钮消失（两表面同口径）。
+  async function showMore() {
+    if (state.moreLoading.value || state.fuzzyDone.value) return
+    if (!state.results.value.length) return
+    const id = requestId
+    const controller = abortController
+    if (!controller) return
+    state.moreLoading.value = true
+    let data
+    try {
+      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags, readWeights())
+    } catch (err) {
+      if (err.name === 'AbortError') return
+      if (id !== requestId) return
+      state.moreLoading.value = false
+      state.fuzzyDone.value = true // 网络/服务端错误：fuzzy 通道关闭，保留当前结果
+      return
+    }
+    if (id !== requestId) return // 过期响应，丢弃
+    const seen = new Set(state.results.value.map(r => r.path))
+    for (const item of data.results || []) {
+      if (!seen.has(item.path)) {
+        seen.add(item.path)
+        state.results.value.push(item)
+      }
+    }
     state.activeIndex.value = -1
+    state.moreLoading.value = false
+    state.fuzzyDone.value = true
+    if (state.resultTier) state.resultTier.value = data.recall || 'fuzzy'
     if (focusInput) focusInput() // 保证 ArrowUp/Down 继续可用
+    if (onSearchComplete) onSearchComplete() // §2 D2：预取（展示更多）结束也算一次搜索完成
   }
 
   function resetToIdle() {
@@ -194,10 +192,9 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.results.value = []
     state.loading.value = false
     state.activeIndex.value = -1
-    state.prefetched.value = []
-    state.prefetching.value = false
-    state.prefetchDone.value = false // 中止 → 回到初始态，不显示任何终态文案
-    if (state.resultTier) state.resultTier.value = 'strict'
+    state.moreLoading.value = false
+    state.fuzzyDone.value = false // 中止 → 回到初始态，不显示任何终态文案
+    if (state.resultTier) state.resultTier.value = 'relaxed'
   }
 
   function destroy() {
@@ -210,5 +207,11 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     setInput(lastRaw)
   }
 
-  return { setInput, showMore, resetToIdle, destroy, rerun, TIER_ORDER }
+  // 产出当前结果的 keywords（#tag 剥离后）——点击落账的 query 来源
+  // （与服务端 recall_queries.query 同值，recall_id 匹配依赖它）
+  function lastQuery() {
+    return lastKeywords
+  }
+
+  return { setInput, showMore, resetToIdle, destroy, rerun, lastQuery }
 }

@@ -78,7 +78,19 @@ export const api = {
       signal
     })
     const data = await res.json()
-    return data.results || []
+    // 返回完整响应体：results（命中）+ recall（产出结果的档位——服务端零命中
+    // 回退时 relaxed→fuzzy，响应记终点档，meta 行据此显示，spec §3.3）
+    return data
+  },
+
+  /** POST /api/recall/click — 点击落账（spec 2026-11-13 §4.4）：fire-and-forget，
+    *  服务端恒 204；错误静默吞（点击响应不依赖落账成功，UI 无感） */
+  recallClick(payload) {
+    fetch('/api/recall/click', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(() => { /* fail-open：静默 */ })
   },
 
   /** GET /api/tags — 全量 tag + 文档数（tag 选择器；doc_count 降序、name 升序；legacy 无 graph 表 → []） */
@@ -106,6 +118,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id, approved, session_id: sessionId })
     })
+    return res.json()
+  },
+
+  /** POST /api/agent/feedback — 回答反馈（spec 2026-11-13 §5.3，D21/D22）：
+   *  verdict = useful/not_useful → upsert（键 session_id+message_id）；null → 撤回（删行，幂等）。
+   *  客户端不传 citations——服务端读持久化消息快照（D21：无东西可伪造） */
+  async agentFeedback(sessionId, messageId, verdict) {
+    const res = await fetch('/api/agent/feedback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, message_id: messageId, verdict })
+    })
+    if (!res.ok) throw new Error(`feedback → ${res.status}`)
     return res.json()
   },
 
@@ -215,6 +240,21 @@ export const api = {
   /** GET /api/memory/reports/{relpath} — 单份报告读取（{relpath, content}；越界 400 文案透传） */
   async getMemoryReport(relpath) {
     const res = await fetch('/api/memory/reports/' + relpath.split('/').map(encodeURIComponent).join('/'))
+    return _jsonOrDetail(res)
+  },
+
+  /** GET /api/memory/doc/{path} — 文档面两层（spec §6.4）：links = 用户 wikilink 层；
+   *  suggestions = 机器层（含 edge_id 供忽略按钮 + basis 供依据摘要）；
+   *  D18 死端点过滤 + D20 排干谓词在服务端（graph_get_related_with_machine 同谓词） */
+  async getDocRelated(path) {
+    const res = await fetch('/api/memory/doc/' + path.split('/').map(encodeURIComponent).join('/'))
+    return _jsonOrDetail(res)
+  },
+
+  /** POST /api/memory/relatedness/{edge_id}/ignore — 一键忽略（ignored 机械过滤的人面入口，D12/D15；
+   *  行保留为遥测，读面过滤；重复忽略 404 文案透传） */
+  async ignoreRelatedness(edgeId) {
+    const res = await fetch('/api/memory/relatedness/' + edgeId + '/ignore', { method: 'POST' })
     return _jsonOrDetail(res)
   }
 }

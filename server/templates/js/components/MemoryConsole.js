@@ -15,6 +15,8 @@
  *       变更轨迹懒加载：首次展开轨迹节时经 GET /api/memory/proposals/{relpath}/trail 读取（awaiting 项不预取）。
  * 入口纪律：「后台 →」= 唯一 L0→L1 入口（window.openMonitorPage()，Phase A 挂载）；
  *       v3 九格脉搏 / 触发行 / 召回块整体移除——九态由监控页①九格承担，面板内彻底消失。
+ * 关联呈现（spec §6.4）2026-11-14 切换候选①：预览区侧栏 + 移动 bottom sheet（DocRelated 组件），
+ *       本控制台不再承载文档面（原第四面移除；数据端点 GET /api/memory/doc/{path} 不变）。
  */
 const { ref, computed, watch, inject, nextTick } = Vue
 import { api } from '../api.js'
@@ -713,7 +715,7 @@ export const MemoryConsole = {
     </div>
 
     <!-- 详情面：五段材料按判断顺序 + 粘性动作行 + 确认之后子视图 -->
-    <div v-else-if="!report" :key="'detail-' + detail" data-face="detail" class="c-face anim">
+    <div v-else-if="detail" :key="'detail-' + detail" data-face="detail" class="c-face anim">
       <div class="p-head">
         <button class="ibtn" title="返回队列" @click="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">终审</span>
