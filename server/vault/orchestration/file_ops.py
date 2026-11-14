@@ -162,6 +162,23 @@ def apply_change(
             if not _is_index_excluded(path):
                 index_segments(conn, vault_dir, path)
                 graph_extract_file(conn, vault_dir, path)
+            # D19 (v2b②): rewrite the relatedness ledger's paths in place —
+            # the relation is about the document, not the path; provenance
+            # and the human's ignored verdict survive the move (D12 keeps
+            # filtering after the move). Single point covering all four move
+            # sources (agent move_docs / web manage_docs / client sync /
+            # external move_detect — every move lands through this branch).
+            # The ledger conn is the module handle pair (lazy, same pattern
+            # as the agent tools); None = no ledger registered (unit-test
+            # mode) → nothing to rewrite. Telemetry tables (recall_*) keep
+            # the old path on purpose (index.db point-in-time telemetry).
+            if from_path:
+                from ..db.conn import get_ledger_conn
+                from ..db.relatedness import rewrite_paths
+
+                ledger_conn = get_ledger_conn()
+                if ledger_conn is not None:
+                    rewrite_paths(ledger_conn, from_path, path)
             # Rewrite references in other docs so links survive the rename.
             if from_path and update_refs:
                 _update_references(conn, vault_dir, from_path, path)

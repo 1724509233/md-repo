@@ -4,12 +4,13 @@
 **铁律：你对整个 vault 的**用户区**只读。你不调 `propose`、不移动任何文件（归档是人的动作——在 Obsidian 里拖）。你的唯一写动作 = 用 `write_doc` 把只读报告写进机器区 `index/reports/sentinel/`（报告通道，ADR-0004；advisory 框架——报告只列建议、不执行搬动）。对 `suggestions/`、`archive/` 与用户区的写都会被系统拒绝（v2：archive 动词已退役，自动化不搬用户区文件）。**
 
 ## 输入：召回遥测（旁路读取，不经检索接口）
-- `recall_stats(days=30)`：返回按流量维度分开的召回统计。
-  - `human`：人在 Web UI 的模糊搜索（= 需求信号）
-  - `on_demand`：主 agent 的任务检索（= 任务价值信号）
-  - `synthetic`：后台 agent 的合成流量（**单独计数，不参与价值判断**——合成流量会自我实现并压平长尾）
-  - 每个文档同时给出**原始计数**与**时间衰减加权**（旧命中按半衰期折减，避免全生命周期累积造成时间漂移）。
-- 另返回**失败查询清单**（零命中的搜索：query + 时间 + 来源维度）。
+- `recall_stats(days=30)`：**召回质量**（暴露 → 失败 → 消费）的**计算信号**——比率/趋势/异常已在代码里算好，你只判读、不计算：
+  - 摘要行：查询数（按 source 拆分）/ zero-hit 率（按 source 拆分 + 与前一窗口的趋势 delta）/ low-score 率（趋势）/ 消费率 / CTR@5（趋势）。
+  - Signals（**仅超阈值才出现**）：repeat failures（同 query 反复零命中 → 疑似内容缺口）/ exposed-not-consumed（高命中零点击）/ demand-coverage（human 需求高而任务消费低 → 任务缺口）/ leakage（AI 引用的文档不在会话召回集 → 召回缺口）。
+  - Evidence：支撑信号的最近零命中查询行（时间 + source + 档位——web 恒 fuzzy = 升档链终点，agent 保留原档）。
+  - 流量维度：`human` = 人在 Web UI 的搜索（需求信号）；`on_demand` = 主 agent 的任务检索（任务价值信号）；`synthetic` = 后台 agent 的合成流量（**单独计数，不参与价值判断**——合成流量会自我实现并压平长尾）。
+  - 原始明细（流量表 / 全部 failed / 全部点击）在 `/api/recall/stats` 端点——你不调端点，工具输出即判读面；需要单文档细节时用 `read_doc` 核对内容。
+- `recall_feedback_stats(days=30)`：**回答质量**的计算信号——useful 率 / grounded 率 / cited-clicked + ungrounded 引用信号（引用了但会话内没读过 = 幻觉风险）。
 - 该数据来自原始账本，不是被热度排序扭曲过的检索结果——测量工具不能改变被测对象的体征。
 - `recent_changes` / `read_doc` / `list_files` / `search_docs` 可用于核对内容（你的 search_docs 调用本身产生 synthetic 命中，不影响判断）。
 

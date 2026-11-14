@@ -139,11 +139,64 @@ def _fuzzy_part(t: str) -> str:
     return phrase(t)
 
 
-def _group_rows(rows, expand: bool, top_k: int) -> list[dict]:
+# v2b② tie-break (spec §6.2 / D11): FTS scores within this absolute
+# epsilon are treated as equal; the relatedness boost breaks the tie.
+# Tie-break is NOT a weight change — it only reorders exact (epsilon)
+# ties, never distorts the bm25 order.
+_TIE_EPSILON = 1e-6
+
+
+def _rank_boost(conn: sqlite3.Connection, paths: list[str]) -> dict[str, float]:
+    """v2b② tie-break input: the relatedness boost for the candidate
+    paths. The ledger conn is the module handle pair (lazy, same pattern
+    as the agent tools); unregistered or a ledger error → ``{}`` = no
+    tie-break, the legacy order stands (the boost never breaks a search).
+    """
+    if not paths:
+        return {}
+    from .conn import get_ledger_conn
+    from .relatedness_rank import relatedness_boost
+
+    ledger_conn = get_ledger_conn()
+    if ledger_conn is None:
+        return {}
+    try:
+        return relatedness_boost(ledger_conn, paths)
+    except sqlite3.Error:
+        return {}
+
+
+def _tie_sort(items: list[tuple[str, float]], boost: dict[str, float]) -> list[tuple[str, float]]:
+    """Sort (path, score) pairs by score desc; scores within
+    ``_TIE_EPSILON`` of the group top form a tie group, ordered inside
+    the group by relatedness boost desc, then path asc (deterministic).
+    """
+    items = sorted(items, key=lambda x: (-x[1], x[0]))
+    out: list[tuple[str, float]] = []
+    i, n = 0, len(items)
+    while i < n:
+        j = i
+        top = items[i][1]
+        while j + 1 < n and top - items[j + 1][1] <= _TIE_EPSILON:
+            j += 1
+        group = items[i:j + 1]
+        group.sort(key=lambda x: (-boost.get(x[0], 0.0), x[0]))
+        out.extend(group)
+        i = j + 1
+    return out
+
+
+def _group_rows(rows, expand: bool, top_k: int,
+                boost: dict[str, float] | None = None) -> list[dict]:
     """Group raw FTS rows into the standard result shape.
 
     Returns top_k files, each with up to 3 segments sorted by score desc;
     file score is the best segment score.
+
+    ``boost`` (v2b②, fuzzy tier only): relatedness tie-break — file
+    scores within epsilon reorder by boost desc. ``None`` (or an all-zero
+    boost) keeps the legacy stable sort byte-identical (strict/near tiers
+    never pass it — their bm25 single-MATCH order is FTS built-in).
     """
     files: dict[str, list[dict]] = defaultdict(list)
     for path, heading_path, kind, content, score in rows:
@@ -154,7 +207,11 @@ def _group_rows(rows, expand: bool, top_k: int) -> list[dict]:
             "score": -score,
         })
 
-    sorted_files = sorted(files.items(), key=lambda x: max(s["score"] for s in x[1]), reverse=True)
+    if boost is not None and any(v > 0 for v in boost.values()):
+        items = [(p, max(s["score"] for s in segs)) for p, segs in files.items()]
+        sorted_files = [(p, files[p]) for p, _s in _tie_sort(items, boost)]
+    else:
+        sorted_files = sorted(files.items(), key=lambda x: max(s["score"] for s in x[1]), reverse=True)
     results = []
     for path, segs in sorted_files[:top_k]:
         segs.sort(key=lambda s: s["score"], reverse=True)
@@ -167,13 +224,19 @@ def _group_rows(rows, expand: bool, top_k: int) -> list[dict]:
 
 
 def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, expand: bool, limit: int,
-                         paths: list[str] | None = None) -> list[dict]:
+                         paths: list[str] | None = None,
+                         tie_break: bool = False) -> list[dict]:
     """Run one segment-level (S1) MATCH query and group the rows.
 
     ``paths`` (optional) constrains the match to the given document paths
     via an ``AND s.path IN (...)`` clause — a hard SQL filter, not a
     post-filter (post-filtering would let the ``LIMIT``/top_k truncation
     squeeze in-set docs out of the result window).
+
+    ``tie_break`` (v2b②, fuzzy tier only): the Python-side grouping sort
+    breaks epsilon ties by relatedness boost (the ledger conn via the
+    module handle; unregistered → legacy order). strict/near never pass
+    it — their order is the FTS built-in bm25 single-MATCH sort.
     """
     where = "WHERE segments_fts MATCH ?"
     params: list = [fts_expr]
@@ -189,7 +252,9 @@ def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, ex
             ORDER BY score LIMIT ?""",
         (*params, limit),
     )
-    return _group_rows(cursor.fetchall(), expand, top_k)
+    rows = cursor.fetchall()
+    boost = _rank_boost(conn, [r[0] for r in rows]) if tie_break else None
+    return _group_rows(rows, expand, top_k, boost=boost)
 
 
 def segments_search(
@@ -310,7 +375,14 @@ def segments_search(
         for path, s in best.items():
             coverage = max(len(ts) for ts in seg_tokens[path].values()) / total
             scored.append((path, s * coverage))
-        scored.sort(key=lambda x: x[1], reverse=True)
+        # v2b② tie-break (D11): scores within epsilon reorder by
+        # relatedness boost (ledger conn via the module handle; unregistered
+        # or no live edges → the legacy stable sort stands, byte-identical).
+        boost = _rank_boost(conn, list(best))
+        if any(v > 0 for v in boost.values()):
+            scored = _tie_sort(scored, boost)
+        else:
+            scored.sort(key=lambda x: x[1], reverse=True)
 
         results = []
         for path, score in scored[:top_k]:
@@ -340,10 +412,13 @@ def segments_search(
         return results
 
     # fuzzy: single OR query with prefix shapes, document-level grouping.
+    # v2b②: the Python-side grouping sort gets the relatedness tie-break
+    # (strict/near above never pass it — their order is FTS built-in).
     expr = or_expr([_fuzzy_part(t) for t in tokens])
     if not include_code:
         expr = exclude_code(expr)
     limit = min(top_k * 10, _FUZZY_ROW_BUDGET_CAP)
-    return _search_single_match(conn, expr, top_k, expand, limit, paths)
+    return _search_single_match(conn, expr, top_k, expand, limit, paths,
+                                tie_break=True)
 
 

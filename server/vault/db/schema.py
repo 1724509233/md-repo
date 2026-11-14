@@ -114,6 +114,21 @@ def _ensure_recall_traffic_col(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_recall_session_cols(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add the session_id column to the recall ledger.
+
+    spec 2026-11-13 §3.3 F3 / §5 (same batch): the agent channel's searches are
+    attributed to their session. ``recall_queries`` and ``recall_log`` each get
+    a nullable ``session_id TEXT`` (web/mcp channels write NULL — no session).
+    Same idiom as :func:`_ensure_recall_traffic_col` — PRAGMA table_info check,
+    ALTER only when the column is missing, safe to call on every startup.
+    """
+    for table in ("recall_queries", "recall_log"):
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "session_id" not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN session_id TEXT")
+
+
 def _ensure_change_log_batch_id(conn: sqlite3.Connection) -> None:
     """Idempotent migration: add the batch_id column to change_log.
 
@@ -275,6 +290,66 @@ def init_db(db_path: Path) -> sqlite3.Connection:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_recall_queries_ts ON recall_queries(ts)"
     )
+    # Click telemetry (spec 2026-11-13 §4): one row per user click on a
+    # recalled/recommended document (via = search | ai | preview; filetree
+    # clicks are NOT ledgered — navigation, not consumption). Telemetry in
+    # index.db (D6: rebuildable, same domain as recall_log/recall_queries);
+    # a new table rather than a recall_log extension (D7: different event
+    # kind + column set — via/rank/session_id/recall_id, no score/tier).
+    # Links back to the hit ledger through recall_id (best-effort match,
+    # nullable — see recall.log_click).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recall_clicks (
+            id INTEGER PRIMARY KEY,
+            ts REAL NOT NULL,
+            path TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'web',
+            traffic TEXT NOT NULL DEFAULT 'human',
+            via TEXT,
+            query TEXT,
+            session_id TEXT,
+            rank INTEGER,
+            recall_id INTEGER,
+            message_id TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_clicks_ts ON recall_clicks(ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_clicks_path ON recall_clicks(path, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_clicks_recall ON recall_clicks(recall_id)"
+    )
+    # User feedback on an agent answer (spec 2026-11-13 §5.3): one row per
+    # (session_id, message_id) — the unique key is the D22 feedback anchor (id,
+    # not the ts measurement). Telemetry in index.db (D6: rebuildable, same
+    # domain as the other recall tables). ``citations`` is the persisted
+    # message snapshot (a copy of the done-time validation); ``click_paths`` is
+    # the via=ai clicks attributed to that message_id (nullable).
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recall_feedback (
+            id INTEGER PRIMARY KEY,
+            ts REAL NOT NULL,
+            session_id TEXT NOT NULL,
+            message_id TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            citations TEXT NOT NULL,
+            click_paths TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_recall_feedback_key "
+        "ON recall_feedback(session_id, message_id)"
+    )
+    # F3 (spec 2026-11-13 §3.3): the agent channel's recall ledger rows carry
+    # the session id (web/mcp write NULL).
+    _ensure_recall_session_cols(conn)
     _ensure_recall_traffic_col(conn)
     conn.execute(
         """

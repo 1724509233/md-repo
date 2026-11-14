@@ -1,9 +1,11 @@
-"""Agent domain: AI chat + LLM agent chat/confirm/new-session (URL prefixes ``/api/ai``, ``/api/agent``)."""
+"""Agent domain: AI chat + LLM agent chat/confirm/feedback/new-session (URL prefixes ``/api/ai``, ``/api/agent``)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import sys
+import time
 
 from fastapi import HTTPException, Request
 
@@ -45,6 +47,19 @@ def _build_agent_spec(ctx) -> AgentSpec:
     )
 
 
+def _click_paths_for_message(conn, message_id: str) -> list[str]:
+    """The via=ai click paths attributed to this message_id (spec 2026-11-13
+    §5.3 D22: precise attribution by the recall_clicks.message_id column — no
+    window heuristic). search/preview clicks carry message_id NULL and never
+    match. Returns distinct paths, sorted."""
+    rows = conn.execute(
+        "SELECT DISTINCT path FROM recall_clicks "
+        "WHERE via = 'ai' AND message_id = ? ORDER BY path",
+        (message_id,),
+    ).fetchall()
+    return [r["path"] for r in rows]
+
+
 def register(app, ctx) -> None:
     session_mgr = SessionManager(ctx.db_conn, ctx.vault_dir)
 
@@ -55,7 +70,10 @@ def register(app, ctx) -> None:
         agent = agent_cache.get(session_id)
         if agent is None:
             messages = session_mgr.get_or_create(session_id)
-            agent = Agent(_build_agent_spec(ctx), messages=messages)
+            # session_id is stamped here (route layer) so the runtime can thread
+            # it into the ToolContext for recall-ledger attribution (spec §3.3 F3).
+            agent = Agent(_build_agent_spec(ctx), messages=messages,
+                          session_id=session_id)
             # Backfill the session-level auto_approve switch from the DB so a
             # TTL-evicted / post-restart rebuild keeps the user's setting (the
             # Agent is built fresh from the static spec, which defaults False).
@@ -225,3 +243,65 @@ def register(app, ctx) -> None:
     async def agent_new_session(request: Request) -> dict:
         new_id = session_mgr.create_new()
         return {"session_id": new_id}
+
+    @app.post("/api/agent/feedback")
+    async def agent_feedback(request: Request) -> dict:
+        """Ledger the user's verdict on one assistant answer (spec 2026-11-13
+        §5.3, D21/D22). Key = (session_id, message_id). ``verdict`` is
+        ``useful`` / ``not_useful`` (upsert) or ``null`` (retract = delete the
+        row). The citations snapshot is read from the PERSISTED message (the
+        done-time snapshot) — never recomputed, and the client never sends it
+        (there is nothing to forge). ``click_paths`` = the via=ai clicks
+        attributed to this message_id (distinct paths)."""
+        if ctx.db_conn is None:
+            raise HTTPException(status_code=503, detail="no database")
+        body = await request.json()
+        session_id = body.get("session_id", "default")
+        message_id = body.get("message_id", "")
+        if not message_id:
+            raise HTTPException(status_code=400, detail="message_id required")
+        if "verdict" not in body:
+            raise HTTPException(status_code=400, detail="verdict required")
+        verdict = body["verdict"]
+        if verdict is not None and verdict not in ("useful", "not_useful"):
+            raise HTTPException(
+                status_code=400,
+                detail="verdict must be 'useful', 'not_useful', or null")
+
+        # Read the persisted message snapshot (D21). The session is loaded from
+        # the DB on demand (get_or_create restores it after a restart), so a
+        # historical message's citations survive a server restart.
+        messages = session_mgr.get_or_create(session_id)
+        msg = next(
+            (m for m in messages
+             if m.get("role") == "assistant" and m.get("id") == message_id),
+            None,
+        )
+        if msg is None:
+            raise HTTPException(status_code=404, detail="message not found")
+        citations = msg.get("citations", [])
+
+        if verdict is None:
+            # Retract: delete the row (idempotent — deleting a missing row is a
+            # no-op, so re-clicking "cancel" is safe).
+            ctx.db_conn.execute(
+                "DELETE FROM recall_feedback "
+                "WHERE session_id = ? AND message_id = ?",
+                (session_id, message_id))
+            ctx.db_conn.commit()
+            return {"ok": True, "verdict": None}
+
+        click_paths = _click_paths_for_message(ctx.db_conn, message_id)
+        ctx.db_conn.execute(
+            "INSERT INTO recall_feedback "
+            "(ts, session_id, message_id, verdict, citations, click_paths) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id, message_id) DO UPDATE SET "
+            "ts = excluded.ts, verdict = excluded.verdict, "
+            "citations = excluded.citations, click_paths = excluded.click_paths",
+            (time.time(), session_id, message_id, verdict,
+             json.dumps(citations, ensure_ascii=False),
+             json.dumps(click_paths, ensure_ascii=False) if click_paths else None),
+        )
+        ctx.db_conn.commit()
+        return {"ok": True, "verdict": verdict}

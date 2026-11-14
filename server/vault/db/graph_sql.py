@@ -270,6 +270,78 @@ def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> lis
     ]
 
 
+def graph_get_related_with_machine(
+    conn: sqlite3.Connection,
+    ledger_conn: sqlite3.Connection | None,
+    vault_dir: Path,
+    path: str,
+    hops: int = 1,
+) -> list[dict]:
+    """Two-layer related-docs output (v2b②, spec §6 — 裁决 D16).
+
+    Layer 1 (user): :func:`graph_get_related` unchanged — the wikilink /
+    tag / frontmatter edges extracted from the user's own content.
+    Layer 2 (machine): the agent's discovery ledger (``relatedness``,
+    ledger.db) — live edges where ``path`` is an endpoint, marked
+    ``via relatedness``.
+
+    Machine-layer rules:
+
+    - D20 read-time dedup: a machine suggestion is excluded when the
+      UNORDERED pair {path, other} already exists in the user layer —
+      the user adopted the relation into content (drained from the
+      suggestion layer); zero writes, zero schema, the relatedness row
+      stays live (provenance). Deleting the content link revives the
+      suggestion (the pair leaves the user layer).
+    - D18 dead-endpoint filter: ``live_edges`` keeps only edges whose
+      both endpoints exist on disk.
+    - invariant 6 (derived demotion): derived targets sort LAST within
+      the machine layer — layer order IS the demotion (the whole machine
+      layer sits after the user layer).
+
+    ``ledger_conn`` may be None (no ledger registered) → the machine
+    layer is empty (user layer byte-identical to the legacy output).
+    User rows carry ``layer="user"``; machine rows carry
+    ``layer="machine"``, ``type="relatedness"``, the edge ``basis``,
+    the edge ``edge_id`` (the console doc face's ignore button, spec
+    §6.4) and a 0.0 score (the machine layer has no relevance score —
+    its order is the demotion order).
+    """
+    user = graph_get_related(conn, path, hops=hops)
+    user_pairs = {frozenset((path, r["path"])) for r in user}
+
+    machine: list[dict] = []
+    if ledger_conn is not None:
+        from .relatedness_rank import is_derived, live_edges
+
+        for e in live_edges(ledger_conn, vault_dir, path=path):
+            other = e["target"] if e["source"] == path else e["source"]
+            if frozenset((path, other)) in user_pairs:
+                continue  # D20: adopted into content — drained
+            machine.append({
+                "path": other,
+                "type": "relatedness",
+                "score": 0.0,
+                "basis": e["basis"],
+                "edge_id": e["id"],
+                "layer": "machine",
+                "_derived": is_derived(vault_dir, other),
+            })
+        # invariant 6: derived targets last within the machine layer
+        # (stable sort keeps the DB order — generated_at/insertion —
+        # among equals).
+        machine.sort(key=lambda r: r["_derived"])
+
+    out = [
+        {"path": r["path"], "type": r["type"], "score": r["score"], "layer": "user"}
+        for r in user
+    ]
+    for r in machine:
+        r.pop("_derived", None)
+        out.append(r)
+    return out
+
+
 def _find_referrers(conn: sqlite3.Connection | None, vault_dir: Path, target_path: str) -> list[str]:
     """Find all src paths that have a wikilink edge to target_path.
 

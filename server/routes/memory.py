@@ -331,6 +331,58 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=500, detail="failed to read report")
         return {"relpath": rel, "content": content}
 
+    # ── relatedness console (v2b②, spec §6.4): the doc face — the
+    #    console's two-block read surface (「你的链接」/「机器建议」) — and
+    #    the human's one-click dismissal, the human-side entry of the
+    #    ignored mechanical filter (D12). The ledger row is kept as
+    #    telemetry (never deleted); the executor then refuses to land the
+    #    pair in either direction (D13), and the read surfaces
+    #    (live_edges / machine layer) drop it. ────────────────────────────
+
+    @app.get("/api/memory/doc/{relpath:path}")
+    async def memory_doc_related(relpath: str) -> dict:
+        """The console doc face's read (spec §6.4): one doc's two-layer
+        related view — the user's own links (graph edges extracted from
+        the doc's content) first, the machine suggestions (live
+        relatedness edges) after. Same predicates as the agent tool
+        surface: D18 dead-endpoint filter + D20 drained-pair dedup, both
+        inside ``graph_get_related_with_machine``. Pure read (index +
+        ledger conns), no lock — the ledger domain's read discipline.
+        404 = the doc is gone (the face renders its dead-doc state); the
+        suggestions carry ``edge_id`` for the ignore button.
+        """
+        from ..vault.db.graph_sql import graph_get_related_with_machine
+
+        rel = _safe_rel_path(relpath)
+        if rel is None:
+            raise HTTPException(status_code=400, detail="invalid path")
+        fp = ctx.vault_dir / rel
+        if not fp.is_file():
+            raise HTTPException(status_code=404, detail="document not found")
+        rows = graph_get_related_with_machine(
+            ctx.db_conn, ctx.ledger_conn, ctx.vault_dir, rel.as_posix())
+        return {
+            "path": rel.as_posix(),
+            "links": [r for r in rows if r["layer"] == "user"],
+            "suggestions": [r for r in rows if r["layer"] == "machine"],
+        }
+
+    @app.post("/api/memory/relatedness/{edge_id}/ignore")
+    async def memory_relatedness_ignore(edge_id: int) -> dict:
+        """Mark one relatedness edge as ignored by the human.
+
+        The row stays (provenance + telemetry); ``ignored = 1`` is the
+        verdict. 404 when the id is unknown or the row is already
+        ignored (the flag is one-way per row — re-proposing through the
+        executor would land a fresh live row, which the human can then
+        ignore again)."""
+        from ..vault.db import relatedness as rel
+
+        if not rel.mark_ignored_edge(ctx.ledger_conn, edge_id):
+            raise HTTPException(
+                status_code=404, detail="edge not found or already ignored")
+        return {"edge_id": edge_id, "ignored": True}
+
     @app.get("/api/memory/status")
     async def memory_status() -> dict:
         """The 30-second scan target: proposal counts + review queue, the

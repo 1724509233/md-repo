@@ -19,6 +19,8 @@ from .list_proposals import ListProposalsArgs, ListProposalsTool
 from .move_docs import MoveDocItem, MoveDocsArgs, MoveDocsTool
 from .propose import ProposeArgs, ProposeTool
 from .read_doc import ReadDocArgs, ReadDocTool
+from .recall_feedback_stats import (RecallFeedbackStatsArgs,
+                                    RecallFeedbackStatsTool)
 from .recall_stats import RecallStatsArgs, RecallStatsTool
 from .recent_changes import RecentChangesArgs, RecentChangesTool
 from .reject_proposal import RejectProposalArgs, RejectProposalTool
@@ -37,6 +39,7 @@ _ALL_TOOLS: list[Tool] = [
     GetRelatedDocsTool(),
     RecentChangesTool(),
     RecallStatsTool(),
+    RecallFeedbackStatsTool(),
     ProposeTool(),
     ListProposalsTool(),
     GetProposalTool(),
@@ -66,6 +69,7 @@ __all__ = [
     "RecentChangesArgs",
     "ProposeArgs",
     "RecallStatsArgs",
+    "RecallFeedbackStatsArgs",
     "ListProposalsArgs",
     "GetProposalArgs",
     "AdoptProposalArgs",

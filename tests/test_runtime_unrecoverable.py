@@ -35,6 +35,7 @@ FakeRuntime.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -206,7 +207,13 @@ def test_delivered_tool_call_not_reexecuted_on_subsequent_rounds(
     agent = Agent(_spec(vault), runtime=LoopRuntime())
     events = _events_of(agent)
 
-    assert [e for e in events if e.type == "done"][-1].data == {"reason": "final"}
+    done = [e for e in events if e.type == "done"][-1].data
+    assert done["reason"] == "final"
+    # spec 2026-11-13 §5.2: a final done additionally carries the feedback key
+    # (message_id) + the done-time citation snapshot (the answer "done" has no
+    # [[...]] → empty list). The error/round_limit done stays {"reason": ...}.
+    assert re.fullmatch(r"[0-9a-f]{12}", done["message_id"])
+    assert done["citations"] == []
     # Executed exactly once — the delivered call, in round 1 only.
     assert [(n, a) for n, a in executed] == [("read_doc", {"path": "notes/a.md"})]
     # History: the answered pair is present (the re-execution guard).

@@ -188,8 +188,11 @@ def _mcp_log_recall(query: str, tier: str, results: list) -> None:
     try:
         recall_db.log_query(conn, "mcp", query, tier, results)
     except Exception:
+        # fail-open + 日志可见（spec 2026-11-13 §4.3, D17）：异常必须留痕，
+        # 带 source/query/档位上下文。
         logging.getLogger("mcp_server").exception(
-            "recall telemetry failed for mcp search_docs")
+            "recall telemetry failed for mcp search_docs "
+            "(source=mcp query=%r tier=%s)", query, tier)
 
 
 def _mcp_search(vault_dir: Path, query: str, top_k: int = 5,
@@ -286,15 +289,33 @@ def main():
     
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:
-        """Get documents related to the given document via wikilinks, tags, or frontmatter related field."""
-        from server.vault.db.graph_sql import graph_get_related
+        """Get documents related to the given document via wikilinks, tags, or frontmatter related field, plus machine-suggested relations the agent discovered (via relatedness)."""
+        from server.vault.db.conn import get_ledger_conn
+        from server.vault.db.graph_sql import graph_get_related_with_machine
         fp = vault_dir / path
         if not fp.is_file():
             return related_no_file(path)
-        results = graph_get_related(db_conn, path, hops=hops)
+        results = graph_get_related_with_machine(
+            db_conn, get_ledger_conn(), vault_dir, path, hops=hops)
         if not results:
             return related_no_links(path)
-        lines = [f"{r['path']} (via {r['type']}, score {r['score']:.2f})" for r in results]
+        # Two-layer output (spec §6.3-②): the user's own links first, the
+        # machine-suggestion layer after (layer order = demotion).
+        user = [r for r in results if r["layer"] == "user"]
+        machine = [r for r in results if r["layer"] == "machine"]
+        lines: list[str] = []
+        if user:
+            lines.append("Your links:")
+            lines += [f"  {r['path']} (via {r['type']}, score {r['score']:.2f})"
+                      for r in user]
+        if machine:
+            lines.append("Machine suggestions (via relatedness — agent-discovered, "
+                         "not yet in the document):")
+            lines += [
+                f"  {r['path']} (basis: {r['basis']})" if r["basis"]
+                else f"  {r['path']}"
+                for r in machine
+            ]
         return f"Related documents for {path}:\n" + "\n".join(lines)
     
     @mcp.tool()

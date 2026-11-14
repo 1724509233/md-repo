@@ -149,7 +149,7 @@ background_agents:
 #     arm_count: 10
 #     min_interval_h: 24
 #   tools: [read_doc, search_docs, list_files, recent_changes,
-#           get_related_docs, recall_stats, write_doc]   # 报告通道：write_doc 仅写 index/ 只读报告；不持 propose
+#           get_related_docs, recall_stats, recall_feedback_stats, write_doc]   # 报告通道：write_doc 仅写 index/ 只读报告；不持 propose（recall_stats = 召回质量 / recall_feedback_stats = 回答质量，D23）
 #   model:
 #     provider: openai
 #     model_id: qwen2.5:14b

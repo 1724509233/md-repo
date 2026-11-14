@@ -37,9 +37,14 @@ def _log_recall(ctx: ToolContext, query: str, tier: str, results: list) -> None:
     if conn is None:
         return
     try:
-        recall_db.log_query(conn, ctx.write_source, query, tier, results)
+        recall_db.log_query(conn, ctx.write_source, query, tier, results,
+                            ctx.session_id or None)
     except Exception:
-        logger.exception("recall telemetry failed for search_docs")
+        # fail-open + 日志可见（spec 2026-11-13 §4.3, D17）：异常必须留痕，
+        # 带 source/query/档位上下文。
+        logger.exception(
+            "recall telemetry failed for search_docs "
+            "(source=%s query=%r tier=%s)", ctx.write_source, query, tier)
 
 
 class SearchDocsTool(Tool):
@@ -79,10 +84,14 @@ class SearchDocsTool(Tool):
                 return self.fts_syntax_error(args.query)
             raise
         _log_recall(ctx, args.query, tier, results)
+        # meta.paths = the surfaced document paths (UI side-channel; the
+        # runtime lifts them into the session citation-grounding set, spec
+        # 2026-11-13 §5.2 D9). Never enters the LLM channel (the result string
+        # is the only thing appended to agent.messages).
         if not results:
-            ctx.last_meta = {"count": 0}
+            ctx.last_meta = {"count": 0, "paths": []}
             return self.search_no_match(args.query)
-        ctx.last_meta = {"count": len(results)}
+        ctx.last_meta = {"count": len(results), "paths": [r["path"] for r in results]}
         lines = [f'<results count="{len(results)}" query="{_html.escape(args.query, quote=False)}" tier="{tier}">']
         for r in results:
             lines.append(f'  <result path="{_html.escape(r["path"], quote=False)}" score="{r["score"]:.2f}">')

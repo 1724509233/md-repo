@@ -135,9 +135,11 @@ def test_spec_built_with_auto_approve_and_scope(tmp_path: Path):
     assert spec.write_scope == cfg.target_dir
     assert spec.report_dir == cfg.report_dir
     assert spec.max_rounds == 5
-    # 14 = full registry minus delete_doc (bgagent channel hard-removal,
-    # spec §3.2/D3: registry is the mechanism, config whitelist is hygiene).
-    assert len(spec.tools) == 14
+    # 15 = full registry (16) minus delete_doc (bgagent channel
+    # hard-removal, spec §3.2/D3: registry is the mechanism, config
+    # whitelist is hygiene). 2026-11-14: registry grew 15→16 (D23:
+    # recall_feedback_stats split from recall_stats).
+    assert len(spec.tools) == 15
     assert not any(t.name == "delete_doc" for t in spec.tools)
     assert spec.system_prompt.startswith("you are a test organizer")
     assert "当前时间：" in spec.system_prompt  # runner 注入运行开始时间（分钟精度）
@@ -688,6 +690,59 @@ def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
     prompt = rt.agent.spec.system_prompt
     assert f"失败 #{recs[-1]['id']} [summary]" in prompt   # newest present
     assert "boom-0" not in prompt                          # oldest dropped
+
+
+def test_readback_injects_click_feedback_telemetry(tmp_path: Path, db_conn,
+                                                   ledger_conn):
+    """§6.3-③（遥测回灌读面）：回读注入本角色相关文档的点击/反馈摘要
+    （有界 top N）——co-click 配对 + ungrounded 引用。只进读面：
+    relatedness 表零自动写入（D14，lane C 静态断言另锚）。"""
+    import json
+    import time
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    now = time.time()
+    # co-click：同会话 s1 点了 a.md + b.md → 配对 ×1
+    for path in ("notes/a.md", "notes/b.md"):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, session_id) "
+            "VALUES (?, ?, 'ai', 's1')", (now, path))
+    # feedback：notes/c.md 被引用但会话内未读（ungrounded）
+    db_conn.execute(
+        "INSERT INTO recall_feedback (ts, session_id, message_id, verdict, "
+        "citations, click_paths) VALUES (?, 's1', 'm1', 'useful', ?, NULL)",
+        (now, json.dumps([
+            {"path": "notes/c.md", "exists": "ok", "grounded": "ungrounded"}])))
+    db_conn.commit()
+
+    cfg = _cfg(tmp_path)
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    prompt = rt.agent.spec.system_prompt
+    assert "## 消费信号" in prompt
+    assert "notes/a.md ↔ notes/b.md（×1）" in prompt
+    assert "notes/c.md（×1）" in prompt
+    # 回读在上下文头部（当前时间行之后）
+    assert prompt.index("当前时间：") < prompt.index("## 消费信号")
+
+
+def test_readback_telemetry_silent_without_data(tmp_path: Path, db_conn,
+                                                ledger_conn):
+    """无点击/反馈数据 → 回读不含消费信号段（nothing to say = silent）。"""
+    cfg = _cfg(tmp_path)  # creates tmp_path/vault
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, tmp_path / "vault",
+                              runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    assert "## 消费信号" not in rt.agent.spec.system_prompt
 
 
 def test_retention_prunes_old_reports(tmp_path: Path):

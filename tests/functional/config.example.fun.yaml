@@ -14,8 +14,10 @@
 #     这里取 0.001h = 3.6s，功能测试要能连续重复 run）
 #   - budget_* 无上限校验（int 即可）；"拉高" = 100 / 50
 #   - tools 名称必须存在于 TOOL_REGISTRY（server/agent/tools/__init__.py，
-#     当前 11 个：read_doc/search_docs/list_files/write_doc/delete_doc/
-#     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats/propose）
+#     当前 16 个：read_doc/search_docs/list_files/write_doc/delete_doc/
+#     move_docs/edit_doc/get_related_docs/recent_changes/recall_stats/
+#     recall_feedback_stats/propose/list_proposals/get_proposal/
+#     adopt_proposal/reject_proposal）
 #   - prompt 文件必须存在（相对 config 文件目录）
 #   - **target_dir 互斥**：任意两个非 executor agent 的 target_dir 不得互为
 #     祖先/相等（Path.is_relative_to 对相等路径返回 True）；例外：两 scope 都
@@ -54,7 +56,7 @@ background_agents:
       arm_count: 1
       min_interval_h: 0.001           # 解析器无下限；3.6s 冷却足够连续重复
     tools: [read_doc, search_docs, list_files, recent_changes,
-            get_related_docs, recall_stats]   # 只读：无 propose、无写工具（白名单 = config.example.yaml sentinel 段）
+            get_related_docs, recall_stats, recall_feedback_stats]   # 只读：无 propose、无写工具（白名单 = config.example.yaml sentinel 段；D23 两工具）
     model:
       provider: openai
       model_id: mock

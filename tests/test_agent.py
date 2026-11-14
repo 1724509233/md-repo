@@ -88,15 +88,16 @@ def test_validate_error_replays_input_and_type_hint(tmp_path: Path):
     assert result == err
 
 
-def test_tools_schema_has_fifteen_tools():
+def test_tools_schema_has_sixteen_tools():
     from server.agent import TOOLS
 
     names = {t["function"]["name"] for t in TOOLS}
-    assert len(names) == 15
+    assert len(names) == 16
     assert names == {
         "read_doc", "search_docs", "list_files",
         "write_doc", "edit_doc", "delete_doc", "move_docs",
-        "get_related_docs", "recent_changes", "recall_stats", "propose",
+        "get_related_docs", "recent_changes", "recall_stats",
+        "recall_feedback_stats", "propose",
         "list_proposals", "get_proposal", "adopt_proposal", "reject_proposal",
     }
 
@@ -109,8 +110,8 @@ def test_tool_permission_declarations():
     assert ask == {"write_doc", "edit_doc", "delete_doc", "move_docs",
                    "adopt_proposal", "reject_proposal"}  # adopt/reject = 人决策，红线 3 框架级 confirm 闸门（10-30 裁决）
     assert allow == {"read_doc", "search_docs", "list_files", "get_related_docs",
-                     "recent_changes", "recall_stats", "propose",
-                     "list_proposals", "get_proposal"}
+                     "recent_changes", "recall_stats", "recall_feedback_stats",
+                     "propose", "list_proposals", "get_proposal"}
     assert ask.isdisjoint(allow)
 
 

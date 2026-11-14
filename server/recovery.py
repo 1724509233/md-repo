@@ -254,6 +254,17 @@ def run_recovery_drill(vault_dir: Path) -> dict:
         "trigger_state/recall_log empty is expected: re-seeded lazily on the "
         "next arming tick / search (acceptable telemetry-cache loss)"
     )
+    # v2b② (spec 2026-11-13 §6/§7.6): the rebuild criterion for the two
+    # tables this lane touches — sessions (index.db: chat history is NOT
+    # re-seeded on cold recovery, acceptable cache loss) and relatedness
+    # (ledger.db: the drill never touches it — row-wise preservation is
+    # verified in the ledger section above; authoritative, not rebuildable).
+    notes.append(
+        "sessions empty is expected: chat history is not re-seeded on cold "
+        "recovery (acceptable cache loss); relatedness lives in ledger.db "
+        "and is never touched by the drill — row-wise preservation is "
+        "checked in the ledger section (authoritative state, not rebuildable)"
+    )
 
     return {
         "backup": str(backup) if backup else None,

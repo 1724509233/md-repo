@@ -11,6 +11,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+import time
+import uuid
 from typing import AsyncIterator
 
 from openai import APIError, AsyncOpenAI
@@ -22,6 +25,65 @@ from .tools.tool import ToolContext
 from .policy import validate_tool_call
 
 logger = logging.getLogger("md-vault.agent")
+
+# LLM boundary whitelist (spec 2026-11-13 §5.2 D21): the ONLY fields that may
+# cross into the model request. ``id`` / ``ts`` / ``citations`` are UI/telemetry
+# fields appended to assistant messages (persisted in the sessions blob, sent
+# on the done event) and must NEVER reach the LLM — the SDK serializes message
+# dicts verbatim, so a bare ``agent.messages`` pass would leak them. The
+# whitelist is the single exit point and is fail-closed: any future UI/telemetry
+# field added to a message is excluded from the request by default.
+LLM_FIELDS = {"role", "content", "tool_calls", "tool_call_id"}
+
+# [[target]] / [[target|alias]] — same token convention as the client's
+# wikilinkToMd (server/templates/js/utils/vaultLinks.js); ``[[notes/a#标题]]``
+# takes the path segment (before the #anchor).
+_WIKILINK_RE = re.compile(r"\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]")
+
+
+def _extract_citation_paths(text: str) -> list[str]:
+    """Parse the answer's ``[[...]]`` wikilink tokens into vault-relative paths.
+
+    Same parser convention as the client's ``wikilinkToMd``: ``[[t]]`` /
+    ``[[t|alias]]`` → ``t``; ``[[notes/a#标题]]`` → the path segment ``notes/a``;
+    ``.md`` is normalized (the ``[[notes/a]]`` / ``[[notes/a.md]]`` dual-write
+    convention). Returns distinct paths in first-seen order (a document cited
+    twice is one source).
+    """
+    if not text:
+        return []
+    seen: list[str] = []
+    for m in _WIKILINK_RE.finditer(text):
+        target = m.group(1).strip()
+        if not target:
+            continue
+        path = target.split("#", 1)[0].strip()
+        if not path:
+            continue
+        if not path.endswith(".md"):
+            path += ".md"
+        if path not in seen:
+            seen.append(path)
+    return seen
+
+
+def _compute_citations(text: str, vault_dir, evidence_paths: set) -> list[dict]:
+    """Validate the answer's ``[[...]]`` citations (spec 2026-11-13 §5.2).
+
+    Two checks per distinct path, one state each:
+
+    - ``exists``: ``(vault_dir / path).is_file()`` (``.md``-normalized) →
+      ``ok`` / ``missing``.
+    - ``grounded``: path in the session evidence set → ``in_evidence`` /
+      ``ungrounded`` (a file that exists but the agent never retrieved =
+      hallucination risk).
+    """
+    citations = []
+    for path in _extract_citation_paths(text):
+        exists = "ok" if (vault_dir / path).is_file() else "missing"
+        grounded = "in_evidence" if path in evidence_paths else "ungrounded"
+        citations.append({"path": path, "exists": exists, "grounded": grounded})
+    return citations
 
 
 class Runtime:
@@ -81,6 +143,7 @@ class LoopRuntime(Runtime):
             write_source=spec.write_source,
             run_id=spec.run_id,
             verbs=spec.verbs,
+            session_id=agent.session_id,
         )
 
         for _round in range(spec.max_rounds):
@@ -95,12 +158,23 @@ class LoopRuntime(Runtime):
             _ensure_tool_results(agent)
             # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
             if _round >= spec.max_rounds - 3:
-                call_messages = agent.messages + [
+                raw_messages = agent.messages + [
                     {"role": "system",
                      "content": "You are approaching the round limit. Summarize your progress and provide a final answer."}
                 ]
             else:
-                call_messages = agent.messages
+                raw_messages = agent.messages
+
+            # LLM boundary whitelist projection (spec 2026-11-13 §5.2 D21): only
+            # the 4 LLM fields cross into the request. ``id``/``ts``/``citations``
+            # are UI/telemetry fields on assistant messages and must NEVER reach
+            # the model — the SDK serializes message dicts verbatim, so a bare
+            # agent.messages pass would leak them. Project the FINAL list (after
+            # reminder injection) so history and reminder are both filtered.
+            call_messages = [
+                {k: v for k, v in m.items() if k in LLM_FIELDS}
+                for m in raw_messages
+            ]
 
             create_kwargs = dict(
                 model=model.model_id,
@@ -199,8 +273,29 @@ class LoopRuntime(Runtime):
                     })
 
             if not tool_calls:
-                agent.messages.append({"role": "assistant", "content": content})
-                yield Event("done", {"reason": "final"})
+                # Final answer: append the assistant message with its UI/telemetry
+                # fields (spec 2026-11-13 §5.2 D21/D22). ``id`` (uuid4 hex 12) is
+                # the feedback key (identity — NOT the ``ts`` measurement, which is
+                # display metadata only). ``citations`` is the done-time validation
+                # snapshot, persisted with the message into the sessions blob; the
+                # feedback endpoint reads this snapshot and never recomputes it.
+                # ts/citations are UI/telemetry fields — the LLM boundary projects
+                # them out (LLM_FIELDS); never pass agent.messages bare to the LLM.
+                message_id = uuid.uuid4().hex[:12]
+                citations = _compute_citations(
+                    content, spec.vault_dir, agent.evidence_paths)
+                agent.messages.append({
+                    "role": "assistant",
+                    "content": content,
+                    "id": message_id,
+                    "ts": time.time(),
+                    "citations": citations,
+                })
+                yield Event("done", {
+                    "reason": "final",
+                    "message_id": message_id,
+                    "citations": citations,
+                })
                 return
 
             agent.messages.append({
@@ -261,6 +356,15 @@ class LoopRuntime(Runtime):
                 ctx.last_meta = None
                 result = execute_tool(tc["name"], args, ctx)
                 meta = ctx.last_meta
+                # Citation grounding set (spec 2026-11-13 §5.2 D9): a successful
+                # retrieval tool (search_docs / read_doc / get_related_docs) stamps
+                # the paths it surfaced in ``ctx.last_meta["paths"]``; add them to
+                # the session evidence set so the answer's citations of those docs
+                # read grounded. Error results carry no meta (the tool returned
+                # before stamping), so nothing is added on failure.
+                if meta is not None:
+                    for p in meta.get("paths", []):
+                        agent.evidence_paths.add(p)
                 logger.debug("tool_result %s => %s", tc["name"], result[:200])
                 # Tool-level failure: the tool executed but returned an "Error:…"
                 # string (e.g. file not found in _execute). Flag it so the UI renders

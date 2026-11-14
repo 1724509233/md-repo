@@ -69,6 +69,9 @@ class ReadDocTool(DocTool):
             "truncated": truncated,
             "chars": len(content),
             "full": full,
+            # The retrieved document path (citation grounding, spec 2026-11-13
+            # §5.2 D9): the runtime lifts it into the session evidence set.
+            "paths": [args.path],
         }
         if full:
             return f"File: {args.path} ({total} lines, {len(content)} chars)\n<content>\n{text}</content>"

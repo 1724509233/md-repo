@@ -196,10 +196,20 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 
     source = source_refs[0], target = payload['target'], basis = the record
     justification. Both files must exist (spec §5.2 v2a 结构校验: drift →
-    surface, 不盲落). Idempotent per pair (merge_edge — the lock-holding
-    write surface, card 5); a pair the human
-    dismissed (ignored rows) gets a fresh live row when re-proposed — the
-    readback's ignored grouping then shows the repeat.
+    surface, 不盲落; D18: a deleted endpoint parks the proposal as failed
+    — the row is never written).
+
+    D12 mechanical filter (v2b②, spec §6.3-①, layer 2): before landing,
+    check the pair for ``ignored = 1`` rows — BIDIRECTIONALLY (D13: the
+    edge is a document-level relation; the human's dismissal must not be
+    bypassed by a reversed re-propose). A hit does NOT land: the proposal
+    is parked in ``failed`` with the reason (there is no ``filtered``
+    terminal state — adding one is a state-machine change, out of scope);
+    the failed row + reason stay in the readback injection, so the agent
+    sees "human dismissed, stop proposing" next run. This supersedes the
+    in-package ``upsert_edge`` re-propose branch (a fresh live row for an
+    ignored pair) — that branch is kept (in-package interface) but is
+    unreachable through the executor; the test anchor lives here.
     """
     refs = p.get("source_refs") or []
     if not refs:
@@ -214,6 +224,20 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         fp = _vault_path(vault, rel)
         if not fp.is_file():
             raise ValueError(f"relatedness file not found: {rel}")
+
+    # D12: ignored-pair mechanical filter — both directions (D13).
+    ignored = conn.execute(
+        """
+        SELECT 1 FROM relatedness
+        WHERE ignored = 1
+          AND ((source = ? AND target = ?) OR (source = ? AND target = ?))
+        """,
+        (source, target, target, source),
+    ).fetchone()
+    if ignored is not None:
+        raise _MergeFailed(
+            "ignored pair — mechanical filter (human dismissed)"
+        )
 
     # The DB half of this compound op runs under the shared lock inside
     # merge_edge (card 5: outside server/vault the lock is no longer

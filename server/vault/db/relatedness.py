@@ -104,6 +104,68 @@ def mark_ignored(conn: sqlite3.Connection, edge_id: int) -> bool:
     return cur.rowcount > 0
 
 
+def mark_ignored_edge(conn: sqlite3.Connection, edge_id: int) -> bool:
+    """Out-of-package write surface (card 5): :func:`mark_ignored` under
+    the shared lock — the console's one-click dismissal endpoint. Returns
+    True if a live row was flagged."""
+    with _ledger_lock:
+        return mark_ignored(conn, edge_id)
+
+
+def rewrite_paths(conn: sqlite3.Connection, old_path: str, new_path: str) -> int:
+    """D19 move rewrite: map ``old_path`` → ``new_path`` on both endpoints
+    of every row carrying the old path (source or target).
+
+    Provenance (actor / run_id / generated_at / basis) and the human's
+    ``ignored`` verdict are PRESERVED — the dismissal survives the move
+    (D12: the mechanical filter keeps filtering the pair after the move;
+    the relation is about the DOCUMENT, not the path). Rows are never
+    deleted (provenance is not rebuildable — D18).
+
+    Duplicate pair: when a *live* row for the mapped (unordered) pair
+    already exists, the rewrite is a no-op for that row — the relation
+    is already recorded at the destination; the row stays at the old
+    path and drops out of the read surfaces via the D18 dead-endpoint
+    filter (it is never deleted).
+
+    Lock discipline: same as :func:`merge_edge` — the shared
+    ``_ledger_lock`` is held inside this function (the out-of-package
+    write surface; the caller — apply_change's moved branch — holds only
+    the index lock, the two locks guard disjoint tables). Returns the
+    number of rows rewritten.
+    """
+    if not old_path or old_path == new_path:
+        return 0
+    with _ledger_lock:
+        rows = conn.execute(
+            "SELECT id, source, target FROM relatedness "
+            "WHERE source = ? OR target = ?",
+            (old_path, old_path),
+        ).fetchall()
+        n = 0
+        for r in rows:
+            src = new_path if r["source"] == old_path else r["source"]
+            tgt = new_path if r["target"] == old_path else r["target"]
+            if src == r["source"] and tgt == r["target"]:
+                continue
+            dup = conn.execute(
+                """
+                SELECT 1 FROM relatedness
+                WHERE id != ? AND ignored = 0
+                  AND ((source = ? AND target = ?) OR (source = ? AND target = ?))
+                """,
+                (r["id"], src, tgt, tgt, src),
+            ).fetchone()
+            if dup is not None:
+                continue  # relation already recorded at the destination
+            conn.execute(
+                "UPDATE relatedness SET source = ?, target = ? WHERE id = ?",
+                (src, tgt, r["id"]),
+            )
+            n += 1
+        return n
+
+
 def edges_for_actor(conn: sqlite3.Connection, alias: str) -> list[dict]:
     """All edges produced by one role (live and ignored), newest first.
 

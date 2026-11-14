@@ -108,6 +108,279 @@ def test_log_query_skips_malformed_results(db_conn):
     assert db_conn.execute("SELECT count(*) FROM recall_log").fetchone()[0] == 1
 
 
+# ── log_click (spec 2026-11-13 §4.3) ───────────────────────────────────────
+
+def test_log_click_row_shape_and_recall_id_match(db_conn):
+    now = time.time()
+    db_conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+        "VALUES (?, 'web', 'q1', 'notes/a.md', 0.8, 'relaxed', 'human')",
+        (now - 60,))
+    db_conn.commit()
+
+    recall_db.log_click(db_conn, "notes/a.md", "search",
+                        query="q1", session_id=None, rank=2, message_id=None)
+
+    r = db_conn.execute("SELECT * FROM recall_clicks").fetchone()
+    assert r["path"] == "notes/a.md"
+    assert r["source"] == "web"
+    assert r["traffic"] == "human"
+    assert r["via"] == "search"
+    assert r["query"] == "q1"
+    assert r["session_id"] is None
+    assert r["rank"] == 2
+    assert r["message_id"] is None
+    assert r["ts"] > 0
+    # recall_id = best-effort match: same path + query within 10min → the hit row
+    hit_id = db_conn.execute(
+        "SELECT id FROM recall_log WHERE path = 'notes/a.md'").fetchone()["id"]
+    assert r["recall_id"] == hit_id
+
+
+def test_log_click_recall_id_window_miss_is_null(db_conn):
+    """A hit older than the 10-minute window does not match → recall_id NULL
+    (never blocks the click row)."""
+    now = time.time()
+    db_conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+        "VALUES (?, 'web', 'q1', 'notes/a.md', 0.8, 'relaxed', 'human')",
+        (now - 11 * 60,))
+    db_conn.commit()
+
+    recall_db.log_click(db_conn, "notes/a.md", "search", query="q1")
+
+    r = db_conn.execute("SELECT * FROM recall_clicks").fetchone()
+    assert r["recall_id"] is None  # window miss → NULL, row still written
+
+
+def test_log_click_recall_id_query_mismatch_is_null(db_conn):
+    """With a query given, the match requires path AND query; a different
+    query (or a query-less click) falls back to path-only matching."""
+    now = time.time()
+    db_conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+        "VALUES (?, 'web', 'other', 'notes/a.md', 0.8, 'relaxed', 'human')",
+        (now - 60,))
+    db_conn.commit()
+
+    recall_db.log_click(db_conn, "notes/a.md", "search", query="q1")
+    r1 = db_conn.execute("SELECT recall_id FROM recall_clicks ORDER BY id LIMIT 1").fetchone()
+    assert r1["recall_id"] is None  # query mismatch → NULL
+
+    recall_db.log_click(db_conn, "notes/a.md", "preview")
+    r2 = db_conn.execute("SELECT recall_id FROM recall_clicks ORDER BY id DESC LIMIT 1").fetchone()
+    assert r2["recall_id"] is not None  # no query → path-only match
+
+
+def test_log_click_no_hit_row_still_writes(db_conn):
+    """No recall_log row at all → recall_id NULL, click row still lands."""
+    recall_db.log_click(db_conn, "notes/ghost.md", "ai",
+                        query="q", session_id="web-1")
+    r = db_conn.execute("SELECT * FROM recall_clicks").fetchone()
+    assert r["recall_id"] is None
+    assert r["via"] == "ai"
+    assert r["session_id"] == "web-1"
+
+
+# ── click_stats (spec 2026-11-13 §4.5) ─────────────────────────────────────
+
+def test_click_stats_ctr_and_avg_rank(db_conn):
+    now = time.time()
+    # 5 ranked clicks: ranks 1,2,3,4,5 → CTR@1=0.2, @3=0.6, @5=1.0, avg=3.0
+    for rank in (1, 2, 3, 4, 5):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, query, rank) "
+            "VALUES (?, 'notes/a.md', 'search', 'q', ?)",
+            (now, rank))
+    db_conn.commit()
+
+    stats = recall_db.click_stats(db_conn, since_ts=0.0)
+    assert stats["ctr"] == {1: pytest.approx(0.2), 3: pytest.approx(0.6),
+                            5: pytest.approx(1.0)}
+    assert stats["avg_rank"] == pytest.approx(3.0)
+
+
+def test_click_stats_ctr_ignores_unranked_and_window(db_conn):
+    """Clicks without a rank are not 'attributed' (excluded from the CTR
+    denominator); clicks outside the window are excluded entirely."""
+    now = time.time()
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, rank) "
+        "VALUES (?, 'notes/a.md', 'search', 1)", (now,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via) "
+        "VALUES (?, 'notes/b.md', 'preview')", (now,))  # no rank
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, rank) "
+        "VALUES (?, 'notes/c.md', 'search', 1)", (now - 100 * 86400,))  # out of window
+    db_conn.commit()
+
+    stats = recall_db.click_stats(db_conn, since_ts=now - 86400)
+    assert stats["ctr"][1] == pytest.approx(1.0)  # only the in-window ranked click
+    assert stats["avg_rank"] == pytest.approx(1.0)
+
+
+def test_click_stats_doc_click_rate(db_conn):
+    """Per-path clicks/hits in the window: a=2/4=0.5, b=1/0=None (no hits),
+    c=0/3=0.0 (no clicks)."""
+    now = time.time()
+    for _ in range(2):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via) VALUES (?, 'notes/a.md', 'search')",
+            (now,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via) VALUES (?, 'notes/b.md', 'search')",
+        (now,))
+    for _ in range(4):
+        db_conn.execute(
+            "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+            "VALUES (?, 'web', 'q', 'notes/a.md', 0.8, 'relaxed', 'human')", (now,))
+    for _ in range(3):
+        db_conn.execute(
+            "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+            "VALUES (?, 'web', 'q', 'notes/c.md', 0.8, 'relaxed', 'human')", (now,))
+    db_conn.commit()
+
+    rate = recall_db.click_stats(db_conn, since_ts=0.0)["doc_click_rate"]
+    assert rate["notes/a.md"] == {"clicks": 2, "hits": 4,
+                                  "rate": pytest.approx(0.5)}
+    assert rate["notes/b.md"]["rate"] is None  # no hits in window
+    assert rate["notes/c.md"] == {"clicks": 0, "hits": 3, "rate": pytest.approx(0.0)}
+
+
+def test_click_stats_recall_miss(db_conn):
+    """via=ai clicks: share of paths NOT in that session's recall_log path
+    set (session_id column, spec §3 F3 / §5 — landed in the same batch)."""
+    now = time.time()
+    # session s1's search 'q1' recalled notes/a.md only
+    db_conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic, session_id) "
+        "VALUES (?, 'agent', 'q1', 'notes/a.md', 0.8, 'relaxed', 'on_demand', 's1')",
+        (now - 60,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
+        "VALUES (?, 'notes/a.md', 'ai', 'q1', 's1')", (now,))      # recalled → not a miss
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
+        "VALUES (?, 'notes/b.md', 'ai', 'q1', 's1')", (now,))      # not recalled → miss
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via) "
+        "VALUES (?, 'notes/c.md', 'preview')", (now,))             # not via=ai → ignored
+    db_conn.commit()
+
+    stats = recall_db.click_stats(db_conn, since_ts=0.0)
+    assert stats["recall_miss"] == pytest.approx(0.5)
+
+
+def test_session_recall_paths_fallback_without_session_col(tmp_path):
+    """Pre-migration DBs (no session_id column on recall_log): the session's
+    recall set is approximated by the click's own query attribution."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE recall_log (id INTEGER PRIMARY KEY, ts REAL, source TEXT, "
+        "query TEXT, path TEXT, score REAL, recall TEXT, traffic TEXT)")
+    conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
+        "VALUES (1, 'agent', 'q1', 'notes/a.md', 0.8, 'relaxed', 'on_demand')")
+    conn.commit()
+
+    assert recall_db._session_recall_paths(conn, "s1", "q1") == {"notes/a.md"}
+    assert recall_db._session_recall_paths(conn, "s1", "q2") == set()
+    assert recall_db._session_recall_paths(conn, "s1", None) == set()
+
+
+def test_click_stats_empty_window(db_conn):
+    stats = recall_db.click_stats(db_conn, since_ts=0.0)
+    assert stats["ctr"] == {1: 0.0, 3: 0.0, 5: 0.0}
+    assert stats["avg_rank"] is None
+    assert stats["doc_click_rate"] == {}
+    assert stats["recall_miss"] is None
+    assert stats["co_click"] == []
+
+
+def test_click_stats_co_click_pairs(db_conn):
+    """§6.3-③：同会话/同 query 内点击 ≥2 文档的配对计数（cap 20）。
+
+    组 1（session s1）：a+b 各点 2 次 → 配对 {a,b} ×1；
+    组 2（query q2，无 session）：a+b+c → 3 个无序对各 ×1；
+    组 1 与组 2 的 {a,b} 聚合 → ×2（top）。preview 点击（无 session 无
+    query）不成组。只进读面——relatedness 表零写入（D14）。
+    """
+    now = time.time()
+    for _ in range(2):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, session_id) "
+            "VALUES (?, 'notes/a.md', 'ai', 's1')", (now,))
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, session_id) "
+            "VALUES (?, 'notes/b.md', 'ai', 's1')", (now,))
+    for path in ("notes/a.md", "notes/b.md", "notes/c.md"):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, query) "
+            "VALUES (?, ?, 'search', 'q2')", (now, path))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via) "
+        "VALUES (?, 'notes/z.md', 'preview')", (now,))  # 无归因 → 不成组
+    db_conn.commit()
+
+    co = recall_db.click_stats(db_conn, since_ts=0.0)["co_click"]
+    assert co == [
+        {"a": "notes/a.md", "b": "notes/b.md", "count": 2},
+        {"a": "notes/a.md", "b": "notes/c.md", "count": 1},
+        {"a": "notes/b.md", "b": "notes/c.md", "count": 1},
+    ]
+
+
+def test_click_stats_co_click_cap_and_window(db_conn):
+    """cap 20：21 个不同配对 → 只留 top 20（count 相同按路径序确定）；
+    窗口外的点击不进配对。"""
+    now = time.time()
+    paths = [f"notes/p{i:02d}.md" for i in range(21)]
+    for i, path in enumerate(paths):
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, query) "
+            "VALUES (?, ?, 'search', ?)", (now, path, f"q{i}"))
+        db_conn.execute(
+            "INSERT INTO recall_clicks (ts, path, via, query) "
+            "VALUES (?, 'notes/anchor.md', 'search', ?)", (now, f"q{i}"))
+    # 窗口外：anchor + 一个文档，同 query qold
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query) "
+        "VALUES (?, 'notes/anchor.md', 'search', 'qold')",
+        (now - 100 * 86400,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query) "
+        "VALUES (?, 'notes/old.md', 'search', 'qold')",
+        (now - 100 * 86400,))
+    db_conn.commit()
+
+    co = recall_db.click_stats(db_conn, since_ts=now - 86400)["co_click"]
+    assert len(co) == 20  # capped
+    assert all(p["count"] == 1 for p in co)
+    # 第 21 个配对（路径序最末）被 cap 丢弃
+    assert not any(p["b"] == "notes/p20.md" for p in co)
+    # 窗口外的 qold 配对不在
+    assert not any(p["b"] == "notes/old.md" for p in co)
+
+
+def test_clicks_do_not_affect_arming_scan(db_conn):
+    """Regression (spec §4 验收 5): the recall_clicks table is telemetry —
+    click rows must not count toward the arming signal (only zero-hit
+    recall_queries rows and weak recall_log hits do)."""
+    recall_db.log_query(db_conn, "web", "miss", "fuzzy", [])  # 1 arming row
+    recall_db.log_click(db_conn, "notes/a.md", "search", query="q")
+    recall_db.log_click(db_conn, "notes/b.md", "ai", session_id="s1")
+    db_conn.commit()
+
+    count, q_cursor, h_cursor = recall_db.scan_recall_arming(
+        db_conn, query_since_id=0, hit_since_id=0)
+    assert count == 1  # the failed query only — clicks contribute 0
+    assert q_cursor > 0
+
+
 # ── doc_traffic ────────────────────────────────────────────────────────────
 
 def test_doc_traffic_decay_weights_and_sorting(db_conn):
@@ -384,48 +657,182 @@ def test_mcp_search_telemetry_failure_never_breaks_response(db_conn, vault_dir,
     assert "<results" in out  # MCP response unaffected
 
 
-# ── recall_stats tool ──────────────────────────────────────────────────────
+# ── recall_stats tool (§1.5 改判：计算信号，非原始行；原始明细留端点) ───────
 
-def test_recall_stats_tool_output(db_conn, vault_dir):
+def _seed_query(conn, ts: float, source: str, query: str, hits: int,
+                recall: str = "relaxed") -> None:
+    """Seed one recall_queries row with a controlled timestamp."""
+    traffic = {"web": "human", "agent": "on_demand"}.get(source, "synthetic")
+    conn.execute(
+        "INSERT INTO recall_queries (ts, source, traffic, query, recall, hits) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, source, traffic, query, recall, hits))
+
+
+def test_recall_stats_tool_formulas(db_conn, vault_dir):
+    """验收 1：输出比率与手算一致（公式断言）。
+
+    当前窗口：10 queries（web 4：2 failed / agent 6：2 failed）→ zero-hit 40%
+    （web 50% / agent 33%）；10 hits 其中 2 low-score → low-score 20%；
+    4 exposed docs 其中 2 被点击 → consumed 50%；5 个有归因点击 3 个在 top5
+    → CTR@5 0.60。无信号超阈值 → 无 Signals 段。
+    """
     now = time.time()
-    _hit(db_conn, "notes/a.md", now, "human")
-    _hit(db_conn, "notes/a.md", now, "on_demand")
-    recall_db.log_query(db_conn, "web", "missing", "strict", [])
-    db_conn.commit()
-
-    tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
-
-    assert "Recall traffic (window: 30d, half-life: 30d)" in out
-    assert "path | human | on_demand | synthetic | value-weighted (excl. synthetic) | last hit" in out
-    a_line = [l for l in out.splitlines() if l.startswith("notes/a.md")][0]
-    assert " | 1 | 1 | 0 |" in a_line  # human=1, on_demand=1, synthetic=0
-    assert "Failed queries (zero hits):" in out
-    assert "web missing" in out
-
-
-def test_recall_stats_tool_caps(db_conn, vault_dir):
-    now = time.time()
-    db_conn.executemany(
-        "INSERT INTO recall_log (ts, source, query, path, score, recall, traffic) "
-        "VALUES (?, 'web', 'q', ?, 0.8, 'strict', 'human')",
-        [(now - i * 0.001, f"notes/p{i:03d}.md") for i in range(51)])
-    for i in range(21):
+    for i in range(4):
+        _seed_query(db_conn, now - i, "web", f"web-q{i}", 0 if i < 2 else 1)
+    for i in range(6):
+        _seed_query(db_conn, now - i, "agent", f"agent-q{i}", 0 if i < 2 else 1)
+    # 10 hits over 4 docs; 2 low-score (score 0.1, non-synthetic)。
+    # 每文档 human_w < 3 → 不触发 demand-coverage（保持本测试只验公式）。
+    for i in range(3):
+        _hit(db_conn, "notes/a.md", now - i, "human" if i < 2 else "on_demand")
+    for i in range(3):
+        _hit(db_conn, "notes/b.md", now - i, "human" if i < 2 else "on_demand")
+    _hit(db_conn, "notes/c.md", now, "human")
+    _hit(db_conn, "notes/c.md", now - 1, "on_demand", score=0.1)
+    _hit(db_conn, "notes/d.md", now, "human")
+    _hit(db_conn, "notes/d.md", now - 1, "on_demand", score=0.1)
+    # 5 ranked clicks, ranks 1,2,5,6,10 → CTR@5 = 3/5；a.md + b.md 被点击
+    for rank, path in ((1, "notes/a.md"), (2, "notes/a.md"),
+                       (5, "notes/b.md"), (6, "notes/b.md"),
+                       (10, "notes/b.md")):
         db_conn.execute(
-            "INSERT INTO recall_queries (ts, source, traffic, query, recall, hits) "
-            "VALUES (?, 'agent', 'on_demand', ?, 'strict', 0)",
-            (now - i * 0.001, f"miss-{i:03d}"))
+            "INSERT INTO recall_clicks (ts, path, via, query, rank) "
+            "VALUES (?, ?, 'search', 'q', ?)", (now, path, rank))
+    db_conn.commit()
+
+    tool = RecallStatsTool()
+    ctx = ToolContext(vault_dir=vault_dir)
+    out = tool.call({}, ctx)
+
+    assert "Recall health (30d, vs prev 30d)" in out
+    assert ("queries 10 (agent 6/web 4) | zero-hit 40% "
+            "(agent 33%/web 50%) | low-score 20%") in out
+    assert "consumed 50% of exposed docs | CTR@5 0.60" in out
+    assert "Signals" not in out  # nothing exceeds its threshold
+    assert ctx.last_meta == {"count": 4}  # exposed docs (UI 工具块摘要)
+
+
+def test_recall_stats_tool_trend_delta(db_conn, vault_dir):
+    """趋势 = 前一窗口（ts - 2×window）同公式，输出 delta（百分点）。"""
+    now = time.time()
+    for i in range(10):  # current: 10 queries, 4 failed → 40%
+        _seed_query(db_conn, now - i, "web", f"q{i}", 0 if i < 4 else 1)
+    for i in range(10):  # prev: 10 queries, 10 failed → 100% → ↓60pt
+        _seed_query(db_conn, now - 31 * 86400 - i, "web", f"old-{i}", 0)
     db_conn.commit()
 
     tool = RecallStatsTool()
     out = tool.call({}, ToolContext(vault_dir=vault_dir))
-    doc_lines = [l for l in out.splitlines() if l.startswith("notes/p")]
-    assert len(doc_lines) == 50  # doc cap
-    assert "notes/p000" in out  # newest (equal weights, ts DESC) survives the cap
-    assert "notes/p050" not in out  # oldest dropped
-    assert "miss-000" in out  # newest failed query survives the cap
-    assert "miss-020" not in out  # oldest dropped by the 20-row cap
-    assert "21 total in window" in out
+    assert "zero-hit 40% (web 40%; prev 100% ↓60pt)" in out
+
+
+def test_recall_stats_tool_repeat_failure_signal_and_boundary(db_conn, vault_dir):
+    """验收 1 边界：repeat failures 仅超阈值出现——恰在阈值（3 次）不出现；
+    4 次 → 信号 + Evidence 段（ts source 档位 query，G3 档位对比）。"""
+    now = time.time()
+    for i in range(4):
+        _seed_query(db_conn, now - i, "web", "部署记录", 0, recall="fuzzy")
+    for i in range(3):
+        _seed_query(db_conn, now - i, "agent", "其他", 0)
+    db_conn.commit()
+
+    tool = RecallStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+
+    assert ('- repeat failures (>3x): "部署记录" web×4 '
+            "→ suspected content gap") in out
+    assert "其他" not in out  # 恰在阈值 → 静默
+    assert "Evidence (top rows backing each signal):" in out
+    assert "web fuzzy 部署记录" in out  # 证据行含档位
+
+
+def test_recall_stats_tool_exposed_not_consumed_boundary(db_conn, vault_dir):
+    """验收 1 边界：exposed-not-consumed 恰在阈值（10 hits）不出现；11 → 出现。
+    （on_demand 流量 → human_w = 0，不触发 demand-coverage 干扰。）"""
+    now = time.time()
+    for i in range(11):
+        _hit(db_conn, "notes/a.md", now - i, "on_demand")
+    for i in range(10):
+        _hit(db_conn, "notes/b.md", now - i, "on_demand")
+    db_conn.commit()
+
+    tool = RecallStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+
+    assert "exposed-not-consumed: notes/a.md (11 hits, 0 clicks)" in out
+    assert "notes/b.md" not in out  # 恰在阈值 → 静默
+
+
+def test_recall_stats_tool_demand_coverage_signal(db_conn, vault_dir):
+    """G2：human_w ≥ 3 且 on_demand_w < 1 → 任务缺口信号（分档衰减对比，
+    非原始计数）。"""
+    now = time.time()
+    for i in range(4):
+        _hit(db_conn, "notes/spec.md", now - i, "human")
+    db_conn.commit()
+
+    tool = RecallStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+
+    assert ("- demand-coverage: notes/spec.md (human_w 4.0, "
+            "on_demand_w 0.0) → task gap") in out
+
+
+def test_recall_stats_tool_leakage_signal_and_boundary(db_conn, vault_dir):
+    """leakage = via=ai 点击中 path ∉ 该 session recall_log 集合（cap 5）；
+    0 泄漏（恰在阈值）→ 静默。"""
+    now = time.time()
+    db_conn.execute(
+        "INSERT INTO recall_log (ts, source, query, path, score, recall, "
+        "traffic, session_id) VALUES (?, 'agent', 'q1', 'notes/a.md', 0.8, "
+        "'relaxed', 'on_demand', 's1')", (now - 60,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
+        "VALUES (?, 'notes/a.md', 'ai', 'q1', 's1')", (now,))  # recalled → 不泄漏
+    db_conn.commit()
+
+    tool = RecallStatsTool()
+    assert "leakage" not in tool.call(
+        {}, ToolContext(vault_dir=vault_dir))  # 边界：0 泄漏 → 静默
+
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
+        "VALUES (?, 'notes/b.md', 'ai', 'q1', 's1')", (now,))
+    db_conn.execute(
+        "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
+        "VALUES (?, 'notes/c.md', 'ai', 'q1', 's1')", (now,))
+    db_conn.commit()
+
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    assert ("- leakage: 2 ai-cited docs not in session recall set "
+            "(notes/b.md, notes/c.md) → recall gap") in out
+
+
+def test_low_score_hits_same_set_as_arming_scan(db_conn):
+    """验收 2：低分读面与 scan_recall_arming 同集——唤醒信号与读面同谓词
+    （score < 0.2 AND traffic != 'synthetic'，纪律）。同一行集合上两者
+    必须选中完全相同的行。"""
+    now = time.time()
+    _hit(db_conn, "notes/low1.md", now, "human", score=0.1)       # 同集：低分 human
+    _hit(db_conn, "notes/low2.md", now, "on_demand", score=0.19)  # 同集：低分 on_demand
+    _hit(db_conn, "notes/high.md", now, "human", score=0.9)       # 排除：高分
+    _hit(db_conn, "notes/syn.md", now, "synthetic", score=0.1)    # 排除：合成
+    _hit(db_conn, "notes/edge.md", now, "human", score=0.2)       # 排除：边界（< 严格）
+    db_conn.commit()
+
+    since = now - 30 * 86400
+    read_face = {r["path"] for r in recall_db.low_score_hits(db_conn, since)}
+    assert read_face == {"notes/low1.md", "notes/low2.md"}
+
+    # 同一行集合（cursor 0 = 全部行；无 zero-hit query）：arming 的低分计数
+    # 与读面行数一致，且选中同一批行。
+    n, _, _ = recall_db.scan_recall_arming(db_conn, 0, 0)
+    assert n == len(read_face)
+    armed = {r["path"] for r in db_conn.execute(
+        "SELECT path FROM recall_log "
+        "WHERE id > 0 AND score < 0.2 AND traffic != 'synthetic'")}
+    assert armed == read_face
 
 
 def test_recall_stats_tool_empty_window(db_conn, vault_dir):
@@ -436,6 +843,78 @@ def test_recall_stats_tool_empty_window(db_conn, vault_dir):
 
 def test_recall_stats_tool_no_db(tmp_path):
     tool = RecallStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=tmp_path))
+    assert out == "Error: database not available"
+
+
+# ── recall_feedback_stats tool（D23 新工具：回答质量单职责）────────────────
+
+def _seed_feedback(conn, ts: float, session_id: str, message_id: str,
+                   verdict: str, citations: list, click_paths=None) -> None:
+    import json as _json
+
+    conn.execute(
+        "INSERT INTO recall_feedback (ts, session_id, message_id, verdict, "
+        "citations, click_paths) VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, session_id, message_id, verdict, _json.dumps(citations),
+         _json.dumps(click_paths) if click_paths is not None else None))
+
+
+def test_recall_feedback_stats_formulas(db_conn, vault_dir):
+    """验收 3：三比率与手算一致。
+
+    3 行反馈：useful 2 / not_useful 1 → useful 67% (2/3)；
+    引用 10 个（3+3+4）：grounded 7 → 70% (7/10)；cited-clicked 4 → 40% (4/10)；
+    ungrounded 信号列出正确文档（b.md ×2, c.md ×1，count desc）。
+    """
+    from server.agent.tools.recall_feedback_stats import RecallFeedbackStatsTool
+
+    now = time.time()
+    _seed_feedback(db_conn, now, "s1", "m1", "useful", [
+        {"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"},
+        {"path": "notes/b.md", "exists": "ok", "grounded": "ungrounded"},
+        {"path": "notes/c.md", "exists": "ok", "grounded": "ungrounded"},
+    ], click_paths=["notes/a.md", "notes/b.md"])
+    _seed_feedback(db_conn, now - 1, "s1", "m2", "useful", [
+        {"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"},
+        {"path": "notes/b.md", "exists": "ok", "grounded": "ungrounded"},
+        {"path": "notes/d.md", "exists": "missing", "grounded": "in_evidence"},
+    ], click_paths=["notes/a.md", "notes/d.md"])
+    _seed_feedback(db_conn, now - 2, "s2", "m3", "not_useful", [
+        {"path": "notes/e.md", "exists": "ok", "grounded": "in_evidence"},
+        {"path": "notes/f.md", "exists": "ok", "grounded": "in_evidence"},
+        {"path": "notes/g.md", "exists": "ok", "grounded": "in_evidence"},
+        {"path": "notes/h.md", "exists": "ok", "grounded": "in_evidence"},
+    ])
+    db_conn.commit()
+
+    tool = RecallFeedbackStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+
+    assert "Answer quality (30d)" in out
+    assert ("useful 67% (2/3) | grounded 70% (7/10) "
+            "| cited-clicked 40% (4/10)") in out
+    assert "Signals (threshold-exceeded only):" in out
+    assert ("- ungrounded citations: notes/b.md cited 2x, "
+            "never read in session") in out
+    assert ("- ungrounded citations: notes/c.md cited 1x, "
+            "never read in session") in out
+    # 顺序：count desc（b.md 2x 在 c.md 1x 之前）
+    assert out.index("notes/b.md cited 2x") < out.index("notes/c.md cited 1x")
+
+
+def test_recall_feedback_stats_empty_window(db_conn, vault_dir):
+    from server.agent.tools.recall_feedback_stats import RecallFeedbackStatsTool
+
+    tool = RecallFeedbackStatsTool()
+    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    assert out == RecallFeedbackStatsTool.no_data()
+
+
+def test_recall_feedback_stats_no_db(tmp_path):
+    from server.agent.tools.recall_feedback_stats import RecallFeedbackStatsTool
+
+    tool = RecallFeedbackStatsTool()
     out = tool.call({}, ToolContext(vault_dir=tmp_path))
     assert out == "Error: database not available"
 
@@ -558,10 +1037,11 @@ def test_runner_no_whitelist_uses_full_registry(tmp_path):
 
     asyncio.run(go())
     names = [t.name for t in rt.agent.spec.tools]
-    # 14 = full registry minus delete_doc (bgagent channel hard-removal,
-    # spec §3.2/D3: the registry, not the config whitelist, is the mechanism).
-    # 2026-10-28: registry grew 11→15 (final-review four tools, v2a debt #4).
-    assert len(names) == 14
+    # 15 = full registry (16) minus delete_doc (bgagent channel
+    # hard-removal, spec §3.2/D3: the registry, not the config whitelist,
+    # is the mechanism). 2026-11-14: registry grew 15→16 (D23:
+    # recall_feedback_stats split from recall_stats).
+    assert len(names) == 15
     assert "delete_doc" not in names
 
 

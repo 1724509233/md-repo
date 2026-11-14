@@ -4,9 +4,24 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, Response
 
 logger = logging.getLogger("md-vault.api")
+
+
+def _is_fts_syntax_error(e: Exception) -> bool:
+    """FTS5 query syntax failure (same detection as the agent/mcp channels)."""
+    s = str(e).lower()
+    return "syntax error" in s or "fts5" in s
+
+
+def _fts_400(query: str) -> HTTPException:
+    """F2 (spec 2026-11-13 §3): the web endpoint answers an FTS syntax
+    error with 400 + the agent channel's exact hint, and ledgered NOTHING
+    (the search never ran — the three channels' error semantics align)."""
+    from ..agent.tools.search_docs import SearchDocsTool
+
+    return HTTPException(status_code=400, detail=SearchDocsTool.fts_syntax_error(query))
 
 
 def register(app, ctx) -> None:
@@ -30,14 +45,78 @@ def register(app, ctx) -> None:
                                  recall=recall, tags=tags, weights=weights)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            if _is_fts_syntax_error(e):
+                raise _fts_400(query)
+            raise
+        # F1 (spec 2026-11-13 §3): one user action = one ledger row. A
+        # relaxed search with zero hits settles at the terminal tier in
+        # the SAME request: run fuzzy here; the response AND the ledger
+        # row both record recall=fuzzy (same semantics as the agent
+        # channel's in-tool escalation). relaxed-with-hits never falls
+        # back. fuzzy zero → one recall=fuzzy hits=0 row (content truly
+        # absent from the vault).
+        tier = recall
+        if recall == "relaxed" and not results:
+            try:
+                results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
+                                     recall="fuzzy", tags=tags, weights=weights)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                if _is_fts_syntax_error(e):
+                    raise _fts_400(query)
+                raise
+            tier = "fuzzy"
         # Recall telemetry (memory-runtime v2): one recall_queries row per
         # search + one recall_log row per hit. Must never break the response.
         from ..vault.db import recall as recall_db
         try:
-            recall_db.log_query(ctx.db_conn, "web", query, recall, results)
+            recall_db.log_query(ctx.db_conn, "web", query, tier, results)
         except Exception:
-            logger.exception("recall telemetry insert failed")
-        return {"results": results, "recall": recall}
+            logger.exception(
+                "recall telemetry insert failed (source=web query=%r tier=%s)",
+                query, tier)
+        return {"results": results, "recall": tier}
+
+    @app.post("/api/recall/click")
+    async def recall_click(request: Request) -> Response:
+        """Ledger one user click on a recalled/recommended document
+        (spec 2026-11-13 §4.4). Fire-and-forget: ALWAYS 204 — a ledger
+        failure must not surface in the UI (fail-open) but MUST be
+        logged (D17). Filetree clicks never reach this endpoint (D5)."""
+        body = await request.json()
+        raw_path = body.get("path", "")
+        via = body.get("via")
+        query = body.get("query")
+        session_id = body.get("session_id")
+        rank = body.get("rank")
+        message_id = body.get("message_id")
+        from ..vault.db import recall as recall_db
+        from ..vault.fs.vault_ops import safe_rel_path
+
+        # Normalization: safe_rel_path (rejects .., leading /, .trash/.sync
+        # first segments) + .md completion ([[notes/a]] / [[notes/a.md]]
+        # dual-write convention).
+        rel = safe_rel_path(raw_path) if raw_path else None
+        if rel is None or via not in ("search", "ai", "preview"):
+            return Response(status_code=204)  # malformed → nothing to ledger
+        path = str(rel)
+        if not path.lower().endswith(".md"):
+            path += ".md"
+        if rank is not None:
+            try:
+                rank = int(rank)
+            except (TypeError, ValueError):
+                rank = None
+        try:
+            recall_db.log_click(ctx.db_conn, path, via, query,
+                                session_id, rank, message_id)
+        except Exception:
+            logger.exception(
+                "recall click ledger failed (source=web path=%s via=%s query=%r)",
+                path, via, query)
+        return Response(status_code=204)
 
     @app.get("/api/tags")
     async def tags() -> dict:

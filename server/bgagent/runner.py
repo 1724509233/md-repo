@@ -269,6 +269,41 @@ def _readback_block(alias: str) -> str:
             if len(pairs) > READBACK_TOP_N:
                 lines.append(f"  - …另有 {len(pairs) - READBACK_TOP_N} 个配对未列出")
 
+    # Telemetry readback (spec 2026-11-13 §6.3-③, D14): click/feedback
+    # signals feed the role's context as EVIDENCE — the agent may propose
+    # relatedness edges from them (human final review); the relatedness
+    # table is NEVER written from telemetry (no self-proving loop). Read
+    # face only (index.db), silent when the index DB is unavailable or
+    # there is nothing to say, bounded (top N + truncation marker).
+    try:
+        from ..vault.db import recall as recall_mod
+        from ..vault.db.conn import get_index_conn
+        index_conn = get_index_conn()
+        if index_conn is not None:
+            since = time.time() - 30 * 86400
+            co_click = recall_mod.click_stats(index_conn, since)["co_click"]
+            ungrounded = recall_mod.feedback_stats(index_conn, since)["ungrounded"]
+            if co_click or ungrounded:
+                lines.append("## 消费信号（点击/反馈遥测 · 只读证据，可作 propose 依据，不自动建边）")
+                if co_click:
+                    lines.append(
+                        f"- 同会话/同查询内总被一起点击的文档对（最近 30 天，"
+                        f"最近 {min(len(co_click), READBACK_TOP_N)} 对）：")
+                    for p in co_click[:READBACK_TOP_N]:
+                        lines.append(f"  - {p['a']} ↔ {p['b']}（×{p['count']}）")
+                    if len(co_click) > READBACK_TOP_N:
+                        lines.append(
+                            f"  - …另有 {len(co_click) - READBACK_TOP_N} 对未列出")
+                if ungrounded:
+                    lines.append("- 被引用但会话内未读过的文档（ungrounded 引用）：")
+                    for e in ungrounded[:READBACK_TOP_N]:
+                        lines.append(f"  - {e['path']}（×{e['count']}）")
+                    if len(ungrounded) > READBACK_TOP_N:
+                        lines.append(
+                            f"  - …另有 {len(ungrounded) - READBACK_TOP_N} 篇未列出")
+    except Exception:
+        logger.warning("[bg:%s] readback telemetry failed", alias, exc_info=True)
+
     return "\n".join(lines)
 
 

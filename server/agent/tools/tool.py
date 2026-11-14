@@ -36,6 +36,11 @@ class ToolContext:
     # types (None = unrestricted channel, e.g. the desktop agent).
     run_id: str = ""
     verbs: tuple[str, ...] | None = None
+    # Session attribution (spec 2026-11-13 §3.3 F3): the agent session id,
+    # injected by the route layer (the model never sets it). Threads into the
+    # recall ledger (recall_queries / recall_log session_id column); empty for
+    # the web/mcp channels (no session) and the bgagent (no UI session).
+    session_id: str = ""
 
 
 # ── Shared path validators ──────────────────────────────────────────────

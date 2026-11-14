@@ -3,8 +3,11 @@
 Scripted playbooks, selected by the request's system prompt:
 
 - system prompt contains ``sentinel`` → **sentinel playbook**
-  - turn 0: tool_call ``recall_stats`` {"days": 30}   (bypass recall read)
-  - turn 1: text — read-only governance report per server/prompts/sentinel.md
+  - turn 0: tool_call ``recall_stats`` {"days": 30}   (bypass recall read —
+    recall quality: exposure → failure → consumption, computed signals)
+  - turn 1: tool_call ``recall_feedback_stats`` {"days": 30}   (answer
+    quality: useful / grounded / cited-clicked, D23 split)
+  - turn 2: text — read-only governance report per server/prompts/sentinel.md
     (v2: the archive verb is retired, the sentinel files no proposals; the
     report names the cold docs and says the move is a human drag in Obsidian)
 - otherwise → **consolidator playbook**
@@ -51,14 +54,18 @@ _CONSOL_PROPOSAL_PATH = f"suggestions/{TODAY}_summary_p1.md"
 
 
 def sentinel_report_text() -> str:
-    """sentinel.md「结束」段要求的只读治理报告（v2：无提案，无写动作）。"""
+    """sentinel.md「结束」段要求的只读治理报告（v2：无提案，无写动作；
+    §1.5 改判后读两个质量面：召回质量 + 回答质量）。"""
     return (
-        f"检查了近 30 天召回遥测（human/on_demand/synthetic 三分流量，半衰期 30d）：\n"
-        f"- 判冷对象 {COLD_DOC}：human 0 / on_demand 0 / synthetic 0（seed 数据，"
-        f"时间衰减加权 0）。\n"
-        f"- 失败查询对账：召回账本中无与该文档相似的失败查询（不存在「想找到却"
-        f"没找到」的缺口），判定真冷（非检索质量缺口）。\n"
-        f"- 建议归档清单（≤3 条，宁缺毋滥）：{COLD_DOC}（判冷依据：窗口内零命中 + "
+        f"检查了近 30 天召回遥测（召回质量：zero-hit/low-score/消费信号，"
+        f"含与前一窗口的趋势对比；回答质量：useful/grounded/cited-clicked 信号）：\n"
+        f"- 判冷对象 {COLD_DOC}：窗口内仅 1 次低分命中（score 0.1，human 通道，"
+        f"seed 数据），无点击消费，无超阈值信号。\n"
+        f"- 失败查询对账：零命中查询（sentinel 通道）与该文档不相似（不存在「想"
+        f"找到却没找到」的缺口），判定真冷（非检索质量缺口）。\n"
+        f"- 回答质量：窗口内无用户反馈（无 useful/not-useful 评分），无 "
+        f"ungrounded 引用信号。\n"
+        f"- 建议归档清单（≤3 条，宁缺毋滥）：{COLD_DOC}（判冷依据：窗口内零消费 + "
         f"无相似失败查询；90 天零召回，functional-test scripted run）。\n"
         f"搬动 = 人在 Obsidian 把它拖到 archive/（v2：哨兵只读，不产提案）。"
         f"未发现其他 query gap。"
@@ -92,11 +99,15 @@ def consolidator_propose_args() -> dict:
 
 def _script(role: str, turn: int) -> tuple[str, str, dict] | str:
     """Return ("tool", name, args) for tool turns, or summary text once the
-    script's tool turns are exhausted (v2: the sentinel stops at turn 1 with
-    a read-only report — it files no proposals)."""
+    script's tool turns are exhausted (v2: the sentinel reads BOTH quality
+    faces — recall_stats = recall quality, recall_feedback_stats = answer
+    quality (D23) — then stops with a read-only report; it files no
+    proposals)."""
     if role == "sentinel":
         if turn == 0:
             return ("tool", "recall_stats", {"days": 30})
+        if turn == 1:
+            return ("tool", "recall_feedback_stats", {"days": 30})
         return sentinel_report_text()
     if turn == 0:
         return ("tool", "recent_changes", {"source": "web", "since": "24h", "limit": 50})
@@ -263,8 +274,20 @@ def _simulate(role: str) -> list[dict]:
             {"role": "user", "content": f"开始整理 suggestions/"}]
     tool_results = {
         "sentinel": {
-            "recall_stats": ("Recall traffic (window: 30d, half-life: 30d)\n"
-                             f"{COLD_DOC} | 0 | 0 | 0 | 0.0 | 30d ago"),
+            # §1.5 改判版格式：计算信号（比率/趋势/异常）+ 证据行，非原始表。
+            # 与 scratch-vault seed 一致（seed.py recall：web 1 hit score 0.1
+            # + sentinel 1 zero-hit）：2 queries、50% zero-hit、100%
+            # low-score（0.1 < 0.2 非合成）、1 exposed doc 0 clicks、无点击
+            # → CTR@5 —；无超阈值信号（repeat 需 >3x、exposed-not-consumed
+            # 需 >10 hits）。
+            "recall_stats": ("Recall health (30d, vs prev 30d)\n"
+                             "queries 2 (sentinel 1/web 1) | "
+                             "zero-hit 50% (sentinel 100%/web 0%) | "
+                             "low-score 100%\n"
+                             "consumed 0% of exposed docs | CTR@5 —"),
+            "recall_feedback_stats": ("No answer feedback in window. No "
+                                      "answers have been rated (useful / "
+                                      "not-useful) yet."),
         },
         "consolidator": {
             "recent_changes": "14:05 web       create   notes/cold-doc.md",

@@ -1,4 +1,4 @@
-"""Route-table order snapshot: the 36 routes' (methods, path) sequence,
+"""Route-table order snapshot: the 40 routes' (methods, path) sequence,
 the /static mount, and the no-duplicate invariant.
 
 Starlette matches the FIRST fully-matching route in registration order
@@ -17,7 +17,7 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
-# notifications → sync → recall → memory → agent → trash). 36 routes.
+# notifications → sync → recall → memory → agent → trash). 40 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -35,33 +35,37 @@ EXPECTED = (
     (("POST",), "/api/notifications/read"),            # 12
     # sync (1).
     (("POST",), "/api/sync"),                          # 13
-    # recall (4).
+    # recall (5).
     (("POST",), "/api/ai/search"),                     # 14
-    (("GET",), "/api/tags"),                           # 15
-    (("GET",), "/api/recall"),                         # 16
-    (("GET",), "/api/recall/stats"),                   # 17
-    # memory (11): {relpath}/subpath ⪯ detail (all four ⪯ the catchall).
-    (("GET",), "/api/memory/proposals"),               # 18 list
-    (("POST",), "/api/memory/proposals/{relpath:path}/adopt"),   # 19 ⪯ detail
-    (("POST",), "/api/memory/proposals/{relpath:path}/revive"),  # 20 ⪯ detail
-    (("POST",), "/api/memory/proposals/{relpath:path}/reject"),  # 21 ⪯ detail
-    (("GET",), "/api/memory/proposals/{relpath:path}/trail"),    # 22 ⪯ detail
-    (("GET",), "/api/memory/proposals/{relpath:path}"),          # 23 detail (catchall)
-    (("POST",), "/api/memory/rollback"),                # 24
-    (("GET",), "/api/memory/rollback-calls"),           # 25
-    (("GET",), "/api/memory/reports"),                  # 26
-    (("GET",), "/api/memory/reports/{relpath:path}"),   # 27
-    (("GET",), "/api/memory/status"),                   # 28
-    # agent (6).
-    (("POST",), "/api/ai/chat"),                        # 29
-    (("POST",), "/api/agent/chat"),                     # 30
-    (("POST",), "/api/agent/confirm"),                  # 31
-    (("GET",), "/api/agent/settings"),                  # 32
-    (("POST",), "/api/agent/settings"),                 # 33
-    (("POST",), "/api/agent/new-session"),              # 34
+    (("POST",), "/api/recall/click"),                  # 15 click ledger (fire-and-forget)
+    (("GET",), "/api/tags"),                           # 16
+    (("GET",), "/api/recall"),                         # 17
+    (("GET",), "/api/recall/stats"),                   # 18
+    # memory (13): {relpath}/subpath ⪯ detail (all four ⪯ the catchall).
+    (("GET",), "/api/memory/proposals"),               # 19 list
+    (("POST",), "/api/memory/proposals/{relpath:path}/adopt"),   # 20 ⪯ detail
+    (("POST",), "/api/memory/proposals/{relpath:path}/revive"),  # 21 ⪯ detail
+    (("POST",), "/api/memory/proposals/{relpath:path}/reject"),  # 22 ⪯ detail
+    (("GET",), "/api/memory/proposals/{relpath:path}/trail"),    # 23 ⪯ detail
+    (("GET",), "/api/memory/proposals/{relpath:path}"),          # 24 detail (catchall)
+    (("POST",), "/api/memory/rollback"),                # 25
+    (("GET",), "/api/memory/rollback-calls"),           # 26
+    (("GET",), "/api/memory/reports"),                  # 27
+    (("GET",), "/api/memory/reports/{relpath:path}"),   # 28
+    (("GET",), "/api/memory/doc/{relpath:path}"),             # 29 (v2b② doc face, spec §6.4)
+    (("POST",), "/api/memory/relatedness/{edge_id}/ignore"),  # 30 (v2b② D12/D15)
+    (("GET",), "/api/memory/status"),                   # 31
+    # agent (7).
+    (("POST",), "/api/ai/chat"),                        # 32
+    (("POST",), "/api/agent/chat"),                     # 33
+    (("POST",), "/api/agent/confirm"),                  # 34
+    (("GET",), "/api/agent/settings"),                  # 35
+    (("POST",), "/api/agent/settings"),                 # 36
+    (("POST",), "/api/agent/new-session"),              # 37
+    (("POST",), "/api/agent/feedback"),                 # 38 (lane B, same batch)
     # trash (2).
-    (("GET",), "/api/trash"),                           # 35 list
-    (("POST",), "/api/trash"),                          # 36 restore/purge/empty
+    (("GET",), "/api/trash"),                           # 39 list
+    (("POST",), "/api/trash"),                          # 40 restore/purge/empty
 )
 
 

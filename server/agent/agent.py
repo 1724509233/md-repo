@@ -19,7 +19,8 @@ class Agent:
     """A running agent: spec + runtime + internal state."""
 
     def __init__(self, spec: AgentSpec, runtime: Runtime | None = None,
-                 messages: list[dict] | None = None):
+                 messages: list[dict] | None = None,
+                 session_id: str = ""):
         self._spec = spec
         self._runtime = runtime or LoopRuntime()
         if not messages:
@@ -29,6 +30,18 @@ class Agent:
         self._messages = messages
         self._pending_confirms: dict[str, dict] = {}
         self._last_read_ts: dict[str, float] = {}
+        # Session attribution (spec 2026-11-13 §3.3 F3): the route layer stamps
+        # the session id here; the runtime threads it into the ToolContext so
+        # the recall ledger can attribute the agent channel's searches.
+        self._session_id = session_id
+        # Citation grounding set (spec 2026-11-13 §5.2, D9): the vault-relative
+        # paths this session's agent actually retrieved (search_docs results ∪
+        # read_doc ∪ get_related_docs ∪ the currently-open doc_path). In-memory,
+        # session-lifecycle only — a fresh Agent (post-restart / TTL eviction)
+        # starts empty, so a first-turn citation after a restart reads
+        # ungrounded (the UI degrades per §5.4). The runtime mutates it on each
+        # tool_result (from the tool meta); chat() seeds the open doc_path.
+        self._evidence_paths: set[str] = set()
 
     @property
     def spec(self) -> AgentSpec:
@@ -47,11 +60,28 @@ class Agent:
     def last_read_ts(self) -> dict[str, float]:
         return self._last_read_ts
 
+    @property
+    def session_id(self) -> str:
+        return self._session_id
+
+    @property
+    def evidence_paths(self) -> set[str]:
+        """The session's citation-grounding set (see the ``_evidence_paths``
+        docstring in ``__init__``). The runtime reads it at ``done`` and adds
+        tool-retrieved paths to it; chat() seeds the open doc_path."""
+        return self._evidence_paths
+
     async def chat(self, message: str, **ctx) -> AsyncIterator[Event]:
         """Process one user turn. Yields runtime events (token, tool_call, ...).
 
         ``ctx`` carries per-call extras for user reminders (e.g. ``doc_path``).
         """
+        # Seed the citation-grounding set with the currently-open document
+        # (spec 2026-11-13 §5.2 D9: the open doc is a legitimate grounding
+        # source — the agent has it in context, so citing it is grounded).
+        doc_path = ctx.get("doc_path")
+        if doc_path:
+            self._evidence_paths.add(doc_path)
         for r in self._spec.user_reminders:
             content = r.render(self, ctx)
             if content is not None:

@@ -27,7 +27,7 @@ def test_app_js_creates_vue_app():
     """app.js 应创建 Vue app 并注册所有组件"""
     js = read_js("app.js")
     assert "createApp" in js
-    for comp in ["FileTree", "EditorPane", "TopBar", "AIChatPanel", "MobileSheet", "ConflictBanner"]:
+    for comp in ["FileTree", "EditorPane", "TopBar", "AIChatPanel", "MobileSheet", "ConflictBanner", "DocRelated"]:
         assert comp in js, f"component {comp} not registered in app.js"
 
 
@@ -75,7 +75,8 @@ def test_api_js_exports_all_endpoints():
     js = read_js("api.js")
     for method in ["getDocs", "getDoc", "saveDoc", "uploadDoc", "getChanges",
                    "aiSearch", "getTags", "agentChat", "agentConfirm", "newSession",
-                   "graphBacklinks", "graphRelated"]:
+                   "graphBacklinks", "graphRelated",
+                   "getDocRelated", "ignoreRelatedness"]:
         assert method in js, f"api.{method} missing"
 
 
@@ -237,3 +238,39 @@ def test_api_js_ai_search_structured():
     m = re.search(r"async aiSearch\(([^)]*)\)", js)
     assert m and "tags" in m.group(1) and "weights" in m.group(1), \
         "aiSearch must accept structured tags/weights"
+
+
+def test_click_ledger_surfaces():
+    """点击落账（spec 2026-11-13 §4）：三面 search/ai/preview 各落一行，
+    filetree 点击不落（D5：导航非消费信号）。
+
+    - search 面：SearchPanel/FileTree 的结果项 pick 调 recallClick(via:'search')，
+      query = 产出当前结果的 keywords（search.lastQuery()），rank = 1-based 项序号
+    - ai 面：app.js 委托 click 在 #ai-messages 内 → via:'ai' + session_id +
+      query = AIChatPanel 跟踪的最近 search_docs query
+    - preview 面：#preview 内 → via:'preview'
+    - filetree 面：onTreeSelect（树文件行）不经过 recallClick
+    - 落账在 openDoc 之前发出、不 await（api.recallClick 内部 fire-and-forget）
+    """
+    api_js = read_js("api.js")
+    assert "recallClick" in api_js and "/api/recall/click" in api_js
+
+    sp = read_js("components/SearchPanel.js")
+    ft = read_js("components/FileTree.js")
+    for js in (sp, ft):
+        assert "via: 'search'" in js, "search surface must ledger via:'search'"
+        assert "search.lastQuery()" in js, "click query = 产出当前结果的 keywords"
+        assert "rank: i + 1" in js, "rank = 1-based 项序号"
+
+    app_js = read_js("app.js")
+    assert "via: 'ai'" in app_js and "via: 'preview'" in app_js
+    assert "state.sessionId" in app_js
+    assert "lastSearchQuery" in app_js  # ai 面 query 归因（AIChatPanel 跟踪）
+    # filetree 树文件行点击（onTreeSelect）不落账
+    m = re.search(r"function onTreeSelect\([^)]*\)\s*\{(.+?)\n\}", app_js, re.S)
+    assert m, "onTreeSelect not found"
+    assert "recallClick" not in m.group(1), "filetree clicks must not ledger (D5)"
+
+    chat = read_js("components/AIChatPanel.js")
+    assert "lastSearchQuery" in chat
+    assert "evt.name === 'search_docs'" in chat, "track the last search_docs query"
