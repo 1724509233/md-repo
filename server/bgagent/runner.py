@@ -21,6 +21,7 @@ from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
 from .notify import NotificationHook, RunReport
+from .readback import ReadbackSystemReminder
 
 logger = logging.getLogger("md-vault.bgagent")
 
@@ -176,135 +177,6 @@ def _report_paths(files_changed: set[str]) -> list[str]:
     them read-only. Empty when the run wrote no report files.
     """
     return sorted(p for p in files_changed if str(p).startswith("index/reports/"))
-
-
-READBACK_TOP_N = 5  # readback failure entries are bounded (top N + marker)
-
-
-def _readback_block(alias: str) -> str:
-    """Read-back injection (reversible-automation v2, spec §5.3): at the
-    context head of each run, the role is told its own proposal backlog —
-    pending counts (status + type breakdown) and failed proposals with their
-    reject_reason (trust-escalation feedback).
-
-    P2: the relatedness feedback loop (spec §4.4 忽略→遥测→回读, D9) rides
-    the same injection: the role's live machine edges (the suggestion layer)
-    and the ignored pairs the human dismissed (telemetry — propose them
-    less). Framework-level (not in the prompt file), bounded (top N +
-    truncation marker), and silent when the DB is unavailable or the role
-    has nothing open/failed/edge-related (nothing to say).
-    """
-    from .. import proposals
-    from ..vault.db import relatedness as rel_mod
-    from ..vault.db.conn import get_ledger_conn
-
-    conn = get_ledger_conn()
-    if conn is None:
-        return ""
-    try:
-        mine = [r for r in proposals.scan(conn) if r["actor"] == alias]
-    except Exception:
-        logger.warning("[bg:%s] readback scan failed", alias, exc_info=True)
-        return ""
-
-    open_counts: dict[str, int] = {}
-    open_types: dict[str, int] = {}
-    failed: list[dict] = []
-    for r in mine:
-        if r["status"] in ("pending", "processing", "adopted", "awaiting_review"):
-            open_counts[r["status"]] = open_counts.get(r["status"], 0) + 1
-            open_types[r["type"]] = open_types.get(r["type"], 0) + 1
-        elif r["status"] == "failed":
-            failed.append(r)
-
-    lines: list[str] = []
-    if open_counts or failed:
-        lines.append("## 你的提案回读（未决积压与失败）")
-        if open_counts:
-            states = " / ".join(f"{n} {s}" for s, n in open_counts.items())
-            types = ", ".join(f"{n} {t}" for t, n in sorted(open_types.items()))
-            lines.append(f"- 未决 {sum(open_counts.values())} 条（{states}；类型：{types}）")
-        if failed:
-            # Newest first (updated_at desc): spec §5.3 requires the LATEST
-            # failure in the next run's context — id order (scan) is oldest
-            # first and would hide recent failures once the backlog exceeds
-            # READBACK_TOP_N.
-            failed.sort(key=lambda r: r["updated_at"], reverse=True)
-            for r in failed[:READBACK_TOP_N]:
-                reason = r["reject_reason"] or "(no reason recorded)"
-                lines.append(
-                    f"- 失败 #{r['id']} [{r['type']}] {r['relpath']}: {reason}")
-            if len(failed) > READBACK_TOP_N:
-                lines.append(f"- …另有 {len(failed) - READBACK_TOP_N} 条失败未列出")
-
-    # Relatedness telemetry (spec §5.3: 被忽略的 relatedness 配对进回读注入).
-    try:
-        edges = rel_mod.edges_for_actor(conn, alias)
-    except Exception:
-        logger.warning("[bg:%s] readback relatedness failed", alias, exc_info=True)
-        edges = []
-    live = [e for e in edges if not e["ignored"]]
-    ignored_pairs: dict[tuple[str, str], int] = {}
-    for e in edges:
-        if e["ignored"]:
-            key = (e["source"], e["target"])
-            ignored_pairs[key] = ignored_pairs.get(key, 0) + 1
-    if live or ignored_pairs:
-        lines.append("## 相关性边（机器建议层 · 只进账本，不进笔记）")
-        if live:
-            lines.append(
-                f"- 当前生效 {len(live)} 条机器边（最近 {min(len(live), READBACK_TOP_N)} 条）：")
-            for e in live[:READBACK_TOP_N]:
-                basis = str(e.get("basis") or "").replace("\n", " ")[:60]
-                lines.append(
-                    f"  - {e['source']} → {e['target']}"
-                    + (f"（{basis}）" if basis else ""))
-            if len(live) > READBACK_TOP_N:
-                lines.append(f"  - …另有 {len(live) - READBACK_TOP_N} 条未列出")
-        if ignored_pairs:
-            pairs = sorted(ignored_pairs.items(), key=lambda kv: kv[1], reverse=True)
-            lines.append("- 人工忽略过的配对（遥测：下次少提这些，人不要了就别再推）：")
-            for (src, tgt), n in pairs[:READBACK_TOP_N]:
-                lines.append(f"  - {src} → {tgt}（忽略 ×{n}）")
-            if len(pairs) > READBACK_TOP_N:
-                lines.append(f"  - …另有 {len(pairs) - READBACK_TOP_N} 个配对未列出")
-
-    # Telemetry readback (spec 2026-11-13 §6.3-③, D14): click/feedback
-    # signals feed the role's context as EVIDENCE — the agent may propose
-    # relatedness edges from them (human final review); the relatedness
-    # table is NEVER written from telemetry (no self-proving loop). Read
-    # face only (index.db), silent when the index DB is unavailable or
-    # there is nothing to say, bounded (top N + truncation marker).
-    try:
-        from ..vault.db import recall as recall_mod
-        from ..vault.db.conn import get_index_conn
-        index_conn = get_index_conn()
-        if index_conn is not None:
-            since = time.time() - 30 * 86400
-            co_click = recall_mod.click_stats(index_conn, since)["co_click"]
-            ungrounded = recall_mod.feedback_stats(index_conn, since)["ungrounded"]
-            if co_click or ungrounded:
-                lines.append("## 消费信号（点击/反馈遥测 · 只读证据，可作 propose 依据，不自动建边）")
-                if co_click:
-                    lines.append(
-                        f"- 同会话/同查询内总被一起点击的文档对（最近 30 天，"
-                        f"最近 {min(len(co_click), READBACK_TOP_N)} 对）：")
-                    for p in co_click[:READBACK_TOP_N]:
-                        lines.append(f"  - {p['a']} ↔ {p['b']}（×{p['count']}）")
-                    if len(co_click) > READBACK_TOP_N:
-                        lines.append(
-                            f"  - …另有 {len(co_click) - READBACK_TOP_N} 对未列出")
-                if ungrounded:
-                    lines.append("- 被引用但会话内未读过的文档（ungrounded 引用）：")
-                    for e in ungrounded[:READBACK_TOP_N]:
-                        lines.append(f"  - {e['path']}（×{e['count']}）")
-                    if len(ungrounded) > READBACK_TOP_N:
-                        lines.append(
-                            f"  - …另有 {len(ungrounded) - READBACK_TOP_N} 篇未列出")
-    except Exception:
-        logger.warning("[bg:%s] readback telemetry failed", alias, exc_info=True)
-
-    return "\n".join(lines)
 
 
 def _cell(op: dict) -> str:
@@ -483,16 +355,13 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
             f"receive delete_doc (hard-removed, spec §3.2); config tools="
             f"{sorted(cfg.tools) if cfg.tools is not None else 'default (all)'}")
 
-    # Read-back (spec §5.3): the run's context head carries the role's own
-    # proposal backlog state (pending counts + failures with reasons).
-    readback = _readback_block(cfg.alias)
-
     spec = AgentSpec(
         # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
-        # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。
+        # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。回读是独立的
+        # SystemReminder（R3）：runner 零判断，gate 全在 reminder 内。
         system_prompt=cfg.prompt.read_text(encoding="utf-8")
-        + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}"
-        + (f"\n\n{readback}" if readback else ""),
+        + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
+        system_reminders=[ReadbackSystemReminder(cfg.alias, tools)],
         model=cfg.model,
         tools=tools,
         max_rounds=cfg.max_rounds,

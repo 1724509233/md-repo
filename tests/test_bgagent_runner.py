@@ -83,6 +83,18 @@ def _run(tmp_path, events=None, exc_for_runtime=None, **cfg_kw):
     return asyncio.run(go()), cfg, vault, rt
 
 
+def _readback_msg(agent) -> str | None:
+    """The <system-reminder> message carrying the readback (None if absent).
+
+    After the encapsulation the readback is a reminder message, not part of
+    system_prompt (R3). There is exactly one reminder on the bgagent path.
+    """
+    for m in agent.messages:
+        if m["role"] == "system" and m["content"].startswith("<system-reminder>"):
+            return m["content"]
+    return None
+
+
 def test_report_file_written_with_frontmatter(tmp_path: Path):
     events = [
         Event("round", {"n": 1}),
@@ -617,14 +629,14 @@ def test_run_report_folds_report_paths(tmp_path: Path):
 
 
 def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
-    """inv-8: a run's failures are visible in the NEXT run's context —
-    the readback block (open counts + failed proposals with their
-    reject_reason) is injected into system_prompt after the 当前时间 line."""
+    """inv-8: a run's failures are visible in the NEXT run's context — the
+    readback (open counts + failed + rejected with reject_reason) is a
+    <system-reminder> message (R3), ordered after the system_prompt (which
+    carries the 当前时间 line)."""
     from server import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
-    # Seed records under this alias: 1 open (adopted), 1 failed with reason.
     rec_open = proposals.create(
         ledger_conn, vault, "relatedness", actor="test-org", run_id="test-org-earlier",
         source_refs=["notes/a.md"], justification="j",
@@ -647,23 +659,29 @@ def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
         return await run_once(cfg, vault, runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    prompt = rt.agent.spec.system_prompt
-    assert "## 你的提案回读（未决积压与失败）" in prompt
-    assert "1 adopted" in prompt
-    assert f"失败 #{rec_fail['id']} [summary]" in prompt
-    assert "boom" in prompt
-    # Context head: after the time line, before anything else.
-    assert prompt.index("当前时间：") < prompt.index("## 你的提案回读")
+    # The readback is a reminder message (not in system_prompt anymore).
+    assert "## 你的提案回读" not in rt.agent.spec.system_prompt
+    msg = _readback_msg(rt.agent)
+    assert msg is not None
+    assert "## 你的提案回读（未决积压 / 失败 / 驳回）" in msg
+    assert "1 adopted" in msg
+    assert f"失败 #{rec_fail['id']} [summary]" in msg
+    assert "boom" in msg
+    # Context head: the reminder message follows the system_prompt message.
+    sys_idx = next(i for i, m in enumerate(rt.agent.messages)
+                   if m["role"] == "system" and m["content"].startswith("you are a test organizer"))
+    rem_idx = next(i for i, m in enumerate(rt.agent.messages)
+                   if m["role"] == "system" and m["content"].startswith("<system-reminder>"))
+    assert sys_idx < rem_idx
 
 
 def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
     """inv-8 (oracle gate P0-Q6b): with more than READBACK_TOP_N recorded
-    failures, the injected list is the N most recent (updated_at desc) —
-    the newest failure is always visible, the oldest drops off."""
+    failures, the injected list is the N most recent (updated_at desc)."""
     import time
 
     from server import proposals
-    from server.bgagent.runner import READBACK_TOP_N
+    from server.bgagent.readback import READBACK_TOP_N
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
@@ -687,16 +705,16 @@ def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
         return await run_once(cfg, vault, runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    prompt = rt.agent.spec.system_prompt
-    assert f"失败 #{recs[-1]['id']} [summary]" in prompt   # newest present
-    assert "boom-0" not in prompt                          # oldest dropped
+    msg = _readback_msg(rt.agent)
+    assert msg is not None
+    assert f"失败 #{recs[-1]['id']} [summary]" in msg   # newest present
+    assert "boom-0" not in msg                          # oldest dropped
 
 
 def test_readback_injects_click_feedback_telemetry(tmp_path: Path, db_conn,
                                                    ledger_conn):
-    """§6.3-③（遥测回灌读面）：回读注入本角色相关文档的点击/反馈摘要
-    （有界 top N）——co-click 配对 + ungrounded 引用。只进读面：
-    relatedness 表零自动写入（D14，lane C 静态断言另锚）。"""
+    """§6.3-③（遥测回灌读面）：回读注入点击/反馈摘要（co-click + ungrounded），
+    有界 top N。只进读面：relatedness 表零自动写入（D14）。"""
     import json
     import time
 
@@ -723,17 +741,16 @@ def test_readback_injects_click_feedback_telemetry(tmp_path: Path, db_conn,
         return await run_once(cfg, vault, runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    prompt = rt.agent.spec.system_prompt
-    assert "## 消费信号" in prompt
-    assert "notes/a.md ↔ notes/b.md（×1）" in prompt
-    assert "notes/c.md（×1）" in prompt
-    # 回读在上下文头部（当前时间行之后）
-    assert prompt.index("当前时间：") < prompt.index("## 消费信号")
+    msg = _readback_msg(rt.agent)
+    assert msg is not None
+    assert "## 消费信号" in msg
+    assert "notes/a.md ↔ notes/b.md（×1）" in msg
+    assert "notes/c.md（×1）" in msg
 
 
 def test_readback_telemetry_silent_without_data(tmp_path: Path, db_conn,
                                                 ledger_conn):
-    """无点击/反馈数据 → 回读不含消费信号段（nothing to say = silent）。"""
+    """无点击/反馈/提案数据 → 回读 reminder 不注入（render() None → 跳过）。"""
     cfg = _cfg(tmp_path)  # creates tmp_path/vault
     rt = FakeRuntime(_events())
 
@@ -742,7 +759,34 @@ def test_readback_telemetry_silent_without_data(tmp_path: Path, db_conn,
                               runtime_cls=lambda: rt)
 
     asyncio.run(go())
-    assert "## 消费信号" not in rt.agent.spec.system_prompt
+    assert _readback_msg(rt.agent) is None
+
+
+def test_readback_gated_out_for_non_proposal_role(tmp_path: Path, ledger_conn):
+    """R1 integration: a role whose effective tools lack propose (sentinel
+    view) gets NO readback reminder, even with proposal data present."""
+    from server import proposals
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    rec = proposals.create(
+        ledger_conn, vault, "summary", actor="test-org", run_id="r",
+        source_refs=["notes/a.md"], justification="j")
+    proposals.advance(ledger_conn, vault, rec["id"], "processing", actor="t")
+    proposals.advance(ledger_conn, vault, rec["id"], "failed", actor="t",
+                      reject_reason="boom")
+
+    # sentinel view: no propose in the effective tools → gate closed.
+    cfg = _cfg(tmp_path, tools=["read_doc", "search_docs", "list_files",
+                                "recent_changes", "get_related_docs",
+                                "recall_stats", "write_doc"])
+    rt = FakeRuntime(_events())
+
+    async def go():
+        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+
+    asyncio.run(go())
+    assert _readback_msg(rt.agent) is None
 
 
 def test_retention_prunes_old_reports(tmp_path: Path):
