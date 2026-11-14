@@ -24,6 +24,8 @@ from pathlib import Path
 
 from server import proposals
 from server.bgagent import runner
+from server.bgagent.readback import ReadbackSystemReminder
+from server.agent.tools import TOOL_REGISTRY
 from server.bgagent.executor import run_executor
 from server.vault.db import relatedness as rel
 from server.vault.db.graph_sql import graph_get_related_with_machine
@@ -88,7 +90,8 @@ def test_ignored_pair_repropose_failed_both_directions(vault_dir, db_conn, ledge
 
     # Readback injection surfaces the failed rows (the agent sees
     # "human dismissed, stop proposing" next run).
-    block = runner._readback_block("consolidator")
+    tools = list(TOOL_REGISTRY.values())  # effective surface incl. propose → gate open
+    block = ReadbackSystemReminder("consolidator", tools).render() or ""
     assert "mechanical filter" in block
 
 

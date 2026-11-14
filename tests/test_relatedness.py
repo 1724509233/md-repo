@@ -21,6 +21,8 @@ import time
 import pytest
 
 from server.bgagent import runner
+from server.bgagent.readback import ReadbackSystemReminder
+from server.agent.tools import TOOL_REGISTRY
 from server.vault.db import conn as db_handle
 from server.vault.db import relatedness as rel
 from server.vault.db.schema import init_ledger_db
@@ -98,10 +100,12 @@ def test_readback_relatedness_section(tmp_path, ledger_conn):
                                   "test-org", now=t0 + 1)
     rel.mark_ignored(ledger_conn, ignored_eid)
 
-    block = runner._readback_block("test-org")
+    tools = list(TOOL_REGISTRY.values())  # effective surface incl. propose → gate open
+    block = ReadbackSystemReminder("test-org", tools).render() or ""
     assert "## 相关性边（机器建议层 · 只进账本，不进笔记）" in block
     assert "notes/a.md → notes/b.md" in block
     assert "same topic" in block
     assert "notes/c.md → notes/d.md（忽略 ×1）" in block
     # The section is silent for a role with nothing to report.
-    assert "相关性边" not in runner._readback_block("other-role")
+    block_other = ReadbackSystemReminder("other-role", tools).render() or ""
+    assert "相关性边" not in block_other
