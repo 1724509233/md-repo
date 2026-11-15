@@ -143,12 +143,33 @@ def _ensure_change_log_batch_id(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE change_log ADD COLUMN batch_id TEXT DEFAULT ''")
 
 
+def _ensure_change_log_pre_hash(conn: sqlite3.Connection) -> None:
+    """Idempotent migration: add the pre_hash column to change_log.
+
+    Delete rows store the SHA-256 of the pre-delete content (spec
+    2026-11-15 actor-separation §2): the sync lane derives its stale-copy
+    pre-hash map from these rows — unbounded (no 30-day boundary, D5 audit
+    fix: the map must outlive the snapshot GC window so a long-offline
+    client's stale copy is still detected). Old rows keep the default ''.
+    Same idiom as :func:`_ensure_change_log_batch_id`: PRAGMA table_info
+    check, ALTER only when the column is missing, safe to call on every
+    startup. Must run before :func:`_ensure_change_log_restore_op` so the
+    table recreation's row copy carries the column.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(change_log)")}
+    if "pre_hash" not in cols:
+        conn.execute("ALTER TABLE change_log ADD COLUMN pre_hash TEXT DEFAULT ''")
+
+
 # change_log DDL — the single source for both the fresh-DB CREATE in
 # :func:`init_db` and the table recreation in
 # :func:`_ensure_change_log_restore_op` (the two must not drift).
 # op is the 5-set: 'restore' is the 5th canonical op (design 2026-11-10
 # §12.1) — a restored file is not a new file, and the bgagent arm surface
 # deliberately does NOT include it.
+# pre_hash: the SHA-256 of the pre-delete content on delete rows (spec
+# 2026-11-15 §2) — the sync lane derives its stale-copy pre-hash map from
+# these rows; '' on all other ops.
 _CHANGE_LOG_DDL = """
     CREATE TABLE change_log (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,7 +180,8 @@ _CHANGE_LOG_DDL = """
         path TEXT NOT NULL,
         old_path TEXT DEFAULT '',
         new_hash TEXT DEFAULT '',
-        batch_id TEXT DEFAULT ''
+        batch_id TEXT DEFAULT '',
+        pre_hash TEXT DEFAULT ''
     )
     """
 
@@ -172,8 +194,8 @@ def _ensure_change_log_restore_op(conn: sqlite3.Connection) -> None:
     recreate the table (rename → create → copy → drop → reindex) inside one
     transaction. Rows are preserved: the sync lane's 200-row window and the
     UI change feed must not reset. Must run after
-    :func:`_ensure_change_log_batch_id` (the copy carries the batch_id
-    column) and after the legacy file_changes merge.
+    :func:`_ensure_change_log_batch_id` and :func:`_ensure_change_log_pre_hash`
+    (the copy carries both columns) and after the legacy file_changes merge.
     """
     row = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='change_log'"
@@ -190,8 +212,8 @@ def _ensure_change_log_restore_op(conn: sqlite3.Connection) -> None:
         conn.execute(_CHANGE_LOG_DDL)
         conn.execute(
             "INSERT INTO change_log "
-            "(seq, ts, source, op, path, old_path, new_hash, batch_id) "
-            "SELECT seq, ts, source, op, path, old_path, new_hash, batch_id "
+            "(seq, ts, source, op, path, old_path, new_hash, batch_id, pre_hash) "
+            "SELECT seq, ts, source, op, path, old_path, new_hash, batch_id, pre_hash "
             "FROM change_log_old"
         )
         conn.execute("DROP TABLE change_log_old")
@@ -234,6 +256,7 @@ def init_db(db_path: Path) -> sqlite3.Connection:
         "CREATE INDEX IF NOT EXISTS idx_changelog_path ON change_log(path)"
     )
     _ensure_change_log_batch_id(conn)
+    _ensure_change_log_pre_hash(conn)
     # Trigger arming checkpoints (memory-runtime v1/v2): per bgagent row
     # tracking arming counter, cooldown anchor, the daily run budget spend,
     # and the two recall-ledger cursors (v2, independent id sequences).

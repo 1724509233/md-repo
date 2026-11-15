@@ -129,11 +129,19 @@ def remove_dead_links(
 ) -> int:
     """Remove wikilinks pointing to a deleted file from files that link to it.
 
+    Liveness check (spec 2026-11-15 actor-separation §4): when the target
+    path EXISTS on disk (the file was recreated after the deletion, or the
+    caller's premise is stale) → return 0 and strip nothing — safe for ANY
+    caller. The trash purge (workbench deletions) and the GC expiry
+    boundary (snapshot deletions) both call this; a recreated file must
+    never lose its referrers' links.
+
     Uses edges table to find referrer files (falls back to full scan if
     empty). ``src_paths`` overrides the referrer lookup when provided —
-    the trash purge passes its own list, because after a trash inbound the
-    referrer→target graph edges are already gone (graph_delete_file at
-    inbound), so the edges-based lookup would find nothing.
+    the trash purge and the GC boundary pass their own list, because after
+    a deletion the referrer→target graph edges are already gone
+    (graph_delete_file at delete time), so the edges-based lookup would
+    find nothing.
     Handles:
     - [[deleted_path]] / [[deleted_path_without_ext]] → removed
     - [[deleted_path|alias]] → removed
@@ -143,6 +151,10 @@ def remove_dead_links(
     Returns the number of files modified.
     """
     import re
+
+    # Liveness check: target back on disk → nothing is dead, strip nothing.
+    if (Path(vault_dir) / deleted_path).exists():
+        return 0
 
     filename = Path(deleted_path).name  # e.g. "a.md"
     stem = Path(deleted_path).stem      # e.g. "a"

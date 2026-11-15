@@ -246,12 +246,13 @@ def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
 def load_background_agents(config_path: str, vault_dir: Path) -> list[BackgroundAgentConfig]:
     """Load and validate the 'background_agents' section.
 
-    Fail-fast: raises ValueError on duplicate alias, invalid cron, missing
-    prompt file, target_dir/report_dir outside the vault, overlapping
-    target_dirs (scopes both in a shared writer face are exempt), or a
-    v2 legal-layer violation (LLM role without an explicit tools whitelist;
-    propose in tools without verbs; propose + write_doc in one role —
-    the executor role is exempt from the legal layer).
+    Fail-fast: raises ValueError on duplicate alias, the reserved alias
+    "agent" (the interactive agent channel — actor separation 2026-11-15),
+    invalid cron, missing prompt file, target_dir/report_dir outside the
+    vault, overlapping target_dirs (scopes both in a shared writer face are
+    exempt), or a v2 legal-layer violation (LLM role without an explicit
+    tools whitelist; propose in tools without verbs; propose + write_doc in
+    one role — the executor role is exempt from the legal layer).
     Returns [] when the section is absent.
     """
     path = Path(config_path)
@@ -273,6 +274,13 @@ def load_background_agents(config_path: str, vault_dir: Path) -> list[Background
         alias = str(raw.get("alias", "")).strip()
         if not alias:
             raise ValueError(f"background_agents[{i}].alias is required")
+        # Actor separation (2026-11-15): "agent" is the interactive agent
+        # channel's write_source — a bgagent named "agent" would route its
+        # deletions to the trash instead of the snapshot channel.
+        if alias == "agent":
+            raise ValueError(
+                f"background_agents[{i}].alias 'agent' is reserved for the "
+                "interactive agent channel — choose another alias")
 
         cron = str(raw.get("cron", "")).strip()
         if not croniter.is_valid(cron):

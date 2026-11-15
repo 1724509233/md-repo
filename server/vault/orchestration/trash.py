@@ -215,10 +215,14 @@ def move_to_trash(
         raise TrashError(f"move to trash failed: {e}") from e
     # 3. Ledger: one inbound row per file. remove_links=False — referrer
     #    content stays untouched so restore is reversible (design §2).
+    #    pre_hash = the pre-delete SHA-256 (spec 2026-11-15 §2: every
+    #    deletion entry point books it at the deletion point; the sync
+    #    lane derives its stale-copy map from these rows).
     if db_conn is not None:
-        for rel in rel_paths:
+        for rel, entry in zip(rel_paths, entries):
             ledger.record(db_conn, vault_dir, rel, "deleted", source,
-                          batch_id=batch_id, remove_links=False)
+                          batch_id=batch_id, remove_links=False,
+                          pre_hash=entry["hash"])
     return batch
 
 

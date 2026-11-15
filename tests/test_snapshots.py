@@ -315,18 +315,24 @@ def test_rollback_unknown_call(vault_dir, ledger_conn):
     assert result["conflicts"]
 
 
-# ── delete-class snapshots: full pre-image + 30-day retention ─────────────
+# ── delete-class snapshots: 30-day retention ──────────────────────────────
+# (Actor separation 2026-11-15: the interactive agent + Web UI delete via
+# the trash, not the snapshot — the full channel tests live in
+# tests/test_deletion_rollback.py; the snapshot-side delete tests there
+# cover the full pre-image capture.)
 
-def test_agent_delete_tool_captures_full_preimage(vault_dir, ledger_conn):
+def test_agent_delete_tool_trash_no_snapshot(vault_dir, ledger_conn):
+    """The interactive agent deletes via the trash — no snapshot row (the
+    snapshot is the bgagent/mcp channel's recovery credential)."""
     (vault_dir / "notes" / "gone.md").write_bytes(b"precious content")
     result = execute_tool("delete_doc", {"path": "notes/gone.md"},
                           ToolContext(vault_dir=vault_dir))
-    assert "Moved to trash" in result  # P4-4: move semantics, not unlink
+    assert "Moved to trash" in result
     assert not (vault_dir / "notes" / "gone.md").exists()
-    live = snapshots.live_preimage(ledger_conn, "notes/gone.md")
-    assert live is not None and live["op"] == "delete"
-    assert live["pre_hash"] == snapshots.hash_bytes(b"precious content")
-    assert _blob(vault_dir, live) == b"precious content"
+    assert snapshots.live_preimage(ledger_conn, "notes/gone.md") is None
+    assert ledger_conn.execute(
+        "SELECT count(*) FROM snapshots WHERE path = 'notes/gone.md'"
+    ).fetchone()[0] == 0
 
 
 def test_delete_snapshot_retention_30_days(vault_dir, ledger_conn):
@@ -347,19 +353,24 @@ def test_delete_snapshot_retention_30_days(vault_dir, ledger_conn):
     assert not (vault_dir / ".sync" / "snapshots" / snap["blob_name"]).exists()
 
 
-# ── Web UI delete: snapshot backstop (work item 6) ────────────────────────
+# ── Web UI delete: trash channel (actor separation 2026-11-15) ────────────
 
-def test_web_delete_single_captures_preimage(client, vault_dir, ledger_conn):
+def test_web_delete_single_trash_no_snapshot(client, vault_dir, ledger_conn):
     (vault_dir / "notes" / "gone.md").write_bytes(b"web delete me")
     r = client.post("/api/docs/manage",
                     json={"action": "delete", "path": "notes/gone.md"})
     assert r.status_code == 200
-    live = snapshots.live_preimage(ledger_conn, "notes/gone.md")
-    assert live is not None and live["op"] == "delete" and live["actor"] == "web"
-    assert _blob(vault_dir, live) == b"web delete me"
+    assert r.json()["batch"]  # the trash batch
+    assert not (vault_dir / "notes" / "gone.md").exists()
+    # No snapshot row (the workbench is trash-only; the snapshot is the
+    # bgagent/mcp channel's).
+    assert snapshots.live_preimage(ledger_conn, "notes/gone.md") is None
+    assert ledger_conn.execute(
+        "SELECT count(*) FROM snapshots WHERE path = 'notes/gone.md'"
+    ).fetchone()[0] == 0
 
 
-def test_web_delete_folder_captures_group(client, vault_dir, ledger_conn):
+def test_web_delete_folder_trash_no_snapshots(client, vault_dir, ledger_conn):
     sub = vault_dir / "notes" / "sub"
     (sub / "deep").mkdir(parents=True)
     (sub / "a.md").write_bytes(b"# A")
@@ -367,11 +378,15 @@ def test_web_delete_folder_captures_group(client, vault_dir, ledger_conn):
     r = client.post("/api/docs/manage",
                     json={"action": "delete", "path": "notes/sub"})
     assert r.status_code == 200 and r.json()["deleted_count"] == 2
-    la = snapshots.live_preimage(ledger_conn, "notes/sub/a.md")
-    lb = snapshots.live_preimage(ledger_conn, "notes/sub/deep/b.md")
-    assert la is not None and lb is not None
-    assert la["call_id"] == lb["call_id"]  # one human action = one rollback group
-    assert _blob(vault_dir, la) == b"# A" and _blob(vault_dir, lb) == b"# B"
+    batch = r.json()["batch"]
+    assert (vault_dir / ".trash" / batch / "notes" / "sub" / "a.md").is_file()
+    assert (vault_dir / ".trash" / batch / "notes" / "sub" / "deep" / "b.md").is_file()
+    # No snapshot rows (workbench = trash only).
+    assert snapshots.live_preimage(ledger_conn, "notes/sub/a.md") is None
+    assert snapshots.live_preimage(ledger_conn, "notes/sub/deep/b.md") is None
+    assert ledger_conn.execute(
+        "SELECT count(*) FROM snapshots WHERE path LIKE 'notes/sub/%'"
+    ).fetchone()[0] == 0
 
 
 # ── rollback endpoint (human-only, spec §3.1) ─────────────────────────────

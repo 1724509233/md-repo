@@ -113,12 +113,13 @@ def move(db_conn, vault_dir, body) -> dict:
     return {"ok": True, "path": dst_rel.as_posix()}
 
 
-def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
-    # Two-conn (2026-10-31 ledger-file split): snapshots live in ledger.db
-    # (ledger_conn); the change_log rows live in index.db (db_conn).
-    # Deletion = move into the trash (P4-4): the file lands in
-    # .trash/<batch>/ (restorable via /api/trash); the snapshot capture
-    # stays as the 30-day backstop (design §5.1).
+def delete(db_conn, vault_dir, body) -> dict:
+    # Deletion = move into the trash (P4-4, actor separation 2026-11-15):
+    # the file lands in .trash/<batch>/ — the workbench's sole recovery
+    # channel (restorable via /api/trash). No snapshot capture here:
+    # snapshot-side deletions are the bgagent/mcp channel's (direct unlink
+    # + 30-day rollback). The pre-delete hash is booked inside move_to_trash
+    # (change_log pre_hash) for the sync lane's stale-copy check.
     from ..vault.orchestration import trash
 
     rel = _safe_rel_path(body.get("path") or "")
@@ -129,59 +130,23 @@ def delete(db_conn, ledger_conn, vault_dir, body) -> dict:
         raise HTTPException(status_code=404, detail="not found")
 
     if target.is_file():
-        # 可逆层（P1，工作项 6）：人在 Web UI 删文件 = 全文快照兜底
-        # （删除类快照单独保留 30 天，回滚端点可恢复）。
-        from ..snapshots import capture, finalize, gc_after_capture
-
-        snap = capture(ledger_conn, vault_dir, rel.as_posix(), "delete", actor="web")
         try:
             batch = trash.move_to_trash(db_conn, vault_dir, [rel.as_posix()], "web")
         except trash.TrashError as e:
-            if snap is not None:
-                from ..snapshots import discard
-
-                discard(ledger_conn, vault_dir, snap)
             raise HTTPException(status_code=500, detail=f"failed to move to trash: {e}")
-        if snap is not None:
-            finalize(ledger_conn, snap, "")  # post-state: file absent from original path
-            gc_after_capture(ledger_conn, vault_dir)
-        # Inbound ledger rows (remove_links=False) are booked inside
-        # move_to_trash; record() marks skip — consumer books nothing.
+        # Inbound ledger rows (remove_links=False, pre_hash) are booked
+        # inside move_to_trash; record() marks skip — consumer books nothing.
         return {"ok": True, "path": rel.as_posix(), "deleted_count": 1, "batch": batch}
     # Folder: move all internal .md files into one trash batch, then clean
     # up empty dirs bottom-up (same scope as the old recursive delete).
-    from ..snapshots import capture, discard, finalize, gc_after_capture, new_call_id
-
     md_files = sorted(p for p in target.rglob("*.md") if p.is_file())
-    # One human action, many files → one call_id rollback group:
-    # capture every member's full pre-image before any move.
-    call_id = new_call_id()
-    snaps = [
-        (p.relative_to(vault_dir).as_posix(),
-         capture(ledger_conn, vault_dir, p.relative_to(vault_dir).as_posix(),
-                 "delete", actor="web", call_id=call_id))
-        for p in md_files
-    ]
     rels = [p.relative_to(vault_dir).as_posix() for p in md_files]
     batch = None
     if rels:
         try:
             batch = trash.move_to_trash(db_conn, vault_dir, rels, "web")
         except trash.TrashError as e:
-            # move_to_trash rolled the batch back — nothing moved; discard
-            # the capture group (no partial state, design §5.1).
-            for r, snap in snaps:
-                if snap is not None:
-                    discard(ledger_conn, vault_dir, snap)
             raise HTTPException(status_code=500, detail=f"failed to move to trash: {e}")
-    # Reconcile the capture group: every member moved (move_to_trash is
-    # all-or-nothing) → finalize each snapshot (post-state: file absent
-    # from the original path).
-    for r, snap in snaps:
-        if snap is not None:
-            finalize(ledger_conn, snap, "")
-    if any(s is not None for _, s in snaps):
-        gc_after_capture(ledger_conn, vault_dir)
     for d in sorted(
         [target] + list(target.rglob("*")),
         key=lambda x: len(x.parts),
@@ -297,7 +262,7 @@ def register(app, ctx) -> None:
         if action in ("rename", "move"):
             return move(ctx.db_conn, ctx.vault_dir, body)
         if action == "delete":
-            return delete(ctx.db_conn, ctx.ledger_conn, ctx.vault_dir, body)
+            return delete(ctx.db_conn, ctx.vault_dir, body)
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
 
     @app.post("/api/docs/{path:path}")

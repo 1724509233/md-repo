@@ -1,13 +1,17 @@
 """delete_doc tool."""
 from __future__ import annotations
 
+import hashlib
+
 from pydantic import BaseModel, Field, field_validator
 
 from .tool import DocTool, ToolContext, _check_md_path
 
 
 class DeleteDocArgs(BaseModel):
-    """Move a document to the trash (restorable via the trash UI). Not permanent."""
+    """Delete a document. Interactive agent runs move it to the trash
+    (restorable via the trash UI); background/MCP runs delete directly
+    (restorable via rollback within 30 days). Not permanent either way."""
     path: str = Field(description="Relative path")
 
     @field_validator("path")
@@ -27,38 +31,54 @@ class DeleteDocTool(DocTool):
         return None
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...snapshots import capture, finalize, gc_after_capture
-        from ...vault.db.conn import get_index_conn, get_ledger_conn
+        from ...vault.db.conn import get_index_conn
         from ...vault.orchestration import trash
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
             return self._file_not_found_hint(args.path)
 
-        # 可逆层（P1，spec §3.2）：交互删除 = user-ask 确认制 + 全文快照兜底
-        # （删除类快照单独保留 30 天，GC 到期才回收）。
+        if ctx.write_source == "agent":
+            # Workbench channel (actor separation 2026-11-15): the
+            # interactive agent deletes like the Web UI — move into the
+            # trash, the workbench's sole recovery channel (restorable
+            # via the trash UI). No snapshot: the 30-day rollback is the
+            # bgagent/mcp channel's. The pre-delete hash is booked inside
+            # move_to_trash (change_log pre_hash) for the sync lane.
+            index_conn = get_index_conn()
+            try:
+                trash.move_to_trash(index_conn, ctx.vault_dir, [args.path],
+                                    ctx.write_source, batch_id=ctx.run_id)
+            except trash.TrashError as e:
+                return f"Error: failed to move to trash: {e}"
+            return f"Moved to trash: {args.path} (restorable via the trash UI)"
+
+        # Snapshot channel (bgagent alias / mcp): direct unlink + full
+        # pre-image snapshot, rollback-able within 30 days. Order:
+        # capture → unlink → record → finalize. A failed unlink discards
+        # the snapshot (the file is intact); a failed record leaves the
+        # file gone but the snapshot still rollback-able.
+        from ... import ledger
+        from ...snapshots import capture, discard, finalize, gc_after_capture
+        from ...vault.db.conn import get_ledger_conn
+
         conn = get_ledger_conn()
-        snap = None
-        if conn is not None:
-            snap = capture(conn, ctx.vault_dir, args.path, "delete",
-                           ctx.write_source, run_id=ctx.run_id)
-
-        # 新约定：change_log 行同步入库（record → apply_change），必须在
-        # tool_result SSE 前到位（UI 快路径 loadDocs 得 200）；skip 标记使
-        # watcher 事件记零行，恰好一行。P4-4：删除 = 移入回收站（move 语义，
-        # remove_links=False —— 引用方内容不动，恢复可逆）；move_to_trash
-        # 内部经 ledger.record 记账，失败时整批回滚（无半回收站态）。
         index_conn = get_index_conn()
+        if conn is None:
+            return f"Error: snapshot layer unavailable for {args.path}"
+        pre_hash = hashlib.sha256(fp.read_bytes()).hexdigest()
+        snap = capture(conn, ctx.vault_dir, args.path, "delete",
+                       ctx.write_source, run_id=ctx.run_id, call_id=ctx.run_id)
         try:
-            trash.move_to_trash(index_conn, ctx.vault_dir, [args.path],
-                                ctx.write_source, batch_id=ctx.run_id)
-        except trash.TrashError as e:
+            fp.unlink()
+        except OSError as e:
             if snap is not None:
-                from ...snapshots import discard
-
                 discard(conn, ctx.vault_dir, snap)
-            return f"Error: failed to move to trash: {e}"
+            return f"Error: failed to delete {args.path}: {e}"
+        ledger.record(index_conn, ctx.vault_dir, args.path, "deleted",
+                      ctx.write_source, batch_id=ctx.run_id,
+                      remove_links=False, pre_hash=pre_hash)
         if snap is not None:
             finalize(conn, snap, "")  # post-state: file absent from original path
             gc_after_capture(conn, ctx.vault_dir)
-        return f"Moved to trash: {args.path} (restorable via the trash UI)"
+        return f"Deleted: {args.path} (restorable via rollback within 30 days)"

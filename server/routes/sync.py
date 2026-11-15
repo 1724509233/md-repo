@@ -42,14 +42,18 @@ def register(app, ctx) -> None:
             # recreate the old path); deletes detect server-side deletions
             # (prevents pushing back a stale copy, which would resurrect
             # the file). deleted_hashes maps original path -> pre-delete
-            # hash from the trash batches, so a local rewrite after a
-            # deletion is still pushed.
+            # hash from the change_log pre_hash column (every deletion
+            # entry point books it), so a local rewrite after a deletion
+            # is still pushed. Snapshot-side deletes (bgagent/mcp) never
+            # enter the trash, so the trash batch scan is no longer the
+            # source. seq ASC: the latest row per path wins. Unbounded
+            # (change_log is persistent; clear_changes is dead code in
+            # production) — the D5 bounded-window fix is deferred.
             recent_moves = None
             recent_deletes = None
             deleted_hashes = None
             if last_sync:
                 from ..vault.db.changes import get_changes as _get_changes
-                from ..vault.orchestration.trash import deleted_hash_map
 
                 all_changes = _get_changes(ctx.db_conn, since=float(last_sync), limit=200)
                 recent_moves = [
@@ -60,7 +64,14 @@ def register(app, ctx) -> None:
                     c for c in all_changes
                     if c["action"] == "deleted" and c.get("path")
                 ]
-                deleted_hashes = deleted_hash_map(ctx.vault_dir)
+                deleted_hashes = {
+                    row["path"]: row["pre_hash"]
+                    for row in ctx.db_conn.execute(
+                        "SELECT path, pre_hash FROM change_log "
+                        "WHERE op = 'delete' AND pre_hash != '' "
+                        "ORDER BY seq ASC"
+                    ).fetchall()
+                }
 
             result = compare_files(
                 local_files, server_files,

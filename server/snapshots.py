@@ -1,8 +1,11 @@
 """Pre-image snapshots: the reversibility layer (reversible-automation v2, P1).
 
 Every LLM-originated write (agent direct-write tools, executor merge handlers)
-and every interactive deletion (Web UI document management) captures the full
-pre-image bytes of each file it is about to modify, **before** the write.
+captures the full pre-image bytes of each file it is about to modify,
+**before** the write. Deletions follow the actor separation
+(2026-11-15): the workbench (Web UI + interactive agent) deletes via the
+trash — no snapshot; the non-workbench (bgagent alias + mcp) deletes via
+direct unlink + snapshot — the 30-day rollback is their recovery channel.
 
 Storage (machine zone only — the user area gets zero automation writes):
 
@@ -59,12 +62,18 @@ import uuid
 from pathlib import Path
 
 from .vault.db import snapshot_records
-from .vault.fs.vault_ops import atomic_write_bytes
+from .vault.fs.vault_ops import _iter_vault_md, atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
 # Delete-class snapshots are retained this long (spec §3.1: default 30 days).
 DELETION_RETENTION_S = 30 * 86400
+
+# Per-GC cap on the expiry-boundary dead-link cleanups (spec 2026-11-15
+# actor-separation §5): gc_after_capture fires on every capture, so each
+# sweep cleans at most this many expired delete paths — the rest wait for
+# the next GC.
+GC_DEADLINK_CAP = 5
 
 
 # ── Degraded telemetry (v2a, D19/#C2) ──────────────────────────────────────
@@ -260,6 +269,64 @@ def recent_calls(conn, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# ── Referrer lookup (delete-class restore / GC cleanup) ───────────────────
+
+def _content_referrers(vault_dir: Path, rel: str) -> list[str]:
+    """Vault files whose content contains a wikilink to ``rel``.
+
+    Same target patterns as ``remove_dead_links``: full path, path without
+    .md, and the short stem when the filename is unique in the vault
+    (``.sync/``/``.trash/`` copies are not live files).
+    """
+    import re
+
+    filename = Path(rel).name
+    stem = Path(rel).stem
+    no_ext = rel[:-3] if rel.endswith(".md") else rel
+    short_unique = True
+    for f in vault_dir.rglob(filename):
+        if ".sync" in f.parts or ".obsidian" in f.parts or ".trash" in f.parts:
+            continue
+        try:
+            if f.is_file() and f.relative_to(vault_dir).as_posix() != rel:
+                short_unique = False
+                break
+        except ValueError:
+            continue
+    patterns = [re.escape(rel), re.escape(no_ext)]
+    if short_unique:
+        patterns.append(re.escape(stem))
+    rx = re.compile(r"\[\[(" + "|".join(patterns) + r")(\|[^\]]+)?\]\]")
+    out = []
+    for f in _iter_vault_md(vault_dir):
+        r = f.relative_to(vault_dir).as_posix()
+        if r == rel:
+            continue
+        try:
+            content = f.read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if rx.search(content):
+            out.append(r)
+    return out
+
+
+def _referrers(conn, vault_dir: Path, rel: str) -> list[str]:
+    """Referrer paths for ``rel``: edges lookup first, content-scan fallback.
+
+    After a deletion, ``graph_delete_file`` removed the referrer→target
+    edges, so the edges lookup alone finds nothing; the O(vault) content
+    scan is the accepted fallback (design §11-4: restore/GC cleanup are
+    low-frequency ops).
+    """
+    from .vault.db.graph_sql import _find_referrers
+
+    referrers = [r for r in _find_referrers(conn, vault_dir, rel) if r != rel]
+    if referrers:
+        return referrers
+    return _content_referrers(vault_dir, rel)
+
+
 # ── GC (retention policy, spec D18) ───────────────────────────────────────
 
 def gc(conn, vault_dir, now: float | None = None) -> int:
@@ -280,6 +347,33 @@ def gc(conn, vault_dir, now: float | None = None) -> int:
     via by_call, which does not filter on live/finalized). Residue is
     bounded: at most one per crashed write.
 
+    Delete-class expiry boundary (spec 2026-11-15 actor-separation §5):
+    when a delete-class row expires (blob + row gone, the file is
+    permanently gone), the deferred dead-link cleanup runs here —
+    ``remove_dead_links`` with its liveness check (a recreated file →
+    zero strip, safe for any caller). This is the snapshot-side cleanup
+    half of the actor separation: workbench deletions (web/agent → trash)
+    are cleaned by the trash purge; snapshot deletions (bgagent/mcp →
+    unlink) are cleaned here, at the moment the file permanently
+    disappears. The path set derives from change_log (``op='delete' AND
+    ts < cutoff AND source NOT IN ('web', 'agent')``, newest first,
+    LIMIT-bounded) — NOT from the rows reclaimed above, which the same
+    sweep deleted: "the rest wait for the next GC" requires rediscovery,
+    and ``remove_dead_links`` is idempotent, so re-processing an
+    already-clean path is a no-op. The source filter is the channel split
+    made explicit: a workbench deletion's recovery channel (trash
+    restore) is CONTENT-reversible — the referrer's link text must
+    survive until the trash purge runs the cleanup, so GC must never
+    strip it first (stripped link text cannot be re-extracted on
+    restore; the file would come back with its backlinks permanently
+    lost). External deletions (source=watchdog, no recovery channel)
+    have no purge boundary — GC is their cleanup. A LIVE path
+    (recreated after the deletion) is skipped by a cheap stat pre-check
+    before the O(vault) referrer scan and consumes no cap slot. Cost cap:
+    ``gc_after_capture`` runs on EVERY capture, so at most
+    ``GC_DEADLINK_CAP`` paths are actually cleaned per sweep — the rest
+    wait for the next GC (the O(vault) scan cost stays purge-grade).
+
     The SELECT+DELETE compound runs under the shared lock inside
     ``snapshot_records.gc_sweep`` (card 5 — the row set and its deletion
     must be one atomic unit); the blob file deletion stays here, outside
@@ -294,6 +388,59 @@ def gc(conn, vault_dir, now: float | None = None) -> int:
     for r in rows:
         if r["blob_name"]:
             (sd / r["blob_name"]).unlink(missing_ok=True)
+    # Expiry-boundary dead-link cleanup (spec 2026-11-15 §5, capped — see
+    # docstring). The path set derives from change_log (PERSISTENT), not
+    # from the rows reclaimed above: the same sweep deleted them, so "the
+    # rest wait for the next GC" requires rediscovery; remove_dead_links is
+    # idempotent, so re-processing an already-clean path is a no-op. The
+    # referrer lookup needs the INDEX conn (edges live in index.db), not
+    # the ledger conn that owns the snapshots table — the module handle
+    # pair (lazy, same pattern as file_ops' move branch); None = no index
+    # registered (unit-test mode) → cleanup skipped, never a crash.
+    from .vault.db.conn import get_index_conn
+
+    index_conn = get_index_conn()
+    if index_conn is not None:
+        from .vault.orchestration.refs import remove_dead_links
+
+        # Newest first; the LIMIT bounds the scan for a long-lived vault
+        # whose deletion history outgrows the retention window. Workbench
+        # sources (web/agent) are excluded: their link cleanup is the
+        # trash purge's boundary (a not-yet-purged trash batch must keep
+        # its referrers' link text intact — see docstring).
+        expired_rows = index_conn.execute(
+            "SELECT path FROM change_log "
+            "WHERE op = 'delete' AND ts < ? "
+            "AND source NOT IN ('web', 'agent') "
+            "ORDER BY ts DESC LIMIT 1000",
+            (cutoff,),
+        ).fetchall()
+        cleaned = 0
+        seen: set[str] = set()
+        for row in expired_rows:
+            path = row[0]
+            if path in seen:
+                continue  # one cleanup per path per run (idempotent anyway)
+            seen.add(path)
+            # Liveness pre-check: a recreated file must never lose its
+            # referrers' links, and the O(vault) referrer scan is skipped
+            # (no cap slot consumed). remove_dead_links re-checks inside
+            # (defense for any other caller).
+            if (Path(vault_dir) / path).exists():
+                continue
+            try:
+                n = remove_dead_links(
+                    index_conn, vault_dir, path,
+                    src_paths=_referrers(index_conn, vault_dir, path),
+                )
+            except Exception as e:  # cleanup is best-effort (GC contract)
+                logger.warning("gc dead-link cleanup failed for %s: %s",
+                               path, e)
+                continue
+            if n > 0:
+                cleaned += 1
+                if cleaned >= GC_DEADLINK_CAP:
+                    break  # cost cap: the rest wait for the next GC
     return len(rows)
 
 
@@ -351,6 +498,12 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
     ``{"ok": False, "conflicts": [reason, ...]}`` when any file's current
     state diverges from the call's post-state (nothing is written in that
     case). Stops at the first restore failure and surfaces half state.
+
+    Delete-class restore (G1, spec 2026-11-15 actor-separation §6): after
+    restoring a deleted file, the referrer→target graph edges are re-extracted
+    (the inbound deletion's ``graph_delete_file`` removed them). Referrer
+    CONTENT is not touched — the links were left in place at deletion time
+    (remove_links=False), so no content restoration is needed.
     """
     vault = Path(vault_dir)
     snaps = by_call(conn, call_id)
@@ -389,4 +542,17 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
                 "conflicts": [f"restore of {s['path']} failed: {e}"],
                 "restored": restored,
             }
+    # Delete-class restore: revive the referrer→target graph edges (G1).
+    restored_set = set(restored)
+    if any(s["op"] == "delete" and s["path"] in restored_set for s in snaps):
+        from .vault.db.conn import get_index_conn
+
+        index_conn = get_index_conn()
+        if index_conn is not None:
+            from .vault.orchestration.indexer import graph_extract_file
+
+            for s in snaps:
+                if s["op"] == "delete" and s["path"] in restored_set:
+                    for ref in _referrers(index_conn, vault, s["path"]):
+                        graph_extract_file(index_conn, vault, ref)
     return {"ok": True, "restored": restored}

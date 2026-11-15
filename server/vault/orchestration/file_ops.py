@@ -52,6 +52,7 @@ def apply_change(
     update_refs: bool = True,
     batch_id: str = "",
     remove_links: bool = True,
+    pre_hash: str = "",
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
@@ -74,10 +75,18 @@ def apply_change(
     the change_log row); '' when the caller has no batch.
 
     ``remove_links`` (deletions only) controls whether ``remove_dead_links``
-    rewrites the referrer documents. The trash inbound path passes False —
-    referrer content stays untouched so restore is fully reversible (the
-    link is temporarily dead); the cleanup is deferred to the trash purge.
+    rewrites the referrer documents. The web/agent (trash) and the
+    bgagent/mcp (snapshot) deletion paths both pass False — referrer
+    content stays untouched so the respective restore (trash UI / rollback)
+    is fully reversible (the link is temporarily dead); the cleanup is
+    deferred to the trash purge / the GC expiry boundary (both call
+    remove_dead_links with its liveness check, spec 2026-11-15 §4/§5).
     External deletions keep the default True.
+
+    ``pre_hash`` (deletions only) is the SHA-256 of the pre-delete content,
+    stored on the change_log row (spec 2026-11-15 §2 — the sync lane derives
+    its stale-copy pre-hash map from these rows, unbounded); '' on all
+    other ops.
     """
     with _db_lock:
         if action in ("created", "modified", "create", "update", "restore"):
@@ -107,7 +116,8 @@ def apply_change(
                 graph_extract_file(conn, vault_dir, path)
         elif action in ("deleted", "delete"):
             delete_file(conn, path)
-            log_change(conn, path, action, source=source, batch_id=batch_id)
+            log_change(conn, path, action, source=source, batch_id=batch_id,
+                       pre_hash=pre_hash)
             # The filename no longer exists on disk; drop its cached entry so
             # later resolutions don't point at a dead path.
             _invalidate_wikilink_filename(Path(path).name)

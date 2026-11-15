@@ -77,6 +77,10 @@ def test_move_to_trash_books_ledger_and_cleans_tables(vault_dir, db_conn):
     assert len(rows) == 1
     assert rows[0]["op"] == "delete"
     assert rows[0]["source"] == "web"
+    # pre_hash = the pre-delete SHA-256 (actor separation 2026-11-15 §2:
+    # every deletion entry point books it; the sync lane derives its
+    # stale-copy map from these rows).
+    assert rows[0]["pre_hash"] == hashlib.sha256(SAMPLE).hexdigest()
 
 
 def test_move_to_trash_folder_one_batch(vault_dir, db_conn):

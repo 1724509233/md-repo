@@ -259,9 +259,11 @@ def register(app, ctx) -> None:
                 # was already restored so the human sees the mixed state.
                 content["restored"] = result["restored"]
             return JSONResponse(status_code=409, content=content)
-        # Attribute the restored writes to the watcher ("web" = human via UI).
+        # Book the restored writes as op "restore" (NOT "created" — the
+        # arm surface watches ops=("create",) and must not see human
+        # restores; record() marks skip so the watcher books nothing).
         for path in result["restored"]:
-            ledger.register(path, "web", ctx.vault_dir)
+            ledger.record(ctx.db_conn, ctx.vault_dir, path, "restore", "web")
         return {"ok": True, "restored": result["restored"]}
 
     @app.get("/api/memory/rollback-calls")

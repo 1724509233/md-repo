@@ -950,6 +950,11 @@ def test_remove_dead_links_full_path(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
+        # Liveness check (actor separation 2026-11-15): target on disk → 0.
+        assert remove_dead_links(conn, vault_dir, "notes/target.md") == 0
+        assert "[[notes/target]]" in (vault_dir / "notes" / "ref.md").read_text()
+
+        (vault_dir / "notes" / "target.md").unlink()
         count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 1
 
@@ -972,6 +977,11 @@ def test_remove_dead_links_short_name(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
+        # Liveness check (actor separation 2026-11-15): target on disk → 0.
+        assert remove_dead_links(conn, vault_dir, "notes/unique.md") == 0
+        assert "[[unique]]" in (vault_dir / "notes" / "ref.md").read_text()
+
+        (vault_dir / "notes" / "unique.md").unlink()
         count = remove_dead_links(conn, vault_dir, "notes/unique.md")
         assert count == 1
 
@@ -994,6 +1004,11 @@ def test_remove_dead_links_alias(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
+        # Liveness check (actor separation 2026-11-15): target on disk → 0.
+        assert remove_dead_links(conn, vault_dir, "notes/target.md") == 0
+        assert "[[notes/target" in (vault_dir / "notes" / "ref.md").read_text()
+
+        (vault_dir / "notes" / "target.md").unlink()
         count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 1
 
@@ -1016,6 +1031,10 @@ def test_remove_dead_links_no_match(vault_dir):
 
         graph_extract_file(conn, vault_dir, "notes/ref.md")
 
+        # Liveness check (actor separation 2026-11-15): target on disk → 0.
+        assert remove_dead_links(conn, vault_dir, "notes/target.md") == 0
+
+        (vault_dir / "notes" / "target.md").unlink()
         count = remove_dead_links(conn, vault_dir, "notes/target.md")
         assert count == 0
     finally:

@@ -16,19 +16,23 @@ def log_change(
     source: str = "unknown",
     new_hash: str = "",
     batch_id: str = "",
+    pre_hash: str = "",
 ) -> None:
     """Append a change event to the change_log.
 
     ``action`` accepts legacy names (created/modified/deleted/moved) or new
     op names (create/update/delete/move); it is normalized to the new op name.
     ``batch_id`` is the run_id that produced the change ('' when the producer
-    did not record one).
+    did not record one). ``pre_hash`` is the SHA-256 of the pre-delete
+    content on delete rows (spec 2026-11-15 actor-separation §2 — the sync
+    lane's stale-copy pre-hash map derives from these rows, unbounded);
+    '' on all other ops.
     """
     op = _ACTION_TO_OP.get(action, action)
     conn.execute(
-        "INSERT INTO change_log (ts, source, op, path, old_path, new_hash, batch_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (ts if ts is not None else time.time(), source, op, path, from_path, new_hash, batch_id),
+        "INSERT INTO change_log (ts, source, op, path, old_path, new_hash, batch_id, pre_hash) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (ts if ts is not None else time.time(), source, op, path, from_path, new_hash, batch_id, pre_hash),
     )
     conn.commit()
 
@@ -50,7 +54,7 @@ def get_changes(
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
     and new keys (``seq``, ``source``, ``op``, ``new_hash``).
     """
-    sql = "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log WHERE ts > ?"
+    sql = "SELECT seq, ts, source, op, path, old_path, new_hash, pre_hash FROM change_log WHERE ts > ?"
     params: list = [since]
     if path is not None:
         # Exact match OR directory prefix: "test2" matches the row recorded
@@ -75,6 +79,7 @@ def get_changes(
             "path": row[4],
             "from_path": row[5],
             "new_hash": row[6],
+            "pre_hash": row[7],
         }
         for row in cursor.fetchall()
     ]
@@ -102,7 +107,7 @@ def get_changes_sources(
     op_ph = ",".join("?" * len(ops))
     since_sql, since_param = ("seq > ?", since_seq) if since_seq > 0 else ("ts > ?", since)
     sql = (
-        "SELECT seq, ts, source, op, path, old_path, new_hash FROM change_log "
+        "SELECT seq, ts, source, op, path, old_path, new_hash, pre_hash FROM change_log "
         f"WHERE {since_sql} AND op IN ({op_ph})"
     )
     params: list = [since_param, *ops]
@@ -123,6 +128,7 @@ def get_changes_sources(
             "path": row[4],
             "from_path": row[5],
             "new_hash": row[6],
+            "pre_hash": row[7],
         }
         for row in cursor.fetchall()
     ]

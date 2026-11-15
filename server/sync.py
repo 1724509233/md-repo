@@ -24,8 +24,10 @@ def compare_files(
             A to_push path that was deleted on the server is a stale local
             copy — pushing it back would resurrect the file.
         deleted_hashes: optional mapping of original path -> pre-delete
-            sha256 hash (from the trash batches' meta.json). When present
-            for a deleted path, a local copy with a DIFFERENT hash is a
+            sha256 hash (from the change_log ``pre_hash`` column — every
+            deletion entry point books it; the latest row per path wins,
+            unbounded because change_log is persistent). When present for a
+            deleted path, a local copy with a DIFFERENT hash is a
             deliberate local rewrite/recreation and stays in to_push; an
             identical hash (or a deletion with no recorded pre-hash, e.g.
             an external delete) is a stale copy and moves to to_delete.
@@ -71,10 +73,11 @@ def compare_files(
 
     # Deletion detection: a to_push path that was deleted on the server is
     # a stale local copy (pushing it back resurrects the file). Exception:
-    # the trash recorded a pre-delete hash and the local copy differs — the
-    # user recreated/rewrote the file after the server-side deletion, so it
-    # is a genuine new file. (The move rule above runs first; a path that
-    # both a move and a delete claim is decided by the move rule.)
+    # the deletion booked a pre-delete hash (change_log pre_hash) and the
+    # local copy differs — the user recreated/rewrote the file after the
+    # server-side deletion, so it is a genuine new file. (The move rule
+    # above runs first; a path that both a move and a delete claim is
+    # decided by the move rule.)
     if recent_deletes:
         deleted_paths = {c.get("path", "") for c in recent_deletes}
         new_to_push = []
