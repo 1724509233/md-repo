@@ -30,6 +30,11 @@ def _hash_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def _conflict_path(p: Path, device_name: str) -> Path:
+    """The conflict-copy path convention: {stem}.conflict-{device}{suffix}."""
+    return p.with_name(f"{p.stem}.conflict-{device_name}{p.suffix}")
+
+
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -114,6 +119,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                 json={
                     "device_name": config.device_name,
                     "local_files": local_files,
+                    "baseline_files": dict(state.get("files", {})),
                     "logs": collector.entries,
                     "last_sync": last_sync_ts,
                 },
@@ -147,6 +153,17 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                     r = client.get(f"{config.server_url}/api/docs/{path}")
                     r.raise_for_status()
                     dest = vault_dir / path
+                    on_disk = dest.read_bytes() if dest.is_file() else None
+                    if on_disk is not None and _hash_bytes(on_disk) != local_files.get(path):
+                        # Edited during the sync cycle (after the scan):
+                        # keep the local edit, save the server copy as a conflict.
+                        conflict_path = vault_dir / _conflict_path(Path(path), config.device_name)
+                        conflict_path.parent.mkdir(parents=True, exist_ok=True)
+                        conflict_path.write_bytes(r.content)
+                        logger.warning(
+                            "pull skipped (edited during cycle), server copy saved as %s",
+                            conflict_path.relative_to(vault_dir).as_posix())
+                        continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(r.content)
                     logger.info("pulled %s", path)
@@ -172,9 +189,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                     r = client.get(f"{config.server_url}/api/docs/{path}")
                     r.raise_for_status()
                     p = Path(path)
-                    conflict_path = vault_dir / str(
-                        p.with_name(f"{p.stem}.conflict-{config.device_name}{p.suffix}")
-                    )
+                    conflict_path = vault_dir / _conflict_path(p, config.device_name)
                     conflict_path.parent.mkdir(parents=True, exist_ok=True)
                     conflict_path.write_bytes(r.content)
                     logger.warning(
