@@ -99,3 +99,42 @@ def compare_files(
         "to_delete": to_delete,
         "conflicts": conflicts,
     }
+
+
+def derive_deleted_hashes(rows: list[dict]) -> dict[str, str]:
+    """Replay all-time move/delete change_log rows (seq ASC) into
+    {client-held original path: pre-delete hash}.
+
+    ``rows``: change_log rows in ascending seq order, each shaped
+    ``{"op": "move"|"delete", "path": ..., "old_path": ..., "pre_hash": ...}``
+    (move rows: ``path`` = destination, ``old_path`` = source; delete rows:
+    ``old_path`` is always empty). ``loc`` tracks where each historical
+    path's content now lives; a delete row marks every path whose content
+    ended up at the deleted path — the path itself plus all move-aliases
+    (a client-held pre-move copy of a moved-then-deleted file is caught).
+
+    Value "" = deleted with no recorded pre-hash (external delete) — still
+    a stale-copy signal for the compare deletion gate. Later delete rows
+    for the same live path overwrite earlier ones (latest pre-image wins).
+    When a path was moved away and later re-created + re-deleted, the
+    delete row at the vacated path refers to NEW content that no alias
+    tracks — aliases are left untouched (documented ambiguity).
+    """
+    loc: dict[str, str] = {}
+    out: dict[str, str] = {}
+    for r in rows:
+        op, p = r["op"], r["path"]
+        if op == "move":
+            f = r.get("old_path") or ""
+            if not f:
+                continue
+            for k in [k for k, v in loc.items() if v == f]:
+                loc[k] = p
+            loc[f] = p
+        elif op == "delete":
+            h = r.get("pre_hash") or ""
+            for k in [k for k, v in loc.items() if v == p]:
+                out[k] = h
+            if p not in loc:
+                out[p] = h
+    return out

@@ -1,7 +1,7 @@
 """Tests for server.sync.compare_files."""
 from __future__ import annotations
 
-from server.sync import compare_files
+from server.sync import compare_files, derive_deleted_hashes
 
 
 def test_no_changes() -> None:
@@ -219,3 +219,54 @@ def test_delete_rule_only_touches_to_push_paths() -> None:
     assert result["to_push"] == []
     assert result["to_delete"] == []
     assert result["to_pull"] == []
+
+
+# ── derive_deleted_hashes：全量重放（F2/F3）──
+
+
+def test_derive_direct_delete() -> None:
+    rows = [{"op": "delete", "path": "a.md", "old_path": "", "pre_hash": "h1"}]
+    assert derive_deleted_hashes(rows) == {"a.md": "h1"}
+
+
+def test_derive_external_delete_empty_prehash() -> None:
+    rows = [{"op": "delete", "path": "a.md", "old_path": "", "pre_hash": ""}]
+    assert derive_deleted_hashes(rows) == {"a.md": ""}
+
+
+def test_derive_move_then_delete_compound() -> None:
+    # F3 主场景：X moved→Y，Y deleted。客户端持有的 X 旧副本必须被映射覆盖。
+    rows = [
+        {"op": "move", "path": "Y.md", "old_path": "X.md", "pre_hash": ""},
+        {"op": "delete", "path": "Y.md", "old_path": "", "pre_hash": "h1"},
+    ]
+    assert derive_deleted_hashes(rows) == {"Y.md": "h1", "X.md": "h1"}
+
+
+def test_derive_chain_move_then_delete() -> None:
+    # X→Y→Z 链式 move 后删除 Z：三个历史路径全部命中。
+    rows = [
+        {"op": "move", "path": "Y.md", "old_path": "X.md", "pre_hash": ""},
+        {"op": "move", "path": "Z.md", "old_path": "Y.md", "pre_hash": ""},
+        {"op": "delete", "path": "Z.md", "old_path": "", "pre_hash": "h1"},
+    ]
+    assert derive_deleted_hashes(rows) == {"Z.md": "h1", "Y.md": "h1", "X.md": "h1"}
+
+
+def test_derive_latest_delete_wins() -> None:
+    rows = [
+        {"op": "delete", "path": "a.md", "old_path": "", "pre_hash": "h1"},
+        {"op": "delete", "path": "a.md", "old_path": "", "pre_hash": "h2"},
+    ]
+    assert derive_deleted_hashes(rows) == {"a.md": "h2"}
+
+
+def test_derive_delete_after_alias_occupied_pins_alias_hash() -> None:
+    # move X→Y 之后 X 被重建又删除：X 的别名槽已指向 Y，重建内容的删除
+    # 不覆盖别名（文档化歧义——Review Focus 5 同源）。
+    rows = [
+        {"op": "move", "path": "Y.md", "old_path": "X.md", "pre_hash": ""},
+        {"op": "delete", "path": "Y.md", "old_path": "", "pre_hash": "h1"},
+        {"op": "delete", "path": "X.md", "old_path": "", "pre_hash": "h2"},
+    ]
+    assert derive_deleted_hashes(rows) == {"Y.md": "h1", "X.md": "h1"}
