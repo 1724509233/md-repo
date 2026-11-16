@@ -148,6 +148,13 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
             )
 
         with httpx.Client(timeout=60) as client:
+            # Paths whose content did NOT reach server agreement this cycle:
+            # their local edits must never enter the next baseline (a poisoned
+            # baseline misreads the edit as "server modified" → silent pull-
+            # overwrite one cycle later — review Critical #1).
+            rescued: set[str] = set()
+            failed_pushes: set[str] = set()
+
             for path in to_pull:
                 try:
                     r = client.get(f"{config.server_url}/api/docs/{path}")
@@ -163,6 +170,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                         logger.warning(
                             "pull skipped (edited during cycle), server copy saved as %s",
                             conflict_path.relative_to(vault_dir).as_posix())
+                        rescued.add(path)
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(r.content)
@@ -182,6 +190,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                     r.raise_for_status()
                     logger.info("pushed %s", path)
                 except (httpx.HTTPError, OSError) as e:
+                    failed_pushes.add(path)
                     logger.error("failed to push %s: %s", path, e)
 
             for path in conflicts:
@@ -212,9 +221,26 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                 logger.error("failed to delete %s: %s", path, e)
 
         new_files = scan_local_files(vault_dir)
+        # Next baseline = only server-AGREED content. Conflicted paths,
+        # failed pushes and guard-rescued edits keep their PREVIOUS baseline
+        # entry (or none — a missing entry classifies as conflict next cycle,
+        # the safe direction), so the next cycle re-flags them (conflict /
+        # push-retry) instead of misreading the local edit as "server
+        # modified" and pulling over it.
+        prev_baseline = dict(state.get("files", {}))
+        non_agreed = set(conflicts) | rescued | failed_pushes
+        files_state: dict[str, str] = {}
+        for path, h in new_files.items():
+            if path in non_agreed:
+                prev = prev_baseline.get(path)
+                if prev is not None:
+                    files_state[path] = prev
+                # else: drop — never agreed → conflict next cycle (safe)
+            else:
+                files_state[path] = h
         updated_state = {
             "last_sync": _now_iso(),
-            "files": new_files,
+            "files": files_state,
         }
         logger.info(
             "sync complete: %d pulled, %d pushed, %d deleted, %d conflicts",

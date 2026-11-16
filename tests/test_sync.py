@@ -344,3 +344,17 @@ def test_baseline_both_directions_coexist():
     assert result["to_pull"] == ["b.md"]   # 服务端改了 b
     assert result["to_push"] == ["a.md"]   # 客户端改了 a
     assert result["conflicts"] == []
+
+
+def test_delete_gate_over_baseline_composition() -> None:
+    # 终审 Minor #4：基线分类与删除门的组合。本地哈希 == pre_hash 的
+    # "客户端改"路径（服务端随后已删）→ 陈旧副本 → to_delete（门压过基线）。
+    result = compare_files({"a.md": "h0"}, {}, deleted_hashes={"a.md": "h0"},
+                           baseline={"a.md": "h0"})
+    assert result["to_delete"] == ["a.md"]
+    assert result["to_push"] == []
+    # 哈希漂移（删除后真实重写）→ 重写例外 → 保持 to_push。
+    result2 = compare_files({"a.md": "h-client"}, {}, deleted_hashes={"a.md": "h0"},
+                            baseline={"a.md": "h0"})
+    assert result2["to_push"] == ["a.md"]
+    assert result2["to_delete"] == []

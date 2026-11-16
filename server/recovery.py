@@ -303,7 +303,8 @@ def run_recovery_drill(vault_dir: Path) -> dict:
         )
     notes.append(
         f"delete rows re-seeded into change_log: {seeded}"
-        "（rename/move 历史是接受的丢失——复活防护已恢复，改名检测没有）"
+        "（rename/move 历史是接受的丢失——复活防护已恢复，改名检测没有；"
+        "外部 watchdog 删除无恢复源，其陈旧副本防护不随重建恢复）"
     )
     notes.append(
         "trigger_state/recall_log empty is expected: re-seeded lazily on the "
