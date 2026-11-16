@@ -162,13 +162,15 @@ def test_local_rewrite_after_trash_delete_stays_to_push() -> None:
 
 def test_external_delete_without_pre_hash_goes_to_delete() -> None:
     # External delete (direct disk edit): change_log row exists but the
-    # path has no trash batch, so no pre-hash — always a stale copy.
+    # path has no trash batch, so no pre-hash — derive_deleted_hashes
+    # maps it to the "" sentinel, and the deletion gate treats the ""
+    # entry as a stale copy (never the rewrite exception).
     local = {"a.md": "h1"}
     server = {}
     recent_deletes = [{"path": "a.md", "ts": 1000.0}]
     result = compare_files(
         local, server,
-        recent_deletes=recent_deletes, deleted_hashes={},
+        recent_deletes=recent_deletes, deleted_hashes={"a.md": ""},
     )
     assert result["to_push"] == []
     assert result["to_delete"] == ["a.md"]
@@ -270,3 +272,75 @@ def test_derive_delete_after_alias_occupied_pins_alias_hash() -> None:
         {"op": "delete", "path": "X.md", "old_path": "", "pre_hash": "h2"},
     ]
     assert derive_deleted_hashes(rows) == {"Y.md": "h1", "X.md": "h1"}
+
+
+# ── 删除门（F2）：deleted_hashes 全量地图，窗口无关 ──
+
+
+def test_delete_gate_ignores_window() -> None:
+    # F2：删除行滑出 recent_deletes 窗口（传 None），只要 deleted_hashes
+    # 有记录就必须拦下复活。
+    local = {"X.md": "h1"}
+    server = {}
+    result = compare_files(local, server, recent_deletes=None,
+                           deleted_hashes={"X.md": "h1"})
+    assert result["to_push"] == []
+    assert result["to_delete"] == ["X.md"]
+
+
+def test_alias_content_drift_stays_to_push() -> None:
+    # Review Focus 5：move→edit→delete 链下，客户端持 move 前内容
+    # （≠ 删除时 pre_hash）→ 重写例外生效，保持 to_push（文档化残余盲区）。
+    result = compare_files({"X.md": "h-pre-move"}, {},
+                           deleted_hashes={"X.md": "h-at-delete"})
+    assert result["to_push"] == ["X.md"]
+    assert result["to_delete"] == []
+
+
+# ── 三方基线分类（F1）──
+
+BASE = {"a.md": "h1"}
+
+
+def test_baseline_server_modified_goes_to_pull():
+    # 上次同步双方 h1；服务端现为 h2、客户端未动 → 客户端应拉取。
+    result = compare_files({"a.md": "h1"}, {"a.md": "h2"}, baseline={"a.md": "h1"})
+    assert result["to_pull"] == ["a.md"]
+    assert result["to_push"] == []
+    assert result["conflicts"] == []
+
+
+def test_baseline_client_modified_goes_to_push():
+    result = compare_files({"a.md": "h2"}, {"a.md": "h1"}, baseline=BASE)
+    assert result["to_push"] == ["a.md"]
+    assert result["to_pull"] == []
+    assert result["conflicts"] == []
+
+
+def test_baseline_both_modified_conflict():
+    result = compare_files({"a.md": "h2"}, {"a.md": "h3"}, baseline={"a.md": "h0"})
+    assert result["conflicts"] == ["a.md"]
+    assert result["to_pull"] == []
+    assert result["to_push"] == []
+
+
+def test_baseline_none_conflict():
+    # 旧客户端兼容：不带基线 → 现状（conflict）。
+    result = compare_files({"a.md": "h1"}, {"a.md": "h2"}, baseline=None)
+    assert result["conflicts"] == ["a.md"]
+
+
+def test_baseline_empty_first_sync_conflict():
+    # 首次同步：基线为 {} → 与现状一致（conflict）。
+    result = compare_files({"a.md": "h1"}, {"a.md": "h2"}, baseline={})
+    assert result["conflicts"] == ["a.md"]
+
+
+def test_baseline_both_directions_coexist():
+    local = {"a.md": "hA2", "b.md": "hB1"}
+    server = {"a.md": "hA1", "b.md": "hB2"}
+    baseline = {"a.md": "hA1", "b.md": "hB1"}
+    result = compare_files(local, server, baseline=baseline)
+    assert result["to_pull"] == ["b.md"]   # 服务端改了 b
+    assert result["to_push"] == ["a.md"]   # 客户端改了 a
+    assert result["conflicts"] == []
