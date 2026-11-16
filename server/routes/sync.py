@@ -36,22 +36,24 @@ def register(app, ctx) -> None:
         try:
             server_files = {f["path"]: f["hash"] for f in get_all_files(ctx.db_conn)}
 
-            # Fetch recent moved + deleted events since the client's last
-            # sync (one query, 200-row window). Moves detect renames
-            # (prevents pushing back a stale pre-rename copy, which would
-            # recreate the old path); deletes detect server-side deletions
-            # (prevents pushing back a stale copy, which would resurrect
-            # the file). deleted_hashes maps original path -> pre-delete
-            # hash from the change_log pre_hash column (every deletion
-            # entry point books it), so a local rewrite after a deletion
-            # is still pushed. Snapshot-side deletes (bgagent/mcp) never
-            # enter the trash, so the trash batch scan is no longer the
-            # source. seq ASC: the latest row per path wins. Unbounded
-            # (change_log is persistent; clear_changes is dead code in
-            # production) — the D5 bounded-window fix is deferred.
+            # F2 (review 2026-11-16): the deletion gate is ALL-TIME — replay
+            # every move/delete row (seq ASC, unbounded per spec 2026-11-15
+            # §2) into {client-held path: pre_hash}. Not gated by last_sync.
+            # The replay resolves move chains: a client-held pre-move copy of
+            # a moved-then-deleted file is caught (review F3). "" values =
+            # external deletes with no pre-hash, treated as stale copies.
+            from ..sync import derive_deleted_hashes
+
+            replay_rows = ctx.db_conn.execute(
+                "SELECT op, path, old_path, pre_hash FROM change_log "
+                "WHERE op IN ('move', 'delete') ORDER BY seq ASC"
+            ).fetchall()
+            deleted_hashes = derive_deleted_hashes([dict(r) for r in replay_rows])
+
+            # Move rule keeps its windowed recent_moves (rename detection):
+            # moves since the client's last sync (200-row window, newest
+            # first) — prevents pushing back a stale pre-rename copy.
             recent_moves = None
-            recent_deletes = None
-            deleted_hashes = None
             if last_sync:
                 from ..vault.db.changes import get_changes as _get_changes
 
@@ -60,24 +62,22 @@ def register(app, ctx) -> None:
                     c for c in all_changes
                     if c["action"] == "moved" and c.get("from_path")
                 ]
-                recent_deletes = [
-                    c for c in all_changes
-                    if c["action"] == "deleted" and c.get("path")
-                ]
-                deleted_hashes = {
-                    row["path"]: row["pre_hash"]
-                    for row in ctx.db_conn.execute(
-                        "SELECT path, pre_hash FROM change_log "
-                        "WHERE op = 'delete' AND pre_hash != '' "
-                        "ORDER BY seq ASC"
-                    ).fetchall()
-                }
+
+            # F1 (review 2026-11-16): the client's last-sync manifest enables
+            # three-way attribution — server-modified → to_pull, client-
+            # modified → to_push, both → conflict. Optional field: absent
+            # (legacy client) or malformed → None = legacy conflict behavior.
+            baseline = body.get("baseline_files")
+            if not isinstance(baseline, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str)
+                    for k, v in baseline.items()):
+                baseline = None
 
             result = compare_files(
                 local_files, server_files,
                 recent_moves=recent_moves,
-                recent_deletes=recent_deletes,
                 deleted_hashes=deleted_hashes,
+                baseline=baseline,
             )
 
             # Background agent notifications since the client's last sync (cap 50).

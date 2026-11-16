@@ -960,3 +960,82 @@ def test_graph_tag_counts_no_graph_tables():
     from server.vault.db.graph_sql import graph_tag_counts
     conn = sqlite3.connect(":memory:")  # 无 entities/edges 表
     assert graph_tag_counts(conn) == []
+
+
+# ── sync lane: baseline three-way + all-time replay delete gate (F1/F2) ──
+
+
+def _sample_hash() -> str:
+    return hashlib.sha256(SAMPLE_CONTENT).hexdigest()
+
+
+def test_sync_baseline_server_modified_to_pull(client) -> None:
+    # 基线 = 上次同步双方一致的哈希（≠ 服务端当前 SAMPLE，即服务端后来改了）；
+    # 客户端仍报基线哈希（未动）→ 服务端改 → to_pull（旧行为是 conflict）。
+    r = client.post("/api/sync", json={
+        "device_name": "mac",
+        "local_files": {"notes/test.md": "old-synced-hash"},
+        "baseline_files": {"notes/test.md": "old-synced-hash"},
+        "logs": [],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["to_pull"] == ["notes/test.md"]
+    assert body["conflicts"] == []
+
+
+def test_sync_baseline_client_modified_to_push(client) -> None:
+    # 基线 = SAMPLE（= 服务端当前版本，即服务端自上次同步未动）；
+    # 客户端报了不同哈希（客户端改）→ to_push。
+    r = client.post("/api/sync", json={
+        "device_name": "mac",
+        "local_files": {"notes/test.md": "client-edited-hash"},
+        "baseline_files": {"notes/test.md": _sample_hash()},
+        "logs": [],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["to_push"] == ["notes/test.md"]
+    assert body["conflicts"] == []
+
+
+def test_sync_no_baseline_conflict_compat(client) -> None:
+    # 不带 baseline_files 的旧客户端 → 现状（conflict）。
+    r = client.post("/api/sync", json={
+        "device_name": "mac",
+        "local_files": {"notes/test.md": "different-hash"},
+        "logs": [],
+    })
+    assert r.json()["conflicts"] == ["notes/test.md"]
+
+
+def test_sync_baseline_malformed_degrades_to_conflict(client) -> None:
+    # Review Focus 3：baseline 非 dict / 值非 str / 列表 → 按 None 处理。
+    for bad in ("not-a-dict", {"notes/test.md": 123}, [1, 2]):
+        r = client.post("/api/sync", json={
+            "device_name": "mac", "local_files": {"notes/test.md": "x"},
+            "baseline_files": bad, "logs": [],
+        })
+        assert r.status_code == 200, bad
+        assert r.json()["conflicts"] == ["notes/test.md"], bad
+
+
+def test_sync_alltime_delete_beats_window(client, vault_dir, db_conn) -> None:
+    # F2 头条场景：删除行之上先堆 250 条无关变更（挤爆 200 行窗口），
+    # 删除防护仍须生效（全量重放不按窗口截断）。
+    from server.vault.db.changes import log_change
+
+    log_change(db_conn, "notes/gone.md", "deleted", source="watchdog",
+               pre_hash="h1")
+    for i in range(250):  # 把删除行推到 200 行窗口之外
+        log_change(db_conn, f"noise/f{i}.md", "created", source="web")
+
+    r = client.post("/api/sync", json={
+        "device_name": "mac",
+        "local_files": {"notes/gone.md": "h1"},  # 客户端的陈旧副本
+        "logs": [],
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["to_delete"] == ["notes/gone.md"]
+    assert body["to_push"] == []
