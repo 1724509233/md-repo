@@ -178,6 +178,16 @@ def main(argv: list[str] | None = None) -> None:
     # rebuild; legacy/desynced FTS: cheap repair from the content table).
     ensure_indexed(conn, vault_dir)
 
+    # Cold-rebuild seeding (spec 2026-11-16): when index.db was lost and
+    # rebuilt, change_log is empty — re-book the delete rows the sync lane's
+    # stale-copy gate needs from trash meta + ledger snapshots. No-op on a
+    # vault with live history (idempotent gate inside).
+    from .recovery import seed_deleted_prehashes
+    seeded = seed_deleted_prehashes(conn, vault_dir, ledger_conn)
+    if seeded:
+        logging.getLogger("md-vault.recovery").info(
+            "cold rebuild: re-seeded %d delete rows into change_log", seeded)
+
     app = create_app(vault_dir=vault_dir, db_conn=conn, ledger_conn=ledger_conn,
                      ai_config=config.ai, bg_targets=_agent_caps(bg_agents))
 

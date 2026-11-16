@@ -25,10 +25,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import shutil
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -38,7 +40,11 @@ from server.vault.fs.segmenter import _STOPWORDS
 from server.vault.fs.vault_ops import _iter_vault_md
 from server.vault.db.schema import init_db
 from server.vault.db.file_index import upsert_file
+from server.vault.db.changes import log_change
 from server.vault.orchestration.indexer import ensure_indexed
+from server.vault.orchestration.trash import list_trash
+
+logger = logging.getLogger("md-vault.recovery")
 
 
 def _utc_stamp() -> str:
@@ -110,6 +116,42 @@ def _rebuild_files_table(conn: sqlite3.Connection, vault_dir: Path) -> None:
     """
     for path, entry in _full_scan(vault_dir).items():
         upsert_file(conn, path, entry.hash, entry.mtime)
+
+
+def seed_deleted_prehashes(conn, vault_dir: Path, ledger_conn=None) -> int:
+    """Cold-rebuild seeding: change_log is wiped with index.db, but the
+    deletion records the sync lane's stale-copy gate needs survive elsewhere
+    (trash meta.json for workbench deletes; the snapshots table in ledger.db
+    for bgagent/mcp deletes). Re-book those delete rows (via log_change —
+    the sole INSERT surface) so deleted_hashes resurrects with the index.
+    Idempotent: runs only when change_log is empty (fresh rebuild / new
+    vault); a vault with live history is a no-op. Returns rows seeded."""
+    if conn.execute("SELECT count(*) FROM change_log").fetchone()[0]:
+        return 0
+    records: list[tuple[float, str, str, str]] = []  # (ts, path, pre_hash, source)
+    for meta in list_trash(Path(vault_dir)):
+        try:
+            ts = datetime.strptime(meta.get("deleted_at", ""),
+                                   "%Y-%m-%dT%H:%M:%SZ").replace(
+                                       tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            ts = time.time()
+        for f in meta.get("files", []):
+            if f.get("hash"):
+                records.append((ts, f["path"], f["hash"],
+                                meta.get("source") or "web"))
+    if ledger_conn is not None:
+        for r in ledger_conn.execute(
+                "SELECT path, pre_hash, ts, actor FROM snapshots "
+                "WHERE op = 'delete' AND pre_hash != ''"):
+            records.append((r["ts"], r["path"], r["pre_hash"], r["actor"] or "watchdog"))
+    records.sort(key=lambda x: x[0])
+    for ts, path, pre_hash, source in records:
+        log_change(conn, path, "deleted", ts=ts, source=source, pre_hash=pre_hash)
+    if records:
+        logger.warning("recovery: re-seeded %d delete rows into change_log "
+                       "(from trash meta + snapshots)", len(records))
+    return len(records)
 
 
 def _count(conn: sqlite3.Connection, table: str) -> int:
@@ -199,6 +241,19 @@ def run_recovery_drill(vault_dir: Path) -> dict:
     ensure_indexed(conn, vault_dir)
     _rebuild_files_table(conn, vault_dir)
 
+    # Cold-rebuild seeding (spec 2026-11-16): change_log was wiped with
+    # index.db — re-book the delete rows the sync lane's stale-copy gate
+    # needs from their surviving sources (trash meta + ledger snapshots).
+    # ledger.db is opened read-only-ish: the SELECT never writes a row.
+    drill_ledger_conn = None
+    ledger_path = vault_dir / ".sync" / "ledger.db"
+    if ledger_path.is_file():
+        drill_ledger_conn = sqlite3.connect(str(ledger_path))
+        drill_ledger_conn.row_factory = sqlite3.Row
+    seeded = seed_deleted_prehashes(conn, vault_dir, drill_ledger_conn)
+    if drill_ledger_conn is not None:
+        drill_ledger_conn.close()
+
     # 4. Verify. ``files_expected`` is an independent production scan, so the
     #    comparison is against a second walk of the same semantics.
     files_expected = len(_full_scan(vault_dir))
@@ -247,8 +302,8 @@ def run_recovery_drill(vault_dir: Path) -> dict:
             f"files mismatch: {files_rebuilt} rebuilt vs {files_expected} on disk"
         )
     notes.append(
-        "change_log empty is expected: the event stream is not replayed on "
-        "cold recovery (accepted, documented loss)"
+        f"delete rows re-seeded into change_log: {seeded}"
+        "（rename/move 历史是接受的丢失——复活防护已恢复，改名检测没有）"
     )
     notes.append(
         "trigger_state/recall_log empty is expected: re-seeded lazily on the "

@@ -233,3 +233,55 @@ def test_recovery_drill_ledger_absent_is_note_not_ok_flip(vault_dir: Path) -> No
     assert report["ledger"]["rows_after"] == {}
     assert any("ledger.db absent" in n for n in report["notes"])
     assert report["ledger_backup"] is None
+
+
+# ── 2026-11-16 cold-rebuild seeding: delete rows resurrect with the index ─
+
+def test_seed_deleted_prehashes_from_trash_and_snapshots(vault_dir, db_conn, ledger_conn):
+    import hashlib
+
+    from server.recovery import seed_deleted_prehashes
+    from server.sync import derive_deleted_hashes
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.trash import move_to_trash
+
+    def _sha(b):
+        return hashlib.sha256(b).hexdigest()
+
+    # 现实删除记录的两个幸存源：workbench trash 批次 + 快照表删除行。
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"aaa")
+    move_to_trash(db_conn, vault_dir, ["notes/a.md"], "web")
+    ledger_conn.execute(
+        "INSERT INTO snapshots (ts, call_id, path, new_path, op, pre_hash, actor,"
+        " run_id, blob_name, live, finalized) VALUES (?, 'c1', 'notes/b.md', '',"
+        " 'delete', 'h-b', 'organizer', '', '', 1, 1)",
+        (1000.0,))
+    ledger_conn.commit()
+
+    # 冷重建态：全新 index.db（模拟 drill / 真实冷丢失后的新库）。
+    fresh = init_db(vault_dir / ".sync" / "index-seed-test.db")
+    n = seed_deleted_prehashes(fresh, vault_dir, ledger_conn)
+    assert n >= 2
+    rows = {(r["path"], r["pre_hash"], r["source"])
+            for r in fresh.execute(
+                "SELECT path, pre_hash, source FROM change_log WHERE op='delete'")}
+    assert ("notes/a.md", _sha(b"aaa"), "web") in rows
+    assert ("notes/b.md", "h-b", "organizer") in rows
+
+    # 播种产物可被重放函数消费（sync lane 闭环）。
+    replay = fresh.execute(
+        "SELECT op, path, old_path, pre_hash FROM change_log "
+        "WHERE op IN ('move','delete') ORDER BY seq ASC").fetchall()
+    assert derive_deleted_hashes([dict(r) for r in replay])["notes/a.md"] == _sha(b"aaa")
+
+    # 幂等：change_log 非空后再调 → no-op。
+    assert seed_deleted_prehashes(fresh, vault_dir, ledger_conn) == 0
+
+
+def test_seed_noop_when_change_log_nonempty(vault_dir, db_conn, ledger_conn):
+    from server.recovery import seed_deleted_prehashes
+    from server.vault.db.changes import log_change
+
+    log_change(db_conn, "notes/live.md", "created", source="web")
+    assert seed_deleted_prehashes(db_conn, vault_dir, ledger_conn) == 0
