@@ -81,3 +81,15 @@
 - **F15 客户端 `.obsidian` 不对称**：客户端 `scan_local_files` 不排 `.obsidian` → 插件文档每轮 poll 永久重推。排（对齐服务端）还是承认并文档化「.obsidian 同步」？（倾向排——Obsidian 插件文档不该跨设备同步。）
 - **F15 事件循环阻塞**（runtime.py:357 同步工具执行）：架构级，牵动工具执行模型，单独设计卡，不进修复计划。
 - **终审 declined #1**（change_log 全量扫描性能）：触发式积压——sync 延迟可观测（>万行历史 + 实测变慢）时再立「seq 游标/op 索引」设计卡。
+
+## 独立终审（push 前，2026-11-17）
+
+requesting-code-review 全新子代理整审未推送的 14 提交（9b53831..c1d77a8，F1–F4 + F5/F13 两批）：服务端三方分类方向、全量删除门、冷重建播种、路径守卫全部判定正确（1083/4 与基线吻合）；发现 1 Critical + 5 Minor。
+
+- **C1（Critical，已修）**：客户端收尾 baseline 用 rescan 哈希充当「已同意」——周期中段编辑经三个窗口（本轮无操作的 in-sync 路径 / pull 写盘后 / push 读盘后）毒化 baseline，下一周期判 server-modified → `to_pull` 静默覆盖（无 conflict 副本、护栏不触发，是对旧 conflict 行为的数据丢失回归）。修复：baseline 三档构建（① 本轮 agreed 字节——pull 记拉取字节哈希、push 记实际上传字节哈希；② 自顶部 scan 未被碰——rescan 哈希即已同意内容；③ 其余保留旧条目/掉出），`non_agreed` 保护必须优先于「未被碰」判断；客户端 pull/delete 双向周期中护栏。
+- **M1（已修）**：删除门对服务端仍存活的 to_push 路径跳过（`p in server`）——delete→recreate 后客户端原地恢复删除前旧内容，不再被误判 `to_delete` 造成本地误删 + 下周期 churn。
+- **M2/M3/M4（已修）**：`safe_rel_path` docstring 补盘符限定规则；AGENTS.md 冷重建损失清单补「已 purge 的 trash 批次 + 被 GC 清掉的 snapshot 行（播种源耗尽）」；`routes/sync.py` 的 `derive_deleted_hashes` 局部导入上提模块顶。
+- **M5（未修，归入既有触发式积压）**：`derive_deleted_hashes` 别名重放 O(moves × tracked paths) + `/api/sync` 每次全量重放——与上文「终审 declined #1」（change_log 全量扫描性能）同族，change_log 增长后留意。
+- 顺手补强：`to_delete` 循环周期中护栏（被编辑的待删文件跳过 unlink，下周期自愈重分类）。
+
+修复分支：`fix/sync-baseline-and-delete-guards`。
