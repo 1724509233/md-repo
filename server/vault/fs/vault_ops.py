@@ -92,7 +92,16 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
     - Empty new_string deletes the matched text
     """
     fp = vault_dir / path
-    content = fp.read_bytes().decode("utf-8", errors="replace")
+    try:
+        content = fp.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        # F10 encoding fidelity: strict decode — a non-UTF-8 file must be
+        # rejected untouched, not silently re-encoded through U+FFFD
+        # (errors="replace" would corrupt every non-UTF-8 byte on write-back).
+        return (
+            f"Error: {path} is not valid UTF-8 — cannot edit safely "
+            "(re-encode the file first)"
+        )
     count = content.count(old_string)
     if count == 0:
         return (
@@ -107,7 +116,9 @@ def edit_file(vault_dir: Path, path: str, old_string: str, new_string: str) -> s
             "or call read_doc to see the full content."
         )
     new_content = content.replace(old_string, new_string)
-    fp.write_bytes(new_content.encode("utf-8"))
+    # F11 atomic write: same-dir tmp + os.replace — a crash mid-write can
+    # never leave a torn file behind.
+    atomic_write_bytes(fp, new_content.encode("utf-8"))
     return (
         f"Edited: {path} (replaced {len(old_string)} chars "
         f"with {len(new_string)} chars)"
