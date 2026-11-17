@@ -28,6 +28,17 @@ def test_safe_rel_path_alias_is_shared_vault_guard() -> None:
     assert console._safe_rel_path is safe_rel_path
 
 
+def test_upload_and_get_reject_drive_absolute_path(client) -> None:
+    # F5 端到端：盘符路径在 web 边界必须 400，绝不落盘、绝不可读。
+    r = client.post(
+        "/api/docs/C:/evil.md",
+        files={"file": ("evil.md", b"pwn", "text/markdown")},
+    )
+    assert r.status_code == 400
+    r = client.get("/api/docs/C:/evil.md")
+    assert r.status_code == 400
+
+
 def test_index_page(client) -> None:
     r = client.get("/")
     assert r.status_code == 200
