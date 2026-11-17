@@ -1,7 +1,9 @@
 """MCP stdio server exposing md-vault as agent memory."""
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 import sys
 import threading
 from pathlib import Path
@@ -31,6 +33,23 @@ related_no_file = GetRelatedDocsTool.related_no_file
 related_no_links = GetRelatedDocsTool.related_no_links
 
 
+def _resolve_mcp_auth(env_token: str, config_token: str) -> bool:
+    """Resolve MCP write-channel authentication (user decision 2026-11-17).
+
+    The stdio process's env token (``MD_VAULT_MCP_WRITE_TOKEN``) and the
+    configured ``mcp.write_token`` must BOTH be non-empty and equal
+    (constant-time compare — never a plain ``==`` on secrets). Two empty
+    tokens must NOT authenticate: no config token = the write channel is
+    closed, even when the env var is unset/empty too. Comparison runs on
+    UTF-8 encoded bytes — ``compare_digest`` on str raises TypeError for
+    non-ASCII tokens.
+    """
+    if not env_token or not config_token:
+        return False
+    return hmac.compare_digest(env_token.encode("utf-8"),
+                               config_token.encode("utf-8"))
+
+
 class McpExternalGate(WriteGate):
     """Channel rule (MCP only): the main memory area is read-only for
     external agents (memory-runtime v2 immune pipeline, physical isolation).
@@ -41,12 +60,26 @@ class McpExternalGate(WriteGate):
     proposal channel (v2: direct suggestions/ writes are rejected by the
     VAULT_GATES SuggestionsGate; v2a zero file-landing per D25 — any
     existing suggestions/ file is inert). Read tools are no-ops (validate_tool_call invokes gates
-    for every tool). Unconditional by constitution — no config flag.
+    for every tool). The gate is always installed — no config flag removes
+    it; the auth state only flips its verdict (below).
+
+    Authenticated mode (user decision 2026-11-17): when the stdio process
+    presented the write token (``_resolve_mcp_auth``), the gate passes ask
+    tools through — the main memory area becomes writable over MCP. This
+    loosens only the channel rule: VAULT_GATES (SuggestionsGate) still
+    apply unconditionally inside validate_tool_call, so suggestions/ stays
+    propose-only in every auth state. The default (unauthenticated)
+    behavior is byte-equivalent to the pre-auth gate: read-only + propose.
     """
 
     name = "mcp_external"
 
+    def __init__(self, authenticated: bool = False):
+        self._authenticated = authenticated
+
     def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
+        if self._authenticated:
+            return None  # authenticated: ask tools pass (VAULT_GATES still apply)
         tool = TOOL_REGISTRY.get(tool_name)
         if tool is None or tool.permission != "ask":
             return None  # reads are not gated
@@ -237,9 +270,29 @@ def main():
     from server.vault.db.schema import init_db
     from server.vault.orchestration.indexer import ensure_indexed
     from server.agent import ChannelPolicy, validate_tool_call
-    
+
+    # stderr is the MCP stdio log surface (stdout carries the protocol);
+    # without a handler the two-state startup log below would be dropped.
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
     config = load_server_config(str(_find_config()))
     vault_dir = config.vault_dir
+
+    # MCP write-channel authentication (user decision 2026-11-17): the
+    # stdio process must present MD_VAULT_MCP_WRITE_TOKEN matching
+    # config.yaml mcp.write_token (constant-time compare) to write the
+    # main memory area; unauthenticated = read-only + propose (unchanged).
+    config_token = getattr(config, "mcp_write_token", "") or ""
+    authenticated = _resolve_mcp_auth(
+        os.environ.get("MD_VAULT_MCP_WRITE_TOKEN", ""), config_token)
+    logging.getLogger("mcp_server").info(
+        "MCP write channel %s",
+        "AUTHENTICATED — main-area writes enabled (suggestions/ stays "
+        "propose-only via VAULT_GATES)"
+        if authenticated else
+        "read-only + propose — set MD_VAULT_MCP_WRITE_TOKEN to match "
+        "config.yaml mcp.write_token to enable main-area writes")
     db_conn = init_db(vault_dir / ".sync" / "index.db")
     # Cross-process concurrency with the main server (both processes can
     # write index.db): WAL is already on via init_db, so readers are
@@ -278,9 +331,10 @@ def main():
     # --- Tools ---
 
     # Channel policy for the external MCP channel: the channel rule gate
-    # (main area read-only) is injected here; VAULT_GATES (suggestions
-    # invariant) is applied unconditionally by validate_tool_call.
-    MCP_POLICY = ChannelPolicy(vault_dir, gates=(McpExternalGate(),))
+    # (main area read-only unless authenticated — user decision
+    # 2026-11-17) is injected here; VAULT_GATES (suggestions invariant)
+    # is applied unconditionally by validate_tool_call.
+    MCP_POLICY = ChannelPolicy(vault_dir, gates=(McpExternalGate(authenticated=authenticated),))
     
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:

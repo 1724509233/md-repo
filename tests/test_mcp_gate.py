@@ -101,6 +101,44 @@ def test_gate_noop_for_read_tools(tmp_path):
     assert gate.check("search_docs", {"query": "x"}, tmp_path) is None
 
 
+# --- authenticated write channel (user decision 2026-11-17) ----------------
+
+def test_authenticated_gate_allows_main_area_write(tmp_path):
+    """authenticated=True (env token matched config mcp.write_token): the
+    channel gate lets ask tools through — the main memory area becomes
+    writable over MCP. VAULT_GATES still apply on top (see below)."""
+    gate = McpExternalGate(authenticated=True)
+    assert gate.check("write_doc", {"path": "notes/a.md", "content": "x"},
+                      tmp_path) is None
+    assert gate.check("edit_doc", {"path": "notes/a.md", "old_string": "a",
+                                   "new_string": "b"}, tmp_path) is None
+
+
+def test_authenticated_gate_still_rejects_suggestions(tmp_path):
+    # VAULT_GATES 无条件生效——这里只验证 McpExternalGate 自身放行；
+    # SuggestionsGate 的拒绝由 validate_tool_call 组合保证（既有测试钉）。
+    gate = McpExternalGate(authenticated=True)
+    assert gate.check("write_doc", {"path": "suggestions/x.md", "content": "x"},
+                      tmp_path) is None
+
+
+def test_unauthenticated_gate_unchanged(tmp_path):
+    """authenticated=False (default) is byte-equivalent to today's gate: a
+    main-area ask write is still refused with the protocol guidance."""
+    gate = McpExternalGate(authenticated=False)
+    assert gate.check("write_doc", {"path": "notes/a.md", "content": "x"},
+                      tmp_path) is not None
+
+
+def test_resolve_mcp_auth_constant_time_compare():
+    from server.mcp_server import _resolve_mcp_auth
+    assert _resolve_mcp_auth("tok", "tok") is True
+    assert _resolve_mcp_auth("tok", "other") is False
+    assert _resolve_mcp_auth("", "tok") is False      # env 缺失
+    assert _resolve_mcp_auth("tok", "") is False      # config 未配置
+    assert _resolve_mcp_auth("", "") is False         # 双空 = 关闭（不误认证）
+
+
 # --- propose channel (oracle gate P0-Q6a) ----------------------------------
 
 def test_mcp_propose_creates_stamped_record(ledger_conn, tmp_path):

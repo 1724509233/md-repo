@@ -414,3 +414,26 @@ def test_ai_tools_empty_list_fails_fast(tmp_path: Path):
     with pytest.raises(ValueError) as exc:
         load_server_config(str(cfg_file))
     assert "empty" in str(exc.value).lower()
+
+
+# ── mcp.write_token (MCP write-channel auth; user decision 2026-11-17) ────
+
+def test_server_config_mcp_write_token_parses(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "mcp:\n"
+        "  write_token: s3cret\n")))
+    assert cfg.mcp_write_token == "s3cret"
+
+
+def test_server_config_mcp_section_absent_token_empty(tmp_path: Path) -> None:
+    """No mcp: section → write channel closed (empty token = unauthenticated)."""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path)))
+    assert cfg.mcp_write_token == ""
+
+
+def test_server_config_mcp_write_token_empty_is_empty(tmp_path: Path) -> None:
+    """An explicitly empty write_token is the closed state, not a value."""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "mcp:\n"
+        "  write_token: \"\"\n")))
+    assert cfg.mcp_write_token == ""
