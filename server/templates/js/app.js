@@ -889,7 +889,7 @@ export function createApp() {
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
-              :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen"
+              :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen" :ai-open="state.aiOpen"
               @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"

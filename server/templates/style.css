@@ -88,7 +88,16 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
   height: 28px; padding: 0 12px;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   border-radius: 8px; color: var(--ink-soft);
-  transition: background-color .15s ease, color .15s ease;
+  white-space: nowrap; /* 内部文字永不换行；放不下由 .topbar-compact 收纳（见下） */
+  transition: background-color .15s ease, color .15s ease,
+              padding .2s ease, gap .2s ease; /* padding/gap 可过渡：紧凑切换时按钮宽度随内容连续收缩 */
+}
+/* 文字标签：max-width + opacity 收缩（display:none 不可过渡 = 紧凑切换瞬跳/闪烁）。
+   上限 28px ≈ 两个 12px 汉字自然宽 + 余量：满配态零裁切，收纳动画全程有效无空转段。
+   按钮 width 保持 auto，随标签收缩连续跟随，全程零跳变。 */
+.tb-label {
+  max-width: 28px; overflow: hidden;
+  transition: max-width .2s ease, opacity .15s ease;
 }
 .topbar-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
 /* 正方形图标按钮：铃铛 / hamburger / 移动端更多 */
@@ -104,6 +113,17 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
   display: flex; align-items: center; gap: 2px;
   height: 36px; padding: 0 2px; border-radius: 8px;
   background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+/* 顶栏紧凑态（app.js 传 ai-open prop：AI 面板展开 ⇔ 图标化，与文字态互斥，2026-11-17 用户定稿）：
+   文字钮收成 28px 图标钮（同移动端 --icon 规格），语义走 title / aria-label，logo 收成单字母 mark。
+   全部走可过渡属性（padding/gap/max-width/opacity），与 AI 面板 0.25s 滑出动画同帧启动、平滑衔接，无瞬跳。
+   仅桌面生效——<lg 本就是图标钮 + 更多菜单，不动。 */
+@media (min-width: 1024px) {
+  .topbar-compact .topbar-btn { padding: 0 7px; gap: 0; } /* 7+图标14+7 = 28px 终宽 */
+  .topbar-compact .tb-label { max-width: 0; opacity: 0; }
+  .topbar-compact .topbar-logo { gap: 0; }
+  .topbar-compact .topbar-logo .logo-word { max-width: 0; opacity: 0; }
 }
 
 /* ============ 目录浮层（P4-3）============
@@ -205,6 +225,7 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
   .view-fade { animation: none; }
   .tool-detail { transition: none; }
   #ai-panel { transition: none; }
+  .topbar-btn, .tb-label, .topbar-logo, .topbar-logo .logo-word { transition: none; } /* 顶栏紧凑收纳直切 */
   .msg-in { animation: none; }
 }
 
@@ -692,7 +713,13 @@ pre code.hljs { background: transparent; padding: 0; }
 
 /* 顶栏 logo（spec §3.1：22px mark + 14px wordmark） */
 .topbar-logo .logo-mark--top { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
-.topbar-logo .logo-word { font-size: 14px; }
+/* 字标同 .tb-label 口径：max-width + opacity 平滑收纳（上限 60px ≈ "md-vault" 自然宽 + 余量） */
+.topbar-logo { transition: gap .2s ease; }
+.topbar-logo .logo-word {
+  font-size: 14px;
+  max-width: 60px; overflow: hidden; white-space: nowrap;
+  transition: max-width .2s ease, opacity .15s ease;
+}
 
 /* ============ 搜索页（spec §3.3）============ */
 /* 搜索输入区：树内（FileTree）与搜索页（SearchPanel）共用同一套类，勿另起（2026-10-19 统一） */
