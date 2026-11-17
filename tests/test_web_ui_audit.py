@@ -197,3 +197,36 @@ def test_shell_uses_layout_viewport_height():
     assert "flex h-screen" not in _templates()["app.js"]
     # 兜底钩子：壳内不存在合法的 window 滚动，出现即弹回 0
     assert "window.scrollTo(0, 0)" in _templates()["app.js"]
+
+
+def test_notif_dropdown_reopen_clears_closing_class():
+    # bug 83de96eb：v-show 常驻元素，退场类 notif-closing 不在再开时清除
+    # → notifOut(fill:both) 顶替 notif-in，第二次起「展开一瞬间立即收起」
+    app = _templates()["app.js"]
+    seg = app[app.index("function toggleNotifDropdown"):]
+    seg = seg[: seg.index("async function markAllRead")]
+    assert "classList.remove('notif-closing')" in seg
+
+
+def test_new_session_resets_token_usage():
+    # bug e785b308：sessionId watch 清了消息流/输入框，漏清 tokenUsage → 新会话仍显示旧用量条
+    ai = _templates()["AIChatPanel.js"]
+    start = ai.index("watch(() => props.sessionId")
+    end = ai.index("loadAutoApprove()", start)
+    assert "tokenUsage" in ai[start:end]
+
+
+def test_rename_row_click_guard():
+    # bug 4a2249fc：rename input 的 @click.stop 只护住 input 本体，
+    # 点到行 padding/边缘仍是行 click → select/toggle 跳转；行级守卫按 editing.path 拦截
+    ft = _templates()["FileTree.js"]
+    assert ft.count("treeOps.isEditing(") >= 3  # 文件行 click + 目录行 click + 目录行 keydown
+
+
+def test_anchorless_link_jump_forces_preview_top():
+    # bug 83e7241f：软链无锚点跳转 → 强制预览 + 滚动至文档首部
+    app = _templates()["app.js"]
+    assert "async function openDoc(path, heading, fromLink)" in app
+    assert "if (fromLink && !heading) state.previewMode = true" in app
+    assert "else if (fromLink)" in app
+    assert "openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)" in app

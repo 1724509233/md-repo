@@ -471,6 +471,7 @@ export const AIChatPanel = {
       inputText.value = ''
       lastSearchQuery = '' // 新会话：清空搜索归因
       sessionToolCalls = 0 // 新会话：重置 §5.4 降级口径计数
+      Object.assign(tokenUsage, { used: 0, total: 0, percent: 0 }) // 新会话：用量条归零（bug e785b308）
       setStatus('ready')
       loadAutoApprove()
     })

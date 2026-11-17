@@ -104,7 +104,7 @@ async function loadDocs() {
   return !!data
 }
 
-async function openDoc(path, heading) {
+async function openDoc(path, heading, fromLink) {
   // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
   if (state.monitoring) exitMonitorPage()
   // 自动保存未保存的编辑
@@ -113,6 +113,8 @@ async function openDoc(path, heading) {
   }
   state.currentPath = path
   state.dirty = false
+  // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
+  if (fromLink && !heading) state.previewMode = true
 
   // fetch 先行：成功后才播放动画
   let text
@@ -159,6 +161,11 @@ async function openDoc(path, heading) {
         if (el) flashHeading(el)
       }, 200)
     }
+  } else if (fromLink) {
+    // 无锚点软链：滚动至文档首部（预览容器跨文档复用，scrollTop 不会自行归零）
+    await nextTick()
+    const pv = editorPaneRef.value ? editorPaneRef.value.previewEl : null
+    if (pv) pv.scrollIntoView({ behavior: 'auto', block: 'start' })
   }
 }
 
@@ -747,7 +754,7 @@ export function createApp() {
           } else {
             api.recallClick({ path: a.getAttribute('data-vault-path'), via: 'preview' })
           }
-          openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'))
+          openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)
         })
 
         // 初始欢迎消息由 AIChatPanel 内部处理
@@ -757,7 +764,14 @@ export function createApp() {
 
       function toggleNotifDropdown() {
         if (state.notifOpen) closeNotifDropdown()
-        else state.notifOpen = true
+        else {
+          // v-show 元素常驻：退场类 notif-closing 不清除则再开时 notifOut(fill:both) 顶替
+          // notif-in（第二次起「展开一瞬间立即收起」，bug 83de96eb）；挂起定时器同清
+          clearTimeout(notifCloseT)
+          const el = document.querySelector('.notif-dropdown')
+          if (el) el.classList.remove('notif-closing')
+          state.notifOpen = true
+        }
       }
 
       async function markAllRead() {

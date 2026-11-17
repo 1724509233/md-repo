@@ -48,6 +48,7 @@ const TreeNode = {
 
     // 目录行键盘激活（P1-8）：div[role=button] 上 Enter/Space 均手动（无原生 click）
     function onDirKeydown(e, path) {
+      if (treeOps.isEditing(path)) return // 行内改名中：行级激活让位（bug 4a2249fc 同族）
       if (e.key === 'Enter') { e.preventDefault(); emit('toggle', path); return }
       if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); emit('toggle', path) }
     }
@@ -74,7 +75,7 @@ const TreeNode = {
             :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
             role="button" tabindex="0"
             :aria-expanded="isExpanded(childPath(name)) ? 'true' : 'false'"
-            @click="$emit('toggle', childPath(name))"
+            @click="treeOps.isEditing(childPath(name)) || $emit('toggle', childPath(name))"
             @keydown="onDirKeydown($event, childPath(name))"
             @contextmenu.prevent="treeOps.openMenu($event, childPath(name), true)"
             draggable="true"
@@ -114,7 +115,7 @@ const TreeNode = {
           :href="docHash(f.path)"
           :class="{ active: f.path === currentPath }"
           :aria-current="f.path === currentPath ? 'page' : undefined"
-          @click.prevent="$emit('select', f.path)"
+          @click.prevent="treeOps.isEditing(f.path) || $emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
           @dragstart="treeOps.onDragStart($event, f.path, false)"
@@ -426,7 +427,10 @@ export const FileTree = {
     }
 
     // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
-    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop })
+    // 行内编辑态判定：该行正在 rename/新建时，行级 click/keydown 一律让位
+    //（input 的 @click.stop 只护住输入框本体，点到行 padding/边缘仍会跳转，bug 4a2249fc）
+    function isEditing(path) { return !!editing.value && editing.value.path === path }
+    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop, isEditing })
     provide('treeOps', treeOps)
 
     // ============ RAG 搜索下拉框（共享控制器，spec §4.3）============
