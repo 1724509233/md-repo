@@ -376,10 +376,12 @@ pre code.hljs { background: transparent; padding: 0; }
 .feedback-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .cite-summary { font-size: 12px; font-family: 'Inter', sans-serif; color: var(--ink-soft); }
 .cite-summary.cite-warn { color: #b45309; }
-.fb-btn { font-size: 12px; padding: 4px 12px; background: none; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-family: 'Inter', sans-serif; transition: transform .1s ease, background-color .15s ease, color .15s ease, border-color .15s ease; }
-.fb-btn:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.fb-btn { width: 26px; height: 26px; border-radius: 7px; border: none; background: transparent; color: var(--ink-soft); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background-color .15s ease, color .15s ease, transform .1s ease; }
+.fb-btn svg { width: 15px; height: 15px; stroke-width: 1.75; }
+.fb-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
 .fb-btn:active { transform: scale(.95); }
-.fb-btn.is-on { background: var(--brass); color: var(--paper); border-color: var(--brass); }
+.fb-btn.is-on { color: var(--brass); background: color-mix(in srgb, var(--brass) 18%, transparent); }
+.fb-btn.is-on:hover { background: color-mix(in srgb, var(--brass) 25%, transparent); }
 
 /* ============ Conflict banner（agent 写入/编辑 vs 用户未保存）============ */
 .conflict-banner { display: flex; align-items: center; gap: 10px; padding: 8px 14px; margin-bottom: 8px; background: color-mix(in srgb, #eab308 12%, var(--surface)); border: 1px solid color-mix(in srgb, #eab308 40%, var(--line)); border-radius: 8px; font-family: 'Inter', sans-serif; font-size: 12px; color: var(--ink); animation: conflict-in .2s ease; }

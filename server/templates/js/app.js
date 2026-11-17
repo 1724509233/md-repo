@@ -593,7 +593,7 @@ function searchDrawerTouchMove(e) {
   drawer.style.height = h + 'px'
 }
 
-function searchDrawerTouchEnd() {
+function searchDrawerTouchEnd(e) {
   // P2-8 下滑关闭：handle 区下滑 >40px → 关闭（与高度调节共用 touchend，先判断后调节）
   if (state.searchDrawerOpen && searchDrawerSwipY >= 0 && e && e.changedTouches) {
     const dy = e.changedTouches[0].clientY - searchDrawerSwipY
