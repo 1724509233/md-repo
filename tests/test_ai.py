@@ -218,3 +218,24 @@ async def test_chat_stream_empty_response():
             events.append(line)
 
     assert events == []
+
+
+def test_legacy_rag_search_excludes_trash_and_obsidian(tmp_path):
+    # F13：降级检索（index.db 缺失时的 TF 兜底）不得泄漏回收站与 .obsidian。
+    from server.ai.search import _legacy_rag_search
+
+    vault = tmp_path / "vault"
+    (vault / "notes").mkdir(parents=True)
+    (vault / "notes" / "live.md").write_bytes(b"quokka live content")
+    batch = vault / ".trash" / "20261117T000000Z-deadbeef" / "notes"
+    batch.mkdir(parents=True)
+    (batch / "leaked.md").write_bytes(b"quokka deleted content")
+    (vault / ".obsidian" / "plugins" / "p").mkdir(parents=True)
+    (vault / ".obsidian" / "plugins" / "p" / "README.md").write_bytes(b"quokka plugin doc")
+
+    hits = _legacy_rag_search(str(vault), "quokka", top_k=10)
+    paths = [h["path"] for h in hits]
+    assert hits, "sanity: live content must match"
+    assert all(not p.startswith(".trash/") for p in paths)
+    assert all(not p.startswith(".obsidian/") for p in paths)
+    assert "notes/live.md" in paths

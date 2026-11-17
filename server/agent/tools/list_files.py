@@ -75,7 +75,7 @@ class ListFilesTool(Tool):
             f.relative_to(ctx.vault_dir).as_posix()
             for f in base.rglob("*.md")
             if ".sync" not in f.parts and ".trash" not in f.parts
-            and not _index_excluded(f, ctx.vault_dir)
+            and ".obsidian" not in f.parts and not _index_excluded(f, ctx.vault_dir)
         ]
         ctx.last_meta = {"count": len(files)}
         return "\n".join(sorted(files)) if files else self.list_empty(args.dir)
