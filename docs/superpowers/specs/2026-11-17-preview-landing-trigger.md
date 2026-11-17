@@ -73,7 +73,7 @@
 - **`onPreviewDblClick`（新，仅桌面语义）**：`lastTouchAt` 旗标先行（屏蔽 iOS 双击选词的 dblclick）→ 顶层 cell 且选区空 → `landCell`，否则块级 `landOn`；成功即清 `landingSel`。
 - **✎ click**：按 `landingSel.el`（td 起点则按 cell）调 `landCell`/`landOn` → 清选中。
 - **hover 对（桌面）**：`mouseover` 命中映射块 → `hoverSel` 亮；`mouseout` 延迟 ~120ms 收（指针进入 ✎ 本体则取消收起）。hover 不产生 sticky；**sticky 优先**——已有 `landingSel` 时 hover 不移动 ✎、不改选中。
-- **清理 watch**：`renderedHtml` 与 `props.mode` → 清 `landingSel`/`hoverSel`（重渲染后 el 引用必失效，先于任何 land 调用生效）。
+- **清理钩子**：`refreshPreview()` 首行（v-html 重建唯一触发点，F3 测试钉禁 `watch(renderedHtml`）与 `props.mode` watch → 清 `landingSel`/`hoverSel`（重渲染后 el 引用必失效，先于任何 land 调用生效）。✎ 显现态用 class 切 opacity（`pointer-events:none` 于隐藏态），不用 `v-show`（display:none 杀淡变）。
 
 ### 3.3 ✎ 定位
 
