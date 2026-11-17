@@ -1534,7 +1534,8 @@ def test_system_reminder_none_and_empty_skipped(tmp_path: Path):
 def test_check_md_path_rejects_drive_qualified():
     from server.agent.tools.tool import _check_md_path, _check_optional_path
 
-    for bad in ("C:/Users/x/evil.md", "c:\\x.md", "C:", "c:x.md"):
+    for bad in ("C:/Users/x/evil.md", "c:\\x.md", "C:", "c:x.md",
+                "\\\\server\\share.md", "\\\\?\\C:\\x.md"):  # 反斜杠 UNC/扩展长度：归一后才落到 "/" 检查
         with pytest.raises(ValueError, match="outside vault"):
             _check_md_path(bad)
         with pytest.raises(ValueError, match="outside vault"):
