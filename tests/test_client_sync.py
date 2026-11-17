@@ -266,3 +266,25 @@ def test_pull_guard_rescues_midcycle_created_file(tmp_path, monkeypatch):
     assert (vault / "new.md").read_bytes() == b"created mid cycle"
     assert (vault / "new.conflict-test.md").read_bytes() == b"server version"
     assert "new.md" not in state["files"]
+
+
+def test_atomic_write_no_stray_on_replace_failure(tmp_path, monkeypatch):
+    import os
+
+    from client.sync import _atomic_write
+
+    fp = tmp_path / "a.md"
+    fp.write_bytes(b"original")
+    real_replace = os.replace
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("client.sync.os.replace", boom)
+    try:
+        _atomic_write(fp, b"new")
+    except OSError:
+        pass
+    monkeypatch.undo()
+    assert fp.read_bytes() == b"original"          # 原文件原样
+    assert list(tmp_path.iterdir()) == [fp]        # tmp 已清理
