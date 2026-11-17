@@ -622,7 +622,7 @@ export const MemoryConsole = {
         <span class="picon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
         <span class="ptitle">记忆</span>
         <span class="pcount" v-if="l0.awaiting + l0.adopted + l0.failed > 0">{{ l0.awaiting + l0.adopted + l0.failed }}</span>
-        <span class="pacts"><button class="ibtn" title="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <!-- L0 行动数 = 纯状态行（整行不可点）；行尾「后台 →」= 唯一 L0→L1 入口；
            failed > 0 → 失败数告警红 + 入口小红点（0 时不渲染 dot） -->
@@ -686,9 +686,9 @@ export const MemoryConsole = {
          回退出口 = 返回队列；深链 state.memoryReport 直达，mp-deep 黄铜下划线 sweep 同详情面口径） -->
     <div v-else-if="report" :key="'report-' + report" data-face="report" class="c-face anim">
       <div class="p-head">
-        <button class="ibtn" title="返回队列" @click="backReport"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="backReport"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">报告</span>
-        <span class="pacts"><button class="ibtn" title="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="c-scroll" @click="onReportCopyClick">
         <div v-if="reportContent === null && !reportError" class="q-empty" style="padding-top: 40px">
@@ -717,10 +717,10 @@ export const MemoryConsole = {
     <!-- 详情面：五段材料按判断顺序 + 粘性动作行 + 确认之后子视图 -->
     <div v-else-if="detail" :key="'detail-' + detail" data-face="detail" class="c-face anim">
       <div class="p-head">
-        <button class="ibtn" title="返回队列" @click="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">终审</span>
         <span class="pcount" v-if="queueIndex > 0">{{ queueIndex }}/{{ queueCount }}</span>
-        <span class="pacts"><button class="ibtn" title="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="c-scroll">
         <div v-if="!detailItem" class="q-empty" style="padding-top: 40px">

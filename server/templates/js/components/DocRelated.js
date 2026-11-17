@@ -145,7 +145,7 @@ export const DocRelated = {
       <div class="p-head">
         <span class="picon"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
         <span class="ptitle">关联</span>
-        <span class="pacts"><button class="ibtn" title="关闭" @click="$emit('close')"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="$emit('close')"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="doc-path-line" :title="path">{{ path }}</div>
       <div class="rel-scroll">

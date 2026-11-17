@@ -387,7 +387,7 @@ export const MonitorPage = {
         <div class="mpage grid">
           <div class="mp-head">
             <!-- 单出口：回文档视图；面板不自动重开（重入走 rail【记忆】） -->
-            <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" @click="back">
+            <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" aria-label="返回文档视图" @click="back">
               <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
             <div class="mp-title">记忆运行时 · 后台监控</div>
             <div class="mp-meta">更新于 {{ updatedAt || '…' }}</div>
@@ -502,7 +502,7 @@ export const MonitorPage = {
                   <!-- L2 头部：§2.4 通道行（7d 按 source，全零隐藏）+ §2 D2 手动刷新 -->
                   <div class="l2-top">
                     <span v-if="bySourceLine" class="l2-src">{{ bySourceLine }}</span>
-                    <button class="l2-refresh" type="button" title="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
+                    <button class="l2-refresh" type="button" title="重新拉取召回明细" aria-label="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
                       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
                     </button>
                   </div>

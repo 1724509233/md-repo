@@ -223,7 +223,7 @@ export const SearchPanel = {
         <span class="pcount" v-if="docCount > 0">{{ docCount }} 个文档</span>
         <span class="pacts">
           <!-- ② 权重控件入口（absolute popover，开/关两态面板头不跳位） -->
-          <button class="sp-sort-btn" :class="{ on: showSort }" title="排序权重" @click="showSort = !showSort">
+          <button class="sp-sort-btn" :class="{ on: showSort }" title="排序权重" aria-label="排序权重" @click="showSort = !showSort">
             <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>
             排序
           </button>
@@ -249,7 +249,7 @@ export const SearchPanel = {
         <input ref="inputEl" v-model="searchQuery" type="text"
           class="sp-q-input"
           placeholder="搜索文档… #tag 按标签搜" @keydown="onKeydown">
-        <button v-if="searchQuery" class="sp-q-clear" title="清除" @click="searchQuery = ''">
+        <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>

@@ -818,7 +818,7 @@ export function createApp() {
                 <span class="ptitle">文档</span>
                 <span class="pcount">{{ state.files.length }}</span>
                 <span class="pacts">
-                  <button class="ibtn" title="收起全部文件夹"
+                  <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
                     @click="fileTreeRef && fileTreeRef.collapseAll()">
                     <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
                   </button>
