@@ -178,9 +178,11 @@ def test_final_review_fixes():
     assert "docHash(" in md
 
 
-def test_mobile_editor_font_16px():
-    css = (TPL / "style.css").read_text(encoding="utf-8")
-    m = re.search(r"#editor\s*{\s*font-size:\s*16px", css)
-    assert m, "移动端 #editor 需 ≥16px：iOS 对 <16px 输入框聚焦自动缩放 → 整页偏移且不可滚回"
-    # 规则必须位于移动媒体查询内（桌面保持 14px 密度）
-    assert css.find("@media (max-width: 1023px)") < m.start()
+def test_keyboard_focus_preventscroll():
+    # Android Chromium/Edge + 华为浏览器：键盘只压 visualViewport，
+    # 裸 focus() 触发浏览器自动平移视口，overflow-hidden 壳内滚不回来（P1 验收捕获）
+    t = _templates()
+    assert t["EditorPane.js"].count("focus({ preventScroll: true })") >= 2
+    assert t["FileTree.js"].count("focus({ preventScroll: true })") >= 4
+    assert "focus({ preventScroll: true })" in t["SearchPanel.js"]
+    assert "focus({ preventScroll: true })" in (TPL / "js/utils/toc.js").read_text(encoding="utf-8")

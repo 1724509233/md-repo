@@ -29,7 +29,7 @@ const TreeNode = {
     currentPath: { type: String, default: null }
   },
   emits: ['select', 'toggle'],
-  directives: { 'focus-select': { mounted(el) { el.focus(); el.select() } } },
+  directives: { 'focus-select': { mounted(el) { el.focus({ preventScroll: true }); el.select() } } },
   setup(props, { emit }) {
     const treeOps = inject('treeOps')
     const treeState = inject('treeState')
@@ -258,7 +258,7 @@ export const FileTree = {
         // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪）
         nextTick(() => {
           const el = document.querySelector('#root-new-input')
-          if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+          if (el) { el.focus({ preventScroll: true }); el.select(); el.scrollIntoView({ block: 'nearest' }) }
         })
         return
       }
@@ -269,7 +269,7 @@ export const FileTree = {
       // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪），对齐根分支
       nextTick(() => {
         const el = document.querySelector('#child-new-input')
-        if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+        if (el) { el.focus({ preventScroll: true }); el.select(); el.scrollIntoView({ block: 'nearest' }) }
       })
     }
 
@@ -443,7 +443,7 @@ export const FileTree = {
       api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
       focusInput() {
         const input = document.querySelector('#search-input')
-        if (input) input.focus() // 保证 ArrowUp/Down 继续可用
+        if (input) input.focus({ preventScroll: true }) // 保证 ArrowUp/Down 继续可用
       },
       onSearchComplete() { fileState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })

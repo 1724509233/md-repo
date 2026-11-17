@@ -75,7 +75,7 @@ export const SearchPanel = {
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state,
-      focusInput() { if (inputEl.value) inputEl.value.focus() },
+      focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
       onSearchComplete() { if (appState) appState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
 

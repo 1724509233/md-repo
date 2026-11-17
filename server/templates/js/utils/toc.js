@@ -122,7 +122,7 @@ export function jumpToEditorLine(ta, value, lineNo) {
     start += parts[k].length + parts[k + 1].length    // 分隔符实际长度（CRLF=2 / LF=CR=1），非固定 1
   }
   lines.push(parts[ln * 2])   // lines[k] 不含分隔符（探针/行长口径，同旧 split）
-  ta.focus()
+  ta.focus({ preventScroll: true })
   ta.setSelectionRange(start, start + lines[ln].length)   // 选中整行 = 反馈本体（编辑器无逐行高亮，不加假闪光）
   let topY
   try {

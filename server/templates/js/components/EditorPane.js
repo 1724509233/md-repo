@@ -204,7 +204,8 @@ export const EditorPane = {
         const src = ta.value
         const a = offsetOfLine(src, l1) // ③ 行号 → 字符偏移
         const b = endOfLine(src, l2)
-        ta.focus() // ⑤ 焦点进 textarea，立即可输入（替换选区）
+        ta.focus({ preventScroll: true }) // ⑤ 焦点进 textarea，立即可输入（替换选区）；
+        //   preventScroll：裸 focus 触发浏览器把聚焦元素平移进键盘上方可视区，overflow-hidden 壳内滚不回
         ta.setSelectionRange(a, b) // 可见性 = 原生选区高亮（§4.2，不另加高亮带）
         // ④ 滚动至 L1：探针实测行顶 Y，无条件双向（与 TOC 跳行同模型，editorGeom.js）；落点锚点 LAND_ANCHOR
         const lines = src.split(/\r\n|\r|\n/)
@@ -231,7 +232,7 @@ export const EditorPane = {
         const ta = editorEl.value
         if (!ta) return
         const rr = cellCharRange(ta.value, wrap, td); if (!rr) return
-        ta.focus()
+        ta.focus({ preventScroll: true })
         const empty = td.textContent.trim() === '' // 空 cell（渲染 td 为空 = 格源文本仅 padding 空白）→ 零宽落位（§5.1）
         const a = empty ? Math.floor((rr[0] + rr[1]) / 2) : rr[0]
         ta.setSelectionRange(a, empty ? a : rr[1]) // 非空格选整段格文本（输入即替换）
