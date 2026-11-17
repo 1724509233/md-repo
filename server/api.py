@@ -17,6 +17,23 @@ from .routes import WebContext, register_all
 from .sync_lock import SyncLock
 
 
+class CachedStatic(StaticFiles):
+    """StaticFiles + explicit Cache-Control (ETag/Last-Modified/304 are built in).
+
+    ``vendor/`` holds version-pinned third-party assets → one day of
+    freshness, so the 4.6 MB set revalidates at most daily; everything else
+    (app js/css, editable) always revalidates against its ETag (free 304).
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers.setdefault(
+            "Cache-Control",
+            "public, max-age=86400" if path.startswith("vendor/") else "no-cache",
+        )
+        return response
+
+
 def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
                bg_targets: dict[str, dict] | None = None) -> FastAPI:
     """Create the FastAPI application.
@@ -37,7 +54,7 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
     compatible).
     """
     app = FastAPI(title="md-sync server")
-    app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "templates")), name="static")
+    app.mount("/static", CachedStatic(directory=str(Path(__file__).parent / "templates")), name="static")
     ctx = WebContext(
         db_conn=db_conn,
         ledger_conn=ledger_conn if ledger_conn is not None else db_conn,
