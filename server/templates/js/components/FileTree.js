@@ -91,11 +91,11 @@ const TreeNode = {
             <input v-if="treeOps.editing && treeOps.editing.path === childPath(name) && treeOps.editing.mode === 'rename'"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
-              @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
+              @blur="treeOps.confirmEdit()" @click.stop.prevent v-focus-select>
             <span v-else class="font-medium flex-1 min-w-0 truncate">{{ name }}</span>
             <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
-              @click.stop="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
+              @click.stop.prevent="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
               <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
           </div>
@@ -123,10 +123,10 @@ const TreeNode = {
           <input v-if="treeOps.editing && treeOps.editing.path === f.path && treeOps.editing.mode === 'rename'"
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
             v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
-            @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
+            @blur="treeOps.confirmEdit()" @click.stop.prevent v-focus-select>
           <span v-else class="font-medium flex-1 truncate">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
-            @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
+            @click.stop.prevent="treeOps.openMenu($event, f.path, false)" aria-label="操作">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
         </a>
@@ -427,8 +427,9 @@ export const FileTree = {
     }
 
     // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
-    // 行内编辑态判定：该行正在 rename/新建时，行级 click/keydown 一律让位
-    //（input 的 @click.stop 只护住输入框本体，点到行 padding/边缘仍会跳转，bug 4a2249fc）
+    // 行内编辑态判定（bug 4a2249fc 两层之二）：该行正在 rename/新建时，行级 click/keydown 让位，
+    // 挡行 padding/边缘点击。两层之一 = 行是 <a href="#doc/…">（P1-4 深链），行内 input/⋯ 的
+    // click 即使 .stop 仍激活祖先 <a>（activation behavior 走 hashchange→openDoc），故须 .prevent。
     function isEditing(path) { return !!editing.value && editing.value.path === path }
     const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop, isEditing })
     provide('treeOps', treeOps)

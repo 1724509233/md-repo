@@ -217,10 +217,14 @@ def test_new_session_resets_token_usage():
 
 
 def test_rename_row_click_guard():
-    # bug 4a2249fc：rename input 的 @click.stop 只护住 input 本体，
-    # 点到行 padding/边缘仍是行 click → select/toggle 跳转；行级守卫按 editing.path 拦截
+    # bug 4a2249fc 双层机制：① 行 padding 的 click → 行级 isEditing 守卫拦截；
+    # ② 行是 <a href="#doc/…">（P1-4 深链 href），行内 input/⋯ 按钮的 click 虽 .stop
+    #   仍会激活祖先 <a>（HTML activation behavior）→ hashchange → openDoc 跳转。
+    #   行内交互元素必须 .prevent 掉默认激活。验收一轮只修①被复现打回。
     ft = _templates()["FileTree.js"]
     assert ft.count("treeOps.isEditing(") >= 3  # 文件行 click + 目录行 click + 目录行 keydown
+    assert ft.count("@click.stop.prevent v-focus-select") == 2  # 两处 rename input
+    assert ft.count('@click.stop.prevent="treeOps.openMenu') == 2  # 两处 ⋯ 按钮
 
 
 def test_anchorless_link_jump_forces_preview_top():
