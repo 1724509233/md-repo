@@ -2,6 +2,7 @@
 const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
+import { showToast } from './utils/toast.js'
 import { docHash, parseHash } from './utils/vaultLinks.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
@@ -167,7 +168,7 @@ async function saveDoc() {
     await api.saveDoc(state.currentPath, state.docContent)
     state.dirty = false
   } catch (e) {
-    alert('保存失败: ' + e.message)
+    showToast('保存失败: ' + e.message)
   }
 }
 
@@ -441,7 +442,7 @@ async function manage(action, payload) {
     if (changes.length) await _applyChangeToCurrentDoc(changes)
     return true
   } catch (e) {
-    alert('操作失败: ' + e.message)
+    showToast('操作失败: ' + e.message)
     return false
   }
 }
@@ -467,8 +468,8 @@ async function trashAct(action, payload) {
     return true
   } catch (e) {
     // 409 = 恢复冲突（原路径已存在，如记忆控制台 rollback 已回滚，design §11-6）
-    if (String(e.message).includes('409')) alert('原路径已存在，无法恢复')
-    else alert('操作失败: ' + e.message)
+    if (String(e.message).includes('409')) showToast('原路径已存在，无法恢复：换一个恢复目标路径，或先清理该路径下的同名文件')
+    else showToast('操作失败: ' + e.message)
     return false
   }
 }

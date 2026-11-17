@@ -14,6 +14,7 @@
  */
 const { ref, computed, watch, nextTick, inject } = Vue
 import { api } from '../api.js'
+import { showToast } from '../utils/toast.js'
 import { TYPE_ICONS, TYPE_ICON_DEFAULT } from './MemoryConsole.js'
 
 /* 九态格序 = 设计稿批准顺序（产品现有 by_status 口径，3×3）；
@@ -357,7 +358,7 @@ export const MonitorPage = {
           rs.conflict = { conflicts: data.conflicts, restored: data.restored }
         }
       } catch (e) {
-        alert('回滚失败: ' + e.message)
+        showToast('回滚失败: ' + e.message + '：可稍后重试，持续失败请查看服务器日志')
       } finally {
         rs.busy = false
       }

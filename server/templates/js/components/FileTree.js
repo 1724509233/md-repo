@@ -3,6 +3,7 @@ const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount, nextTi
 import { ICONS } from '../utils/icons.js'
 import { initMenuNav } from '../utils/menuNav.js'
 import { docHash } from '../utils/vaultLinks.js'
+import { showToast } from '../utils/toast.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 
@@ -273,7 +274,7 @@ export const FileTree = {
       if (ed.mode === 'rename') {
         // 重命名无法修改后缀：输入带后缀（如 a.md / a.txt）会拼出双扩展名，拦截并提示
         if (/\.\w+$/.test(name)) {
-          alert('名称不能带后缀（如 .md、.txt）：重命名无法修改文件后缀')
+          showToast('名称不能带后缀（如 .md、.txt）：重命名无法修改文件后缀')
           return
         }
         const to = ed.path.replace(/[^/]+$/, name + (ed.isDir ? '' : '.md'))

@@ -87,3 +87,28 @@ def test_hash_state_sync_wired():
 def test_file_tree_rows_are_links():
     ft = _templates()["FileTree.js"]
     assert "docHash(" in ft and ":href" in ft
+
+
+def test_compositor_only_transitions():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    bad = [l.strip()[:90] for l in css.splitlines()
+           if re.search(r"transition: *(right|bottom|padding)", l)
+           and "#ai-btn {" not in l]  # 桌面贴边 tab 例外：见 ledger Task 7 Ruling
+    assert bad == []
+
+
+def test_overscroll_and_safe_area():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert "overscroll-behavior: contain" in css
+    assert "env(safe-area-inset-bottom)" in css
+
+
+def test_no_blocking_alerts():
+    for name, src in _templates().items():
+        assert "alert(" not in src, name
+
+
+def test_toast_channel():
+    src = (TPL / "js/utils/toast.js").read_text(encoding="utf-8")
+    assert "setAttribute('role', 'alert')" in src
+    assert "app-toast" in src and "setTimeout" in src
