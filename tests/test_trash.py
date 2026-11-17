@@ -368,6 +368,17 @@ def test_safe_rel_path_rejects_trash_and_sync_first_segment():
     assert safe_rel_path("notes/a.md") == Path("notes/a.md")
 
 
+def test_safe_rel_path_rejects_drive_qualified_paths():
+    # F5：Windows 盘符限定路径在 win32 上会丢弃 join 基逃出 vault
+    # （drive-absolute "C:/x" 与 drive-relative "c:x.md" 皆然）。
+    # 纯字符串判定，POSIX 上同样可测。
+    for bad in ("C:/Users/x/evil.md", "c:/notes/a.md", "C:\\x.md", "C:", "z:/a/b.md", "c:x.md"):
+        assert safe_rel_path(bad) is None, bad
+    # 中间冒号不误伤：仅拒绝起始的 字母+冒号。
+    assert safe_rel_path("notes/c:x.md") is not None
+    assert safe_rel_path("my-c:.md") is not None
+
+
 def test_web_routes_cannot_touch_trash(client, vault_dir, db_conn):
     # Upload into .trash via the upload catchall → 400.
     r = client.post(

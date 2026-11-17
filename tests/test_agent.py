@@ -1529,3 +1529,16 @@ def test_system_reminder_none_and_empty_skipped(tmp_path: Path):
                      if m["role"] == "system"
                      and m["content"].startswith("<system-reminder>")]
     assert len(reminder_msgs) == 1  # only TimeSystemReminder; None + '' skipped
+
+
+def test_check_md_path_rejects_drive_qualified():
+    from server.agent.tools.tool import _check_md_path, _check_optional_path
+
+    for bad in ("C:/Users/x/evil.md", "c:\\x.md", "C:", "c:x.md"):
+        with pytest.raises(ValueError, match="outside vault"):
+            _check_md_path(bad)
+        with pytest.raises(ValueError, match="outside vault"):
+            _check_optional_path(bad)
+    # 中间冒号不误伤
+    assert _check_md_path("notes/c:x.md") == "notes/c:x.md"
+    assert _check_optional_path("notes/c:x.md") == "notes/c:x.md"

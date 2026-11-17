@@ -5,6 +5,7 @@ Subclasses declare ``name`` + ``args_model`` and implement ``_execute``.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,8 @@ def _check_md_path(v: str) -> str:
     """Validate a required .md file path (boundary + extension + .sync/.trash)."""
     if ".." in v or v.startswith("/"):
         raise ValueError(f"path outside vault: '{v}'")
+    if re.match(r"^[A-Za-z]:", v.replace("\\", "/")):
+        raise ValueError(f"path outside vault: '{v}'")
     if not v.endswith(".md"):
         raise ValueError(f"only .md files are supported, got '{v}'")
     if ".sync" in v:
@@ -63,6 +66,8 @@ def _check_optional_path(v: str | None) -> str | None:
     if v is None:
         return v
     if ".." in v or v.startswith("/"):
+        raise ValueError(f"path outside vault: '{v}'")
+    if re.match(r"^[A-Za-z]:", v.replace("\\", "/")):
         raise ValueError(f"path outside vault: '{v}'")
     return v
 
