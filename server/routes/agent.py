@@ -21,6 +21,41 @@ from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 logger = logging.getLogger("md-vault.api")
 
 
+def _evict_stale_agents(
+    cache: dict[str, Agent],
+    last_active: dict[str, float],
+    locks: dict[str, asyncio.Lock],
+    ttl: float = 1800,
+    now: float | None = None,
+) -> list[str]:
+    """Evict cached Agents idle > ttl (review F15b).
+
+    The route's agent_cache had no TTL of its own: session_mgr.cleanup()
+    evicts session messages, not the cached Agent objects, so a long-lived
+    server accumulated one Agent per historical session. Called from
+    agent_chat next to that cleanup, with the cache's own last_active map.
+
+    A session whose per-session lock is currently held (stream in flight)
+    is never evicted — the same rule SessionManager.cleanup applies to
+    session messages. A missing last_active entry counts as maximally
+    stale (the lock check is what protects in-flight work, not the
+    timestamp). Returns the evicted session ids.
+    """
+    if now is None:
+        now = time.time()
+    evicted: list[str] = []
+    for sid in list(cache):
+        lock = locks.get(sid)
+        if lock is not None and lock.locked():
+            continue
+        if now - last_active.get(sid, 0.0) <= ttl:
+            continue
+        cache.pop(sid, None)
+        last_active.pop(sid, None)
+        evicted.append(sid)
+    return evicted
+
+
 def _build_agent_spec(ctx) -> AgentSpec:
     """Declarative agent spec from the server's AI config.
 
@@ -65,6 +100,10 @@ def register(app, ctx) -> None:
 
     # Agent instances per session (created on first chat, reused afterwards).
     agent_cache: dict[str, Agent] = {}
+    # Last chat-entry timestamp per cached session — drives the TTL eviction
+    # of agent_cache itself (F15b: the cache had no TTL; session_mgr.cleanup()
+    # only evicts session messages, so Agents accumulated forever).
+    _agent_last_active: dict[str, float] = {}
 
     def _get_agent(session_id: str) -> Agent:
         agent = agent_cache.get(session_id)
@@ -143,7 +182,12 @@ def register(app, ctx) -> None:
         doc_path = body.get("doc_path", "")
 
         session_mgr.cleanup()
+        # F15b: evict idle cached Agents alongside the session cleanup.
+        # session_mgr._locks is the manager's private lock table (no public
+        # accessor) — read-only here; the helper only checks held-ness.
+        _evict_stale_agents(agent_cache, _agent_last_active, session_mgr._locks)
         session_mgr.get_or_create(session_id)
+        _agent_last_active[session_id] = time.time()
 
         # Pre-check doc_path（不修改 session，只验证；409 走 HTTP 异常）
         doc_context = None
