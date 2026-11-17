@@ -73,6 +73,8 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .tree-drop-target { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 40%, transparent); background: color-mix(in srgb, var(--brass) 10%, transparent); }
 /* 拖拽到根目录（nav 非目录行区域）高亮 */
 .tree-drop-root { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+/* 键盘可见：.tree-more 仅 hover 显现是缺陷（P0-2），Tab 聚焦即显形 */
+.tree-more:focus-visible { opacity: 1; }
 
 /* ============ 搜索框 ============ */
 #search-input { background: var(--surface); border-color: var(--line); color: var(--ink); font-family: 'Inter', sans-serif; }
@@ -298,6 +300,8 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .code-copy-btn { opacity: 0; transition: opacity .15s; background: none; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font-size: 11px; color: var(--ink-soft); cursor: pointer; font-family: 'Inter', sans-serif; }
 .code-block:hover .code-copy-btn { opacity: 1; }
 .code-copy-btn:hover { color: var(--brass); border-color: var(--brass); background: color-mix(in srgb, var(--brass) 8%, transparent); }
+/* 键盘可见：Tab 进入代码块区域即显形复制钮（P1-10），不依赖 hover */
+.code-block:focus-within .code-copy-btn { opacity: 1; }
 .code-block pre { margin: 0; padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
 pre code.hljs { background: transparent; padding: 0; }
 

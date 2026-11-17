@@ -45,3 +45,9 @@ def test_async_regions_announced():
     assert 'aria-live="polite"' in t["SearchPanel.js"]  # 结果区
     assert t["MemoryConsole.js"].count('role="alert"') >= 1  # 操作错误
     assert 'aria-live="polite"' in t["MonitorPage.js"]  # 回滚状态
+
+
+def test_hover_only_controls_visible_on_focus():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert ".tree-more:focus-visible" in css
+    assert ".code-block:focus-within .code-copy-btn" in css
