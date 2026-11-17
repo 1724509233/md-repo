@@ -39,7 +39,7 @@ def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str,
     return update_references_batch(conn, vault_dir, [(old_path, new_path)])
 
 
-def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False) -> int:
+def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False, src_paths: list[str] | None = None) -> int:
     """Single-pass: replace references for multiple moves at once.
 
     Uses edges table to find referrer files (falls back to full scan if empty).
@@ -50,6 +50,11 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
         vault_dir: root of the vault
         moves: list of (old_path, new_path) tuples
         pre_rename: if True, the filesystem rename has NOT happened yet.
+        src_paths: explicit referrer list — skips the edges lookup entirely.
+            For callers whose lookup premise is stale (e.g. a rollback
+            reversing a move whose referrer→new edges the watcher has not
+            built yet): pass the G1-grade _referrers result (edges first,
+            unconditional content-scan fallback).
 
     Returns the number of files modified.
     """
@@ -84,10 +89,14 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
             "short_new": new_stem,
         })
 
-    # Find all referrer files across all moves (union)
+    # Find all referrer files across all moves (union), unless the caller
+    # supplied the list explicitly (stale-lookup-premise callers).
     all_src_paths: set[str] = set()
-    for old_path, _ in moves:
-        all_src_paths.update(_find_referrers(conn, vault_dir, old_path))
+    if src_paths is not None:
+        all_src_paths.update(src_paths)
+    else:
+        for old_path, _ in moves:
+            all_src_paths.update(_find_referrers(conn, vault_dir, old_path))
 
     # Exclude the destination paths (moved files themselves)
     dest_paths = {new_path for _, new_path in moves}

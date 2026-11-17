@@ -259,11 +259,33 @@ def register(app, ctx) -> None:
                 # was already restored so the human sees the mixed state.
                 content["restored"] = result["restored"]
             return JSONResponse(status_code=409, content=content)
-        # Book the restored writes as op "restore" (NOT "created" — the
-        # arm surface watches ops=("create",) and must not see human
-        # restores; record() marks skip so the watcher books nothing).
-        for path in result["restored"]:
-            ledger.record(ctx.db_conn, ctx.vault_dir, path, "restore", "web")
+        if result["ok"]:
+            # F7 (review 2026-11-16): book per REAL op — create-rollback is an
+            # unlink ('delete' rows need no disk file), move-rollback is a
+            # pair (restore the old path, delete the new), delete/update
+            # rollback is a content restore ('restore'). The old blanket
+            # 'restore' booked zero rows for create/move-restore (apply_change
+            # requires the file on disk) while the skip mark suppressed the
+            # watcher — ghost rows until the periodic reconcile. All rows go
+            # through record() (NOT "created" — the arm surface watches
+            # ops=("create",) and must not see human restores; record() marks
+            # skip so the watcher books nothing).
+            for s in snap_mod.by_call(ctx.ledger_conn, call_id):
+                if s["op"] == "create":
+                    # F-2 (final review): the pre-delete hash is the rolled-
+                    # back content's hash (== the finalized snapshot's
+                    # post_hash, guaranteed non-empty by verify) — spec §2
+                    # requires EVERY deletion entry point to book it, or the
+                    # sync gate treats a client's rewritten copy as an
+                    # external delete and pulls over the user's edit.
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "deleted",
+                                  "web", pre_hash=s["post_hash"])
+                elif s["op"] == "move":
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "restore", "web")
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["new_path"], "deleted",
+                                  "web", pre_hash=s["post_hash"])
+                else:
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "restore", "web")
         return {"ok": True, "restored": result["restored"]}
 
     @app.get("/api/memory/rollback-calls")
