@@ -665,6 +665,11 @@ export function createApp() {
         pollNotifications()
         pollMemory()
 
+        // 未保存守卫（P1-3）：仅 dirty 时拦刷新/关标签；浏览器忽略自定义文案
+        window.addEventListener('beforeunload', (e) => {
+          if (state.dirty) { e.preventDefault(); e.returnValue = '' }
+        })
+
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
 

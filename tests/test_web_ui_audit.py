@@ -51,3 +51,10 @@ def test_hover_only_controls_visible_on_focus():
     css = (TPL / "style.css").read_text(encoding="utf-8")
     assert ".tree-more:focus-visible" in css
     assert ".code-block:focus-within .code-copy-btn" in css
+
+
+def test_beforeunload_guard_on_dirty():
+    src = _templates()["app.js"]
+    assert "beforeunload" in src
+    body = src.split("beforeunload", 1)[1][:200]
+    assert "state.dirty" in body and "returnValue" in body
