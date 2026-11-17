@@ -257,7 +257,8 @@ export const EditorPane = {
     const TOUCH_MOUSE_GUARD_MS = 800
     let lastTouchAt = 0
     let downPt = null
-    const landingSel = ref(null) // { el, isCell } | null —— sticky 选中态（✎ 视觉 = 后续任务）
+    let frameLanded = false // 本手势框选路径已落位旗标（dblclick 不得二次改写，终审 Important 2）
+    const landingSel = ref(null) // { el, isCell, td } | null —— sticky 选中态（✎ 点击执行入口）
     let selEl = null
 
     function applyBlockSel(el) {
@@ -290,7 +291,8 @@ export const EditorPane = {
     }
 
     function onEditBtnClick() {
-      const s = landingSel.value
+      // 点了就落位（spec §2.3 无状态限定）：hover 预览态（仅 selEl）同样执行（终审 Important 1）
+      const s = landingSel.value ?? (selEl && selEl.isConnected ? { el: selEl, isCell: false, td: null } : null)
       if (!s || !s.el || !s.el.isConnected) return clearBlockSel() // el 失效竞态 → 静默作废（spec §5）
       if (s.isCell && s.td && s.td.isConnected) {
         landCell(s.td)
@@ -312,17 +314,19 @@ export const EditorPane = {
     }
 
     function onPreviewPointerDown(e) {
-      if (e.pointerType !== 'touch') { downPt = null; return }
+      if (e.pointerType !== 'touch') { downPt = null; frameLanded = false; return }
       downPt = { x: e.clientX, y: e.clientY, t: Date.now() }
     }
 
     function onPreviewPointerUp(e) {
       if (!state || props.mode !== 'preview') return
       if (!e.target.closest) return
+      // 注：豁免目标（活链/✎ 等）早退不置 lastTouchAt——其合成鼠标事件同命中 exempt，链条自洽；新增豁免项须两侧核对
       if (exemptTarget(e.target)) return
       if (e.pointerType === 'touch') {
         lastTouchAt = Date.now()
         // 非 tap（长按/滚动）→ no-op：手势完整归还原生（Android 选词放大镜不受扰）
+        // pointercancel「即弃」由每次 pointerdown 重置 downPt 等效覆盖（滚动/取消后的 up 必伴新 down 或 downPt 过期）
         if (!downPt) return
         const moved = Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y)
         if (Date.now() - downPt.t > TAP_MAX_MS || moved > TAP_MAX_DX) return
@@ -360,6 +364,7 @@ export const EditorPane = {
         }
         clearBlockSel()
         window.getSelection().removeAllRanges()
+        frameLanded = true // 同手势后续 dblclick 直接让位（终审 Important 2）
         landOn(l1, l2)
         return
       }
@@ -376,11 +381,15 @@ export const EditorPane = {
     function onPreviewHoverIn(e) {
       if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return
       if (!e.target.closest) return
+      if (e.target.closest('#block-edit-btn')) { // 移入 ✎ 本体：不收（撤销在途定时器）也不翻转态
+        if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null }
+        return
+      }
       if (exemptTarget(e.target)) return
-      if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null } // 块内/跨块移动不闪断
       if (landingSel.value) return
       const b = e.target.closest('[data-src-line]')
-      if (!b) return
+      if (!b) return // 穿空隙/空白：hoverOut 挂的收起定时器必须存活（终审 Critical 1）
+      if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null } // 块间切换：先撤再亮
       applyBlockSel(b) // 仅视觉（landingSel 保持 null）
     }
     function onPreviewHoverOut(e) {
@@ -395,6 +404,7 @@ export const EditorPane = {
     function onPreviewDblClick(e) {
       if (!state || props.mode !== 'preview') return
       if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return // 触摸双击选词归原生
+      if (frameLanded) return // 本手势已由框选路径落位（词选 cell=整表，spec §2.1 冻结口径）
       if (!e.target.closest) return
       if (exemptTarget(e.target)) return
       const sel = window.getSelection()

@@ -274,4 +274,30 @@ def test_hover_preview_desktop_only():
     assert m and "setTimeout" in m.group(1)
     m2 = re.search(r"function onPreviewHoverIn\(e\) \{(.+?)\n    \}\n", ep, re.S)
     assert m2 and "landingSel" in m2.group(1)
-    assert "clearTimeout" in ep
+    # 终审 Critical 1：hoverIn 不得无条件 clearTimeout——穿块间空隙/空白退出时，
+    # hoverOut 挂的 120ms 收起定时器必须存活；清定时器仅两处：进入 ✎ 本体、命中新块
+    body = m2.group(1)
+    assert "#block-edit-btn" in body                      # ✎ 本体豁免（不收、不翻转）
+    assert body.index("if (!b) return") < body.index("applyBlockSel(b)")
+    assert body.count("clearTimeout") == 2
+
+
+def test_edit_btn_hover_fallback_and_dblclick_frame_land():
+    # 终审 Important 1/2：hover ✎ 点了就落位（spec §2.3 无状态限定）；
+    # 框选落位后同手势 dblclick 不得二次改写落位区（spec §2.1 冻结「双击文字 cell=整表」）
+    ep = _templates()["EditorPane.js"]
+    assert "landingSel.value ??" in ep
+    assert "frameLanded" in ep
+    m = re.search(r"function onPreviewDblClick\(e\) \{(.+?)\n    \}\n", ep, re.S)
+    assert m and "frameLanded" in m.group(1)[: m.group(1).index("table td")]
+
+
+def test_landing_integration_pins():
+    # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
+    ep = _templates()["EditorPane.js"]
+    assert re.search(r"writeSrcLineMapping\(\s*previewHtmlEl\.value", ep)
+    assert re.search(r"postProcessPreview\(\s*previewHtmlEl\.value", ep)
+    m = re.search(r"async function refreshPreview\(\) \{(.+?)\n    \}\n", ep, re.S)
+    assert m and m.group(1).lstrip().startswith("clearBlockSel()")
+    m2 = re.search(r"watch\(\(\) => props\.mode, async \(mode\) => \{(.+?)\n    \}\)", ep, re.S)
+    assert m2 and m2.group(1).lstrip().startswith("clearBlockSel()")
