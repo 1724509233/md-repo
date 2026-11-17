@@ -1,6 +1,7 @@
 /* FileTree 组件：递归文件树 + RAG 搜索下拉框 + 展开/折叠 */
 const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount, nextTick } = Vue
 import { ICONS } from '../utils/icons.js'
+import { initMenuNav } from '../utils/menuNav.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 
@@ -219,6 +220,17 @@ export const FileTree = {
     }
 
     function closeMenu() { menu.value = null }
+
+    // 右键菜单键盘导航（P1-5）
+    const menuEl = ref(null)
+    let menuNavCleanup = null
+    watch(menu, (m) => {
+      if (menuNavCleanup) { menuNavCleanup(); menuNavCleanup = null }
+      if (m) nextTick(() => {
+        if (menuEl.value) menuNavCleanup = initMenuNav(menuEl.value, closeMenu)
+      })
+    })
+    onBeforeUnmount(() => { if (menuNavCleanup) menuNavCleanup() })
 
     function startRename(path, isDir) {
       const name = path.split('/').pop()
@@ -522,7 +534,7 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS, menu, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
+      ICONS, menu, menuEl, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
       moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
@@ -605,17 +617,17 @@ export const FileTree = {
            overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
       <Teleport to="body">
         <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
-        <div v-if="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
+        <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
-          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-file')">新建文件</button>
-          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startRename(menu.path, menu.isDir)">重命名</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="moveItem()">移动</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="confirmDelete()">移入回收站</button>
         </div>
       </Teleport>

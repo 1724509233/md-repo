@@ -148,9 +148,18 @@ export const SearchPanel = {
         showSort.value = false
       }
     }
+    // Escape 关 popover（P1-5，组件自有浮层自关）
+    function onSortEsc(e) {
+      if (e.key === 'Escape') showSort.value = false
+    }
     watch(showSort, (open) => {
-      if (open) document.addEventListener('mousedown', onSortDocMouseDown)
-      else document.removeEventListener('mousedown', onSortDocMouseDown)
+      if (open) {
+        document.addEventListener('mousedown', onSortDocMouseDown)
+        document.addEventListener('keydown', onSortEsc)
+      } else {
+        document.removeEventListener('mousedown', onSortDocMouseDown)
+        document.removeEventListener('keydown', onSortEsc)
+      }
     })
 
     // 结果整形：segment 平铺 + 相对相关性（本次结果最高分 = 100%）

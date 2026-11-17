@@ -1,6 +1,7 @@
 /* TopBar 组件：文件路径 + 模式按钮 + 目录浮层（P4-3）+ 保存/下载 */
-const { ref, watch, onMounted, onBeforeUnmount } = Vue
+const { ref, watch, nextTick, onMounted, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
+import { initMenuNav } from '../utils/menuNav.js'
 
 export const TopBar = {
   name: 'TopBar',
@@ -21,6 +22,17 @@ export const TopBar = {
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
     const rootEl = ref(null)
+
+    // 更多菜单键盘导航（P1-5）
+    const moreMenuEl = ref(null)
+    let moreNavCleanup = null
+    watch(() => props.moreMenuOpen, (open) => {
+      if (moreNavCleanup) { moreNavCleanup(); moreNavCleanup = null }
+      if (open) nextTick(() => {
+        if (moreMenuEl.value) moreNavCleanup = initMenuNav(moreMenuEl.value, () => emit('toggleMoreMenu'))
+      })
+    })
+    onBeforeUnmount(() => { if (moreNavCleanup) moreNavCleanup() })
 
     function setMode(mode) {
       emit('setMode', mode)
@@ -67,7 +79,7 @@ export const TopBar = {
     watch(() => props.moreMenuOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
     watch(() => props.notifOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
 
-    return { ICONS_LOCAL, rootEl, setMode, save, download, toggleToc, onTocClick, openDocFace }
+    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace }
   },
   template: `
     <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
@@ -151,25 +163,25 @@ export const TopBar = {
           @click="$emit('toggleMoreMenu')" aria-label="更多操作">
           <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
         </button>
-        <div v-show="moreMenuOpen" class="absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50">
-          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+        <div v-show="moreMenuOpen" ref="moreMenuEl" role="menu" class="absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50">
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('setMode', 'edit'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
           </button>
-          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('setMode', 'preview'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
           </button>
-          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
             :disabled="!currentPath"
             @click="$emit('open-doc-face'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
           </button>
-          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('save'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存
           </button>
-          <button class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('download'); $emit('toggleMoreMenu')">
             <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
           </button>

@@ -58,3 +58,18 @@ def test_beforeunload_guard_on_dirty():
     assert "beforeunload" in src
     body = src.split("beforeunload", 1)[1][:200]
     assert "state.dirty" in body and "returnValue" in body
+
+
+def test_escape_and_menu_semantics():
+    t = _templates()
+    src = t["app.js"]
+    assert "Escape" in src
+    assert "closeNotifDropdown" in src and "state.moreMenuOpen = false" in src
+    for f in ("TopBar.js", "FileTree.js", "TrashPanel.js"):
+        assert 'role="menu"' in t[f], f
+        assert 'role="menuitem"' in t[f], f
+    nav = (TPL / "js/utils/menuNav.js").read_text(encoding="utf-8")
+    assert "ArrowDown" in nav and "ArrowUp" in nav and "menuitem" in nav
+    assert "initMenuNav" in t["TopBar.js"] and "initMenuNav" in t["FileTree.js"]
+    assert "initMenuNav" in t["TrashPanel.js"]
+    assert "Escape" in t["SearchPanel.js"]

@@ -670,6 +670,21 @@ export function createApp() {
           if (state.dirty) { e.preventDefault(); e.returnValue = '' }
         })
 
+        // Escape 分层关闭（P1-5）：一次只关最上一层 app 持有的浮层；
+        // 组件自有浮层（FileTree 右键菜单 / TrashPanel 菜单 / SearchPanel popover）由各自 handler 关
+        document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return
+          if (state.notifOpen) closeNotifDropdown()
+          else if (state.moreMenuOpen) state.moreMenuOpen = false
+          else if (state.relSheetOpen) state.relSheetOpen = false
+          else if (state.relOpen) state.relOpen = false
+          else if (state.tocOpen) toggleToc()
+          else if (state.aiOpen) toggleAI(false)
+          else if (state.memoryOpen) state.memoryOpen = false
+          else if (state.monitoring) exitMonitorPage()
+          else if (state.searchDrawerOpen) state.searchDrawerOpen = false
+        })
+
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
 
