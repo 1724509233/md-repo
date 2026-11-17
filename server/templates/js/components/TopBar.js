@@ -13,7 +13,8 @@ export const TopBar = {
     notifications: { type: Array, default: () => [] },
     tocOpen: { type: Boolean, default: false },
     tocItems: { type: Array, default: () => [] },
-    relOpen: { type: Boolean, default: false }   // 关联侧栏开启（spec §6.4 候选①；激活态反馈，只变色不变几何）
+    relOpen: { type: Boolean, default: false },  // 关联侧栏开启（spec §6.4 候选①；激活态反馈，只变色不变几何）
+    aiOpen: { type: Boolean, default: false }    // AI 面板展开 ⇔ 顶栏紧凑态（文字展示与面板展开互斥，2026-11-17 用户定稿）
   },
   emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
@@ -69,7 +70,8 @@ export const TopBar = {
     return { ICONS_LOCAL, rootEl, setMode, save, download, toggleToc, onTocClick, openDocFace }
   },
   template: `
-    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative">
+    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
+      :class="{ 'topbar-compact': aiOpen }">
       <!-- logo（spec §3.1：从 rail 迁入顶栏） -->
       <div class="topbar-logo flex items-center gap-2">
         <span class="logo-mark logo-mark--top">M</span>
@@ -96,12 +98,12 @@ export const TopBar = {
       <!-- 桌面端模式切换：无外框分段控件，仅激活态黄铜 -->
       <div class="hidden lg:flex mode-pill">
         <button class="mode-btn topbar-btn" :class="{ active: mode === 'edit' }"
-          @click="setMode('edit')">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
+          @click="setMode('edit')" title="编辑" aria-label="编辑">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg><span class="tb-label">编辑</span>
         </button>
         <button class="mode-btn topbar-btn" :class="{ active: mode === 'preview' }"
-          @click="setMode('preview')">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
+          @click="setMode('preview')" title="预览" aria-label="预览">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><span class="tb-label">预览</span>
         </button>
       </div>
 
@@ -113,7 +115,7 @@ export const TopBar = {
         :class="{ 'rel-open': relOpen }"
         :disabled="!currentPath"
         @click="openDocFace" title="本文档的关联文档" aria-label="本文档的关联文档">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg><span class="tb-label">关联</span>
       </button>
 
       <!-- 目录（P4-3）：桌面 图标+文字；移动 28px 图标钮（铃铛/更多同规格，文案进 tooltip）。
@@ -122,7 +124,7 @@ export const TopBar = {
         class="topbar-btn hidden lg:inline-flex"
         :class="{ 'toc-btn-open': tocOpen }"
         @click="toggleToc" title="本文目录" aria-label="本文目录">
-        <span v-html="ICONS_LOCAL.list"></span>目录
+        <span v-html="ICONS_LOCAL.list"></span><span class="tb-label">目录</span>
       </button>
       <button data-toc-toggle
         class="topbar-btn topbar-btn--icon lg:hidden"
@@ -131,14 +133,16 @@ export const TopBar = {
         <span v-html="ICONS_LOCAL.list"></span>
       </button>
 
-      <!-- 桌面端保存/下载：下载为幽灵，保存为主操作（实心黄铜） -->
-      <button class="hidden lg:block topbar-btn"
-        @click="download">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
+      <!-- 桌面端保存/下载：下载为幽灵，保存为主操作（实心黄铜）。lg:inline-flex 与其余顶栏按钮统一
+           （lg:block 会压掉基类 inline-flex，行内 .tb-label 的 max-width 收纳失效，2026-11-17 评审）。
+           保存图标 = 软盘（同移动端「更多」菜单）：铅笔与「编辑」重复，图标化后两键不可区分 -->
+      <button class="hidden lg:inline-flex topbar-btn"
+        @click="download" title="下载" aria-label="下载">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="tb-label">下载</span>
       </button>
-      <button class="hidden lg:block topbar-btn btn-save"
-        @click="save">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>保存
+      <button class="hidden lg:inline-flex topbar-btn btn-save"
+        @click="save" title="保存" aria-label="保存">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span class="tb-label">保存</span>
       </button>
 
       <!-- 移动端更多菜单 -->
