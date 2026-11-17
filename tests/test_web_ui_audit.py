@@ -186,3 +186,14 @@ def test_keyboard_focus_preventscroll():
     assert t["FileTree.js"].count("focus({ preventScroll: true })") >= 4
     assert "focus({ preventScroll: true })" in t["SearchPanel.js"]
     assert "focus({ preventScroll: true })" in (TPL / "js/utils/toc.js").read_text(encoding="utf-8")
+
+
+def test_shell_uses_layout_viewport_height():
+    # Edge/安卓键盘压缩布局视口：100vh 壳超出 → overflow-hidden 仍可被 scrollIntoView
+    # 程序化滚动 → 顶部被遮且触摸不可恢复（验收捕获）。壳高必须走 100% 链跟随收缩。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"html,\s*body,\s*#app\s*{[^}]*height:\s*100%", css)
+    assert "h-screen" not in (TPL / "index.html").read_text(encoding="utf-8")
+    assert "flex h-screen" not in _templates()["app.js"]
+    # 兜底钩子：壳内不存在合法的 window 滚动，出现即弹回 0
+    assert "window.scrollTo(0, 0)" in _templates()["app.js"]

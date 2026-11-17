@@ -9,6 +9,10 @@
 }
 
 html, body { background: var(--paper); color: var(--ink); }
+/* 应用壳高度走 100% 链跟随布局视口（Edge/安卓键盘压缩布局视口时 100vh 会超出壳身，
+   overflow-hidden 只挡用户滚、不挡浏览器 scrollIntoView 程序化滚 → 顶部被遮不可恢复；
+   100% 随键盘收缩，滚动量归零。桌面 100%≡100vh 行为不变。验收捕获，Edge 复现） */
+html, body, #app { height: 100%; }
 
 /* ============ 字体与排版 ============ */
 body { font-family: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif; font-size: 16px; line-height: 1.75; }

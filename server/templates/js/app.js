@@ -694,6 +694,11 @@ export function createApp() {
           if (state.dirty) { e.preventDefault(); e.returnValue = '' }
         })
 
+        // 兜底（Edge/键盘 scrollIntoView 程序化滚动）：应用壳内不存在合法的 window 滚动，出现即弹回
+        window.addEventListener('scroll', () => {
+          if (window.scrollY || window.scrollX) window.scrollTo(0, 0)
+        }, { passive: true })
+
         // Escape 分层关闭（P1-5）：一次只关最上一层 app 持有的浮层；
         // 组件自有浮层（FileTree 右键菜单 / TrashPanel 菜单 / SearchPanel popover）由各自 handler 关
         document.addEventListener('keydown', (e) => {
@@ -828,7 +833,7 @@ export function createApp() {
       }
     },
     template: `
-      <div class="flex h-screen">
+      <div class="flex h-full">
         <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
         <aside class="sidebar-shell flex shrink-0">
           <!-- rail（桌面 64px / 移动 48px） -->
