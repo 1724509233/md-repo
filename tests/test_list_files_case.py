@@ -247,3 +247,24 @@ def test_t4c_web_surface_wrong_case_system_dir(client, vault_dir, db_conn):
     assert "SUGGESTIONS" not in body["dirs"], (
         f"wrong-case system dir leaked into web dir tree: {body['dirs']}"
     )
+
+
+# ── F13: .obsidian must be excluded (aligned with _iter_vault_md) ─────────
+
+
+def test_list_files_excludes_obsidian(tmp_path: Path):
+    """list_files 与 _iter_vault_md 的排除集合对齐（.sync/.trash 已排除，补 .obsidian）。"""
+    vault = tmp_path / "vault"
+    (vault / ".obsidian" / "plugins" / "p").mkdir(parents=True)
+    (vault / ".obsidian" / "plugins" / "p" / "README.md").write_bytes(SAMPLE)
+    (vault / "notes").mkdir()
+    (vault / "notes" / "a.md").write_bytes(SAMPLE)
+
+    ctx = ToolContext(vault_dir=vault)
+    result = execute_tool("list_files", {"dir": ""}, ctx)
+    lines = _lines(result)
+    assert ".obsidian/plugins/p/README.md" not in lines, (
+        f".obsidian leaked into list_files output: {lines}"
+    )
+    assert "notes/a.md" in lines
+    assert ctx.last_meta == {"count": 1}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path, PurePath
 
@@ -24,6 +25,8 @@ def safe_rel_path(raw: str) -> Path | None:
     raw = raw.replace("\\", "/")
     if not raw or raw.startswith("/"):
         return None
+    if re.match(r"^[A-Za-z]:", raw):
+        return None  # drive-qualified: a win32 join discards the vault base
     parts = Path(raw).parts
     if any(p in ("..", "") for p in parts):
         return None

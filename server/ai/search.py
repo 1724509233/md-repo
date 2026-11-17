@@ -112,7 +112,7 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
     results = []
 
     for md_file in vault.rglob("*.md"):
-        if ".sync" in md_file.parts:
+        if ".sync" in md_file.parts or ".obsidian" in md_file.parts or ".trash" in md_file.parts:
             continue
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")

@@ -5,6 +5,7 @@ Subclasses declare ``name`` + ``args_model`` and implement ``_execute``.
 """
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,8 +47,18 @@ class ToolContext:
 # ── Shared path validators ──────────────────────────────────────────────
 
 def _check_md_path(v: str) -> str:
-    """Validate a required .md file path (boundary + extension + .sync/.trash)."""
-    if ".." in v or v.startswith("/"):
+    """Validate a required .md file path (boundary + extension + .sync/.trash).
+
+    Boundary checks run on the backslash-normalized form so UNC
+    (``\\\\server\\share.md``) and extended-length (``\\\\?\\C:\\x.md``)
+    shapes hit the leading-``/`` rejection like ``safe_rel_path`` does.
+    """
+    vn = v.replace("\\", "/")
+    if ".." in vn or vn.startswith("/"):
+        raise ValueError(f"path outside vault: '{v}'")
+    if re.match(r"^[A-Za-z]:", vn):
+        # OS-accurate drive test: pathlib 3.12 also parses single-char+colon
+        # shapes like '1:' as drives, but those are OS-invalid → inert.
         raise ValueError(f"path outside vault: '{v}'")
     if not v.endswith(".md"):
         raise ValueError(f"only .md files are supported, got '{v}'")
@@ -59,10 +70,16 @@ def _check_md_path(v: str) -> str:
 
 
 def _check_optional_path(v: str | None) -> str | None:
-    """Validate an optional path (boundary only, no .md requirement)."""
+    """Validate an optional path (boundary only, no .md requirement).
+
+    Same backslash-normalized boundary checks as :func:`_check_md_path`."""
     if v is None:
         return v
-    if ".." in v or v.startswith("/"):
+    vn = v.replace("\\", "/")
+    if ".." in vn or vn.startswith("/"):
+        raise ValueError(f"path outside vault: '{v}'")
+    if re.match(r"^[A-Za-z]:", vn):
+        # OS-accurate drive test — see _check_md_path.
         raise ValueError(f"path outside vault: '{v}'")
     return v
 
