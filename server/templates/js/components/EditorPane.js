@@ -446,7 +446,7 @@ export const EditorPane = {
       done()
     }
 
-    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
+    return { editorEl, previewEl, previewHtmlEl, ebtnEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">

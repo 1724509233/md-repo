@@ -292,6 +292,17 @@ def test_edit_btn_hover_fallback_and_dblclick_frame_land():
     assert m and "frameLanded" in m.group(1)[: m.group(1).index("table td")]
 
 
+def test_editor_template_refs_are_returned():
+    # Vue setup ref 绑定陷阱：模板 ref="X" 仅当 X 出现在 setup return 才绑定。
+    # previewHtmlEl/ebtnEl 漏 return（验收捕获）曾致 refreshPreview 早退——映射/fm 折叠/复制钮整体静默失效
+    ep = _templates()["EditorPane.js"]
+    m = re.search(r"return \{ [^{}]*getScrollerEl[^{}]*\}", ep)
+    assert m, "setup return not found"
+    returned = m.group(0)
+    for name in set(re.findall(r'ref="(\w+)"', ep)):
+        assert name in returned, f"template ref {name} missing from setup return"
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]
