@@ -499,21 +499,6 @@ def test_delete_doc_result_wording(vault_dir, db_conn):
 # ── sync lane: stale-copy detection (design §6) ─────────────────────────────
 
 
-def test_deleted_hash_map_newest_batch_wins(vault_dir, db_conn):
-    h1 = hashlib.sha256(SAMPLE).hexdigest()
-    b1 = trash.move_to_trash(db_conn, vault_dir, ["notes/test.md"], "web")
-    assert trash.deleted_hash_map(vault_dir) == {"notes/test.md": h1}
-    # Restore, rewrite, delete again — the newer batch's pre-hash wins.
-    trash.restore(db_conn, vault_dir, b1)
-    (vault_dir / "notes" / "test.md").write_bytes(b"rewritten")
-    h2 = hashlib.sha256(b"rewritten").hexdigest()
-    b2 = trash.move_to_trash(db_conn, vault_dir, ["notes/test.md"], "web")
-    assert trash.deleted_hash_map(vault_dir) == {"notes/test.md": h2}
-    # Fully restored again — nothing left in the trash, empty map.
-    trash.restore(db_conn, vault_dir, b2)
-    assert trash.deleted_hash_map(vault_dir) == {}
-
-
 def test_api_sync_stale_copy_after_trash_delete(client, vault_dir, db_conn):
     # Server moved notes/test.md to the trash; the client still holds the
     # identical local copy. The sync must report it in to_delete, not

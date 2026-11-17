@@ -19,6 +19,7 @@ class ServerConfig:
     vault_dir: Path
     ai: AIConfig | None = None
     log: LogConfig = field(default_factory=LogConfig)
+    mcp_write_token: str = ""
 
 
 def _parse_ai_tools(tools_raw) -> list[str] | None:
@@ -82,10 +83,20 @@ def load_server_config(config_path: str) -> ServerConfig:
             tools=_parse_ai_tools(ai_raw.get("tools")),
         )
 
+    # MCP write-channel auth (user decision 2026-11-17): top-level `mcp:`
+    # section, same lenient convention as `ai:` — absent section/empty
+    # token = "" (the write channel stays closed; the MCP stdio process
+    # then runs unauthenticated: main area read-only + propose).
+    mcp_raw = data.get("mcp")
+    mcp_write_token = ""
+    if isinstance(mcp_raw, dict):
+        mcp_write_token = str(mcp_raw.get("write_token", "") or "")
+
     return ServerConfig(
         host=server["host"],
         port=int(server["port"]),
         vault_dir=Path(os.path.expanduser(server["vault_dir"])).resolve(),
         ai=ai_cfg,
         log=LogConfig.from_raw(server, str(path)),
+        mcp_write_token=mcp_write_token,
     )

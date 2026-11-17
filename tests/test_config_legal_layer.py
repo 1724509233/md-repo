@@ -119,10 +119,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def test_real_config_yaml_v2_migration(tmp_path: Path):
     """Task 6 integration: the repo's real config.yaml loads under the v2
-    legal layer — consolidator = reads + propose with the 4 verbs
-    (D31/B5 incl. errata); sentinel/narrator = report channel writing
-    under index/ (ADR-0004); the triple index/ overlap is exempt
-    (shared writer face); executor present and exempt.
+    legal layer — structural assertions only (review F14): the load call
+    passing IS the legal-layer check (fail-fast, no ValueError), aliases
+    are unique, and the three architecture roles are present
+    (consolidator = proposal channel, sentinel = report channel,
+    executor = exempt framework role).
+
+    The exact alias set / per-agent tools / verbs / target_dirs are
+    machine-local config state and may evolve — not pinned here.
 
     Vault = a temp dir: load_background_agents is pure path resolution
     (no vault filesystem access), so the real vault is not required.
@@ -136,21 +140,7 @@ def test_real_config_yaml_v2_migration(tmp_path: Path):
                     "section (config.yaml is untracked user-local state)")
     vault = tmp_path / "vault"
     vault.mkdir()
-    agents = load_background_agents(str(cfg), vault)
+    agents = load_background_agents(str(cfg), vault)   # legal layer 校验：非法即 raise
     by_alias = {a.alias: a for a in agents}
-    assert set(by_alias) == {"consolidator", "sentinel", "narrator", "executor"}
-
-    index = (vault / "index").resolve()
-    cons = by_alias["consolidator"]
-    assert cons.target_dir == index
-    assert "propose" in cons.tools
-    assert "write_doc" not in cons.tools
-    assert cons.verbs == ("entity_index", "relatedness", "summary", "errata")
-
-    for alias in ("sentinel", "narrator"):
-        a = by_alias[alias]
-        assert a.target_dir == index
-        assert "write_doc" in a.tools
-        assert "propose" not in a.tools
-
-    assert by_alias["executor"].is_executor is True
+    assert len(by_alias) == len(agents)                # 别名唯一
+    assert {"consolidator", "sentinel", "executor"} <= set(by_alias)  # 架构角色；不钉完整集合

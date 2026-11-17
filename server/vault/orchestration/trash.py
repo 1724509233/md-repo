@@ -114,26 +114,6 @@ def list_trash(vault_dir: Path) -> list[dict]:
     return items
 
 
-def deleted_hash_map(vault_dir: Path) -> dict[str, str]:
-    """Map of original path -> pre-delete sha256 hash, for the sync lane.
-
-    Built from the batches' meta.json via :func:`list_trash` (read-only;
-    files already restored/purged are absent because ``list_trash``
-    filters to what is on disk). When the same path was deleted in more
-    than one batch, the NEWEST batch wins (a second delete is the more
-    recent pre-image).
-    """
-    out: dict[str, str] = {}
-    # list_trash is newest-first — iterate oldest-first so newer batches
-    # overwrite older ones.
-    for meta in reversed(list_trash(vault_dir)):
-        for f in meta.get("files", []):
-            h = f.get("hash")
-            if h:
-                out[f["path"]] = h
-    return out
-
-
 def _drop_empty_root(vault_dir: Path) -> None:
     """Remove the .trash root when it is empty (best-effort)."""
     root = trash_root(vault_dir)

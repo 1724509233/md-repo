@@ -120,6 +120,27 @@ def test_empty_lock_file_treated_stale_fail_open(lock_path: Path) -> None:
     assert not lock_path.exists()
 
 
+# --- release pid guard (review F15) -----------------------------------------
+
+
+def test_release_keeps_foreign_lock_file(tmp_path):
+    lock = SyncLock(tmp_path / "s.lock")
+    assert lock.try_acquire()
+    (tmp_path / "s.lock").write_text("1.0 pid=999999\n", encoding="utf-8")
+    lock.release()  # 持有超 300s 后锁已被接管者的场景：不得删别人的锁
+    assert (tmp_path / "s.lock").is_file()
+    assert lock.locked_at is None
+
+
+def test_release_unparsable_content_unlinks(tmp_path):
+    # fail-open：不可读/空内容按陈旧语义处理，仍清理
+    lock = SyncLock(tmp_path / "s.lock")
+    assert lock.try_acquire()
+    (tmp_path / "s.lock").write_text("garbage\n", encoding="utf-8")
+    lock.release()
+    assert not (tmp_path / "s.lock").exists()
+
+
 # --- test seam & in-memory mode --------------------------------------------
 
 

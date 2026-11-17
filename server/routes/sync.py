@@ -22,6 +22,12 @@ def register(app, ctx) -> None:
         local_files = body.get("local_files")
         logs = body.get("logs", [])
         last_sync = body.get("last_sync", 0.0)
+        # F15d: last_sync is client-supplied and untrusted — a non-numeric
+        # value degrades to 0.0 (no window) instead of a 500.
+        try:
+            last_sync = float(last_sync)
+        except (TypeError, ValueError):
+            last_sync = 0.0
 
         if not isinstance(device_name, str) or not device_name:
             raise HTTPException(status_code=400, detail="device_name is required")

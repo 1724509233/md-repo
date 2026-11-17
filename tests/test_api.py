@@ -265,6 +265,63 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
     assert '"type": "done"' in body
 
 
+def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ai_config,
+                                        monkeypatch):
+    """F15b wiring: agent_chat runs the agent-cache TTL eviction next to
+    session_mgr.cleanup() and stamps the session's last_active. The cache /
+    last_active dicts are closure-internal — the spy captures them by
+    reference, so the post-request assertions see the request's effects."""
+    import server.routes.agent as agent_routes
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from fastapi.testclient import TestClient
+
+    from server.api import create_app
+
+    captured: dict = {}
+
+    def spy(cache, last_active, locks, **kw):
+        captured["cache"] = cache
+        captured["last_active"] = last_active
+        captured["locks"] = locks
+        return []
+
+    monkeypatch.setattr(agent_routes, "_evict_stale_agents", spy)
+
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    tc = TestClient(app)
+
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "Hello"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        resp = tc.post(
+            "/api/agent/chat",
+            json={"message": "hi", "session_id": "s1"},
+        )
+
+    assert resp.status_code == 200
+    assert "last_active" in captured                  # eviction was wired in
+    assert captured["last_active"].get("s1") is not None   # refreshed at entry
+    assert "s1" in captured["cache"]                  # the agent is cached
+    assert "s1" in captured["locks"]                  # per-session lock exists
+
+
 def test_graph_backlinks_endpoint(client, vault_dir, db_conn):
     """GET /api/graph/backlinks returns documents linking to a path."""
     from server.vault import init_graph
@@ -1029,6 +1086,14 @@ def test_sync_baseline_malformed_degrades_to_conflict(client) -> None:
         })
         assert r.status_code == 200, bad
         assert r.json()["conflicts"] == ["notes/test.md"], bad
+
+
+def test_sync_last_sync_garbage_degrades_to_zero(client) -> None:
+    # F15d：非数字 last_sync 按 0.0（无窗口）处理，不 500。
+    r = client.post("/api/sync", json={"device_name": "mac",
+                                       "local_files": {}, "logs": [],
+                                       "last_sync": "garbage"})
+    assert r.status_code == 200
 
 
 def test_sync_alltime_delete_beats_window(client, vault_dir, db_conn) -> None:

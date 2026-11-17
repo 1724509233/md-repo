@@ -1543,3 +1543,98 @@ def test_check_md_path_rejects_drive_qualified():
     # 中间冒号不误伤
     assert _check_md_path("notes/c:x.md") == "notes/c:x.md"
     assert _check_optional_path("notes/c:x.md") == "notes/c:x.md"
+
+
+# ── routes/agent.py: agent-cache TTL eviction (review F15b) ──────────────────
+# The route's agent_cache had no TTL of its own (session_mgr.cleanup() evicts
+# session messages, not cached Agents) — the module-level helper is wired into
+# agent_chat next to cleanup(). Here: the helper's own semantics.
+
+
+def test_evict_stale_agents_removes_idle_unlocked():
+    from server.routes.agent import _evict_stale_agents
+
+    cache = {"a": object(), "b": object()}
+    last_active = {"a": 0.0, "b": 0.0}
+    evicted = _evict_stale_agents(cache, last_active, {}, ttl=1800, now=2000.0)
+    assert evicted == ["a", "b"]
+    assert cache == {}
+    assert last_active == {}
+
+
+def test_evict_stale_agents_keeps_fresh_and_locked():
+    import asyncio
+
+    from server.routes.agent import _evict_stale_agents
+
+    fresh, locked = object(), object()
+    cache = {"fresh": fresh, "locked": locked, "gone": object()}
+    last_active = {"fresh": 1900.0, "locked": 0.0, "gone": 0.0}
+
+    lock = asyncio.Lock()
+
+    async def hold():
+        await lock.acquire()
+
+    asyncio.run(hold())          # stays locked after the loop closes
+
+    evicted = _evict_stale_agents(cache, last_active, {"locked": lock},
+                                  ttl=1800, now=2000.0)
+    assert evicted == ["gone"]
+    assert cache == {"fresh": fresh, "locked": locked}
+    assert "gone" not in last_active
+    # kept entries stay in last_active too
+    assert "fresh" in last_active and "locked" in last_active
+
+
+def test_evict_stale_agents_ttl_boundary():
+    """idle == ttl is kept — eviction is strictly idle > ttl."""
+    from server.routes.agent import _evict_stale_agents
+
+    cache = {"edge": object(), "over": object()}
+    last_active = {"edge": 200.0, "over": 100.0}
+    evicted = _evict_stale_agents(cache, last_active, {}, ttl=100, now=300.0)
+    assert evicted == ["over"]
+    assert "edge" in cache
+
+
+def test_evict_stale_agents_missing_last_active_counts_stale():
+    """No last_active entry = no recorded activity = maximally stale (the
+    lock check is what protects in-flight work, not the timestamp)."""
+    from server.routes.agent import _evict_stale_agents
+
+    cache = {"orphan": object()}
+    evicted = _evict_stale_agents(cache, {}, {}, ttl=1800, now=5000.0)
+    assert evicted == ["orphan"]
+    assert cache == {}
+
+
+def test_evict_stale_agents_default_ttl_and_now():
+    """Defaults per the route wiring: ttl=1800, now=time.time()."""
+    import time
+
+    from server.routes.agent import _evict_stale_agents
+
+    cache = {"old": object(), "new": object()}
+    last_active = {"old": time.time() - 3601, "new": time.time()}
+    evicted = _evict_stale_agents(cache, last_active, {})
+    assert evicted == ["old"]
+    assert "new" in cache
+
+
+def test_evict_stale_agents_keeps_pending_confirms():
+    # 终审 F-R1：挂起的 ask 确认只活在内存（_pending_confirms 不随会话
+    # 持久化重建）——带 pending 确认的 Agent 不得被 TTL 淘汰，否则用户
+    # 30 分钟后回来 confirm 直接 404，必须重新下发指令。
+    from types import SimpleNamespace
+
+    from server.routes.agent import _evict_stale_agents
+
+    pending = SimpleNamespace(pending_confirms={"tc1": {}})
+    plain = object()
+    cache = {"pending": pending, "plain": plain}
+    last_active = {"pending": 0.0, "plain": 0.0}
+    evicted = _evict_stale_agents(cache, last_active, {}, ttl=1800, now=2000.0)
+    assert evicted == ["plain"]
+    assert cache == {"pending": pending}
+    assert "pending" in last_active
