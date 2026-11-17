@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,23 @@ def _hash_bytes(content: bytes) -> str:
 def _conflict_path(p: Path, device_name: str) -> Path:
     """The conflict-copy path convention: {stem}.conflict-{device}{suffix}."""
     return p.with_name(f"{p.stem}.conflict-{device_name}{p.suffix}")
+
+
+def _atomic_write(fp: Path, data: bytes) -> None:
+    """Write file content atomically (same-dir tmp + os.replace).
+
+    The tmp name is dot-prefixed and non-.md (same convention as the
+    server's atomic_write_bytes), so scan_local_files' rglob("*.md")
+    never sees it; a crash-stray is inert. On failure the tmp is
+    cleaned up and the error propagates.
+    """
+    tmp = fp.with_name("." + fp.name + ".writing-tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, fp)  # atomic: same directory => same volume
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _now_iso() -> str:
@@ -172,14 +190,14 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                         # keep the local edit, save the server copy as a conflict.
                         conflict_path = vault_dir / _conflict_path(Path(path), config.device_name)
                         conflict_path.parent.mkdir(parents=True, exist_ok=True)
-                        conflict_path.write_bytes(r.content)
+                        _atomic_write(conflict_path, r.content)
                         logger.warning(
                             "pull skipped (edited during cycle), server copy saved as %s",
                             conflict_path.relative_to(vault_dir).as_posix())
                         rescued.add(path)
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_bytes(r.content)
+                    _atomic_write(dest, r.content)
                     agreed[path] = _hash_bytes(r.content)
                     logger.info("pulled %s", path)
                 except (httpx.HTTPError, OSError) as e:
@@ -208,7 +226,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                     p = Path(path)
                     conflict_path = vault_dir / _conflict_path(p, config.device_name)
                     conflict_path.parent.mkdir(parents=True, exist_ok=True)
-                    conflict_path.write_bytes(r.content)
+                    _atomic_write(conflict_path, r.content)
                     logger.warning(
                         "conflict on %s, saved server version as %s",
                         path,

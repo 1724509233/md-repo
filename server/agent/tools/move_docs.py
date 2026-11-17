@@ -60,7 +60,10 @@ class MoveDocsTool(DocTool):
         from ...snapshots import (capture, discard, finalize, gc_after_capture,
                                   hash_bytes, new_call_id)
         from ...vault.db.conn import get_index_conn, get_ledger_conn
-        from ...vault.orchestration.refs import update_references_batch
+        from ...vault.orchestration.refs import (
+            apply_reference_updates,
+            prepare_reference_updates,
+        )
         from ... import ledger
 
         moves = [(m.from_path, m.to_path) for m in args.moves]
@@ -74,8 +77,11 @@ class MoveDocsTool(DocTool):
             if dst.is_file():
                 return self.move_dest_exists(to_path)
 
-        # Phase 2: single-pass reference update (before rename, so uniqueness checks work)
-        ref_count = update_references_batch(get_index_conn(), ctx.vault_dir, moves, pre_rename=True)
+        # Phase 2: compute every referrer's rewritten content BEFORE any
+        # rename (pre-rename uniqueness; in-batch referrers read at their
+        # old paths) — touches no disk, so a partial-rename failure in
+        # Phase 3 raises with every referrer byte-identical (F9).
+        prepared = prepare_reference_updates(get_index_conn(), ctx.vault_dir, moves)
 
         # Phase 3: perform all filesystem renames. The whole batch is ONE
         # tool call → one call_id snapshot group (rollback unit, P1): every
@@ -95,8 +101,9 @@ class MoveDocsTool(DocTool):
             # 新约定：每个 rename 同步记账（ledger.record → apply_change：files/
             # change_log/FTS/graph 在 tool_result SSE 前全部到位，UI 快路径
             # loadDocs 依赖）；skip 标记使 watcher 事件记零行，恰好一行。
-            # update_refs=False：引用改写已由上方 update_references_batch
-            # (pre_rename=True) 批量做过（与 web manage 同口径），防双重改写。
+            # update_refs=False：引用改写由 rename 全部成功后的
+            # apply_reference_updates 落盘（redirect 指向批内 referrer 的
+            # 新路径），apply_change 不再重复改写。
             digests = {}  # to_path → 改后哈希（finalize 与记账共用，免重复读盘）
             for from_path, to_path in moves:
                 src = ctx.vault_dir / from_path
@@ -120,6 +127,10 @@ class MoveDocsTool(DocTool):
                 if snap is not None:
                     finalize(conn, snap, digests[to_path])
             gc_after_capture(conn, ctx.vault_dir)
+        # All renames (and their ledger rows/snapshots) succeeded → land the
+        # prepared rewrites once; referrers that are themselves in the move
+        # batch are redirected to their new paths.
+        ref_count = apply_reference_updates(ctx.vault_dir, prepared, redirect=dict(moves))
 
         lines = [f"Moved {len(moves)} file(s):"]
         for from_path, to_path in moves:

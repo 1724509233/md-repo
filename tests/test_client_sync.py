@@ -501,3 +501,25 @@ def test_delete_guard_skips_midcycle_edit(tmp_path, monkeypatch, caplog):
     # 跳过删除的编辑不进基线：a.md 保留旧条目（下周期自愈重判），
     # b.md 已删 → 缺项。
     assert state["files"] == {"a.md": h_a}
+
+
+def test_atomic_write_no_stray_on_replace_failure(tmp_path, monkeypatch):
+    import os
+
+    from client.sync import _atomic_write
+
+    fp = tmp_path / "a.md"
+    fp.write_bytes(b"original")
+    real_replace = os.replace
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("client.sync.os.replace", boom)
+    try:
+        _atomic_write(fp, b"new")
+    except OSError:
+        pass
+    monkeypatch.undo()
+    assert fp.read_bytes() == b"original"          # 原文件原样
+    assert list(tmp_path.iterdir()) == [fp]        # tmp 已清理

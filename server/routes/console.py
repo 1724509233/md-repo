@@ -74,7 +74,10 @@ def move(db_conn, vault_dir, body) -> dict:
         raise HTTPException(
             status_code=400, detail="cannot move into own subdirectory"
         )
-    from ..vault.orchestration.refs import update_references_batch
+    from ..vault.orchestration.refs import (
+        apply_reference_updates,
+        prepare_reference_updates,
+    )
 
     if src.is_file():
         moves = [(src_rel.as_posix(), dst_rel.as_posix())]
@@ -83,12 +86,11 @@ def move(db_conn, vault_dir, body) -> dict:
             (p.relative_to(vault_dir).as_posix(), (dst_rel / p.relative_to(src)).as_posix())
             for p in sorted(src.rglob("*.md")) if p.is_file()
         ]
-    # Web op: per-file moved rows logged synchronously (console
-    # feed); record() marks skip — consumer books nothing.
-    # Reference rewriting ran in batch above — the per-file passes
-    # skip their own ref update (idempotent either way).
-    # pre_rename=True: update refs before rename so uniqueness check is correct
-    update_references_batch(db_conn, vault_dir, moves, pre_rename=True)
+    # F9 split: prepare computes every referrer's rewritten content BEFORE
+    # any rename (pre-rename uniqueness; in-batch referrers read at their
+    # old paths) and touches no disk — a rename failure below 500s with
+    # every referrer byte-identical (zero residue).
+    prepared = prepare_reference_updates(db_conn, vault_dir, moves)
     was_dir = src.is_dir()
     try:
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +101,10 @@ def move(db_conn, vault_dir, body) -> dict:
         ledger.record_folder(
             db_conn, vault_dir, dst_rel.as_posix(), "moved", "web",
             from_path=src_rel.as_posix())
+    # Web op: per-file moved rows logged synchronously (console
+    # feed); record() marks skip — consumer books nothing.
+    # update_refs=False: reference rewriting lands once, via
+    # apply_reference_updates below.
     # segments_fts_* triggers keep FTS in sync per row; no batch suppression needed
     for old, new in moves:
         ledger.record(
@@ -110,6 +116,10 @@ def move(db_conn, vault_dir, body) -> dict:
             from_path=old,
             update_refs=False,
         )
+    # All renames (and their ledger rows) succeeded → land the prepared
+    # rewrites; referrers that are themselves in the move batch are
+    # redirected to their new paths.
+    apply_reference_updates(vault_dir, prepared, redirect=dict(moves))
     return {"ok": True, "path": dst_rel.as_posix()}
 
 
@@ -271,15 +281,19 @@ def register(app, ctx) -> None:
         if rel is None:
             raise HTTPException(status_code=400, detail="invalid path")
         file_path = ctx.vault_dir / rel
+        rel_str = rel.as_posix()
         try:
             content = await file.read()
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            # F6 write discipline: register BEFORE the write — the watcher
+            # consumer pops our attribution when the write event fires;
+            # registered after, it pops empty (watchdog misattribution +
+            # stale registry entry mislabeling the next external write).
+            ledger.register(rel_str, "web", ctx.vault_dir)
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
-        rel_str = rel.as_posix()
-        ledger.register(rel_str, "web", ctx.vault_dir)
         return {"path": rel_str, "hash": digest}
 
     @app.put("/api/docs/{path:path}")
@@ -291,8 +305,9 @@ def register(app, ctx) -> None:
         content = await request.body()
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            # F6 write discipline: register BEFORE the write (see upload_doc).
+            ledger.register(rel.as_posix(), "web", ctx.vault_dir)
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        ledger.register(rel.as_posix(), "web", ctx.vault_dir)
         return {"ok": True}

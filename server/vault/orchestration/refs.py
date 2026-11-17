@@ -1,13 +1,28 @@
 """Reference maintenance: rewrite wikilinks after moves/deletes.
 
 Coordinates DB (edges lookup via ``_find_referrers``) + FS (read/replace/write).
+
+Write discipline (review F9/F10b/F11b, 2026-11-17): referrer rewrites are
+split into ``prepare_reference_updates`` (computed BEFORE any rename —
+pre-rename uniqueness judgment, touches no disk) and
+``apply_reference_updates`` (landed AFTER all renames succeeded — in-batch
+referrers redirected to their new paths, atomic tmp+os.replace writes). A
+rename failure therefore leaves every referrer byte-identical. Non-UTF-8
+referrers are skipped (log warning, no write-back, batch continues) —
+``errors="replace"`` would re-encode every undecodable byte to U+FFFD on
+write-back and silently corrupt the file.
 """
 from __future__ import annotations
 
+import logging
+import re
 import sqlite3
 from pathlib import Path
 
 from ..db.graph_sql import _find_referrers
+from ..fs.vault_ops import atomic_write_bytes
+
+logger = logging.getLogger(__name__)
 
 
 def _is_filename_unique(vault_dir: Path, filename: str) -> bool:
@@ -39,31 +54,15 @@ def _update_references(conn: sqlite3.Connection, vault_dir: Path, old_path: str,
     return update_references_batch(conn, vault_dir, [(old_path, new_path)])
 
 
-def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False, src_paths: list[str] | None = None) -> int:
-    """Single-pass: replace references for multiple moves at once.
+def _build_patterns(vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool) -> list[dict]:
+    """Pre-compile full-path + short-name patterns for each move.
 
-    Uses edges table to find referrer files (falls back to full scan if empty).
-    Each file is read once, all replacements applied in memory, written once.
-
-    Args:
-        conn: database connection (for edges lookup), or None for fallback
-        vault_dir: root of the vault
-        moves: list of (old_path, new_path) tuples
-        pre_rename: if True, the filesystem rename has NOT happened yet.
-        src_paths: explicit referrer list — skips the edges lookup entirely.
-            For callers whose lookup premise is stale (e.g. a rollback
-            reversing a move whose referrer→new edges the watcher has not
-            built yet): pass the G1-grade _referrers result (edges first,
-            unconditional content-scan fallback).
-
-    Returns the number of files modified.
+    ``pre_rename=True`` — the renames have NOT happened yet: uniqueness is
+    judged by :func:`_is_filename_unique` (live-file semantics).
+    ``pre_rename=False`` — legacy callers (apply_change's move branch, the
+    compat wrapper) run after the rename: the on-disk count of the old
+    filename decides, exactly as before the split.
     """
-    import re
-
-    if not moves:
-        return 0
-
-    # Pre-compile patterns for each move
     patterns = []
     for old_path, new_path in moves:
         escaped_old = re.escape(old_path)
@@ -88,9 +87,47 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
             ),
             "short_new": new_stem,
         })
+    return patterns
+
+
+def prepare_reference_updates(
+    conn: sqlite3.Connection | None,
+    vault_dir: Path,
+    moves: list[tuple[str, str]],
+    pre_rename: bool = True,
+    src_paths: list[str] | None = None,
+) -> list[tuple[str, bytes]]:
+    """Compute every referrer's rewritten full text BEFORE any rename (F9).
+
+    Uses the edges table to find referrer files (falls back to full scan if
+    empty). Each referrer is read once, all replacements applied in memory —
+    nothing is written to disk, so a rename failure after this point leaves
+    every referrer byte-identical.
+
+    Args:
+        conn: database connection (for edges lookup), or None for fallback
+        vault_dir: root of the vault
+        moves: list of (old_path, new_path) tuples
+        pre_rename: uniqueness judgment mode — True (default) means the
+            renames have not happened yet (:func:`_is_filename_unique`);
+            the compat wrapper passes False to keep the legacy on-disk
+            count for post-rename callers.
+        src_paths: explicit referrer list — skips the edges lookup entirely.
+            For callers whose lookup premise is stale (e.g. the rollback F8
+            call reversing a move whose referrer→new edges the watcher has
+            not built yet): pass the G1-grade ``snapshots._referrers``
+            result (edges first, unconditional content-scan fallback).
+
+    Returns a list of (referrer_rel_path, rewritten_full_text_bytes).
+    """
+    if not moves:
+        return []
+
+    patterns = _build_patterns(vault_dir, moves, pre_rename)
 
     # Find all referrer files across all moves (union), unless the caller
-    # supplied the list explicitly (stale-lookup-premise callers).
+    # supplied the list explicitly (stale-lookup-premise callers — review
+    # F-1: the rollback's edges premise does not hold).
     all_src_paths: set[str] = set()
     if src_paths is not None:
         all_src_paths.update(src_paths)
@@ -101,13 +138,19 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
     # Exclude the destination paths (moved files themselves)
     dest_paths = {new_path for _, new_path in moves}
 
-    modified_count = 0
-    for rel in all_src_paths:
+    prepared: list[tuple[str, bytes]] = []
+    for rel in sorted(all_src_paths):
         if rel in dest_paths:
             continue
         md_file = vault_dir / rel
         try:
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
+            content = md_file.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            # F10b: non-UTF-8 referrer — skip it entirely (no write-back,
+            # batch continues). errors="replace" would re-encode every
+            # undecodable byte to U+FFFD and corrupt the file.
+            logger.warning("refs: skipping non-UTF-8 referrer %s — not rewritten", rel)
+            continue
         except OSError:
             continue
 
@@ -124,10 +167,53 @@ def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, mo
                 )
 
         if content != original:
-            md_file.write_bytes(content.encode("utf-8"))
-            modified_count += 1
+            prepared.append((rel, content.encode("utf-8")))
 
-    return modified_count
+    return prepared
+
+
+def apply_reference_updates(
+    vault_dir: Path,
+    prepared: list[tuple[str, bytes]],
+    redirect: dict[str, str] | None = None,
+) -> int:
+    """Land prepared referrer rewrites atomically, after all renames (F9/F11b).
+
+    ``redirect`` maps a referrer's prepare-time (old) path to its
+    post-rename path — a referrer that is itself part of the move batch
+    was read at its old path but must be written at its new one. Each file
+    is written via :func:`atomic_write_bytes` (same-dir tmp + os.replace).
+
+    Returns the number of files written.
+    """
+    redirect = redirect or {}
+    written = 0
+    for rel, data in prepared:
+        target = redirect.get(rel, rel)
+        atomic_write_bytes(vault_dir / target, data)
+        written += 1
+    return written
+
+
+def update_references_batch(conn: sqlite3.Connection | None, vault_dir: Path, moves: list[tuple[str, str]], pre_rename: bool = False, src_paths: list[str] | None = None) -> int:
+    """Single-pass: replace references for multiple moves at once.
+
+    Compat wrapper (review F9 split, 2026-11-17): prepare + immediate
+    apply with no redirect — the rename has either not happened yet
+    (``pre_rename=True``) or is already complete for the moved file while
+    referrers stay put (``pre_rename=False``, apply_change's move branch
+    and the rollback call sites), so no in-batch redirection is needed.
+    Signature and on-disk outcomes are unchanged for existing callers;
+    ``src_paths`` (rollback F-1) skips the edges lookup for callers whose
+    lookup premise is stale. Writes go through :func:`atomic_write_bytes`
+    and non-UTF-8 referrers are skipped (F10b) instead of being re-encoded.
+
+    Returns the number of files modified.
+    """
+    prepared = prepare_reference_updates(conn, vault_dir, moves,
+                                         pre_rename=pre_rename,
+                                         src_paths=src_paths)
+    return apply_reference_updates(vault_dir, prepared)
 
 
 def remove_dead_links(
@@ -159,8 +245,6 @@ def remove_dead_links(
 
     Returns the number of files modified.
     """
-    import re
-
     # Liveness check: target back on disk → nothing is dead, strip nothing.
     if (Path(vault_dir) / deleted_path).exists():
         return 0
@@ -193,7 +277,12 @@ def remove_dead_links(
             continue
         md_file = vault_dir / rel
         try:
-            content = md_file.read_bytes().decode("utf-8", errors="replace")
+            content = md_file.read_bytes().decode("utf-8")
+        except UnicodeDecodeError:
+            # F10b: non-UTF-8 referrer — skip it entirely (no write-back);
+            # errors="replace" would re-encode it through U+FFFD on write.
+            logger.warning("refs: skipping non-UTF-8 referrer %s — not rewritten", rel)
+            continue
         except OSError:
             continue
 
@@ -203,7 +292,8 @@ def remove_dead_links(
             content = re.sub(r"\[\[" + pat + r"(\|[^\]]+)?\]\]", "", content)
 
         if content != original:
-            md_file.write_bytes(content.encode("utf-8"))
+            # F11b: atomic write — same-dir tmp + os.replace.
+            atomic_write_bytes(md_file, content.encode("utf-8"))
             modified_count += 1
 
     return modified_count

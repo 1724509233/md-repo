@@ -1050,3 +1050,33 @@ def test_sync_alltime_delete_beats_window(client, vault_dir, db_conn) -> None:
     body = r.json()
     assert body["to_delete"] == ["notes/gone.md"]
     assert body["to_push"] == []
+
+
+# ── write discipline: register-before-write (review F6) ──
+
+
+def test_upload_and_save_register_before_write(client, vault_dir, monkeypatch) -> None:
+    # F6：契约 = register 先于写盘（register 后置时，先跑的 watcher 消费者
+    # 弹空 → watchdog 误归因 + 注册表残留误标下一次外部写）。
+    from server.routes import console
+
+    calls = []
+    real_register = console.ledger.register
+
+    def spy_register(rel, source, vault, *a, **k):
+        assert not (vault / rel).exists(), f"register must run BEFORE the write: {rel}"
+        calls.append(rel)
+        return real_register(rel, source, vault, *a, **k)
+
+    monkeypatch.setattr(console.ledger, "register", spy_register)
+
+    r = client.post("/api/docs/order/new.md",
+                    files={"file": ("new.md", b"content", "text/markdown")})
+    assert r.status_code == 200
+    assert (vault_dir / "order" / "new.md").is_file()
+
+    r = client.put("/api/docs/order/saved.md", content=b"saved body")
+    assert r.status_code == 200
+    assert (vault_dir / "order" / "saved.md").is_file()
+
+    assert calls == ["order/new.md", "order/saved.md"]

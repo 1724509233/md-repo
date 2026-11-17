@@ -4,9 +4,12 @@ A deletion is a MOVE into ``<vault>/.trash/<batch>/`` — not an unlink:
 
 - **Inbound** (:func:`move_to_trash`): meta.json is written first, then the
   files are renamed into the batch (original relative path preserved); the
-  batch is immutable afterwards. A partial failure rolls the batch back
-  (moved files renamed back + batch dir removed) — there is never a
-  half-trash state. The change_log row is booked with ``remove_links=False``:
+  batch is immutable afterwards. A partial failure rolls the moved files
+  back; if every rename-back succeeds the batch dir is removed (there is
+  never a half-trash state), and if a rename-back fails the batch dir is
+  KEPT on disk — it holds the only surviving copies, so it is never
+  destroyed (review F12). The change_log row is booked with
+  ``remove_links=False``:
   referrer content is left untouched so restore is fully reversible (links
   revive); the dead-link cleanup is deferred to the purge.
 - **Restore** (:func:`restore`): rename back + ``restore`` row (5th
@@ -167,8 +170,11 @@ def move_to_trash(
     ``db_conn`` may be None (degraded, no index DB): the disk move
     happens, the ledger rows are skipped.
 
-    Raises TrashError on failure — already rolled back (moved files
-    renamed back, batch dir removed), so there is never a half-trash state.
+    Raises TrashError on failure. When every rename-back succeeds the
+    batch dir is removed (never a half-trash state); when a rename-back
+    fails the batch dir is kept on disk — it holds the only surviving
+    copies, so it is never destroyed — and the error reads
+    "rollback incomplete — batch kept at <bdir>" (review F12).
     """
     if not rel_paths:
         raise TrashError("no files to move")
@@ -205,11 +211,19 @@ def move_to_trash(
             fp.rename(dest)
             moved.append((fp, dest))
     except (OSError, TrashError) as e:
+        rollback_failed = False
         for src, dest in moved:
             try:
                 dest.rename(src)
             except OSError:
-                pass  # best-effort; the batch dir is dropped below
+                rollback_failed = True  # best-effort；绝不为它销毁 batch
+        if rollback_failed:
+            # The batch holds the only surviving copies — keep it on disk
+            # for manual recovery; destroying it would lose user content.
+            raise TrashError(
+                f"move to trash failed: {e}; rollback incomplete — "
+                f"batch kept at {bdir}"
+            ) from e
         shutil.rmtree(bdir, ignore_errors=True)
         _drop_empty_root(vault_dir)
         raise TrashError(f"move to trash failed: {e}") from e
