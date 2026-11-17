@@ -4,9 +4,12 @@
 const TIMER_MS = 6000
 let timer = null
 
-function sanitize(msg) {
-  // 剥端点前缀「METHOD /path → 」：实现 meta 不进用户文案（AGENTS.md 文案规范）
-  return String(msg).replace(/^(?:GET|POST|PUT|DELETE|PATCH) \/\S+ → /, '')
+export function sanitize(msg) {
+  // 剥端点段「METHOD /path → NNN」：路径可含空格 → 非锚定 + 惰性；先剥带尾冒号形态再剥裸形态
+  // （实现 meta 不进用户文案，AGENTS.md 文案规范；终审 I2：锚定 ^ 永不命中拼好前缀的消息）
+  return String(msg)
+    .replace(/ ?(?:GET|POST|PUT|DELETE|PATCH) \/\S[^\n]*? → \d{3}:/g, ':')
+    .replace(/ ?(?:GET|POST|PUT|DELETE|PATCH) \/\S[^\n]*? → \d{3}/g, '')
 }
 
 function hide(el) {

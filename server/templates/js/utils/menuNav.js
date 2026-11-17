@@ -1,6 +1,7 @@
 /* 弹出菜单键盘导航（P1-5）：role=menu 容器接 Arrow/Home/End/Escape。
    调用方在菜单打开（nextTick 后）挂、关闭时 cleanup。返回 cleanup 函数。 */
 export function initMenuNav(containerEl, onEscape) {
+  const prevFocus = document.activeElement  // 焦点归还（终审 I5）：cleanup 时回 opener
   const items = () => Array.from(
     containerEl.querySelectorAll('[role="menuitem"]:not([disabled])'))
 
@@ -23,5 +24,8 @@ export function initMenuNav(containerEl, onEscape) {
   containerEl.addEventListener('keydown', onKeydown)
   const first = items()[0]
   if (first) first.focus()
-  return () => containerEl.removeEventListener('keydown', onKeydown)
+  return () => {
+    containerEl.removeEventListener('keydown', onKeydown)
+    if (prevFocus && prevFocus.isConnected && document.contains(prevFocus)) prevFocus.focus()
+  }
 }

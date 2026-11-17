@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import re
 import pathlib
+import shutil
+
+import pytest
 
 TPL = pathlib.Path(__file__).resolve().parent.parent / "server" / "templates"
 
@@ -136,6 +139,40 @@ def test_keyboard_reachability_cluster():
     # 文件行/目录行属节点组件——docHash/onDirKeydown 必须在其 setup return（运行时报错的回归钉）
     node_return = ft.split("return { treeOps,")[1].split("}")[0]
     assert "onDirKeydown" in node_return and "docHash" in node_return
+
+
+def test_final_review_fixes():
+    import json
+    import subprocess
+    ft = _templates()["FileTree.js"]
+    # C1: div[role=button] 上 Enter 不产 click——onDirKeydown 必须自带 Enter 分支
+    kd = ft[ft.index("function onDirKeydown"):][:320]
+    assert "Enter" in kd and "' '" in kd
+    # I4: 移动项结构锚定（防注释假锚）
+    mv = [l for l in ft.splitlines() if 'moveItem()">移动' in l]
+    assert mv and all("lg:hidden" not in l for l in mv)
+    # I2: sanitize 必须导出且对拼好前缀的真实消息生效
+    toast = (TPL / "js/utils/toast.js").read_text(encoding="utf-8")
+    assert "export function sanitize" in toast
+    # I3: env() 非零前提
+    assert "viewport-fit=cover" in (TPL / "index.html").read_text(encoding="utf-8")
+    # I5: 菜单关闭焦点归还
+    assert "document.activeElement" in (TPL / "js/utils/menuNav.js").read_text(encoding="utf-8")
+    # hash 往返 + sanitize 行为（node 执行，静态扫串验不了语义）
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    vl = (TPL / "js/utils/vaultLinks.js").as_uri()
+    cases = ["a b.md", "中文.md", "x#y.md", "q?r.md", "a&b=c.md"]
+    js = ("import(%r).then(async m=>{for(const p of %s){const h=m.docHash(p);"
+          "const r=m.parseHash(h);if(!r||r.path!==p)process.exit(1);"
+          "if(!m.docHash(p,{edit:true}).endsWith('?mode=edit'))process.exit(2)}"
+          "const s=m===undefined?'':(await import(%r)).sanitize;"
+          "if(typeof s!=='function')process.exit(3);"
+          "const out=s('保存失败: PUT /api/docs/中 文.md → 404: not found');"
+          "if(out.includes('PUT /')||out.includes('→ 404')||!out.startsWith('保存失败'))process.exit(4);"
+          "process.exit(0)})") % (vl, json.dumps(cases), (TPL / "js/utils/toast.js").as_uri())
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
     md = (TPL / "js/utils/markdown.js").read_text(encoding="utf-8")
     assert 'aria-disabled="true"' in md
     assert "docHash(" in md

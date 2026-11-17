@@ -46,8 +46,9 @@ const TreeNode = {
       return (props.dirPath ? props.dirPath + '/' : '') + name
     }
 
-    // 目录行键盘激活（P1-8）：Enter 原生触发 click；Space 手动（role=button 语义要求）
+    // 目录行键盘激活（P1-8）：div[role=button] 上 Enter/Space 均手动（无原生 click）
     function onDirKeydown(e, path) {
+      if (e.key === 'Enter') { e.preventDefault(); emit('toggle', path); return }
       if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); emit('toggle', path) }
     }
 
