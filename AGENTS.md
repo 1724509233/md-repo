@@ -59,6 +59,8 @@ Spec 已归档至 vault：`~/md-vault/projects/md-repo/specs/2026-09-27-md-sync-
 
 **沉淀规则（2026-11-17 用户定）**: 需要反复修复/返工的问题在 `issues/`（本地台账，git 不入）留完整复盘（含被打回的轮次与错误假设），可提交的约束进 AGENTS.md Gotchas；一次性修好的 bug 不单独成文，账本 + commit 即可。
 
+**vault 写入纪律（2026-11-17 用户定）**: spec/计划/新文档默认只落仓库（`docs/superpowers/` 等），保持仓库内新鲜；vault 仅在用户明说「归档」或要求直接写入时才写，不主动同步。
+
 MCP 检索：`search_docs("<关键词>")` 全文检索、`read_doc("<相对路径>")` 读全文、`get_related_docs("<相对路径>")` 查关联。
 
 仓库保留清单：AGENTS.md / GLOSSARY.md / README.md / MISSION.md / NOTES.md / RESOURCES.md + `server/` 下 README 与 prompts/ + `docs/superpowers/plans/2026-11-02-*.md` 六份 + 2 份提案通道 HTML。
