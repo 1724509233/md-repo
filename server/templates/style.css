@@ -32,6 +32,12 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 *::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb, var(--ink-soft) 55%, transparent)}
 *::-webkit-scrollbar-button{display:none;width:0;height:0}
 
+/* ============ 滚动链 containment（P1-7）============ */
+/* 抽屉/弹层/内部滚动区滚到边界不外链整页（移动防误触发下拉刷新） */
+#ai-panel, .search-drawer, .rel-sheet, .console-shell, .panel-shell,
+.sp-results, .notif-list, .toc-list, .c-scroll, .m-scroll, .rel-scroll,
+.search-dropdown { overscroll-behavior: contain; }
+
 /* ============ 侧边栏 logo ============ */
 .logo-mark {
   width: 32px; height: 32px; flex-shrink: 0;
@@ -232,10 +238,13 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 }
 
 /* ============ AI 面板（桌面侧滑）============ */
-#ai-panel { position: absolute; right: -50%; top: 0; bottom: 0; width: 50%; transition: right .25s cubic-bezier(.32,.72,0,1); z-index: 15; background: var(--surface); border-left: 2px solid var(--brass); }
-#ai-panel.open { right: 0; }
+/* transform 滑入（P1-6，AGENTS.md 动效红线）：关闭态藏身容框右缘外，开态归零 */
+#ai-panel { position: absolute; right: 0; top: 0; bottom: 0; width: 50%; transform: translateX(100%); transition: transform .25s cubic-bezier(.32,.72,0,1); z-index: 15; background: var(--surface); border-left: 2px solid var(--brass); }
+#ai-panel.open { transform: none; }
 
-/* 桌面端 main 内容区挤压（与面板同帧 class 切换） */
+/* 桌面端 main 内容区挤压（与面板同帧 class 切换）。
+   padding-right 过渡是用户定型（顶栏按钮文本折叠与面板 0.25s 滑出同帧衔接，
+   2026-11-17 定稿；删掉会使顶栏瞬时跳变——ledger Task 7 Ruling） */
 @media (min-width: 1024px) {
   main { transition: padding-right .25s cubic-bezier(.32,.72,0,1); }
   main.ai-open { padding-right: 50%; }
@@ -245,6 +254,8 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 
 /* 桌面 toggle tab */
 @media (min-width: 1024px) {
+  /* 例外（ledger Task 7 Ruling）：贴边 tab 需骑乘面板边缘，transform % 相对本体
+     无法表达容器 50%；32px 小面 right 过渡 reflow 可忽略 */
   #ai-btn { right: 0; z-index: 25; width: 32px; height: 64px; border-radius: 8px 0 0 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: right .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
   #ai-btn.ai-open { right: 50%; }
   #ai-btn:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
@@ -255,20 +266,22 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 /* ============ 移动底部抽屉 (< lg) ============ */
 @media (max-width: 1023px) {
   #ai-panel {
-    position: fixed; left: 0; right: 0; top: auto; bottom: -80vh; width: 100%;
+    position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: 100%;
     height: 80vh;
+    transform: translateY(100%);
     border-left: none; border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
     z-index: 40;
-    transition: bottom .38s cubic-bezier(.32,.72,0,1);
+    transition: transform .38s cubic-bezier(.32,.72,0,1);
+    padding-bottom: env(safe-area-inset-bottom); /* P1-7 全出血层避底部横条 */
   }
-  #ai-panel.open { bottom: 0; }
+  #ai-panel.open { transform: none; }
   #ai-sheet-handle { display: flex; }
   #ai-sheet-backdrop { display: block; }
-  #ai-btn-mobile { bottom: 1.25rem; width: 48px; height: 40px; border-radius: 9999px; z-index: 35; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: bottom .38s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
+  #ai-btn-mobile { bottom: 1.25rem; width: 48px; height: 40px; border-radius: 9999px; z-index: 35; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: transform .38s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
   #ai-btn-mobile:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
-  #ai-btn-mobile.open { bottom: calc(80vh + 4px); }
+  #ai-btn-mobile.open { transform: translateY(calc(-80vh + 1.25rem - 4px)); }
   #ai-btn-mobile #ai-chevron { transform: rotate(0deg); }
   #ai-btn-mobile.open #ai-chevron { transform: rotate(180deg); }
 }
@@ -576,7 +589,6 @@ pre code.hljs { background: transparent; padding: 0; }
   right: 8px;
   width: 380px;
   animation: notif-in .18s ease-out both;
-  transition: right .25s cubic-bezier(.32,.72,0,1);
 }
 @media (max-width: 1023px) {
   .notif-dropdown { width: 342px; }
@@ -791,14 +803,16 @@ pre code.hljs { background: transparent; padding: 0; }
 
   /* 搜索抽屉：80vh 底部抽屉（同 #ai-panel 移动抽屉：圆角 24、backdrop、拖拽手柄） */
   .search-drawer {
-    top: auto; bottom: -80vh; height: 80vh; width: 100%;
+    top: auto; bottom: 0; height: 80vh; width: 100%;
+    transform: translateY(100%);
     background: var(--surface);
     border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
-    transition: bottom .38s cubic-bezier(.32,.72,0,1);
+    transition: transform .38s cubic-bezier(.32,.72,0,1);
+    padding-bottom: env(safe-area-inset-bottom); /* P1-7 */
   }
-  .search-drawer.open { bottom: 0; }
+  .search-drawer.open { transform: none; }
   #search-sheet-handle { display: flex; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
   #search-sheet-handle::before { content: ''; width: 44px; height: 5px; border-radius: 9999px; background: var(--line); transition: background .15s; }
   #search-sheet-handle:active::before { background: var(--brass); }
@@ -1570,14 +1584,16 @@ details.d-sec .body { padding: 8px 12px 14px; }
      关闭态 visibility:hidden（双值：bottom 在不同视口下解析不一致时也不露边）；
      开 = 立即可见再上滑，合 = 下滑完成后隐藏（visibility 延迟 .38s） */
   .rel-sheet {
-    position: fixed; left: 0; right: 0; bottom: -80vh; height: 80vh; z-index: 40;
+    position: fixed; left: 0; right: 0; bottom: 0; height: 80vh; z-index: 40;
+    transform: translateY(100%);
     background: var(--surface); border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
     display: flex; flex-direction: column;
-    visibility: hidden; transition: bottom .38s var(--ease), visibility 0s .38s;
+    visibility: hidden; transition: transform .38s var(--ease), visibility 0s .38s;
+    padding-bottom: env(safe-area-inset-bottom); /* P1-7 */
   }
-  .rel-sheet.open { bottom: 0; visibility: visible; transition: bottom .38s var(--ease), visibility 0s 0s; }
+  .rel-sheet.open { transform: none; visibility: visible; transition: transform .38s var(--ease), visibility 0s 0s; }
   /* 面容器：sheet 内 = 手柄之下的 flex 子件（填剩余高度） */
   .rel-sheet .rel-face { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .rel-sheet-handle { display: flex; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }

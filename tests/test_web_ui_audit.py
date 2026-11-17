@@ -93,7 +93,8 @@ def test_compositor_only_transitions():
     css = (TPL / "style.css").read_text(encoding="utf-8")
     bad = [l.strip()[:90] for l in css.splitlines()
            if re.search(r"transition: *(right|bottom|padding)", l)
-           and "#ai-btn {" not in l]  # 桌面贴边 tab 例外：见 ledger Task 7 Ruling
+           and "#ai-btn {" not in l and "main { " not in l]
+    # 双例外（ledger Task 7 Rulings）：桌面贴边 tab；main padding 同帧折叠 = 用户定型
     assert bad == []
 
 
