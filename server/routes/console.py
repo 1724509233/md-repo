@@ -271,15 +271,19 @@ def register(app, ctx) -> None:
         if rel is None:
             raise HTTPException(status_code=400, detail="invalid path")
         file_path = ctx.vault_dir / rel
+        rel_str = rel.as_posix()
         try:
             content = await file.read()
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            # F6 write discipline: register BEFORE the write — the watcher
+            # consumer pops our attribution when the write event fires;
+            # registered after, it pops empty (watchdog misattribution +
+            # stale registry entry mislabeling the next external write).
+            ledger.register(rel_str, "web", ctx.vault_dir)
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save file: {e}")
         digest = _hash_bytes(content)
-        rel_str = rel.as_posix()
-        ledger.register(rel_str, "web", ctx.vault_dir)
         return {"path": rel_str, "hash": digest}
 
     @app.put("/api/docs/{path:path}")
@@ -291,8 +295,9 @@ def register(app, ctx) -> None:
         content = await request.body()
         try:
             file_path.parent.mkdir(parents=True, exist_ok=True)
+            # F6 write discipline: register BEFORE the write (see upload_doc).
+            ledger.register(rel.as_posix(), "web", ctx.vault_dir)
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        ledger.register(rel.as_posix(), "web", ctx.vault_dir)
         return {"ok": True}
