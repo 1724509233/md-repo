@@ -433,8 +433,11 @@ def test_prune_keeps_alias_prefix_order(tmp_path: Path):
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
     # 预置 31 份带前缀旧报告（与真实命名同构）
+    preset: set[str] = set()
     for i in range(31):
-        fp = cfg.report_dir / f"test-org_2026-09-{i + 1:02d}_0300.md"
+        name = f"test-org_2026-09-{i + 1:02d}_0300.md"
+        preset.add(name)
+        fp = cfg.report_dir / name
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_text("old", encoding="utf-8")
 
@@ -445,15 +448,21 @@ def test_prune_keeps_alias_prefix_order(tmp_path: Path):
     assert "test-org_2026-09-01_0300.md" not in remaining
     assert "test-org_2026-09-02_0300.md" not in remaining
     assert "test-org_2026-09-03_0300.md" in remaining  # 第 3 旧份幸存
-    assert any(n.startswith("test-org_2026-10") for n in remaining)  # 本次运行报告
+    # 本次运行报告 = 预置名单差集中恰好一份，且带 alias 前缀（不钉具体日期）
+    fresh = [n for n in remaining if n not in preset]
+    assert len(fresh) == 1
+    assert fresh[0].startswith("test-org_")
 
 
 def test_old_unprefixed_reports_prune_first(tmp_path: Path):
     """无前缀旧文件（数字开头）字典序排 {alias}_ 之前 → 真实时间序，先被剪。"""
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
+    preset: set[str] = set()
     for i in range(31):
-        fp = cfg.report_dir / f"2026-09-{i + 1:02d}_0300.md"   # 无 alias 前缀
+        name = f"2026-09-{i + 1:02d}_0300.md"   # 无 alias 前缀
+        preset.add(name)
+        fp = cfg.report_dir / name
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_text("old", encoding="utf-8")
 
@@ -462,8 +471,11 @@ def test_old_unprefixed_reports_prune_first(tmp_path: Path):
     remaining = sorted(p.name for p in cfg.report_dir.glob("*.md"))
     assert len(remaining) == 30          # 写后剪枝到 30 份（含本次新报告）
     assert "2026-09-01_0300.md" not in remaining     # 最旧（无前缀）先删
-    assert "test-org_2026-10-17_1010.md" in remaining or any(
-        n.startswith("test-org_2026-10") for n in remaining)
+    assert "2026-09-02_0300.md" not in remaining
+    # 本次运行报告 = 预置名单差集中恰好一份，且带 alias 前缀（不钉具体日期）
+    fresh = [n for n in remaining if n not in preset]
+    assert len(fresh) == 1
+    assert fresh[0].startswith("test-org_")
 
 
 def test_hooks_receive_run_report(tmp_path: Path):
@@ -794,8 +806,11 @@ def test_retention_prunes_old_reports(tmp_path: Path):
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
     # 预置 31 份旧报告（名字即时间戳，字典序 = 时间序）
+    preset: set[str] = set()
     for i in range(31):
-        fp = cfg.report_dir / f"test-org_2026-09-{i + 1:02d}_0300.md"
+        name = f"test-org_2026-09-{i + 1:02d}_0300.md"
+        preset.add(name)
+        fp = cfg.report_dir / name
         fp.parent.mkdir(parents=True, exist_ok=True)
         fp.write_text("old", encoding="utf-8")
 
@@ -806,7 +821,10 @@ def test_retention_prunes_old_reports(tmp_path: Path):
     assert "test-org_2026-09-01_0300.md" not in remaining
     assert "test-org_2026-09-02_0300.md" not in remaining
     assert "test-org_2026-09-03_0300.md" in remaining  # 第 3 旧份幸存
-    assert any(n.startswith("test-org_2026-10") for n in remaining)  # 本次运行报告
+    # 本次运行报告 = 预置名单差集中恰好一份，且带 alias 前缀（不钉具体日期）
+    fresh = [n for n in remaining if n not in preset]
+    assert len(fresh) == 1
+    assert fresh[0].startswith("test-org_")
 
 
 # ── 批次追踪（run_id / trigger） ──────────────────────────────────────────
