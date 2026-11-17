@@ -93,3 +93,10 @@ requesting-code-review 全新子代理整审未推送的 14 提交（9b53831..c1
 - 顺手补强：`to_delete` 循环周期中护栏（被编辑的待删文件跳过 unlink，下周期自愈重分类）。
 
 修复分支：`fix/sync-baseline-and-delete-guards`。
+
+**修复分支终审（同日，cac3dd6）**：Ready to merge，0 Critical / 0 Important，3 Minor——#1（AGENTS.md 外删 `""` 例外句）已随 cac3dd6 修复；以下两条**未修，待决策**：
+
+- **#2 测试 mock 复刻服务端分类逻辑**（`tests/test_client_sync.py` 的 `_sync_handler`）：手写三方分类与 `server/sync.py compare_files` 当前等价，但服务端规则一旦变化 mock 会静默漂移、削弱生命周期测试真实性。修法：handler 内改调 `server.sync.compare_files`。
+- **#3 两处周期中护栏判定重复**（`client/sync.py` pull 护栏与 delete 护栏各写一遍"读盘重 hash ≠ scan 哈希即周期中编辑"）：抽一个小 helper 防两处漂移。
+
+去向建议：归 Plan 5（测试卫生），或下次动 `client/sync.py` 时顺带——注意与 F11（客户端原子写，fix/write-discipline 分支）的合并冲突协调。
