@@ -571,3 +571,85 @@ def test_rollback_route_books_restore_op_not_created(client, vault_dir, db_conn,
     assert count_changes_sources(db_conn, ops=("create",)) == 0
     # The files table row is back (upserted by the restore branch).
     assert (vault_dir / "notes" / "test.md").read_bytes() == SAMPLE
+
+
+def test_rollback_route_books_delete_for_create_op(client, vault_dir, db_conn,
+                                                   ledger_conn):
+    # F7：create-op 回滚 = unlink。路由必须记 op='delete'（旧行为记 'restore'
+    # → apply_change 查盘无文件 → 零行，且 skip 标记压制 watcher → 幽灵行）。
+    from server import snapshots as snap_mod
+    from tests.conftest import simulate_consumer
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    fp = vault_dir / "notes" / "created.md"
+    fp.write_bytes(b"new content")
+    snap = snap_mod.capture(ledger_conn, vault_dir, "notes/created.md", "create", "agent")
+    snap_mod.finalize(ledger_conn, snap, snap_mod.hash_bytes(b"new content"))
+
+    r = client.post("/api/memory/rollback", json={"call_id": snap["call_id"]})
+    assert r.status_code == 200
+    assert not fp.exists()
+    rows = {(row["path"], row["op"], row["source"]) for row in db_conn.execute(
+        "SELECT path, op, source FROM change_log")}
+    assert ("notes/created.md", "delete", "web") in rows
+    assert ("notes/created.md", "restore", "web") not in rows
+    # 恰好一行：skip 标记压制后续 watcher 事件
+    simulate_consumer(db_conn, vault_dir, "notes/created.md", "deleted")
+    assert db_conn.execute(
+        "SELECT count(*) FROM change_log WHERE path='notes/created.md'"
+    ).fetchone()[0] == 1
+
+
+def test_rollback_route_books_move_pair(client, vault_dir, db_conn, ledger_conn):
+    # F7：move-op 回滚 = 旧路径 restore + 新路径 delete。
+    from server import snapshots as snap_mod
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"payload")
+    snap = snap_mod.capture(ledger_conn, vault_dir, "notes/a.md", "move", "agent",
+                            new_path="notes/b.md")
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    snap_mod.finalize(ledger_conn, snap, snap_mod.hash_bytes(b"payload"))
+
+    r = client.post("/api/memory/rollback", json={"call_id": snap["call_id"]})
+    assert r.status_code == 200
+    assert (vault_dir / "notes" / "a.md").is_file()
+    assert not (vault_dir / "notes" / "b.md").exists()
+    rows = {(row["path"], row["op"]) for row in db_conn.execute(
+        "SELECT path, op FROM change_log WHERE source='web'")}
+    assert ("notes/a.md", "restore") in rows
+    assert ("notes/b.md", "delete") in rows
+
+
+def test_rollback_move_reverses_refs_and_relatedness(vault_dir, db_conn, ledger_conn):
+    # F8：move 的回滚必须逆转 move 时的两处副作用——referrer 正文改写
+    # （[[a]]→[[b]]）与 relatedness 路径改写（D19）。
+    from server import ledger, snapshots as snap_mod
+    from server.vault.db.relatedness import merge_edge
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"a content")
+    (vault_dir / "notes" / "referrer.md").write_bytes(b"see [[notes/a.md]] here")
+    ledger.record(db_conn, vault_dir, "notes/a.md", "created", "agent")
+    ledger.record(db_conn, vault_dir, "notes/referrer.md", "created", "agent")
+    merge_edge(ledger_conn, "notes/a.md", "notes/referrer.md",
+               basis="b", actor="t", run_id="r")
+
+    # move 调用的真实时序：capture（旧路径仍在盘）→ rename → record（同步
+    # 记账，refs/relatedness 在此改写）→ finalize。
+    snap = snap_mod.capture(ledger_conn, vault_dir, "notes/a.md", "move", "agent",
+                            new_path="notes/b.md")
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
+                  from_path="notes/a.md")
+    snap_mod.finalize(ledger_conn, snap,
+                      snap_mod.hash_bytes((vault_dir / "notes" / "b.md").read_bytes()))
+    assert b"[[notes/b.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()
+    assert ledger_conn.execute(
+        "SELECT source FROM relatedness").fetchone()["source"] == "notes/b.md"
+
+    result = snap_mod.rollback(ledger_conn, vault_dir, snap["call_id"])
+    assert result["ok"]
+    assert b"[[notes/a.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()
+    assert ledger_conn.execute(
+        "SELECT source FROM relatedness").fetchone()["source"] == "notes/a.md"

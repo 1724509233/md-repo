@@ -555,4 +555,22 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
                 if s["op"] == "delete" and s["path"] in restored_set:
                     for ref in _referrers(index_conn, vault, s["path"]):
                         graph_extract_file(index_conn, vault, ref)
+    # F8 (review 2026-11-16): a move's rollback reverses the move-time side
+    # effects — referrer link text ([[new]] → [[old]]) and the relatedness
+    # ledger's path rewrite (D19's relation-follows-document runs both ways).
+    # Module handles, None-safe: same discipline as the G1 block above.
+    move_snaps = [s for s in snaps if s["op"] == "move" and s["path"] in restored_set]
+    if move_snaps:
+        from .vault.db.conn import get_index_conn, get_ledger_conn
+        from .vault.orchestration.refs import update_references_batch
+
+        index_conn = get_index_conn()
+        handle_ledger_conn = get_ledger_conn()
+        for s in move_snaps:
+            if index_conn is not None:
+                update_references_batch(index_conn, vault, [(s["new_path"], s["path"])])
+            if handle_ledger_conn is not None:
+                from .vault.db.relatedness import rewrite_paths
+
+                rewrite_paths(handle_ledger_conn, s["new_path"], s["path"])
     return {"ok": True, "restored": restored}
