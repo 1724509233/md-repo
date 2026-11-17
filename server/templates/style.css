@@ -198,7 +198,13 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #editor::placeholder { color: var(--ink-soft); opacity: .6; }
 
 /* 预览排版（衬线正文） */
-#preview { font-family: 'Source Serif 4', serif; font-size: 16px; line-height: 1.75; color: var(--ink); }
+#preview { font-family: 'Source Serif 4', serif; font-size: 16px; line-height: 1.75; color: var(--ink); position: relative; /* ✎ 定位锚（spec 2026-11-17） */ }
+/* sticky 选中块（spec 2026-11-17）：outline 不改布局 */
+.md-sel-block { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
+/* 块落位 ✎：隐藏态 pointer-events:none，class 切 opacity（display 切换会杀淡变） */
+#block-edit-btn { position: absolute; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-soft); font-size: 14px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
+#block-edit-btn.on { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { #block-edit-btn { transition: none; } }
 #preview h1 { font-size: 28px; font-weight: 700; line-height: 1.3; margin: 2rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid color-mix(in srgb, var(--brass) 45%, transparent); }
 #preview h2 { font-size: 20px; font-weight: 600; line-height: 1.4; margin: 1.5rem 0 .75rem; }
 #preview h3 { font-size: 17px; font-weight: 600; line-height: 1.4; margin: 1.25rem 0 .5rem; }

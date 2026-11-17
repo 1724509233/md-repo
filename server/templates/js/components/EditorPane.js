@@ -14,6 +14,9 @@ export const EditorPane = {
   setup(props, { emit }) {
     const editorEl = ref(null)
     const previewEl = ref(null)
+    const previewHtmlEl = ref(null) // v-html 内层（✎ 与映射层分离，spec 2026-11-17 §3.1）
+    const ebtnEl = ref(null)
+    const ebtnOn = ref(false)
     const docWrapEl = ref(null)
     const state = inject('state', null)
 
@@ -46,11 +49,11 @@ export const EditorPane = {
     // 不依赖当前模式——编辑后切回预览时 v-html 已替换预览 DOM、旧映射属性丢失，须重写，否则落位缺失。
     async function refreshPreview() {
       clearBlockSel() // 重渲染即 v-html 重建，sticky 选中随之作废（spec 2026-11-17 §3.2）
-      if (!previewEl.value) return
+      if (!previewEl.value || !previewHtmlEl.value) return
       await nextTick()
-      if (!previewEl.value) return
-      postProcessPreview(previewEl.value)
-      writeSrcLineMapping(previewEl.value, localContent.value, renderOpts())
+      if (!previewEl.value || !previewHtmlEl.value) return
+      postProcessPreview(previewHtmlEl.value)
+      writeSrcLineMapping(previewHtmlEl.value, localContent.value, renderOpts())
     }
 
     // 内容变更 = 映射重建不变量（spec §3.2）：渲染对变更不可见时（插入/删除空行、强调记号互换等）
@@ -260,12 +263,41 @@ export const EditorPane = {
     function applyBlockSel(el) {
       if (selEl && selEl !== el) selEl.classList.remove('md-sel-block')
       selEl = el
-      if (el) el.classList.add('md-sel-block')
+      if (el) {
+        el.classList.add('md-sel-block')
+        positionEditBtn(el)
+        ebtnOn.value = true
+      }
     }
     function clearBlockSel() {
       if (selEl) selEl.classList.remove('md-sel-block')
       selEl = null
       landingSel.value = null
+      ebtnOn.value = false
+    }
+
+    // ✎ 定位：offsetTop/offsetLeft 的 offsetParent 即 #preview（内层 static 透明）；
+    // 代码块让位复制钮——落其左侧并排不叠（spec §3.3）
+    function positionEditBtn(el) {
+      const btn = ebtnEl.value
+      const stage = previewHtmlEl.value
+      if (!btn || !stage) return
+      let right = Math.max(0, stage.clientWidth - el.offsetLeft - el.offsetWidth + 4)
+      const copyBtn = el.querySelector ? el.querySelector('.code-copy-btn') : null
+      if (copyBtn) right += (copyBtn.offsetWidth || 44) + 8
+      btn.style.top = Math.max(0, el.offsetTop - 30) + 'px'
+      btn.style.right = right + 'px'
+    }
+
+    function onEditBtnClick() {
+      const s = landingSel.value
+      if (!s || !s.el || !s.el.isConnected) return clearBlockSel() // el 失效竞态 → 静默作废（spec §5）
+      if (s.isCell && s.td && s.td.isConnected) {
+        landCell(s.td)
+      } else {
+        landOn(+s.el.dataset.srcLine, +s.el.dataset.srcLineEnd)
+      }
+      clearBlockSel()
     }
 
     // 操作意图而非编辑意图 → 不落位不进选中（2026-11-09 定稿豁免全集继承 + ✎ 自身；
@@ -296,8 +328,9 @@ export const EditorPane = {
         if (Date.now() - downPt.t > TAP_MAX_MS || moved > TAP_MAX_DX) return
         const b = e.target.closest('[data-src-line]')
         if (!b) { clearBlockSel(); return } // 点空白 = 取消选中
+        const tdEl = e.target.closest('td, th')
         applyBlockSel(b)
-        landingSel.value = { el: b, isCell: !!b.closest('td, th') }
+        landingSel.value = { el: b, isCell: !!tdEl, td: tdEl }
         return
       }
       // 触摸后的合成鼠标事件屏蔽（双触发防护）
@@ -313,7 +346,7 @@ export const EditorPane = {
         const sF = fEl && fEl.closest ? fEl.closest('[data-src-line]') : null
         let l1 = null, l2 = null
         if (sA && sF) {
-          const all = Array.from(previewEl.value.querySelectorAll('[data-src-line]'))
+          const all = Array.from(previewHtmlEl.value.querySelectorAll('[data-src-line]'))
           let i = all.indexOf(sA), j = all.indexOf(sF)
           if (i > j) { const tmp = i; i = j; j = tmp }
           let mn = Infinity, mx = -Infinity
@@ -333,8 +366,9 @@ export const EditorPane = {
       // 空选区单击 → sticky 选中（不再落位；执行入口 = ✎ 或双击）
       const b = e.target.closest('[data-src-line]')
       if (!b) { clearBlockSel(); return }
+      const tdEl = e.target.closest('td, th')
       applyBlockSel(b)
-      landingSel.value = { el: b, isCell: !!b.closest('td, th') }
+      landingSel.value = { el: b, isCell: !!tdEl, td: tdEl }
     }
 
     function onPreviewDblClick(e) {
@@ -381,7 +415,7 @@ export const EditorPane = {
       done()
     }
 
-    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, triggerPageTurn, getScrollerEl }
+    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, triggerPageTurn, getScrollerEl }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
@@ -391,8 +425,11 @@ export const EditorPane = {
         placeholder="从左侧选择一个文档..."
         @input="onInput"></textarea>
       <div id="preview" ref="previewEl" v-show="mode === 'preview'"
-        class="w-full flex-1" v-html="renderedHtml" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"
-        @dblclick="onPreviewDblClick"></div>
+        class="w-full flex-1" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"
+        @dblclick="onPreviewDblClick">
+        <div ref="previewHtmlEl" v-html="renderedHtml"></div>
+        <button id="block-edit-btn" ref="ebtnEl" :class="{ on: ebtnOn }" aria-label="编辑此块" @click="onEditBtnClick">✎</button>
+      </div>
     </div>
   `
 }

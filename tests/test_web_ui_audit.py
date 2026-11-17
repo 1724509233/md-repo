@@ -251,3 +251,16 @@ def test_preview_landing_trigger_pins():
     assert "#block-edit-btn" in ep               # 豁免清单含 ✎ 自身（Task 2 前先在 exempt 里钉名）
     m = re.search(r"function onPreviewPointerUp\(e\) \{(.+?)\n    \}\n", ep, re.S)
     assert m and "isCollapsed" in m.group(1)[: m.group(1).index("landOn")]
+
+
+def test_block_edit_btn_and_sel_visual():
+    # spec 2026-11-17 §3.1/§4：✎ 浮动按钮 + sticky 选中视觉 + 竞态防护
+    ep = _templates()["EditorPane.js"]
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert 'id="block-edit-btn"' in ep
+    assert "isConnected" in ep                      # land 前 el 失效竞态防护（spec §5）
+    assert re.search(r"#preview\s*\{[^}]*position:\s*relative", css), \
+        "✎ 绝对定位锚 = #preview 显式 relative"
+    assert ".md-sel-block" in css and "#block-edit-btn" in css
+    seg = css.split("#block-edit-btn", 1)[1][:600]
+    assert "prefers-reduced-motion" in css or "reduced-motion" in seg  # 淡变动效须可关
