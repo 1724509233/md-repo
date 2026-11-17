@@ -48,6 +48,13 @@ def _evict_stale_agents(
         lock = locks.get(sid)
         if lock is not None and lock.locked():
             continue
+        # Final review F-R1: a pending ask confirmation lives only in the
+        # Agent's memory (_pending_confirms is not rebuilt from the persisted
+        # session) — evicting that agent would 404 the user's later
+        # /api/agent/confirm and force a re-ask. Same protection class as
+        # the in-flight lock check.
+        if getattr(cache.get(sid), "pending_confirms", None):
+            continue
         if now - last_active.get(sid, 0.0) <= ttl:
             continue
         cache.pop(sid, None)

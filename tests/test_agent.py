@@ -1620,3 +1620,21 @@ def test_evict_stale_agents_default_ttl_and_now():
     evicted = _evict_stale_agents(cache, last_active, {})
     assert evicted == ["old"]
     assert "new" in cache
+
+
+def test_evict_stale_agents_keeps_pending_confirms():
+    # 终审 F-R1：挂起的 ask 确认只活在内存（_pending_confirms 不随会话
+    # 持久化重建）——带 pending 确认的 Agent 不得被 TTL 淘汰，否则用户
+    # 30 分钟后回来 confirm 直接 404，必须重新下发指令。
+    from types import SimpleNamespace
+
+    from server.routes.agent import _evict_stale_agents
+
+    pending = SimpleNamespace(pending_confirms={"tc1": {}})
+    plain = object()
+    cache = {"pending": pending, "plain": plain}
+    last_active = {"pending": 0.0, "plain": 0.0}
+    evicted = _evict_stale_agents(cache, last_active, {}, ttl=1800, now=2000.0)
+    assert evicted == ["plain"]
+    assert cache == {"pending": pending}
+    assert "pending" in last_active
