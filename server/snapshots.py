@@ -568,7 +568,15 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
         handle_ledger_conn = get_ledger_conn()
         for s in move_snaps:
             if index_conn is not None:
-                update_references_batch(index_conn, vault, [(s["new_path"], s["path"])])
+                # G1-grade referrer lookup (_referrers = edges first +
+                # unconditional content-scan fallback): the referrer→new
+                # edges do not exist until the watcher processes the
+                # move-time rewrite, and the edges lookup inside
+                # update_references_batch cannot fall back once the table
+                # holds unrelated edges (review F-1).
+                update_references_batch(
+                    index_conn, vault, [(s["new_path"], s["path"])],
+                    src_paths=_referrers(index_conn, vault, s["new_path"]))
             if handle_ledger_conn is not None:
                 from .vault.db.relatedness import rewrite_paths
 

@@ -272,10 +272,18 @@ def register(app, ctx) -> None:
             # skip so the watcher books nothing).
             for s in snap_mod.by_call(ctx.ledger_conn, call_id):
                 if s["op"] == "create":
-                    ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "deleted", "web")
+                    # F-2 (final review): the pre-delete hash is the rolled-
+                    # back content's hash (== the finalized snapshot's
+                    # post_hash, guaranteed non-empty by verify) — spec §2
+                    # requires EVERY deletion entry point to book it, or the
+                    # sync gate treats a client's rewritten copy as an
+                    # external delete and pulls over the user's edit.
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "deleted",
+                                  "web", pre_hash=s["post_hash"])
                 elif s["op"] == "move":
                     ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "restore", "web")
-                    ledger.record(ctx.db_conn, ctx.vault_dir, s["new_path"], "deleted", "web")
+                    ledger.record(ctx.db_conn, ctx.vault_dir, s["new_path"], "deleted",
+                                  "web", pre_hash=s["post_hash"])
                 else:
                     ledger.record(ctx.db_conn, ctx.vault_dir, s["path"], "restore", "web")
         return {"ok": True, "restored": result["restored"]}

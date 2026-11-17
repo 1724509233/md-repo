@@ -593,6 +593,13 @@ def test_rollback_route_books_delete_for_create_op(client, vault_dir, db_conn,
         "SELECT path, op, source FROM change_log")}
     assert ("notes/created.md", "delete", "web") in rows
     assert ("notes/created.md", "restore", "web") not in rows
+    # F-2（终审）：delete 记账必须携带 pre_hash（spec §2 不变量）——被回滚的
+    # create 内容哈希 = 快照的 post_hash；缺了它，客户端的本地改写副本会被
+    # sync 门的 "" 外部删除语义误删（用户编辑丢失）。
+    pre = db_conn.execute(
+        "SELECT pre_hash FROM change_log WHERE path='notes/created.md'"
+    ).fetchone()[0]
+    assert pre == snap_mod.hash_bytes(b"new content")
     # 恰好一行：skip 标记压制后续 watcher 事件
     simulate_consumer(db_conn, vault_dir, "notes/created.md", "deleted")
     assert db_conn.execute(
@@ -653,3 +660,58 @@ def test_rollback_move_reverses_refs_and_relatedness(vault_dir, db_conn, ledger_
     assert b"[[notes/a.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()
     assert ledger_conn.execute(
         "SELECT source FROM relatedness").fetchone()["source"] == "notes/a.md"
+
+
+def test_rollback_move_refs_reversal_survives_nonempty_edges(vault_dir, db_conn,
+                                                             ledger_conn):
+    # F-1（终审，blocking）：真实 vault 的 edges 表非空——rollback 时
+    # referrer→new 边尚未建（watcher 未跑或事件丢失），edges 查找返回空且
+    # 不触发 fallback（fallback 只在整表空时触发）→ refs 逆转静默 no-op。
+    # 修复后走 G1 级 _referrers（edges 优先 + 无条件内容扫描兜底）。
+    from server import ledger, snapshots as snap_mod
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"a content")
+    (vault_dir / "notes" / "referrer.md").write_bytes(b"see [[notes/a.md]] here")
+    # hub 链接 referrer：制造一条在 move 中幸存的边（referrer 实体不被
+    # move 触碰），把 edges 表撑成非空（模拟任何真实 vault）。
+    (vault_dir / "notes" / "hub.md").write_bytes(b"hub links [[notes/referrer.md]]")
+    ledger.record(db_conn, vault_dir, "notes/a.md", "created", "agent")
+    ledger.record(db_conn, vault_dir, "notes/referrer.md", "created", "agent")
+    ledger.record(db_conn, vault_dir, "notes/hub.md", "created", "agent")
+    assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] >= 2
+
+    snap = snap_mod.capture(ledger_conn, vault_dir, "notes/a.md", "move", "agent",
+                            new_path="notes/b.md")
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
+                  from_path="notes/a.md")
+    snap_mod.finalize(ledger_conn, snap,
+                      snap_mod.hash_bytes((vault_dir / "notes" / "b.md").read_bytes()))
+    assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] > 0
+
+    result = snap_mod.rollback(ledger_conn, vault_dir, snap["call_id"])
+    assert result["ok"]
+    assert b"[[notes/a.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()
+
+
+def test_move_refs_rewrite_survives_nonempty_edges(vault_dir, db_conn, ledger_conn):
+    # F-1 同根因（主干既有，调试实证）：apply_change 的 moved 分支把
+    # _update_references 跑在 graph_delete_file(from) 之后——referrer→旧
+    # 边已被删，edges 表非空时查找返回空且 fallback 不触发 → 真实 vault
+    # 上 move 的引用改写静默失效。修复 = 改写移到图删除之前。
+    from server import ledger
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    (vault_dir / "notes" / "a.md").write_bytes(b"a content")
+    (vault_dir / "notes" / "referrer.md").write_bytes(b"see [[notes/a.md]] here")
+    (vault_dir / "notes" / "hub.md").write_bytes(b"hub links [[notes/referrer.md]]")
+    ledger.record(db_conn, vault_dir, "notes/a.md", "created", "agent")
+    ledger.record(db_conn, vault_dir, "notes/referrer.md", "created", "agent")
+    ledger.record(db_conn, vault_dir, "notes/hub.md", "created", "agent")
+    assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] >= 2
+
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
+                  from_path="notes/a.md")
+    assert b"[[notes/b.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()

@@ -166,6 +166,14 @@ def apply_change(
             if old_hash and old_hash != digest:
                 log_change(conn, path, "modified", source=source, new_hash=digest,
                            batch_id=batch_id)
+            # Rewrite references BEFORE graph_delete_file removes the
+            # referrer→old edges (review F-1 root cause, main-branch bug
+            # found during the fix pass): _update_references' edges lookup
+            # cannot fall back to a content scan once the table holds
+            # unrelated edges — running it after the graph deletion made
+            # move-time rewriting a silent no-op on any real vault.
+            if from_path and update_refs:
+                _update_references(conn, vault_dir, from_path, path)
             if from_path and not _is_index_excluded(from_path):
                 delete_segments(conn, from_path)
                 graph_delete_file(conn, from_path)
@@ -189,9 +197,6 @@ def apply_change(
                 ledger_conn = get_ledger_conn()
                 if ledger_conn is not None:
                     rewrite_paths(ledger_conn, from_path, path)
-            # Rewrite references in other docs so links survive the rename.
-            if from_path and update_refs:
-                _update_references(conn, vault_dir, from_path, path)
 
     # Event wakeup (after the change_log row is committed by log_change).
     # Publisher-side filter (registered at startup) drops self/excluded
