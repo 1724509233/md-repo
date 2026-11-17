@@ -17,10 +17,13 @@ def safe_rel_path(raw: str) -> Path | None:
     """Shared vault-path guard. Returns None if the path is unsafe.
 
     Normalizes backslashes to forward slashes (vault-relative). Rejects
-    empty paths, leading ``/``, any ``..`` / empty path part, and a first
-    segment of ``.trash`` (trash batch store — the web routes must never
-    touch it directly, P4-4) or ``.sync`` (machine area — bug 0eac2e40,
-    landed in the same batch).
+    empty paths, leading ``/``, any ``..`` / empty path part, any
+    drive-qualified start (``^[A-Za-z]:``, drive-relative forms like
+    ``c:x.md`` included — a win32 pathlib join with a drive-qualified
+    argument discards or swaps the vault base), and a first segment of
+    ``.trash`` (trash batch store — the web routes must never touch it
+    directly, P4-4) or ``.sync`` (machine area — bug 0eac2e40, landed
+    in the same batch).
     """
     raw = raw.replace("\\", "/")
     if not raw or raw.startswith("/"):

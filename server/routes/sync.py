@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..vault.db.file_index import get_all_files
-from ..sync import compare_files
+from ..sync import compare_files, derive_deleted_hashes
 
 
 def register(app, ctx) -> None:
@@ -42,7 +42,10 @@ def register(app, ctx) -> None:
             # The replay resolves move chains: a client-held pre-move copy of
             # a moved-then-deleted file is caught (review F3). "" values =
             # external deletes with no pre-hash, treated as stale copies.
-            from ..sync import derive_deleted_hashes
+            # Paths still alive on the server skip the deletion gate —
+            # enforced in compare_files itself (a to_push path present
+            # in the server manifest is not checked against
+            # deleted_hashes).
 
             replay_rows = ctx.db_conn.execute(
                 "SELECT op, path, old_path, pre_hash FROM change_log "
