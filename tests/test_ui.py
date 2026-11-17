@@ -123,15 +123,15 @@ def test_utils_markdown_exports():
 
 
 def test_editor_td_branch_guards_selection_and_localcontent_watch():
-    """F1/F8：onPreviewMouseUp 的 td 分支格级分流须先判选区为空（spec §2.2「点击 cell = mouseup 无文本选区」）。
+    """F1/F8（2026-11-17 触发重构后口径）：onPreviewDblClick 的 cell 分流须先判选区为空。
 
-    旧实现在 td 命中时无条件 removeAllRanges + landCell 吞掉一切手势，跨块框选释放点落在
-    cell 上、格内拖选本应走框选/整表流程——断言 isCollapsed 选区守卫出现在 onPreviewMouseUp
-    函数体内（含 landCell 调用前的 cell 命中分支）。
+    格级落位只兜「空选区双击」场景（词选非空的双击已由 pointerup 框选路径落位，spec
+    2026-11-17 §3.2 双路合流）——isCollapsed 选区守卫必须先于 landCell，否则双击兜底
+    会吞掉带选区手势。断言形状承袭旧 F1：守卫出现在函数体内 landCell 调用之前。
     """
     js = read_js("components/EditorPane.js")
-    m = re.search(r"function onPreviewMouseUp\(e\) \{(.+?)\n    \}\n", js, re.S)
-    assert m, "missing onPreviewMouseUp in EditorPane.js"
+    m = re.search(r"function onPreviewDblClick\(e\) \{(.+?)\n    \}\n", js, re.S)
+    assert m, "missing onPreviewDblClick in EditorPane.js"
     fn = m.group(1)
     assert "landCell" in fn, "td branch must dispatch to landCell"
     head = fn[: fn.index("landCell")]

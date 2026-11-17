@@ -234,3 +234,20 @@ def test_anchorless_link_jump_forces_preview_top():
     assert "if (fromLink && !heading) state.previewMode = true" in app
     assert "else if (fromLink)" in app
     assert "openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)" in app
+
+
+def test_preview_landing_trigger_pins():
+    # spec 2026-11-17：单击空选区不落位；指针分流 + 双击 + 触摸旗标 + 常量
+    ep = _templates()["EditorPane.js"]
+    assert "onPreviewMouseUp" not in ep          # 旧委托整体退场
+    assert '@mouseup="onPreviewMouseUp"' not in ep
+    assert "function onPreviewPointerUp(e)" in ep
+    assert "function onPreviewDblClick(e)" in ep
+    assert "pointerType === 'touch'" in ep or 'pointerType === "touch"' in ep
+    assert ep.index("lastTouchAt") < ep.index("function onPreviewDblClick"), \
+        "dblclick 路径首行必须过 lastTouchAt 旗标（屏蔽触摸双击选词）"
+    for c in ("TAP_MAX_MS = 350", "TAP_MAX_DX = 10", "TOUCH_MOUSE_GUARD_MS = 800"):
+        assert c in ep
+    assert "#block-edit-btn" in ep               # 豁免清单含 ✎ 自身（Task 2 前先在 exempt 里钉名）
+    m = re.search(r"function onPreviewPointerUp\(e\) \{(.+?)\n    \}\n", ep, re.S)
+    assert m and "isCollapsed" in m.group(1)[: m.group(1).index("landOn")]
