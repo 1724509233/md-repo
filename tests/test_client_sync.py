@@ -56,9 +56,11 @@ def test_scan_local_files_excludes_trash_and_sync(tmp_path: Path):
     (vault / "notes").mkdir(parents=True)
     (vault / ".trash" / "20261110T120000Z-a1b2c3d4" / "notes").mkdir(parents=True)
     (vault / ".sync" / "logs").mkdir(parents=True)
+    (vault / ".obsidian" / "plugins" / "p").mkdir(parents=True)
     (vault / "notes" / "live.md").write_bytes(b"live")
     (vault / ".trash" / "20261110T120000Z-a1b2c3d4" / "notes" / "old.md").write_bytes(b"old")
     (vault / ".sync" / "state.md").write_bytes(b"state")
+    (vault / ".obsidian" / "plugins" / "p" / "note.md").write_bytes(b"obsidian")
     scanned = scan_local_files(vault)
     assert scanned == {"notes/live.md": hashlib.sha256(b"live").hexdigest()}
 

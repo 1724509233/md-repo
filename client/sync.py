@@ -79,7 +79,8 @@ def _setup_logging(log_path: Path) -> logging.Logger:
 
 
 def scan_local_files(vault_dir: Path) -> dict[str, str]:
-    """Walk vault_dir for .md files (skipping .sync/ and .trash/) and hash them.
+    """Walk vault_dir for .md files (skipping .sync/, .trash/ and .obsidian/)
+    and hash them.
 
     Returns {relative_path_with_forward_slashes: sha256_hash}.
     """
@@ -87,7 +88,7 @@ def scan_local_files(vault_dir: Path) -> dict[str, str]:
     if not vault_dir.is_dir():
         return result
     for f in vault_dir.rglob("*.md"):
-        if ".sync" in f.parts or ".trash" in f.parts:
+        if ".sync" in f.parts or ".trash" in f.parts or ".obsidian" in f.parts:
             continue
         try:
             content = f.read_bytes()
