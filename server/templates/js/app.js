@@ -2,6 +2,7 @@
 const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
+import { docHash, parseHash } from './utils/vaultLinks.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
 import { FileTree } from './components/FileTree.js'
@@ -403,6 +404,14 @@ async function handleToolResult(evt) {
   }
 }
 
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档
+function applyInitialHash() {
+  const h = parseHash(location.hash)
+  if (!h) return
+  if (h.mode === 'edit') state.previewMode = false
+  openDoc(h.path)
+}
+
 // ─── AI 新会话 ───
 async function startNewSession() {
   try {
@@ -656,8 +665,22 @@ export function createApp() {
         }
       )
 
+      // URL 状态同步（P1-4）：当前文档 + 编辑态进 hash；
+      // replaceState 不产历史垃圾，前进/后退由 hashchange 兜底（markdown 软链 #doc/ 跳转同走此路）
+      watch([() => state.currentPath, () => state.previewMode], ([p, preview]) => {
+        if (!p) return
+        const url = docHash(p, { edit: !preview })
+        if (location.hash !== url) history.replaceState(null, '', url)
+      })
+      window.addEventListener('hashchange', () => {
+        const h = parseHash(location.hash)
+        if (!h) return
+        if (h.path !== state.currentPath) openDoc(h.path)
+        if (!state.monitoring) state.previewMode = h.mode !== 'edit'
+      })
+
       onMounted(() => {
-        loadDocs()
+        loadDocs().then(applyInitialHash)
         loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
         // 通知 + 记忆共用一个 30s 定时器：同周期串行触发两次取数（合并前为两个独立 30s 定时器）

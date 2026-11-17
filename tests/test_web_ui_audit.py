@@ -73,3 +73,17 @@ def test_escape_and_menu_semantics():
     assert "initMenuNav" in t["TopBar.js"] and "initMenuNav" in t["FileTree.js"]
     assert "initMenuNav" in t["TrashPanel.js"]
     assert "Escape" in t["SearchPanel.js"]
+
+
+def test_hash_state_sync_wired():
+    src = _templates()["app.js"]
+    for token in ("docHash", "parseHash", "hashchange", "replaceState"):
+        assert token in src, token
+    vl = (TPL / "js/utils/vaultLinks.js").read_text(encoding="utf-8")
+    assert "export function docHash" in vl and "export function parseHash" in vl
+    assert "encodeURIComponent" in vl and "decodeURIComponent" in vl
+
+
+def test_file_tree_rows_are_links():
+    ft = _templates()["FileTree.js"]
+    assert "docHash(" in ft and ":href" in ft

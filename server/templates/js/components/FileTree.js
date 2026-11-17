@@ -2,6 +2,7 @@
 const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount, nextTick } = Vue
 import { ICONS } from '../utils/icons.js'
 import { initMenuNav } from '../utils/menuNav.js'
+import { docHash } from '../utils/vaultLinks.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 
@@ -101,11 +102,10 @@ const TreeNode = {
 
       <!-- 文件 -->
       <div v-for="f in node.files" :key="f.path" class="group">
-        <div class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
+        <a class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
+          :href="docHash(f.path)"
           :class="{ active: f.path === currentPath }"
-          role="button" tabindex="0"
-          @click="$emit('select', f.path)"
-          @keydown.enter.prevent="$emit('select', f.path)"
+          @click.prevent="$emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
           @dragstart="treeOps.onDragStart($event, f.path, false)"
@@ -119,7 +119,7 @@ const TreeNode = {
             @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
-        </div>
+        </a>
       </div>
     </div>
   `
@@ -538,6 +538,7 @@ export const FileTree = {
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
       moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
+      docHash,
       expandToPath, revealActive, collapseAll
     }
   },

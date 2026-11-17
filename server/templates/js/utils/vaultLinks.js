@@ -202,3 +202,20 @@ export function wikilinkToMd(text) {
   }
   return out.join('\n')
 }
+
+// ─── URL 深链（P1-4）：#doc/<encodeURIComponent(path)>[?mode=edit] ───
+// 中文/空格/# 经 encodeURIComponent 往返无损；预览为缺省，仅 edit 进 URL；
+// 面板开关（AI/记忆/监控）是会话瞬态，不进 URL（YAGNI）。
+export function docHash(path, { edit = false } = {}) {
+  return '#doc/' + encodeURIComponent(path) + (edit ? '?mode=edit' : '')
+}
+
+export function parseHash(hash) {
+  if (!hash || !hash.startsWith('#doc/')) return null
+  const qIdx = hash.indexOf('?')
+  const raw = qIdx === -1 ? hash.slice(5) : hash.slice(5, qIdx)
+  let path
+  try { path = decodeURIComponent(raw) } catch { return null }
+  const mode = qIdx !== -1 && hash.slice(qIdx + 1).includes('mode=edit') ? 'edit' : 'preview'
+  return path ? { path, mode } : null
+}
