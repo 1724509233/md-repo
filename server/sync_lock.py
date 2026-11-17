@@ -80,6 +80,15 @@ class SyncLock:
         self.locked_at = None
         if self.lock_path is None:
             return
+        pid = self._read_pid()
+        if pid is not None and pid != os.getpid():
+            # Held past _TIMEOUT: our lock went stale and a take-over-er
+            # rewrote the file with THEIR pid — release must not delete
+            # another process's live lock.
+            return
+        # pid == ours (the normal release) or the content is absent/
+        # unparseable (fail-open: same stale semantics as _read_ts —
+        # garbage is ours to clean, it cannot be trusted as a live lock).
         try:
             self.lock_path.unlink()
         except FileNotFoundError:
@@ -87,6 +96,32 @@ class SyncLock:
             # release after our own lock went stale and another process
             # took it over finds it already gone (or gone again).
             pass
+
+    def _read_pid(self) -> int | None:
+        """The lock file holder's pid, or None if absent/unparseable.
+
+        Same tolerance as :meth:`_read_ts` — unreadable, empty, or
+        non-timestamp content returns None (the caller treats that as
+        fail-open cleanup, matching the stale/take-over semantics rather
+        than trusting garbage bytes as a live foreign lock).
+        """
+        try:
+            content = self.lock_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return None
+        if not content:
+            return None
+        try:
+            float(content.split()[0])
+        except ValueError:
+            return None
+        for token in content.split()[1:]:
+            if token.startswith("pid="):
+                try:
+                    return int(token[4:])
+                except ValueError:
+                    return None
+        return None
 
     def _create(self) -> bool:
         """Atomically create the lock file and write the timestamp.
