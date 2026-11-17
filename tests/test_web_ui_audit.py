@@ -176,3 +176,11 @@ def test_final_review_fixes():
     md = (TPL / "js/utils/markdown.js").read_text(encoding="utf-8")
     assert 'aria-disabled="true"' in md
     assert "docHash(" in md
+
+
+def test_mobile_editor_font_16px():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    m = re.search(r"#editor\s*{\s*font-size:\s*16px", css)
+    assert m, "移动端 #editor 需 ≥16px：iOS 对 <16px 输入框聚焦自动缩放 → 整页偏移且不可滚回"
+    # 规则必须位于移动媒体查询内（桌面保持 14px 密度）
+    assert css.find("@media (max-width: 1023px)") < m.start()

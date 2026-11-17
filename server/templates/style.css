@@ -284,6 +284,10 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
   #ai-btn-mobile.open { transform: translateY(calc(-80vh + 1.25rem - 4px)); }
   #ai-btn-mobile #ai-chevron { transform: rotate(0deg); }
   #ai-btn-mobile.open #ai-chevron { transform: rotate(180deg); }
+  /* iOS 聚焦缩放红线：输入框 <16px 会触发自动缩放，在 overflow-hidden 应用壳内
+     造成整页偏移/顶部被遮/无法滚回（body 不可滚，偏移在 visualViewport 层）。
+     桌面保持 14px 编辑密度，仅移动抬到 16px（全项目其余输入框均继承 16px 无此患）。 */
+  #editor { font-size: 16px; }
 }
 #ai-sheet-handle { display: none; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
 #ai-sheet-handle:active { cursor: grabbing; }
