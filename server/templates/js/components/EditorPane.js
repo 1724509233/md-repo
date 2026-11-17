@@ -371,6 +371,27 @@ export const EditorPane = {
       landingSel.value = { el: b, isCell: !!tdEl, td: tdEl }
     }
 
+    // 桌面 hover 瞬时预览（spec §3.2）：不产生 sticky；sticky 优先——已有选中块时 hover 不移动 ✎
+    let hoverOutTimer = null
+    function onPreviewHoverIn(e) {
+      if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return
+      if (!e.target.closest) return
+      if (exemptTarget(e.target)) return
+      if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null } // 块内/跨块移动不闪断
+      if (landingSel.value) return
+      const b = e.target.closest('[data-src-line]')
+      if (!b) return
+      applyBlockSel(b) // 仅视觉（landingSel 保持 null）
+    }
+    function onPreviewHoverOut(e) {
+      if (e && e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#block-edit-btn')) return // 移入 ✎ 本体不收
+      if (hoverOutTimer) clearTimeout(hoverOutTimer)
+      hoverOutTimer = setTimeout(() => {
+        hoverOutTimer = null
+        if (!landingSel.value) clearBlockSel()
+      }, 120)
+    }
+
     function onPreviewDblClick(e) {
       if (!state || props.mode !== 'preview') return
       if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return // 触摸双击选词归原生
@@ -415,7 +436,7 @@ export const EditorPane = {
       done()
     }
 
-    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, triggerPageTurn, getScrollerEl }
+    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
@@ -426,7 +447,7 @@ export const EditorPane = {
         @input="onInput"></textarea>
       <div id="preview" ref="previewEl" v-show="mode === 'preview'"
         class="w-full flex-1" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"
-        @dblclick="onPreviewDblClick">
+        @dblclick="onPreviewDblClick" @mouseover="onPreviewHoverIn" @mouseout="onPreviewHoverOut">
         <div ref="previewHtmlEl" v-html="renderedHtml"></div>
         <button id="block-edit-btn" ref="ebtnEl" :class="{ on: ebtnOn }" aria-label="编辑此块" @click="onEditBtnClick">✎</button>
       </div>

@@ -264,3 +264,14 @@ def test_block_edit_btn_and_sel_visual():
     assert ".md-sel-block" in css and "#block-edit-btn" in css
     seg = css.split("#block-edit-btn", 1)[1][:600]
     assert "prefers-reduced-motion" in css or "reduced-motion" in seg  # 淡变动效须可关
+
+
+def test_hover_preview_desktop_only():
+    # spec 2026-11-17 §3.2：桌面 hover 瞬时预览；sticky 优先；延迟收起防闪断
+    ep = _templates()["EditorPane.js"]
+    assert '@mouseover="onPreviewHoverIn"' in ep and '@mouseout="onPreviewHoverOut"' in ep
+    m = re.search(r"function onPreviewHoverOut\(\w*\) \{(.+?)\n    \}\n", ep, re.S)
+    assert m and "setTimeout" in m.group(1)
+    m2 = re.search(r"function onPreviewHoverIn\(e\) \{(.+?)\n    \}\n", ep, re.S)
+    assert m2 and "landingSel" in m2.group(1)
+    assert "clearTimeout" in ep
