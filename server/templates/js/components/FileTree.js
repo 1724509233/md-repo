@@ -84,7 +84,7 @@ const TreeNode = {
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
               @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
-            <span v-else class="font-medium">{{ name }}</span>
+            <span v-else class="font-medium flex-1 min-w-0 truncate">{{ name }}</span>
             <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
               @click.stop="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">

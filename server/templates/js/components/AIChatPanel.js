@@ -551,7 +551,7 @@ export const AIChatPanel = {
           class="msg-in flex" :class="{ 'justify-end': msg.role === 'user' }">
           <!-- 用户消息 -->
           <div v-if="msg.role === 'user'"
-            class="msg-user max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md text-sm">
+            class="msg-user max-w-[80%] px-3.5 py-2.5 rounded-2xl rounded-br-md text-sm break-words whitespace-pre-wrap">
             {{ msg.blocks[0] ? msg.blocks[0].text : '' }}
           </div>
           <!-- AI 消息 -->

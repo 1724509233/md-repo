@@ -112,3 +112,14 @@ def test_toast_channel():
     src = (TPL / "js/utils/toast.js").read_text(encoding="utf-8")
     assert "setAttribute('role', 'alert')" in src
     assert "app-toast" in src and "setTimeout" in src
+
+
+def test_robustness_microfixes():
+    mp = _templates()["MonitorPage.js"]
+    ai = _templates()["AIChatPanel.js"]
+    ft = _templates()["FileTree.js"]
+    assert "$index" not in mp
+    assert "docs?.length" in mp
+    assert "break-words" in ai.split("msg-user")[1][:200]
+    dir_name_lines = [l for l in ft.splitlines() if "{{ name }}" in l]
+    assert any("min-w-0" in l and "truncate" in l for l in dir_name_lines)

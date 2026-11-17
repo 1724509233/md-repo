@@ -517,7 +517,7 @@ export const MonitorPage = {
                         <table>
                           <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th title="加权 = 每次命中按 0.5^(距今天数/30) 累加，合成流量不计">加权</th><th>last_hit</th></tr></thead>
                           <tbody>
-                            <tr v-if="!l2Data.docs.length"><td colspan="6">窗口内无召回流量</td></tr>
+                            <tr v-if="!l2Data.docs?.length"><td colspan="6">窗口内无召回流量</td></tr>
                             <tr v-for="d in l2Data.docs" :key="d.path">
                               <td :title="d.path">{{ d.path }}<span class="mm-cnt">human {{ (d.counts && d.counts.human) || 0 }} · on_demand {{ (d.counts && d.counts.on_demand) || 0 }} · synthetic {{ (d.counts && d.counts.synthetic) || 0 }}</span></td>
                               <td>{{ (d.counts && d.counts.human) || 0 }}</td>
@@ -555,7 +555,7 @@ export const MonitorPage = {
           <div class="mcard full mm-card">
             <div class="mc-h"><span class="mc-t">采纳提案</span></div>
             <div v-if="finals.length" class="rev-rows">
-              <div v-for="p in finals" :key="p.relpath + '|' + (p.created || p.id || $index)" class="rev-row">
+              <div v-for="(p, i) in finals" :key="p.relpath + '|' + (p.created || p.id || i)" class="rev-row">
                 <div class="f-meta"><span class="tchip"><span v-html="typeIcons[p.type] || typeIconDefault"></span>{{ p.type || 'unknown' }}</span><span class="rev-time">{{ p.mergedDisp || '—' }}</span></div>
                 <div class="f-title" :title="p.title">{{ p.title }}</div>
               </div>
