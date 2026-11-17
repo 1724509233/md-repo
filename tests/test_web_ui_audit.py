@@ -123,3 +123,18 @@ def test_robustness_microfixes():
     assert "break-words" in ai.split("msg-user")[1][:200]
     dir_name_lines = [l for l in ft.splitlines() if "{{ name }}" in l]
     assert any("min-w-0" in l and "truncate" in l for l in dir_name_lines)
+
+
+def test_keyboard_reachability_cluster():
+    ft = _templates()["FileTree.js"]
+    assert "aria-expanded" in ft
+    assert "e.key === ' '" in ft
+    move_item = ft[ft.index("移动"):][:160]
+    assert "lg:hidden" not in move_item
+    assert 'aria-current' in ft
+    # 文件行/目录行属节点组件——docHash/onDirKeydown 必须在其 setup return（运行时报错的回归钉）
+    node_return = ft.split("return { treeOps,")[1].split("}")[0]
+    assert "onDirKeydown" in node_return and "docHash" in node_return
+    md = (TPL / "js/utils/markdown.js").read_text(encoding="utf-8")
+    assert 'aria-disabled="true"' in md
+    assert "docHash(" in md

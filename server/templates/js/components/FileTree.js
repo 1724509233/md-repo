@@ -46,7 +46,12 @@ const TreeNode = {
       return (props.dirPath ? props.dirPath + '/' : '') + name
     }
 
-    return { treeOps, ICONS_LOCAL, isExpanded, childPath }
+    // 目录行键盘激活（P1-8）：Enter 原生触发 click；Space 手动（role=button 语义要求）
+    function onDirKeydown(e, path) {
+      if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); emit('toggle', path) }
+    }
+
+    return { treeOps, ICONS_LOCAL, isExpanded, childPath, onDirKeydown, docHash }
   },
   template: `
     <div>
@@ -67,8 +72,9 @@ const TreeNode = {
             :data-dir="childPath(name)"
             :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
             role="button" tabindex="0"
+            :aria-expanded="isExpanded(childPath(name)) ? 'true' : 'false'"
             @click="$emit('toggle', childPath(name))"
-            @keydown.enter.prevent="$emit('toggle', childPath(name))"
+            @keydown="onDirKeydown($event, childPath(name))"
             @contextmenu.prevent="treeOps.openMenu($event, childPath(name), true)"
             draggable="true"
             @dragstart="treeOps.onDragStart($event, childPath(name), true)"
@@ -106,6 +112,7 @@ const TreeNode = {
         <a class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
           :href="docHash(f.path)"
           :class="{ active: f.path === currentPath }"
+          :aria-current="f.path === currentPath ? 'page' : undefined"
           @click.prevent="$emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
@@ -627,7 +634,7 @@ export const FileTree = {
             @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
           <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startRename(menu.path, menu.isDir)">重命名</button>
-          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="moveItem()">移动</button>
           <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="confirmDelete()">移入回收站</button>

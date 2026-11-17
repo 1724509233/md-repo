@@ -1,6 +1,6 @@
 /* Markdown 渲染封装：marked + DOMPurify + hljs + mermaid */
 
-import { createLinkContext, resolveVaultLink, wikilinkToMd, WIKILINK_HREF_PREFIX } from './vaultLinks.js'
+import { createLinkContext, resolveVaultLink, wikilinkToMd, WIKILINK_HREF_PREFIX, docHash } from './vaultLinks.js'
 
 let rendererConfigured = false
 
@@ -213,9 +213,9 @@ export function setupMarkdown() {
       const r = resolveVaultLink(dec, ctx)
       if (r.kind === 'live') {
         const a = r.anchor ? ` data-vault-anchor="${escapeHtml(r.anchor)}"` : ''
-        return `<a class="md-softlink" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
+        return `<a class="md-softlink" href="${docHash(r.path)}" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
       }
-      return `<a class="md-softlink-dead" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
+      return `<a class="md-softlink-dead" aria-disabled="true" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
     }
     if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(href || '')) {
       // 外部链接：新 tab 打开（noopener 防 window.opener）
@@ -225,9 +225,9 @@ export function setupMarkdown() {
       const r = resolveVaultLink(href, _activeLinkCtx)
       if (r.kind === 'live') {
         const a = r.anchor ? ` data-vault-anchor="${escapeHtml(r.anchor)}"` : ''
-        return `<a class="md-softlink" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
+        return `<a class="md-softlink" href="${docHash(r.path)}" data-vault-path="${escapeHtml(r.path)}"${a}">${text}</a>`
       }
-      return `<a class="md-softlink-dead" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
+      return `<a class="md-softlink-dead" aria-disabled="true" title="${r.kind === 'ambiguous' ? '存在同名文档，无法定位' : '文档不存在'}">${text}</a>`
     }
     // 无解析上下文：原样渲染（监控页等）
     return `<a href="${escapeHtml(href)}"${t}>${text}</a>`
