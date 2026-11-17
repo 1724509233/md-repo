@@ -33,6 +33,9 @@ def compare_files(
             no recorded pre-hash, treated as stale copies), unless the
             deletion booked a pre-hash and the local copy differs — a
             deliberate local rewrite/recreation that stays in to_push.
+            Paths still alive on the server skip the deletion gate
+            entirely (a live file is not a stale copy of any historical
+            delete — after delete→recreate that path's past is closed).
             The move rule runs first; a path that both a move and a delete
             claim is decided by the move rule.
         baseline: client's last-sync manifest {path: hash}; None = legacy
@@ -102,6 +105,9 @@ def compare_files(
     if deleted_hashes is not None:
         new_to_push = []
         for p in to_push:
+            if p in server:
+                new_to_push.append(p)          # 服务端仍存活：不是陈旧删除副本
+                continue
             pre_hash = deleted_hashes.get(p)
             if pre_hash is None:
                 new_to_push.append(p)          # 无删除记录：普通新文件

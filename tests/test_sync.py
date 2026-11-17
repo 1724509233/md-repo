@@ -358,3 +358,27 @@ def test_delete_gate_over_baseline_composition() -> None:
                             baseline={"a.md": "h0"})
     assert result2["to_push"] == ["a.md"]
     assert result2["to_delete"] == []
+
+
+def test_delete_recreate_restored_old_content_not_deleted() -> None:
+    # 审查 M1：delete→recreate 后，客户端把删除前的旧内容原样恢复。
+    # 三方分类：local ≠ baseline、server == baseline → 进 to_push；本地哈希
+    # 恰好等于历史 delete 行的 pre_hash。服务端仍存活 → 跳过删除门，
+    # 不得误判 to_delete（否则本地被删、下一周期又 to_pull 回来，churn）。
+    result = compare_files(
+        {"a.md": "h-old"},                # 客户端恢复了旧内容
+        {"a.md": "h-new"},                # 服务端 recreate 后的新内容
+        deleted_hashes={"a.md": "h-old"},
+        baseline={"a.md": "h-new"},       # 上次一致的是 recreate 后内容
+    )
+    assert result["to_push"] == ["a.md"]
+    assert result["to_delete"] == []
+    assert result["conflicts"] == []
+    # 对照：同样的 deleted_hashes，服务端不含该路径（真陈旧副本）→
+    # 仍进 to_delete，老行为不回归。
+    result2 = compare_files(
+        {"a.md": "h-old"}, {}, deleted_hashes={"a.md": "h-old"},
+        baseline={"a.md": "h-new"},
+    )
+    assert result2["to_delete"] == ["a.md"]
+    assert result2["to_push"] == []
