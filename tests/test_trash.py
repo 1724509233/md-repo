@@ -134,6 +134,49 @@ def test_partial_move_failure_rolls_back(vault_dir, db_conn, monkeypatch):
     assert get_changes(db_conn) == []
 
 
+def test_move_to_trash_double_failure_keeps_batch(vault_dir, db_conn, monkeypatch):
+    # F12：forward 第 2 个 rename 失败 + 第 1 个文件的 rename-back 也失败
+    # → 旧行为 rmtree 销毁 batch 里仅存的唯一副本；新行为保留 batch 并抛错。
+    import pathlib
+    from server.vault.orchestration import trash
+
+    (vault_dir / "notes").mkdir(exist_ok=True)
+    f1 = vault_dir / "notes" / "one.md"
+    f2 = vault_dir / "notes" / "two.md"
+    f1.write_bytes(b"one")
+    f2.write_bytes(b"two")
+    real_rename = pathlib.Path.rename
+
+    state = {"forward": 0}
+
+    def fake_rename(self, target):
+        if str(target).startswith(str(trash.trash_root(vault_dir))):
+            state["forward"] += 1
+            if state["forward"] >= 2:  # forward 第 2 个失败
+                raise OSError("disk full (forward #2)")
+            return real_rename(self, target)
+        # rename-back 阶段：one.md 的回滚也失败
+        if self.name == "one.md":
+            raise OSError("disk full (rename-back)")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(pathlib.Path, "rename", fake_rename)
+    try:
+        exc = None
+        try:
+            trash.move_to_trash(db_conn, vault_dir,
+                                ["notes/one.md", "notes/two.md"], "web")
+        except trash.TrashError as e:
+            exc = e
+        assert exc is not None and "rollback incomplete" in str(exc)
+        batches = list(trash.trash_root(vault_dir).iterdir())
+        assert len(batches) == 1
+        assert (batches[0] / "notes" / "one.md").is_file()  # 唯一副本幸存
+        assert (vault_dir / "notes" / "two.md").is_file()  # 未搬走的原地幸存
+    finally:
+        monkeypatch.undo()
+
+
 # ── restore ────────────────────────────────────────────────────────────────
 
 def test_restore_whole_batch(vault_dir, db_conn):
