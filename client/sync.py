@@ -148,10 +148,16 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
             )
 
         with httpx.Client(timeout=60) as client:
-            # Paths whose content did NOT reach server agreement this cycle:
-            # their local edits must never enter the next baseline (a poisoned
-            # baseline misreads the edit as "server modified" → silent pull-
-            # overwrite one cycle later — review Critical #1).
+            # Bookkeeping for the next baseline (review Critical #1).
+            # `agreed` records content that actually reached server agreement
+            # this cycle: the bytes a successful pull wrote to disk / the
+            # bytes a successful push actually uploaded — never a later
+            # rescan (the file may be edited again after the op).
+            # `rescued` / `failed_pushes` are the paths that did NOT agree;
+            # their local edits must never enter the next baseline (a
+            # poisoned baseline misreads the edit as "server modified" →
+            # silent pull-overwrite one cycle later).
+            agreed: dict[str, str] = {}
             rescued: set[str] = set()
             failed_pushes: set[str] = set()
 
@@ -174,6 +180,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                         continue
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(r.content)
+                    agreed[path] = _hash_bytes(r.content)
                     logger.info("pulled %s", path)
                 except (httpx.HTTPError, OSError) as e:
                     logger.error("failed to pull %s: %s", path, e)
@@ -188,6 +195,7 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
                         files={"file": (filename, content, "text/markdown")},
                     )
                     r.raise_for_status()
+                    agreed[path] = _hash_bytes(content)  # the bytes actually uploaded
                     logger.info("pushed %s", path)
                 except (httpx.HTTPError, OSError) as e:
                     failed_pushes.add(path)
@@ -215,29 +223,49 @@ def sync_once(config: ClientConfig, state: dict) -> dict:
             try:
                 fp = vault_dir / path
                 if fp.is_file():
+                    on_disk = fp.read_bytes()
+                    if _hash_bytes(on_disk) != local_files.get(path):
+                        # Edited during the sync cycle (after the scan):
+                        # unlinking would lose the edit. Skip; the next cycle
+                        # re-classifies (rewritten → to_push, still stale →
+                        # to_delete again).
+                        logger.warning(
+                            "delete skipped (edited during cycle): %s", path)
+                        continue
                     fp.unlink()
                     logger.info("deleted local %s (renamed or deleted on server)", path)
             except OSError as e:
                 logger.error("failed to delete %s: %s", path, e)
 
         new_files = scan_local_files(vault_dir)
-        # Next baseline = only server-AGREED content. Conflicted paths,
-        # failed pushes and guard-rescued edits keep their PREVIOUS baseline
-        # entry (or none — a missing entry classifies as conflict next cycle,
-        # the safe direction), so the next cycle re-flags them (conflict /
-        # push-retry) instead of misreading the local edit as "server
-        # modified" and pulling over it.
+        # Next baseline = only server-AGREED content, picked per path in
+        # three tiers: ① agreed this cycle — the bytes a successful pull
+        # wrote / a successful push actually uploaded (NOT the rescan hash:
+        # the file may be edited again after the op); ② untouched since the
+        # top-of-cycle scan (rescan hash == scan hash) — the rescan hash IS
+        # the agreed content; ③ no agreement this cycle (conflicted / push
+        # failed / guard-rescued / edited mid-cycle) — keep the PREVIOUS
+        # baseline entry (or none — a missing entry classifies as conflict
+        # next cycle, the safe direction), so the next cycle re-flags the
+        # local edit instead of misreading it as "server modified" and
+        # pulling over it. Order is load-bearing: the non-agreed guard in ②
+        # must outrank the untouched check — a conflicted path's local file
+        # is never touched by the conflict loop (it only writes the conflict
+        # copy), so its rescan hash == scan hash and would otherwise
+        # re-poison the baseline.
         prev_baseline = dict(state.get("files", {}))
         non_agreed = set(conflicts) | rescued | failed_pushes
         files_state: dict[str, str] = {}
         for path, h in new_files.items():
-            if path in non_agreed:
+            if path in agreed:
+                files_state[path] = agreed[path]
+            elif path not in non_agreed and h == local_files.get(path):
+                files_state[path] = h
+            else:
                 prev = prev_baseline.get(path)
                 if prev is not None:
                     files_state[path] = prev
                 # else: drop — never agreed → conflict next cycle (safe)
-            else:
-                files_state[path] = h
         updated_state = {
             "last_sync": _now_iso(),
             "files": files_state,
