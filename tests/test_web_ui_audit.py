@@ -32,3 +32,16 @@ def test_icon_only_buttons_have_aria_label():
         if m:
             bad[name] = len(m)
     assert bad == {}
+
+
+def test_async_regions_announced():
+    t = _templates()
+    assert 'role="alert"' in t["ConflictBanner.js"]
+    ai = t["AIChatPanel.js"]
+    assert 'role="log"' in ai
+    assert 'aria-live' not in ai.split('id="ai-messages"')[1].split('>')[0]
+    assert 'aria-live="polite"' in ai          # 状态行（非消息流，防逐 token 刷屏）
+    assert 'aria-live="polite"' in t["app.js"]      # 通知列表
+    assert 'aria-live="polite"' in t["SearchPanel.js"]  # 结果区
+    assert t["MemoryConsole.js"].count('role="alert"') >= 1  # 操作错误
+    assert 'aria-live="polite"' in t["MonitorPage.js"]  # 回滚状态

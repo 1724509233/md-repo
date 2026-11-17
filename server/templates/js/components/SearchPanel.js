@@ -272,7 +272,7 @@ export const SearchPanel = {
       </div>
 
       <!-- 结果区 -->
-      <div class="sp-results">
+      <div class="sp-results" aria-live="polite">
         <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
         <div v-if="loading && !results.length" class="sp-loading">
           <span class="search-spinner"></span>

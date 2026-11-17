@@ -809,7 +809,7 @@ export const MemoryConsole = {
           </details>
 
           <!-- 操作失败提示（400 等；服务端文案直接展示） -->
-          <div v-if="actionError" class="m-err">
+          <div v-if="actionError" class="m-err" role="alert">
             <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
             <span>{{ actionError }}</span>
           </div>

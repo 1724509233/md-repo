@@ -520,8 +520,8 @@ export const AIChatPanel = {
               <span class="ai-doc-path">{{ docPath }}</span>
             </span>
           </div>
-          <div class="ai-line2">
-            <span v-if="status === 'thinking'">思考中<span class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></span>
+          <div class="ai-line2" aria-live="polite">
+            <span v-if="status === 'thinking'">思考中<span class="thinking-dots" aria-hidden="true"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></span>
             <span v-else>就绪</span>
           </div>
         </div>
@@ -546,7 +546,7 @@ export const AIChatPanel = {
       </div>
 
       <!-- 消息列表 -->
-      <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4">
+      <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4" role="log">
         <div v-for="(msg, mi) in messages" :key="mi"
           class="msg-in flex" :class="{ 'justify-end': msg.role === 'user' }">
           <!-- 用户消息 -->

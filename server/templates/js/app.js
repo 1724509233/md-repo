@@ -928,7 +928,7 @@ export function createApp() {
               <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
                 @click="markAllRead">全部已读</button>
             </div>
-            <div class="flex-1 overflow-y-auto min-h-0 notif-list">
+            <div class="flex-1 overflow-y-auto min-h-0 notif-list" aria-live="polite">
               <div v-if="state.notifications.length === 0" class="px-4 py-10 text-center">
                 <p class="font-ui text-xs text-muted/60">暂无通知</p>
               </div>

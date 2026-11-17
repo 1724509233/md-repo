@@ -574,7 +574,7 @@ export const MonitorPage = {
                   <span :class="RB_META" class="truncate" :title="c.actor">{{ c.actor }}</span>
                   <span :class="RB_META" class="text-[color-mix(in_srgb,var(--ink-soft)_70%,transparent)]">{{ relRun(c.ts) }}</span>
                   <span :class="RB_META" :title="(c.files || []).join('\\n')">{{ (c.files || []).length }} 个文件</span>
-                  <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                  <span class="ml-auto flex items-center gap-1.5 shrink-0" aria-live="polite">
                     <template v-if="rowState[c.call_id] && rowState[c.call_id].busy">
                       <span :class="RB_META">回滚中…</span>
                     </template>
