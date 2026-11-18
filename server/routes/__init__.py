@@ -32,6 +32,11 @@ class WebContext:
     ai_config: object | None
     sync_lock: SyncLock
     bg_targets: dict[str, dict] | None = None
+    # Privacy live view (spec 2026-11-18 §2.2/§2.5): the process-wide
+    # PrivacyConfig shared from main.py; the web surface reads it ONLY for
+    # display annotations (/api/docs privacy_dirs, save privacy_refs) — the
+    # tree itself is never privacy-filtered. None = not configured/wired.
+    privacy: object | None = None
 
 
 from . import agent, console, egress, memory, notifications, recall, sync, trash

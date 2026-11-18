@@ -96,6 +96,10 @@ def _build_agent_spec(ctx) -> AgentSpec:
         vault_dir=ctx.vault_dir,
         read_doc_max_chars=ctx.ai_config.read_doc_max_chars,
         egress=egress,
+        # 交互通道隐私接线（spec 2026-11-18 §2.2，T7 缺口收口）：WebContext
+        # 的共享活视图直入 spec → policy()/ToolContext，读边界对聊天通道
+        # 生效。None（未配置）= 行为逐字节等价。
+        privacy=ctx.privacy,
     )
 
 

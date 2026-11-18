@@ -1423,6 +1423,7 @@ def _spec_ctx(tmp_path: Path, tools):
 
     return SimpleNamespace(
         vault_dir=tmp_path,
+        privacy=None,  # T9: _build_agent_spec 现读 ctx.privacy（机械跟补）
         ai_config=AIConfig(
             base_url="http://x",
             model="m",

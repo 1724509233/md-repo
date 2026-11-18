@@ -204,7 +204,8 @@ def test_put_doc_save(client, vault_dir):
     """PUT /api/docs/{path} saves markdown content."""
     resp = client.put("/api/docs/new-doc.md", content=b"# New Doc\n\nHello world.")
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+    # T9 形状更新：成功响应恒带 privacy_refs 键（未配置名单 → 空）
+    assert resp.json() == {"ok": True, "privacy_refs": []}
     # Verify file was written
     saved = (vault_dir / "new-doc.md").read_bytes()
     assert saved == b"# New Doc\n\nHello world."

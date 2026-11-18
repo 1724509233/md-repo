@@ -35,7 +35,8 @@ class CachedStatic(StaticFiles):
 
 
 def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
-               bg_targets: dict[str, dict] | None = None) -> FastAPI:
+               bg_targets: dict[str, dict] | None = None,
+               privacy=None) -> FastAPI:
     """Create the FastAPI application.
 
     ``db_conn``: the index/file-ledger connection (``.sync/index.db``).
@@ -52,6 +53,12 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
     budget_runs_per_day). None → the status endpoint reports the
     config-derived caps as null (pre-memory-console shape, backward
     compatible).
+
+    ``privacy``: the process-wide ``PrivacyConfig`` live view (spec
+    2026-11-18 §2.2/§2.5), shared with the scheduler chain from main.py.
+    The web surface reads it only for display annotations (``/api/docs``
+    ``privacy_dirs``, save ``privacy_refs``); None = unconfigured (keys
+    still present, empty).
     """
     app = FastAPI(title="md-sync server")
     app.mount("/static", CachedStatic(directory=str(Path(__file__).parent / "templates")), name="static")
@@ -62,6 +69,7 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
         ai_config=ai_config,
         sync_lock=SyncLock(vault_dir / ".sync" / "sync.lock"),
         bg_targets=bg_targets,
+        privacy=privacy,
     )
     app.state.ctx = ctx
     register_all(app, ctx)

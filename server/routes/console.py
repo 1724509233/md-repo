@@ -16,6 +16,7 @@ from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from .. import ledger
+from ..privacy import detect_privacy_refs, is_privacy
 from ..vault.db.file_index import get_all_files
 from ..vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 
@@ -228,7 +229,14 @@ def register(app, ctx) -> None:
                 dirnames[:] = [d for d in dirnames if d.lower() not in EXCLUDED_INDEX_DIRS]
             dirs.extend((rel_root / d).as_posix() for d in dirnames)
         dirs.sort()
-        body = json.dumps({"files": files, "dirs": dirs}, sort_keys=True).encode()
+        # privacy_dirs 标注（spec 2026-11-18 §2.5，display-only）：UI 据此
+        # 灰显隐私目录；files/dirs 全集绝不隐私过滤（Web 面是用户自己的
+        # 数据视图）。进 ETag：名单变更 → 前端缓存自然失效。
+        privacy_dirs = (list(ctx.privacy.dirs) if ctx.privacy is not None
+                        else [])
+        body = json.dumps({"files": files, "dirs": dirs,
+                           "privacy_dirs": privacy_dirs},
+                          sort_keys=True).encode()
         etag = hashlib.sha256(body).hexdigest()
         if request.headers.get("if-none-match") == f'"{etag}"':
             return Response(content=b"", status_code=304, headers={"ETag": f'"{etag}"'})
@@ -317,4 +325,13 @@ def register(app, ctx) -> None:
             file_path.write_bytes(content)
         except OSError as e:
             raise HTTPException(status_code=500, detail=f"failed to save: {e}")
-        return {"ok": True}
+        # 保存引用警告（spec §2.6，advisory 不拦截）：成功响应恒带
+        # privacy_refs 键（统一形状，前端零分支）：非隐私目标 + 内容显式
+        # 引用隐私目录 → 去重引用列表；隐私区内目标恒 []（区内写是合法
+        # 动作）；ctx.privacy None/空名单 → 恒 []。保存语义不变。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
+        privacy_refs: list[str] = []
+        if privacy_dirs and not is_privacy(privacy_dirs, rel.as_posix()):
+            privacy_refs = detect_privacy_refs(
+                content.decode("utf-8", errors="replace"), privacy_dirs)
+        return {"ok": True, "privacy_refs": privacy_refs}

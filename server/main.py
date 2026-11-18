@@ -205,8 +205,12 @@ def main(argv: list[str] | None = None) -> None:
         logging.getLogger("md-vault.recovery").info(
             "cold rebuild: re-seeded %d delete rows into change_log", seeded)
 
+    # 唯一 PrivacyConfig 实例（§2.2 活视图唯一性）：web 标注面（create_app
+    # → /api/docs 标注、保存警告）与 scheduler/executor/runner 参数链共享。
+    privacy = PrivacyConfig(config_path)
     app = create_app(vault_dir=vault_dir, db_conn=conn, ledger_conn=ledger_conn,
-                     ai_config=config.ai, bg_targets=_agent_caps(bg_agents))
+                     ai_config=config.ai, bg_targets=_agent_caps(bg_agents),
+                     privacy=privacy)
 
     config_obj = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=config.log.level.lower()
@@ -219,7 +223,7 @@ def main(argv: list[str] | None = None) -> None:
         # mtime-cache view handed to the scheduler → run_once/run_executor.
         rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents,
                                  notifications_cfg,
-                                 privacy=PrivacyConfig(config_path))
+                                 privacy=privacy)
         await server.serve()
         rt.stop()
         events.set_bus(None)
