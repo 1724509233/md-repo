@@ -14,6 +14,7 @@
  */
 const { ref, computed, watch, nextTick, inject } = Vue
 import { api } from '../api.js'
+import { showToast } from '../utils/toast.js'
 import { TYPE_ICONS, TYPE_ICON_DEFAULT } from './MemoryConsole.js'
 
 /* 九态格序 = 设计稿批准顺序（产品现有 by_status 口径，3×3）；
@@ -357,7 +358,7 @@ export const MonitorPage = {
           rs.conflict = { conflicts: data.conflicts, restored: data.restored }
         }
       } catch (e) {
-        alert('回滚失败: ' + e.message)
+        showToast('回滚失败: ' + e.message + '：可稍后重试，持续失败请查看服务器日志')
       } finally {
         rs.busy = false
       }
@@ -387,7 +388,7 @@ export const MonitorPage = {
         <div class="mpage grid">
           <div class="mp-head">
             <!-- 单出口：回文档视图；面板不自动重开（重入走 rail【记忆】） -->
-            <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" @click="back">
+            <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" aria-label="返回文档视图" @click="back">
               <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
             <div class="mp-title">记忆运行时 · 后台监控</div>
             <div class="mp-meta">更新于 {{ updatedAt || '…' }}</div>
@@ -502,7 +503,7 @@ export const MonitorPage = {
                   <!-- L2 头部：§2.4 通道行（7d 按 source，全零隐藏）+ §2 D2 手动刷新 -->
                   <div class="l2-top">
                     <span v-if="bySourceLine" class="l2-src">{{ bySourceLine }}</span>
-                    <button class="l2-refresh" type="button" title="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
+                    <button class="l2-refresh" type="button" title="重新拉取召回明细" aria-label="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
                       <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
                     </button>
                   </div>
@@ -516,7 +517,7 @@ export const MonitorPage = {
                         <table>
                           <thead><tr><th>文档</th><th>human</th><th>on_demand</th><th>synthetic</th><th title="加权 = 每次命中按 0.5^(距今天数/30) 累加，合成流量不计">加权</th><th>last_hit</th></tr></thead>
                           <tbody>
-                            <tr v-if="!l2Data.docs.length"><td colspan="6">窗口内无召回流量</td></tr>
+                            <tr v-if="!l2Data.docs?.length"><td colspan="6">窗口内无召回流量</td></tr>
                             <tr v-for="d in l2Data.docs" :key="d.path">
                               <td :title="d.path">{{ d.path }}<span class="mm-cnt">human {{ (d.counts && d.counts.human) || 0 }} · on_demand {{ (d.counts && d.counts.on_demand) || 0 }} · synthetic {{ (d.counts && d.counts.synthetic) || 0 }}</span></td>
                               <td>{{ (d.counts && d.counts.human) || 0 }}</td>
@@ -554,7 +555,7 @@ export const MonitorPage = {
           <div class="mcard full mm-card">
             <div class="mc-h"><span class="mc-t">采纳提案</span></div>
             <div v-if="finals.length" class="rev-rows">
-              <div v-for="p in finals" :key="p.relpath + '|' + (p.created || p.id || $index)" class="rev-row">
+              <div v-for="(p, i) in finals" :key="p.relpath + '|' + (p.created || p.id || i)" class="rev-row">
                 <div class="f-meta"><span class="tchip"><span v-html="typeIcons[p.type] || typeIconDefault"></span>{{ p.type || 'unknown' }}</span><span class="rev-time">{{ p.mergedDisp || '—' }}</span></div>
                 <div class="f-title" :title="p.title">{{ p.title }}</div>
               </div>
@@ -574,7 +575,7 @@ export const MonitorPage = {
                   <span :class="RB_META" class="truncate" :title="c.actor">{{ c.actor }}</span>
                   <span :class="RB_META" class="text-[color-mix(in_srgb,var(--ink-soft)_70%,transparent)]">{{ relRun(c.ts) }}</span>
                   <span :class="RB_META" :title="(c.files || []).join('\\n')">{{ (c.files || []).length }} 个文件</span>
-                  <span class="ml-auto flex items-center gap-1.5 shrink-0">
+                  <span class="ml-auto flex items-center gap-1.5 shrink-0" aria-live="polite">
                     <template v-if="rowState[c.call_id] && rowState[c.call_id].busy">
                       <span :class="RB_META">回滚中…</span>
                     </template>

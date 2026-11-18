@@ -22,7 +22,7 @@ export const ConflictBanner = {
     return { icon, accept, dismiss }
   },
   template: `
-    <div class="conflict-banner">
+    <div class="conflict-banner" role="alert">
       <span class="conflict-msg">
         <span v-html="icon"></span>
         {{ toolName === 'write_doc' ? 'agent 已写入此文档' : 'agent 已编辑此文档' }}，你的未保存编辑将被覆盖

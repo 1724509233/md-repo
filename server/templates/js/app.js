@@ -2,6 +2,8 @@
 const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
+import { showToast } from './utils/toast.js'
+import { docHash, parseHash } from './utils/vaultLinks.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
 import { FileTree } from './components/FileTree.js'
@@ -102,7 +104,7 @@ async function loadDocs() {
   return !!data
 }
 
-async function openDoc(path, heading) {
+async function openDoc(path, heading, fromLink) {
   // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
   if (state.monitoring) exitMonitorPage()
   // 自动保存未保存的编辑
@@ -111,6 +113,8 @@ async function openDoc(path, heading) {
   }
   state.currentPath = path
   state.dirty = false
+  // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
+  if (fromLink && !heading) state.previewMode = true
 
   // fetch 先行：成功后才播放动画
   let text
@@ -157,6 +161,11 @@ async function openDoc(path, heading) {
         if (el) flashHeading(el)
       }, 200)
     }
+  } else if (fromLink) {
+    // 无锚点软链：滚动至文档首部（预览容器跨文档复用，scrollTop 不会自行归零）
+    await nextTick()
+    const pv = editorPaneRef.value ? editorPaneRef.value.previewEl : null
+    if (pv) pv.scrollIntoView({ behavior: 'auto', block: 'start' })
   }
 }
 
@@ -166,7 +175,7 @@ async function saveDoc() {
     await api.saveDoc(state.currentPath, state.docContent)
     state.dirty = false
   } catch (e) {
-    alert('保存失败: ' + e.message)
+    showToast('保存失败: ' + e.message)
   }
 }
 
@@ -403,6 +412,14 @@ async function handleToolResult(evt) {
   }
 }
 
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档
+function applyInitialHash() {
+  const h = parseHash(location.hash)
+  if (!h) return
+  if (h.mode === 'edit') state.previewMode = false
+  openDoc(h.path)
+}
+
 // ─── AI 新会话 ───
 async function startNewSession() {
   try {
@@ -432,7 +449,7 @@ async function manage(action, payload) {
     if (changes.length) await _applyChangeToCurrentDoc(changes)
     return true
   } catch (e) {
-    alert('操作失败: ' + e.message)
+    showToast('操作失败: ' + e.message)
     return false
   }
 }
@@ -458,8 +475,8 @@ async function trashAct(action, payload) {
     return true
   } catch (e) {
     // 409 = 恢复冲突（原路径已存在，如记忆控制台 rollback 已回滚，design §11-6）
-    if (String(e.message).includes('409')) alert('原路径已存在，无法恢复')
-    else alert('操作失败: ' + e.message)
+    if (String(e.message).includes('409')) showToast('原路径已存在，无法恢复：换一个恢复目标路径，或先清理该路径下的同名文件')
+    else showToast('操作失败: ' + e.message)
     return false
   }
 }
@@ -656,14 +673,53 @@ export function createApp() {
         }
       )
 
+      // URL 状态同步（P1-4）：当前文档 + 编辑态进 hash；
+      // replaceState 不产历史垃圾，前进/后退由 hashchange 兜底（markdown 软链 #doc/ 跳转同走此路）
+      watch([() => state.currentPath, () => state.previewMode], ([p, preview]) => {
+        if (!p) return
+        const url = docHash(p, { edit: !preview })
+        if (location.hash !== url) history.replaceState(null, '', url)
+      })
+      window.addEventListener('hashchange', () => {
+        const h = parseHash(location.hash)
+        if (!h) return
+        if (h.path !== state.currentPath) openDoc(h.path)
+        if (!state.monitoring) state.previewMode = h.mode !== 'edit'
+      })
+
       onMounted(() => {
-        loadDocs()
+        loadDocs().then(applyInitialHash)
         loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
         // 通知 + 记忆共用一个 30s 定时器：同周期串行触发两次取数（合并前为两个独立 30s 定时器）
         setInterval(() => { pollNotifications(); pollMemory() }, 30000)
         pollNotifications()
         pollMemory()
+
+        // 未保存守卫（P1-3）：仅 dirty 时拦刷新/关标签；浏览器忽略自定义文案
+        window.addEventListener('beforeunload', (e) => {
+          if (state.dirty) { e.preventDefault(); e.returnValue = '' }
+        })
+
+        // 兜底（Edge/键盘 scrollIntoView 程序化滚动）：应用壳内不存在合法的 window 滚动，出现即弹回
+        window.addEventListener('scroll', () => {
+          if (window.scrollY || window.scrollX) window.scrollTo(0, 0)
+        }, { passive: true })
+
+        // Escape 分层关闭（P1-5）：一次只关最上一层 app 持有的浮层；
+        // 组件自有浮层（FileTree 右键菜单 / TrashPanel 菜单 / SearchPanel popover）由各自 handler 关
+        document.addEventListener('keydown', (e) => {
+          if (e.key !== 'Escape') return
+          if (state.notifOpen) closeNotifDropdown()
+          else if (state.moreMenuOpen) state.moreMenuOpen = false
+          else if (state.relSheetOpen) state.relSheetOpen = false
+          else if (state.relOpen) state.relOpen = false
+          else if (state.tocOpen) toggleToc()
+          else if (state.aiOpen) toggleAI(false)
+          else if (state.memoryOpen) state.memoryOpen = false
+          else if (state.monitoring) exitMonitorPage()
+          else if (state.searchDrawerOpen) state.searchDrawerOpen = false
+        })
 
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
@@ -698,7 +754,7 @@ export function createApp() {
           } else {
             api.recallClick({ path: a.getAttribute('data-vault-path'), via: 'preview' })
           }
-          openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'))
+          openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)
         })
 
         // 初始欢迎消息由 AIChatPanel 内部处理
@@ -708,7 +764,14 @@ export function createApp() {
 
       function toggleNotifDropdown() {
         if (state.notifOpen) closeNotifDropdown()
-        else state.notifOpen = true
+        else {
+          // v-show 元素常驻：退场类 notif-closing 不清除则再开时 notifOut(fill:both) 顶替
+          // notif-in（第二次起「展开一瞬间立即收起」，bug 83de96eb）；挂起定时器同清
+          clearTimeout(notifCloseT)
+          const el = document.querySelector('.notif-dropdown')
+          if (el) el.classList.remove('notif-closing')
+          state.notifOpen = true
+        }
       }
 
       async function markAllRead() {
@@ -784,7 +847,7 @@ export function createApp() {
       }
     },
     template: `
-      <div class="flex h-screen">
+      <div class="flex h-full">
         <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
         <aside class="sidebar-shell flex shrink-0">
           <!-- rail（桌面 64px / 移动 48px） -->
@@ -818,7 +881,7 @@ export function createApp() {
                 <span class="ptitle">文档</span>
                 <span class="pcount">{{ state.files.length }}</span>
                 <span class="pacts">
-                  <button class="ibtn" title="收起全部文件夹"
+                  <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
                     @click="fileTreeRef && fileTreeRef.collapseAll()">
                     <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
                   </button>
@@ -928,7 +991,7 @@ export function createApp() {
               <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
                 @click="markAllRead">全部已读</button>
             </div>
-            <div class="flex-1 overflow-y-auto min-h-0 notif-list">
+            <div class="flex-1 overflow-y-auto min-h-0 notif-list" aria-live="polite">
               <div v-if="state.notifications.length === 0" class="px-4 py-10 text-center">
                 <p class="font-ui text-xs text-muted/60">暂无通知</p>
               </div>

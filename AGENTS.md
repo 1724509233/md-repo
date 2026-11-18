@@ -34,6 +34,8 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 ## Gotchas
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.
+- **移动端键盘与视口（2026-11-17 华为 Mate60 双内核复盘，详见 `issues/2026-11-17-mobile-keyboard-viewport-shift.md`）**: 应用壳高度必须走 `html,body,#app{height:100%}` 链（Tailwind `h-full`）——`h-screen/100vh` 壳在「键盘压布局视口」型内核（Edge/安卓）下不随键盘收缩，overflow-hidden 文档仍会被 scrollIntoView 程序化滚走（顶部被遮、触摸不可恢复；fixed 抽屉不受文档滚动影响，「只有主区偏」即此指纹）。所有会弹键盘的聚焦调用必须 `focus({preventScroll:true})`（防「只压可视视口」型内核平移 visualViewport，原生浏览器复现过）。安卓 Chromium 无 iOS 式 <16px 自动缩放，勿按 iOS 思路修。回归钉：`test_shell_uses_layout_viewport_height` + `test_keyboard_focus_preventscroll`。
+- **锚点激活行为（2026-11-17 bug 4a2249fc 返工复盘，详见 `issues/2026-11-17-tree-anchor-activation-jump.md`）**: 文件树文件行是 `<a href="#doc/…">`（P1-4 深链），行内交互元素（rename input、⋯ 按钮）的 click 只写 `@click.stop` 仍会跳文档——点击链接后代元素照样激活祖先 `<a>` 默认行为（hash 变 → hashchange → openDoc），该旁路不经任何 Vue handler。必须 `@click.stop.prevent`。泛化红线：任何有默认行为的容器（`<a href>`/submit 按钮/label）内的交互子元素都要 `.prevent`；跳转/滚动类 bug 先按层列监听全集（Vue handler / 原生默认 action / window 级 hashchange-scroll）再看触发元素在每层之上还是之下。回归钉：`test_rename_row_click_guard`（双层断言，单层放行过半成品修复）。
 - **Sync lock is a cross-process file lock**: a `SyncLock` instance (`server/sync_lock.py`) constructed by `create_app` and exposed at `app.state.ctx.sync_lock`. It claims `<vault_dir>/.sync/sync.lock` via atomic `os.open(O_CREAT|O_EXCL)` (stdlib only — no fcntl/msvcrt), so two server processes on the same vault (e.g. 9888 dev + 9889 feature-test) cannot sync concurrently; the file is removed on release. The file content is the acquire timestamp (+ pid); a lock older than 300s is stale and take-over-able (a crashed sync must not wedge the vault), unreadable/empty content is treated as stale (fail-open). The `locked_at` in-memory attribute is checked first and remains the test seam: tests that need to simulate a locked state set it directly (see `test_sync_lock` in `tests/test_api.py`) — a refusal at the seam never touches the filesystem. Constructed without a lock path, `SyncLock` is pure in-memory (unit-test mode).
 - **Path traversal guard**: `safe_rel_path()` in `server/vault/fs/vault_ops.py` (aliased `_safe_rel_path` in the route modules) rejects paths with `..` or leading `/` (checked on the backslash-normalized form — UNC/extended-length shapes included), any drive-qualified start (`^[A-Za-z]:`; on win32 a pathlib join with a drive-qualified argument discards or swaps the vault base), and a first segment of `.trash`/`.sync` (system dirs are unreachable via the web routes — upload/download/manage must never touch them; the `.sync` half is bug 0eac2e40). Deeper same-named dirs are user content.
 - **Deletion is not synced**: if a client deletes a file, it simply won't appear in `local_files`. The server keeps it. On next sync it shows up in `to_pull` (server has it, client doesn't). This is by design.
@@ -54,6 +56,10 @@ Spec 已归档至 vault：`~/md-vault/projects/md-repo/specs/2026-09-27-md-sync-
 ## 文档归档
 
 归档位置：`~/md-vault/projects/md-repo/`（plans/ specs/ adr/ benchmarks/ review/ issues/ + 顶层杂项）。
+
+**沉淀规则（2026-11-17 用户定）**: 需要反复修复/返工的问题在 `issues/`（本地台账，git 不入）留完整复盘（含被打回的轮次与错误假设），可提交的约束进 AGENTS.md Gotchas；一次性修好的 bug 不单独成文，账本 + commit 即可。
+
+**vault 写入纪律（2026-11-17 用户定）**: spec/计划/新文档默认只落仓库（`docs/superpowers/` 等），保持仓库内新鲜；vault 仅在用户明说「归档」或要求直接写入时才写，不主动同步。
 
 MCP 检索：`search_docs("<关键词>")` 全文检索、`read_doc("<相对路径>")` 读全文、`get_related_docs("<相对路径>")` 查关联。
 

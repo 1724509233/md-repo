@@ -75,7 +75,7 @@ export const SearchPanel = {
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state,
-      focusInput() { if (inputEl.value) inputEl.value.focus() },
+      focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
       onSearchComplete() { if (appState) appState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
 
@@ -148,9 +148,18 @@ export const SearchPanel = {
         showSort.value = false
       }
     }
+    // Escape 关 popover（P1-5，组件自有浮层自关）
+    function onSortEsc(e) {
+      if (e.key === 'Escape') showSort.value = false
+    }
     watch(showSort, (open) => {
-      if (open) document.addEventListener('mousedown', onSortDocMouseDown)
-      else document.removeEventListener('mousedown', onSortDocMouseDown)
+      if (open) {
+        document.addEventListener('mousedown', onSortDocMouseDown)
+        document.addEventListener('keydown', onSortEsc)
+      } else {
+        document.removeEventListener('mousedown', onSortDocMouseDown)
+        document.removeEventListener('keydown', onSortEsc)
+      }
     })
 
     // 结果整形：segment 平铺 + 相对相关性（本次结果最高分 = 100%）
@@ -223,7 +232,7 @@ export const SearchPanel = {
         <span class="pcount" v-if="docCount > 0">{{ docCount }} 个文档</span>
         <span class="pacts">
           <!-- ② 权重控件入口（absolute popover，开/关两态面板头不跳位） -->
-          <button class="sp-sort-btn" :class="{ on: showSort }" title="排序权重" @click="showSort = !showSort">
+          <button class="sp-sort-btn" :class="{ on: showSort }" title="排序权重" aria-label="排序权重" @click="showSort = !showSort">
             <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>
             排序
           </button>
@@ -249,7 +258,7 @@ export const SearchPanel = {
         <input ref="inputEl" v-model="searchQuery" type="text"
           class="sp-q-input"
           placeholder="搜索文档… #tag 按标签搜" @keydown="onKeydown">
-        <button v-if="searchQuery" class="sp-q-clear" title="清除" @click="searchQuery = ''">
+        <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>
@@ -272,7 +281,7 @@ export const SearchPanel = {
       </div>
 
       <!-- 结果区 -->
-      <div class="sp-results">
+      <div class="sp-results" aria-live="polite">
         <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
         <div v-if="loading && !results.length" class="sp-loading">
           <span class="search-spinner"></span>

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
-from fastapi.templating import Jinja2Templates
 
 from .. import ledger
 from ..vault.db.file_index import get_all_files
@@ -190,11 +189,19 @@ def delete(db_conn, vault_dir, body) -> dict:
 
 
 def register(app, ctx) -> None:
-    templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+    templates_dir = Path(__file__).parent.parent / "templates"
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request) -> HTMLResponse:
-        return templates.TemplateResponse(request, "index.html")
+    async def index(request: Request) -> Response:
+        # Content-hashed ETag + manual 304 (Starlette's FileResponse ships
+        # the header but only StaticFiles answers If-None-Match). The HTML
+        # must always revalidate — it references the versioned vendor set.
+        data = (templates_dir / "index.html").read_bytes()
+        etag = '"' + hashlib.md5(data, usedforsecurity=False).hexdigest() + '"'
+        headers = {"etag": etag, "cache-control": "no-cache"}
+        if etag in request.headers.get("if-none-match", "").split(","):
+            return Response(status_code=304, headers=headers)
+        return Response(content=data, media_type="text/html", headers=headers)
 
     @app.get("/api/health")
     async def health() -> dict:

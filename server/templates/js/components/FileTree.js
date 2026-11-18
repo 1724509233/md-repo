@@ -1,6 +1,9 @@
 /* FileTree 组件：递归文件树 + RAG 搜索下拉框 + 展开/折叠 */
 const { ref, reactive, computed, watch, provide, inject, onBeforeUnmount, nextTick } = Vue
 import { ICONS } from '../utils/icons.js'
+import { initMenuNav } from '../utils/menuNav.js'
+import { docHash } from '../utils/vaultLinks.js'
+import { showToast } from '../utils/toast.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 
@@ -26,7 +29,7 @@ const TreeNode = {
     currentPath: { type: String, default: null }
   },
   emits: ['select', 'toggle'],
-  directives: { 'focus-select': { mounted(el) { el.focus(); el.select() } } },
+  directives: { 'focus-select': { mounted(el) { el.focus({ preventScroll: true }); el.select() } } },
   setup(props, { emit }) {
     const treeOps = inject('treeOps')
     const treeState = inject('treeState')
@@ -43,7 +46,14 @@ const TreeNode = {
       return (props.dirPath ? props.dirPath + '/' : '') + name
     }
 
-    return { treeOps, ICONS_LOCAL, isExpanded, childPath }
+    // 目录行键盘激活（P1-8）：div[role=button] 上 Enter/Space 均手动（无原生 click）
+    function onDirKeydown(e, path) {
+      if (treeOps.isEditing(path)) return // 行内改名中：行级激活让位（bug 4a2249fc 同族）
+      if (e.key === 'Enter') { e.preventDefault(); emit('toggle', path); return }
+      if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); emit('toggle', path) }
+    }
+
+    return { treeOps, ICONS_LOCAL, isExpanded, childPath, onDirKeydown, docHash }
   },
   template: `
     <div>
@@ -64,8 +74,9 @@ const TreeNode = {
             :data-dir="childPath(name)"
             :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
             role="button" tabindex="0"
-            @click="$emit('toggle', childPath(name))"
-            @keydown.enter.prevent="$emit('toggle', childPath(name))"
+            :aria-expanded="isExpanded(childPath(name)) ? 'true' : 'false'"
+            @click="treeOps.isEditing(childPath(name)) || $emit('toggle', childPath(name))"
+            @keydown="onDirKeydown($event, childPath(name))"
             @contextmenu.prevent="treeOps.openMenu($event, childPath(name), true)"
             draggable="true"
             @dragstart="treeOps.onDragStart($event, childPath(name), true)"
@@ -80,11 +91,11 @@ const TreeNode = {
             <input v-if="treeOps.editing && treeOps.editing.path === childPath(name) && treeOps.editing.mode === 'rename'"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
-              @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
-            <span v-else class="font-medium">{{ name }}</span>
+              @blur="treeOps.confirmEdit()" @click.stop.prevent v-focus-select>
+            <span v-else class="font-medium flex-1 min-w-0 truncate">{{ name }}</span>
             <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
-              @click.stop="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
+              @click.stop.prevent="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
               <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
           </div>
@@ -100,11 +111,11 @@ const TreeNode = {
 
       <!-- 文件 -->
       <div v-for="f in node.files" :key="f.path" class="group">
-        <div class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
+        <a class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
+          :href="docHash(f.path)"
           :class="{ active: f.path === currentPath }"
-          role="button" tabindex="0"
-          @click="$emit('select', f.path)"
-          @keydown.enter.prevent="$emit('select', f.path)"
+          :aria-current="f.path === currentPath ? 'page' : undefined"
+          @click.prevent="treeOps.isEditing(f.path) || $emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
           draggable="true"
           @dragstart="treeOps.onDragStart($event, f.path, false)"
@@ -112,13 +123,13 @@ const TreeNode = {
           <input v-if="treeOps.editing && treeOps.editing.path === f.path && treeOps.editing.mode === 'rename'"
             class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
             v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
-            @blur="treeOps.confirmEdit()" @click.stop v-focus-select>
+            @blur="treeOps.confirmEdit()" @click.stop.prevent v-focus-select>
           <span v-else class="font-medium flex-1 truncate">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
-            @click.stop="treeOps.openMenu($event, f.path, false)" aria-label="操作">
+            @click.stop.prevent="treeOps.openMenu($event, f.path, false)" aria-label="操作">
             <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
-        </div>
+        </a>
       </div>
     </div>
   `
@@ -220,6 +231,17 @@ export const FileTree = {
 
     function closeMenu() { menu.value = null }
 
+    // 右键菜单键盘导航（P1-5）
+    const menuEl = ref(null)
+    let menuNavCleanup = null
+    watch(menu, (m) => {
+      if (menuNavCleanup) { menuNavCleanup(); menuNavCleanup = null }
+      if (m) nextTick(() => {
+        if (menuEl.value) menuNavCleanup = initMenuNav(menuEl.value, closeMenu)
+      })
+    })
+    onBeforeUnmount(() => { if (menuNavCleanup) menuNavCleanup() })
+
     function startRename(path, isDir) {
       const name = path.split('/').pop()
       editing.value = { path, isDir, name: isDir ? name : (name.endsWith('.md') ? name.slice(0, -3) : name), mode: 'rename' }
@@ -237,7 +259,7 @@ export const FileTree = {
         // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪）
         nextTick(() => {
           const el = document.querySelector('#root-new-input')
-          if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+          if (el) { el.focus({ preventScroll: true }); el.select(); el.scrollIntoView({ block: 'nearest' }) }
         })
         return
       }
@@ -248,7 +270,7 @@ export const FileTree = {
       // 自动聚焦全选 + 滚进视口（v-if 渲染后 DOM 就绪），对齐根分支
       nextTick(() => {
         const el = document.querySelector('#child-new-input')
-        if (el) { el.focus(); el.select(); el.scrollIntoView({ block: 'nearest' }) }
+        if (el) { el.focus({ preventScroll: true }); el.select(); el.scrollIntoView({ block: 'nearest' }) }
       })
     }
 
@@ -261,7 +283,7 @@ export const FileTree = {
       if (ed.mode === 'rename') {
         // 重命名无法修改后缀：输入带后缀（如 a.md / a.txt）会拼出双扩展名，拦截并提示
         if (/\.\w+$/.test(name)) {
-          alert('名称不能带后缀（如 .md、.txt）：重命名无法修改文件后缀')
+          showToast('名称不能带后缀（如 .md、.txt）：重命名无法修改文件后缀')
           return
         }
         const to = ed.path.replace(/[^/]+$/, name + (ed.isDir ? '' : '.md'))
@@ -405,7 +427,11 @@ export const FileTree = {
     }
 
     // treeOps 供 TreeNode 递归层 inject；reactive() 使内部 ref 在子组件模板中自动解包
-    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop })
+    // 行内编辑态判定（bug 4a2249fc 两层之二）：该行正在 rename/新建时，行级 click/keydown 让位，
+    // 挡行 padding/边缘点击。两层之一 = 行是 <a href="#doc/…">（P1-4 深链），行内 input/⋯ 的
+    // click 即使 .stop 仍激活祖先 <a>（activation behavior 走 hashchange→openDoc），故须 .prevent。
+    function isEditing(path) { return !!editing.value && editing.value.path === path }
+    const treeOps = reactive({ menu, editing, openMenu, closeMenu, startRename, startNew, confirmEdit, onEditKeydown, confirmDelete, moveItem, dragPath, dragIsDir, dropTarget, onDragStart, onDragEnd, canDropOn, onDragOver, onDrop, isEditing })
     provide('treeOps', treeOps)
 
     // ============ RAG 搜索下拉框（共享控制器，spec §4.3）============
@@ -422,7 +448,7 @@ export const FileTree = {
       api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
       focusInput() {
         const input = document.querySelector('#search-input')
-        if (input) input.focus() // 保证 ArrowUp/Down 继续可用
+        if (input) input.focus({ preventScroll: true }) // 保证 ArrowUp/Down 继续可用
       },
       onSearchComplete() { fileState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
@@ -522,10 +548,11 @@ export const FileTree = {
     return {
       searchQuery, tree, toggleDir, selectFile,
       results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
-      ICONS, menu, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
+      ICONS, menu, menuEl, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
       moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
+      docHash,
       expandToPath, revealActive, collapseAll
     }
   },
@@ -535,7 +562,7 @@ export const FileTree = {
         <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
           placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
-        <button v-if="searchQuery" class="sp-q-clear" title="清除" @click="searchQuery = ''">
+        <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
 
@@ -605,17 +632,17 @@ export const FileTree = {
            overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
       <Teleport to="body">
         <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
-        <div v-if="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
+        <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
-          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-file')">新建文件</button>
-          <button v-if="menu.isDir" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-folder')">新建文件夹</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startRename(menu.path, menu.isDir)">重命名</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs lg:hidden hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="moveItem()">移动</button>
-          <button v-if="!menu.isRoot" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button v-if="!menu.isRoot" role="menuitem" class="w-full text-left px-3 py-2 text-xs text-red-700 hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="confirmDelete()">移入回收站</button>
         </div>
       </Teleport>

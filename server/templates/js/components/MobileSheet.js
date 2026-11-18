@@ -112,6 +112,7 @@ export const MobileSheet = {
   template: `
     <!-- 移动端 backdrop -->
     <div ref="backdropEl" class="fixed inset-0 bg-black/30 lg:hidden"
+      @touchmove.prevent
       :class="{ hidden: !open }" @click="$emit('close')" style="z-index: 1;"></div>
 
     <!-- 拖拽手柄（fixed 定位到面板顶部） -->

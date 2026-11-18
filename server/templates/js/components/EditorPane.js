@@ -14,6 +14,9 @@ export const EditorPane = {
   setup(props, { emit }) {
     const editorEl = ref(null)
     const previewEl = ref(null)
+    const previewHtmlEl = ref(null) // v-html 内层（✎ 与映射层分离，spec 2026-11-17 §3.1）
+    const ebtnEl = ref(null)
+    const ebtnOn = ref(false)
     const docWrapEl = ref(null)
     const state = inject('state', null)
 
@@ -45,11 +48,12 @@ export const EditorPane = {
     // 替换发生在 postProcess，映射须按最终 DOM 写）。映射随每次内容重渲染整体重建（§3.2），
     // 不依赖当前模式——编辑后切回预览时 v-html 已替换预览 DOM、旧映射属性丢失，须重写，否则落位缺失。
     async function refreshPreview() {
-      if (!previewEl.value) return
+      clearBlockSel() // 重渲染即 v-html 重建，sticky 选中随之作废（spec 2026-11-17 §3.2）
+      if (!previewEl.value || !previewHtmlEl.value) return
       await nextTick()
-      if (!previewEl.value) return
-      postProcessPreview(previewEl.value)
-      writeSrcLineMapping(previewEl.value, localContent.value, renderOpts())
+      if (!previewEl.value || !previewHtmlEl.value) return
+      postProcessPreview(previewHtmlEl.value)
+      writeSrcLineMapping(previewHtmlEl.value, localContent.value, renderOpts())
     }
 
     // 内容变更 = 映射重建不变量（spec §3.2）：渲染对变更不可见时（插入/删除空行、强调记号互换等）
@@ -63,6 +67,7 @@ export const EditorPane = {
 
     // 模式切换到 preview 时确保渲染（含映射）
     watch(() => props.mode, async (mode) => {
+      clearBlockSel() // spec 2026-11-17：模式切换即清 sticky 选中
       if (mode === 'preview') {
         await refreshPreview()
         fadeView(previewEl.value)
@@ -142,7 +147,7 @@ export const EditorPane = {
 
     /* ============ 选区 → 源码落位（spec 2026-11-09 §2.2 / §4.1 / §5.1 / §9.3 / §9.7）============
        预览是只读投影、markdown 源码是唯一事实源；编辑永远发生在 textarea 上。
-       三种手势（点单块 / 点表格 cell / 框选跨块）收敛为同一结果：连续块行区间 [L1, L2]。
+       编辑意图手势（2026-11-17 触发契约：桌面 双击/✎/框选，移动 两段轻触）收敛为同一结果：连续块行区间 [L1, L2]。
        切源码模式 = 直接置 state.previewMode（app.js setMode 的镜像）。提交通道沿用既有 input 路径，零新触发器。 */
 
     // 1-based 行 → 字符偏移（行首）；前缀和（§4.1 / §9.4）
@@ -204,7 +209,8 @@ export const EditorPane = {
         const src = ta.value
         const a = offsetOfLine(src, l1) // ③ 行号 → 字符偏移
         const b = endOfLine(src, l2)
-        ta.focus() // ⑤ 焦点进 textarea，立即可输入（替换选区）
+        ta.focus({ preventScroll: true }) // ⑤ 焦点进 textarea，立即可输入（替换选区）；
+        //   preventScroll：裸 focus 触发浏览器把聚焦元素平移进键盘上方可视区，overflow-hidden 壳内滚不回
         ta.setSelectionRange(a, b) // 可见性 = 原生选区高亮（§4.2，不另加高亮带）
         // ④ 滚动至 L1：探针实测行顶 Y，无条件双向（与 TOC 跳行同模型，editorGeom.js）；落点锚点 LAND_ANCHOR
         const lines = src.split(/\r\n|\r|\n/)
@@ -231,7 +237,7 @@ export const EditorPane = {
         const ta = editorEl.value
         if (!ta) return
         const rr = cellCharRange(ta.value, wrap, td); if (!rr) return
-        ta.focus()
+        ta.focus({ preventScroll: true })
         const empty = td.textContent.trim() === '' // 空 cell（渲染 td 为空 = 格源文本仅 padding 空白）→ 零宽落位（§5.1）
         const a = empty ? Math.floor((rr[0] + rr[1]) / 2) : rr[0]
         ta.setSelectionRange(a, empty ? a : rr[1]) // 非空格选整段格文本（输入即替换）
@@ -244,55 +250,175 @@ export const EditorPane = {
       })
     }
 
-    // 选区手势（§2.2 / §9.3：#preview mouseup 事件委托；优先级：fm 手柄 > 活链/外链 > 表格 cell > 框选跨块 > 单块）
-    function onPreviewMouseUp(e) {
-      if (!state || props.mode !== 'preview' || e.button !== 0) return
-      if (!e.target.closest) return
-      // 操作意图而非编辑意图 → 不落位（2026-11-09 用户定稿）：
-      // ① frontmatter 折叠手柄（既有折叠行为）；② 活链（a.md-softlink 带 data-vault-path，app.js 委托 openDoc 跳转）
-      //    与外部链接（target=_blank 新 tab）——mouseup 先于 click，若落位会先切源码模式再跳转；
-      //    死链/歧义链（无跳转）不在此列 = 点击落位，顺势改链接语法；③ 代码块复制按钮（onPreviewClick 处理）。
-      //    task list checkbox（disabled input）浏览器不派发 mouseup，天然不落位，无需守卫。
-      if (e.target.closest('[data-fm-toggle]')) return
-      const aEl = e.target.closest('a')
-      if (aEl && (aEl.hasAttribute('data-vault-path') || aEl.hasAttribute('target'))) return
-      if (e.target.closest('.code-copy-btn')) return
-      // 「点击表格 cell」→ 单格文本范围（格级分流，先于块级判定；td/th 非映射块，其最近映射块是整表）。
-      // spec §2.2 点击 cell = mouseup 无文本选区 → 格级分流仅在选区为空时成立；非折叠选区
-      // 释放点落在 cell 上（跨块框选 / 格内拖选）不 return，落入下方框选/单块流程——
-      // anchor/focus 的 closest('[data-src-line]') 对格内选区自然取到整表 wrapper，合并语义正确（§5.1）。
-      const td = e.target.closest('table td, table th')
-      if (td) {
-        const cellSel = window.getSelection()
-        if (!(cellSel && !cellSel.isCollapsed && cellSel.toString())) {
-          landCell(td) // 选区空 = 点击 cell → 格级落位（landCell 内部落位成功路径才清选区）
-          return
-        }
-        // 选区非空 → 不 return，继续走框选/单块流程
+    /* ===== 触发层（spec 2026-11-17）：pointerType 分流。单击空选区不落位 → sticky 选中块；
+       双击/✎ 落位；非空选区框选映射不变；touch tap 选中，长按/双击归还原生。 ===== */
+    const TAP_MAX_MS = 350
+    const TAP_MAX_DX = 10
+    const TOUCH_MOUSE_GUARD_MS = 800
+    let lastTouchAt = 0
+    let downPt = null
+    let frameLanded = false // 本手势框选路径已落位旗标（dblclick 不得二次改写，终审 Important 2）
+    const landingSel = ref(null) // { el, isCell, td } | null —— sticky 选中态（✎ 点击执行入口）
+    let selEl = null
+
+    function applyBlockSel(el) {
+      if (selEl && selEl !== el) selEl.classList.remove('md-sel-block')
+      selEl = el
+      if (el) {
+        el.classList.add('md-sel-block')
+        positionEditBtn(el)
+        ebtnOn.value = true
       }
+    }
+    function clearBlockSel() {
+      if (selEl) selEl.classList.remove('md-sel-block')
+      selEl = null
+      landingSel.value = null
+      ebtnOn.value = false
+    }
+
+    // ✎ 定位：offsetTop/offsetLeft 的 offsetParent 即 #preview（内层 static 透明）；
+    // 代码块让位复制钮——落其左侧并排不叠（spec §3.3）
+    function positionEditBtn(el) {
+      const btn = ebtnEl.value
+      const stage = previewHtmlEl.value
+      if (!btn || !stage) return
+      let right = Math.max(0, stage.clientWidth - el.offsetLeft - el.offsetWidth + 4)
+      const copyBtn = el.querySelector ? el.querySelector('.code-copy-btn') : null
+      if (copyBtn) right += (copyBtn.offsetWidth || 44) + 8
+      btn.style.top = Math.max(0, el.offsetTop - 30) + 'px'
+      btn.style.right = right + 'px'
+    }
+
+    function onEditBtnClick() {
+      // 点了就落位（spec §2.3 无状态限定）：hover 预览态（仅 selEl）同样执行（终审 Important 1）
+      const s = landingSel.value ?? (selEl && selEl.isConnected ? { el: selEl, isCell: false, td: null } : null)
+      if (!s || !s.el || !s.el.isConnected) return clearBlockSel() // el 失效竞态 → 静默作废（spec §5）
+      if (s.isCell && s.td && s.td.isConnected) {
+        landCell(s.td)
+      } else {
+        landOn(+s.el.dataset.srcLine, +s.el.dataset.srcLineEnd)
+      }
+      clearBlockSel()
+    }
+
+    // 操作意图而非编辑意图 → 不落位不进选中（2026-11-09 定稿豁免全集继承 + ✎ 自身；
+    // task list checkbox（disabled input）浏览器不派发 pointerup，天然豁免）
+    function exemptTarget(t) {
+      if (!t.closest) return false
+      if (t.closest('[data-fm-toggle]')) return true
+      const a = t.closest('a')
+      if (a && (a.hasAttribute('data-vault-path') || a.hasAttribute('target'))) return true
+      if (t.closest('.code-copy-btn, #block-edit-btn')) return true
+      return false
+    }
+
+    function onPreviewPointerDown(e) {
+      if (e.pointerType !== 'touch') { downPt = null; frameLanded = false; return }
+      downPt = { x: e.clientX, y: e.clientY, t: Date.now() }
+    }
+
+    function onPreviewPointerUp(e) {
+      if (!state || props.mode !== 'preview') return
+      if (!e.target.closest) return
+      // 注：豁免目标（活链/✎ 等）早退不置 lastTouchAt——其合成鼠标事件同命中 exempt，链条自洽；新增豁免项须两侧核对
+      if (exemptTarget(e.target)) return
+      if (e.pointerType === 'touch') {
+        lastTouchAt = Date.now()
+        // 非 tap（长按/滚动）→ no-op：手势完整归还原生（Android 选词放大镜不受扰）
+        // pointercancel「即弃」由每次 pointerdown 重置 downPt 等效覆盖（滚动/取消后的 up 必伴新 down 或 downPt 过期）
+        if (!downPt) return
+        const moved = Math.hypot(e.clientX - downPt.x, e.clientY - downPt.y)
+        if (Date.now() - downPt.t > TAP_MAX_MS || moved > TAP_MAX_DX) return
+        const b = e.target.closest('[data-src-line]')
+        if (!b) { clearBlockSel(); return } // 点空白 = 取消选中
+        const tdEl = e.target.closest('td, th')
+        applyBlockSel(b)
+        landingSel.value = { el: b, isCell: !!tdEl, td: tdEl }
+        return
+      }
+      // 触摸后的合成鼠标事件屏蔽（双触发防护）
+      if (e.pointerType === 'mouse' && Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return
+      if (e.button !== 0) return
+      // 非空选区 → 框选跨块映射（旧 mouseup 逻辑原样迁移；格内拖选经 anchor/focus closest
+      // 自然落整表 wrapper，§5.1 合并语义不变）
       const sel = window.getSelection()
-      let l1 = null, l2 = null
       if (sel && !sel.isCollapsed && sel.toString()) {
         const node = n => (n ? (n.nodeType === 1 ? n : n.parentElement) : null)
         const aEl = node(sel.anchorNode), fEl = node(sel.focusNode)
         const sA = aEl && aEl.closest ? aEl.closest('[data-src-line]') : null
         const sF = fEl && fEl.closest ? fEl.closest('[data-src-line]') : null
+        let l1 = null, l2 = null
         if (sA && sF) {
-          const all = Array.from(previewEl.value.querySelectorAll('[data-src-line]'))
+          const all = Array.from(previewHtmlEl.value.querySelectorAll('[data-src-line]'))
           let i = all.indexOf(sA), j = all.indexOf(sF)
-          if (i > j) [i, j] = [j, i]
+          if (i > j) { const tmp = i; i = j; j = tmp }
           let mn = Infinity, mx = -Infinity
           for (let k = i; k <= j; k++) { mn = Math.min(mn, +all[k].dataset.srcLine); mx = Math.max(mx, +all[k].dataset.srcLineEnd) }
           l1 = mn; l2 = mx
         }
+        if (!l1) {
+          const b = e.target.closest('[data-src-line]')
+          if (!b) return // §2.3：无映射 → 静默
+          l1 = +b.dataset.srcLine; l2 = +b.dataset.srcLineEnd
+        }
+        clearBlockSel()
+        window.getSelection().removeAllRanges()
+        frameLanded = true // 同手势后续 dblclick 直接让位（终审 Important 2）
+        landOn(l1, l2)
+        return
       }
-      if (!l1) {
-        const b = e.target.closest('[data-src-line]')
-        if (!b) return // §2.3：无映射 / 非块区域 → 静默，不弹错误
-        l1 = +b.dataset.srcLine; l2 = +b.dataset.srcLineEnd
+      // 空选区单击 → sticky 选中（不再落位；执行入口 = ✎ 或双击）
+      const b = e.target.closest('[data-src-line]')
+      if (!b) { clearBlockSel(); return }
+      const tdEl = e.target.closest('td, th')
+      applyBlockSel(b)
+      landingSel.value = { el: b, isCell: !!tdEl, td: tdEl }
+    }
+
+    // 桌面 hover 瞬时预览（spec §3.2）：不产生 sticky；sticky 优先——已有选中块时 hover 不移动 ✎
+    let hoverOutTimer = null
+    function onPreviewHoverIn(e) {
+      if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return
+      if (!e.target.closest) return
+      if (e.target.closest('#block-edit-btn')) { // 移入 ✎ 本体：不收（撤销在途定时器）也不翻转态
+        if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null }
+        return
       }
-      window.getSelection().removeAllRanges()
-      landOn(l1, l2)
+      if (exemptTarget(e.target)) return
+      if (landingSel.value) return
+      const b = e.target.closest('[data-src-line]')
+      if (!b) return // 穿空隙/空白：hoverOut 挂的收起定时器必须存活（终审 Critical 1）
+      if (hoverOutTimer) { clearTimeout(hoverOutTimer); hoverOutTimer = null } // 块间切换：先撤再亮
+      applyBlockSel(b) // 仅视觉（landingSel 保持 null）
+    }
+    function onPreviewHoverOut(e) {
+      if (e && e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('#block-edit-btn')) return // 移入 ✎ 本体不收
+      if (hoverOutTimer) clearTimeout(hoverOutTimer)
+      hoverOutTimer = setTimeout(() => {
+        hoverOutTimer = null
+        if (!landingSel.value) clearBlockSel()
+      }, 120)
+    }
+
+    function onPreviewDblClick(e) {
+      if (!state || props.mode !== 'preview') return
+      if (Date.now() - lastTouchAt < TOUCH_MOUSE_GUARD_MS) return // 触摸双击选词归原生
+      if (frameLanded) return // 本手势已由框选路径落位（词选 cell=整表，spec §2.1 冻结口径）
+      if (!e.target.closest) return
+      if (exemptTarget(e.target)) return
+      const sel = window.getSelection()
+      if (sel && !sel.isCollapsed && sel.toString()) return // 词选非空 = pointerup 框选路径已落位
+      const td = e.target.closest('table td, table th')
+      if (td) {
+        landCell(td) // 空 cell 零宽落格；嵌套表无映射 → landCell 内部静默（继承 §5.1）
+        clearBlockSel()
+        return
+      }
+      const b = e.target.closest('[data-src-line]')
+      if (!b) return // §2.3 静默
+      landOn(+b.dataset.srcLine, +b.dataset.srcLineEnd)
+      clearBlockSel()
     }
 
     // TOC 跳转/scrollspy 用的元素引用（P4-3）：previewEl / editorEl 即本组件 ref；
@@ -320,7 +446,7 @@ export const EditorPane = {
       done()
     }
 
-    return { editorEl, previewEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewMouseUp, triggerPageTurn, getScrollerEl }
+    return { editorEl, previewEl, previewHtmlEl, ebtnEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
   },
   template: `
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
@@ -330,7 +456,11 @@ export const EditorPane = {
         placeholder="从左侧选择一个文档..."
         @input="onInput"></textarea>
       <div id="preview" ref="previewEl" v-show="mode === 'preview'"
-        class="w-full flex-1" v-html="renderedHtml" @click="onPreviewClick" @mouseup="onPreviewMouseUp"></div>
+        class="w-full flex-1" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"
+        @dblclick="onPreviewDblClick" @mouseover="onPreviewHoverIn" @mouseout="onPreviewHoverOut">
+        <div ref="previewHtmlEl" v-html="renderedHtml"></div>
+        <button id="block-edit-btn" ref="ebtnEl" :class="{ on: ebtnOn }" aria-label="编辑此块" @click="onEditBtnClick">✎</button>
+      </div>
     </div>
   `
 }
