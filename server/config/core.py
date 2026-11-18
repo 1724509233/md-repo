@@ -10,6 +10,7 @@ import yaml
 from .ai import AIConfig
 from .log import LogConfig
 from ..agent.tools import TOOL_REGISTRY
+from ..privacy import parse_privacy_dirs
 
 
 @dataclass
@@ -21,6 +22,7 @@ class ServerConfig:
     log: LogConfig = field(default_factory=LogConfig)
     mcp_write_token: str = ""
     lan_exposure: bool = False
+    privacy_dirs: tuple[str, ...] = ()
 
 
 def is_loopback(host: str) -> bool:
@@ -122,6 +124,14 @@ def load_server_config(config_path: str) -> ServerConfig:
     if isinstance(mcp_raw, dict):
         mcp_write_token = str(mcp_raw.get("write_token", "") or "")
 
+    # Privacy read boundary (spec 2026-11-18 §2.1): top-level `privacy:`
+    # section, dirs list validated fail-fast (same lenient-section
+    # convention as `mcp:` — absent section = () = mechanism lazy).
+    privacy_raw = data.get("privacy")
+    privacy_dirs: tuple[str, ...] = ()
+    if isinstance(privacy_raw, dict):
+        privacy_dirs = parse_privacy_dirs(privacy_raw.get("dirs"))
+
     return ServerConfig(
         host=server["host"],
         port=int(server["port"]),
@@ -130,4 +140,5 @@ def load_server_config(config_path: str) -> ServerConfig:
         log=LogConfig.from_raw(server, str(path)),
         mcp_write_token=mcp_write_token,
         lan_exposure=bool(server.get("lan_exposure", False)),
+        privacy_dirs=privacy_dirs,
     )

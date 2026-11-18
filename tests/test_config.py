@@ -1,6 +1,7 @@
 """Tests for server.config and client.config."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -462,3 +463,43 @@ def test_server_config_nonloopback_host_loads_ungated(tmp_path: Path) -> None:
     cfg = load_server_config(str(_server_cfg_file(tmp_path)))
     assert cfg.host == "0.0.0.0"
     assert cfg.lan_exposure is False
+
+
+# ── privacy.dirs (model-surface read boundary; spec §2.1) ─────────────────
+
+def _privacy_extra(dirs_entries: list[str]) -> str:
+    """Top-level ``privacy: dirs:`` YAML block (JSON quoting = valid YAML)."""
+    lines = "".join(f"    - {json.dumps(e)}\n" for e in dirs_entries)
+    return f"privacy:\n  dirs:\n{lines}"
+
+
+def test_privacy_dirs_absent_default_empty(tmp_path: Path) -> None:
+    """缺省 [] = 机制惰性（安全默认范式）."""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path)))
+    assert cfg.privacy_dirs == ()
+
+
+def test_privacy_dirs_parses_and_dedupes(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(
+        tmp_path, _privacy_extra(["日记", "finance", "日记"]))))
+    assert cfg.privacy_dirs == ("日记", "finance")
+
+
+@pytest.mark.parametrize("entry", [
+    "/abs/dir",          # 绝对路径（posix，含 '/'）
+    "C:\\vault",         # 绝对路径（Windows 盘符形）
+    "..",                # 父目录穿越
+    "../x",
+    "notes/x",           # 含 '/'（只支持首段目录级）
+    "",                  # 空串
+    ".sync",             # 系统目录首段
+    ".trash",
+    "suggestions",
+    ".sync\\x",          # 反斜杠形（首段 .sync）
+    "suggestions\\y",
+])
+def test_privacy_dirs_invalid_entry_rejected(tmp_path: Path, entry: str) -> None:
+    """config 校验拒绝清单（每个非法形态一个 parametrize；spec §2.1）。"""
+    with pytest.raises(ValueError, match="privacy.dirs"):
+        load_server_config(str(_server_cfg_file(
+            tmp_path, _privacy_extra([entry]))))
