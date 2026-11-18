@@ -16,6 +16,7 @@ from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import self_exclusion
 from .config import load_background_agents, load_notifications, load_server_config
 from .config.core import lan_gate_check
+from .privacy import PrivacyConfig
 from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed
@@ -47,13 +48,17 @@ class Runtime:
 
 
 async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
-                        notifications_cfg) -> Runtime:
+                        notifications_cfg, privacy: PrivacyConfig | None = None) -> Runtime:
     """Assemble the runtime wiring graph, returned as a named Runtime.
 
     Everything the nested _run closure in main() used to do: event bus +
     publisher-side filters, the four ledger callbacks, the snapshot
     watcher, and the background agents. Must be called from a running
     loop (the Bus is loop-bound).
+
+    ``privacy`` (spec 2026-11-18 §2.2): passed straight to
+    start_background_agents (the bgagent/executor privacy parameter chain);
+    ``None`` = unwired, behavior identical to before.
     """
     # Event bus: wake signals for the arming/executor loops
     # (spec 2026-10-24). Publisher-side filters drop events that
@@ -98,7 +103,7 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
             bg_agents, vault_dir,
             hooks=[GuardedNotificationHook(
                 conn, daily_cap=notifications_cfg.daily_cap)],
-            db_conn=conn, ledger_conn=ledger_conn)
+            db_conn=conn, ledger_conn=ledger_conn, privacy=privacy)
         await asyncio.sleep(0)  # let the bgagent tasks start
 
     return Runtime(watcher, on_created, on_modified, on_moved, on_deleted,
@@ -203,7 +208,11 @@ def main(argv: list[str] | None = None) -> None:
 
     async def _run() -> None:
         start_logrotate(None, logs_dir, config.log.retention_days)
-        rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents, notifications_cfg)
+        # Privacy parameter chain (spec 2026-11-18 §2.2): one shared
+        # mtime-cache view handed to the scheduler → run_once/run_executor.
+        rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents,
+                                 notifications_cfg,
+                                 privacy=PrivacyConfig(config_path))
         await server.serve()
         rt.stop()
         events.set_bus(None)

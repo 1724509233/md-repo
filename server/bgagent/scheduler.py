@@ -26,6 +26,7 @@ Memory-runtime v1 additions (trigger agents + executor role):
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import time
 from datetime import datetime
@@ -35,6 +36,7 @@ from typing import Callable
 from croniter import croniter
 
 from ..config import BackgroundAgentConfig
+from ..privacy import PrivacyConfig
 from ..proposals import EXPIRE_AFTER_S, scan as scan_proposals
 from .. import events
 from ..vault.db import recall as recall_db
@@ -347,7 +349,8 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
                             run_fn: Callable | None = None,
                             db_conn=None,
                             ledger_conn=None,
-                            executor_fn: Callable | None = None) -> list[asyncio.Task]:
+                            executor_fn: Callable | None = None,
+                            privacy: PrivacyConfig | None = None) -> list[asyncio.Task]:
     """Spawn scheduler tasks. Must be called from a running loop.
 
     - One cron task per enabled, non-executor agent (executor registry
@@ -358,9 +361,32 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
       ledger connection is provided (``ledger_conn``, falling back to
       ``db_conn`` for callers predating the 2026-10-31 ledger-file split:
       the proposals records it scans live in ledger.db).
+
+    ``privacy`` (spec 2026-11-18 §2.2/§2.3): the process-wide PrivacyConfig,
+    forwarded along the parameter chain to BOTH consumers — ``run_once``
+    (its ``privacy`` kwarg, T3: the bgagent spec's privacy view) and
+    ``run_executor`` (``privacy_dirs``, recomputed from ``privacy.dirs``
+    every cycle so a config edit applies to the next cycle without a
+    restart — §2.7). ``None`` (default) = the chain stays unwired, every
+    call identical to the pre-privacy behavior. Custom ``run_fn``/
+    ``executor_fn`` overrides are left as-is except the default ``run_once``
+    / ``run_executor`` bindings, which get wrapped when privacy is given.
     """
     run_fn = run_fn or run_once
     executor_fn = executor_fn or run_executor
+    if privacy is not None:
+        if run_fn is run_once:
+            # T3 wired run_once's privacy kwarg (in-package interface,
+            # runner.py untouched) — partial-bind the live PrivacyConfig.
+            run_fn = functools.partial(run_once, privacy=privacy)
+        _exec = executor_fn
+
+        def _privacy_executor(vault, conn):
+            # privacy.dirs re-read per cycle (the mtime cache, §2.7):
+            # zero derived state — the executor never caches the list.
+            return _exec(vault, conn, privacy_dirs=privacy.dirs)
+
+        executor_fn = _privacy_executor
     hooks = hooks or []
     vault = Path(vault_dir).resolve()
     all_aliases = {a.alias for a in agents}

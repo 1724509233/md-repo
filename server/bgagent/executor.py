@@ -60,6 +60,7 @@ Failure taxonomy:
 """
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import sqlite3
@@ -67,6 +68,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import ledger
+from ..privacy import is_privacy
 from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..snapshots import capture, finalize, gc, hash_bytes
 from ..vault.db.relatedness import merge_edge
@@ -126,11 +128,20 @@ def _render_entities(sections: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict,
+                        privacy_dirs: tuple[str, ...] = ()) -> None:
     """Upsert payload {entity, attrs: {field: scalar}} as a ``## entity``
     section in ``index/entities.md`` (replace existing section, append if
     absent). D7: attrs are fields, not narrative — the v1 prose shape
-    ``{entity, value}`` is rejected structurally (parked as failed)."""
+    ``{entity, value}`` is rejected structurally (parked as failed).
+
+    Privacy guard (spec 2026-11-18 §2.3): ``source_refs`` render verbatim
+    as ``- source: <ref>`` lines into the machine zone — a privacy-scoped
+    ref would leak a private path through the auto track (no human gate),
+    the same exposure class as a relatedness edge. Privacy refs are
+    dropped line-wise; if every ref is dropped the section would carry
+    zero provenance → typed failure parks the proposal.
+    """
     payload = p.get("payload") or {}
     key = str(payload.get("entity") or "").strip()
     if not key:
@@ -153,7 +164,11 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
             raise ValueError(f"entity_index attrs['{k}'] must be a non-empty value")
 
     body_lines = [f"- {k}: {v}" for k, v in attrs.items()]
-    for ref in (p.get("source_refs") or []):
+    refs = [str(r) for r in (p.get("source_refs") or [])]
+    kept_refs = [r for r in refs if not is_privacy(privacy_dirs, r)]
+    if refs and not kept_refs:
+        raise _MergeFailed("source_refs all privacy-scoped")
+    for ref in kept_refs:
         body_lines.append(f"- source: {ref}")
     section_body = "\n".join(body_lines)
 
@@ -191,7 +206,8 @@ def _merge_entity_index(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
 # (proposal_transitions) is this handler's state record. Nothing to
 # snapshot (no file).
 
-def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
+def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict,
+                       privacy_dirs: tuple[str, ...] = ()) -> None:
     """Insert/refresh one (source, target) edge in the ``relatedness`` table.
 
     source = source_refs[0], target = payload['target'], basis = the record
@@ -220,6 +236,16 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
         raise ValueError("relatedness payload requires a 'target'")
 
     source = str(refs[0])
+
+    # Privacy guard (spec 2026-11-18 §2.3): a privacy-scoped endpoint must
+    # never land as a visible edge (the relatedness table feeds the model
+    # surface — same exposure class as the entity_index source refs).
+    # Refuses BEFORE the existence probe: a private path's liveness is not
+    # for the proposal channel to learn either.
+    if privacy_dirs and (is_privacy(privacy_dirs, source)
+                         or is_privacy(privacy_dirs, target)):
+        raise _MergeFailed("relatedness endpoint privacy-scoped")
+
     for rel in (source, target):
         fp = _vault_path(vault, rel)
         if not fp.is_file():
@@ -412,10 +438,15 @@ _HANDLERS = {
     "errata": _merge_errata,
 }
 
+# Handlers that render proposal refs into the machine zone (spec
+# 2026-11-18 §2.3): only these receive ``privacy_dirs``.
+_PRIVACY_AWARE = frozenset({"entity_index", "relatedness"})
+
 
 # ── Entry point ──────────────────────────────────────────────────────────
 
-def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
+def run_executor(vault_dir, conn: sqlite3.Connection,
+                 privacy_dirs: tuple[str, ...] = ()) -> dict:
     """One executor cycle. Returns {"merged": n, "expired": n, "errors": [...]}.
 
     See the module docstring for the failure taxonomy. ``reminder`` has no
@@ -423,6 +454,11 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
     merging. Retired v1 types (link / correction / archive) have no v2
     handler: their adopted records are parked in ``failed`` with an
     actionable reason (human processes 存量, no migration — spec §四).
+
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): the privacy dir list, passed
+    to the merge handlers that surface refs into the machine zone
+    (entity_index / relatedness). Empty tuple (default) = every handler
+    behaves exactly as before the guard existed.
     """
     vault = Path(vault_dir)
     merged = 0
@@ -455,6 +491,12 @@ def run_executor(vault_dir, conn: sqlite3.Connection) -> dict:
                 # No handler (reminder): never silently swallowed.
                 errors.append(f"proposal #{rec_id} ({rel}): no handler for type '{p['type']}'")
                 continue
+            if privacy_dirs and p["type"] in _PRIVACY_AWARE:
+                # Spec 2026-11-18 §2.3: bind the privacy list into the two
+                # handlers that surface refs into the machine zone
+                # (entity_index / relatedness); summary/errata are outside
+                # the guard table and keep the 3-arg call.
+                handler = functools.partial(handler, privacy_dirs=privacy_dirs)
             handler(conn, vault, p)
             advance(conn, vault, rec_id, "merged", actor="executor")
             merged += 1
