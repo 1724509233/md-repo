@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from server.services import proposals
+from server.services import ledger, proposals
 from server.bgagent import runner
 from server.bgagent.readback import ReadbackSystemReminder
 from server.agent.tools import TOOL_REGISTRY
@@ -33,6 +33,7 @@ from server.vault.db.relatedness_rank import is_derived, live_edges, relatedness
 from server.vault.db.segments_sql import segments_search
 from server.vault.orchestration.file_ops import apply_change
 from server.vault.orchestration.indexer import graph_extract_file, index_segments
+from tests.conftest import simulate_consumer
 from tests.test_executor import _adopted
 
 
@@ -367,6 +368,66 @@ def test_move_rewrites_paths_preserves_verdicts(vault_dir, db_conn, ledger_conn)
     p = proposals.record(ledger_conn, rec["id"])
     assert p["status"] == "failed"
     assert "mechanical filter" in p["reject_reason"]
+
+
+# ── card 10a 行为签名钉（改动前现状；10c 等价性对照） ────────────────────────
+# 钉「record 移动路径 → ledger.db relatedness 边改写」与「ignored 态存活
+# （D12）」两条现行为，另钉 consume 路（watcher 通道，补裁 1.2 建议件）。
+# 今日改写经 file_ops 懒取模块 handle 喂入；10c（A4 终值）只换 conn 来源
+# （显式 kwarg），这三个钉的断言一字不动——前后同断言即等价性对照。
+
+def test_card10_pin_record_move_rewrites_edge(vault_dir, db_conn, ledger_conn):
+    """签名 1（边改写）：盘上改名 + ledger.record(moved)（web/agent 写通道
+    同款）→ relatedness 边 A-C 改写为 B-C，旧路径零行。"""
+    _write(vault_dir, "notes/a.md")
+    _write(vault_dir, "notes/c.md")
+    rel.upsert_edge(ledger_conn, "notes/a.md", "notes/c.md", "topic", "t")
+
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
+                  from_path="notes/a.md")
+
+    rows = {(r["source"], r["target"]) for r in ledger_conn.execute(
+        "SELECT source, target FROM relatedness").fetchall()}
+    assert rows == {("notes/b.md", "notes/c.md")}
+
+
+def test_card10_pin_record_move_preserves_ignored(vault_dir, db_conn, ledger_conn):
+    """签名 2（D12 ignored 态存活）：ignored=1 的边随移动改写保住标记，
+    且机械过滤对新路径照常触发（pair_ignored 双向命中）。"""
+    _write(vault_dir, "notes/a.md")
+    _write(vault_dir, "notes/d.md")
+    eid = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/d.md", "nope", "t")
+    assert rel.mark_ignored(ledger_conn, eid)
+
+    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
+                  from_path="notes/a.md")
+
+    rows = [(r["source"], r["target"], r["ignored"]) for r in ledger_conn.execute(
+        "SELECT source, target, ignored FROM relatedness").fetchall()]
+    assert rows == [("notes/b.md", "notes/d.md", 1)]
+    assert rel.pair_ignored(ledger_conn, "notes/b.md", "notes/d.md")
+
+
+def test_card10_pin_consumer_move_rewrites_edge(vault_dir, db_conn, ledger_conn):
+    """签名 3（consume 路=watcher/外部移动通道）：simulate_consumer 驱动
+    生产消费路径的移动事件 → 边同样改写（今日经懒取 handle；10c 起经
+    透传 kwarg——届时本钉随 conftest 预批同步加 kwarg，断言不变）。
+
+    路径独立命名（s/t）：ledger._registry 是模块级、按相对路径键控，
+    前序 record 钉留在 "notes/b.md" 的 skip 标记 TTL 内会被这里误弹。"""
+    _write(vault_dir, "notes/s.md")
+    _write(vault_dir, "notes/c.md")
+    rel.upsert_edge(ledger_conn, "notes/s.md", "notes/c.md", "topic", "t")
+
+    (vault_dir / "notes" / "s.md").rename(vault_dir / "notes" / "t.md")
+    simulate_consumer(db_conn, vault_dir, "notes/t.md", "moved",
+                      from_path="notes/s.md")
+
+    rows = {(r["source"], r["target"]) for r in ledger_conn.execute(
+        "SELECT source, target FROM relatedness").fetchall()}
+    assert rows == {("notes/t.md", "notes/c.md")}
 
 
 def test_move_duplicate_pair_rewrite_noop(vault_dir, db_conn, ledger_conn):
