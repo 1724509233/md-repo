@@ -303,6 +303,37 @@ def test_editor_template_refs_are_returned():
         assert name in returned, f"template ref {name} missing from setup return"
 
 
+def test_p2_a11y_text_sweep():
+    t = _templates(); css = (TPL / "style.css").read_text(encoding="utf-8")
+    ic = (TPL / "js/utils/icons.js").read_text(encoding="utf-8")
+    assert ic.count("<svg") == ic.count('aria-hidden="true"')
+    # 内联装饰 svg：全组件枚举，漏加者须进 EXC 例外并注理由（语义 svg 或已有文本兜底）
+    # 例外均为本 task 文件范围外的组件（Task 2/3/6/7 属地），逐文件理由：
+    # - FileTree.js(6)：折叠 caret（行本身有 aria-expanded，语义指示）；⋯/清除钮均有 aria-label；
+    #   搜索图标邻 placeholder/label；「展示更多」chevron 按钮有文字
+    # - TrashPanel.js(3)：空态 ring 邻「回收站是空的」文字；两个 ⋯ 钮有 aria-label
+    # - AIChatPanel.js(11)：全部位于带 aria-label/title 的按钮内或邻文本（brand 邻「AI 助手」、
+    #   tool/thinking caret = 折叠语义指示且行有文字、赞/踩/发送/中止钮有 aria-label）
+    # - MonitorPage.js(3)：返回/展开钮有文字+aria-expanded；刷新钮有 aria-label
+    # - DocRelated.js(9)：picon 邻「关联」标题；关闭/返回钮有 aria-label；三个区块 caret 钮
+    #   有文字+aria-expanded；IC_LINK/IC_TAG/IC_REL 常量渲染于带文字标题的折叠钮内；错误图标邻文案
+    EXC: dict[str, int] = {
+        "FileTree.js": 6, "TrashPanel.js": 3, "AIChatPanel.js": 11,
+        "MonitorPage.js": 3, "DocRelated.js": 9,
+    }
+    for name, src in t.items():
+        naked = len(re.findall(r"<svg(?![^>]*aria-hidden)", src))
+        assert naked <= EXC.get(name, 0), f"{name}: {naked} 个未隐藏内联 svg"
+    for sel in ("#search-input", "#ai-input", ".sp-q-input", ".rsn-ta"):
+        assert re.search(re.escape(sel) + r":focus-visible", css), sel
+    assert 'javascript:void(0)' not in t["MemoryConsole.js"]
+    app = t["app.js"]
+    assert app.count('aria-hidden="true"') >= 4           # 四处 backdrop
+    assert 'aria-hidden="true"' in t["MobileSheet.js"]
+    assert ':aria-pressed' in t["TopBar.js"] and 'aria-expanded' in t["SearchPanel.js"]
+    assert 'aria-label' in t["SearchPanel.js"] and 'class="rsn-ta" aria-label' in t["MemoryConsole.js"]
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]

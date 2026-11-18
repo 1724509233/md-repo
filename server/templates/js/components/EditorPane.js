@@ -453,7 +453,7 @@ export const EditorPane = {
       <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
         class="w-full flex-1 border-0 bg-transparent resize-none focus:outline-none"
-        placeholder="从左侧选择一个文档..."
+        placeholder="从左侧选择一个文档…"
         @input="onInput"></textarea>
       <div id="preview" ref="previewEl" v-show="mode === 'preview'"
         class="w-full flex-1" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"

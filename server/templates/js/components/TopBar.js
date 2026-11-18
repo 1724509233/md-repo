@@ -97,8 +97,9 @@ export const TopBar = {
       <button data-notif-bell
         class="topbar-btn topbar-btn--icon"
         :class="{ 'text-muted/40': unreadCount === 0 }"
-        @click="$emit('toggleNotifDropdown')" aria-label="通知">
-        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        @click="$emit('toggleNotifDropdown')"
+        :aria-label="'通知' + (unreadCount > 0 ? '（' + unreadCount + ' 条未读）' : '')">
+        <svg aria-hidden="true" class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
           <path d="M13.73 21a2 2 0 0 1-3.46 0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -109,13 +110,13 @@ export const TopBar = {
 
       <!-- 桌面端模式切换：无外框分段控件，仅激活态黄铜 -->
       <div class="hidden lg:flex mode-pill">
-        <button class="mode-btn topbar-btn" :class="{ active: mode === 'edit' }"
+        <button class="mode-btn topbar-btn" :class="{ active: mode === 'edit' }" :aria-pressed="mode === 'edit'"
           @click="setMode('edit')" title="编辑" aria-label="编辑">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg><span class="tb-label">编辑</span>
+          <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg><span class="tb-label">编辑</span>
         </button>
-        <button class="mode-btn topbar-btn" :class="{ active: mode === 'preview' }"
+        <button class="mode-btn topbar-btn" :class="{ active: mode === 'preview' }" :aria-pressed="mode === 'preview'"
           @click="setMode('preview')" title="预览" aria-label="预览">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><span class="tb-label">预览</span>
+          <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><span class="tb-label">预览</span>
         </button>
       </div>
 
@@ -127,7 +128,7 @@ export const TopBar = {
         :class="{ 'rel-open': relOpen }"
         :disabled="!currentPath"
         @click="openDocFace" title="本文档的关联文档" aria-label="本文档的关联文档">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg><span class="tb-label">关联</span>
+        <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg><span class="tb-label">关联</span>
       </button>
 
       <!-- 目录（P4-3）：桌面 图标+文字；移动 28px 图标钮（铃铛/更多同规格，文案进 tooltip）。
@@ -150,40 +151,40 @@ export const TopBar = {
            保存图标 = 软盘（同移动端「更多」菜单）：铅笔与「编辑」重复，图标化后两键不可区分 -->
       <button class="hidden lg:inline-flex topbar-btn"
         @click="download" title="下载" aria-label="下载">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="tb-label">下载</span>
+        <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="tb-label">下载</span>
       </button>
       <button class="hidden lg:inline-flex topbar-btn btn-save"
         @click="save" title="保存" aria-label="保存">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span class="tb-label">保存</span>
+        <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span class="tb-label">保存</span>
       </button>
 
       <!-- 移动端更多菜单 -->
       <div class="lg:hidden relative" data-more-menu>
         <button class="topbar-btn topbar-btn--icon"
           @click="$emit('toggleMoreMenu')" aria-label="更多操作">
-          <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
         </button>
         <div v-show="moreMenuOpen" ref="moreMenuEl" role="menu" class="absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50">
           <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('setMode', 'edit'); $emit('toggleMoreMenu')">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
           </button>
           <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('setMode', 'preview'); $emit('toggleMoreMenu')">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览
           </button>
           <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
             :disabled="!currentPath"
             @click="$emit('open-doc-face'); $emit('toggleMoreMenu')">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
           </button>
           <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('save'); $emit('toggleMoreMenu')">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存
           </button>
           <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="$emit('download'); $emit('toggleMoreMenu')">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
           </button>
         </div>
       </div>

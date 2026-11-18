@@ -652,7 +652,7 @@ export const AIChatPanel = {
         <div class="flex items-end gap-2 border border-border rounded-xl p-3">
           <textarea id="ai-input" ref="inputEl" v-model="inputText" rows="1"
             class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
-            placeholder="输入消息，Enter 发送..."
+            placeholder="输入消息，Enter 发送…"
             @keydown="onKeydown"></textarea>
           <button id="ai-send" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             :class="{ hidden: status === 'thinking' }" @click="sendChat" aria-label="发送">

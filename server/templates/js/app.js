@@ -868,7 +868,7 @@ export function createApp() {
               class="rbtn" :class="{ on: state.memoryOpen }"
               :title="'记忆控制台' + (badgeParts.total > 0 ? ' · 待审 ' + badgeParts.awaiting + ' · 失败 ' + badgeParts.failed : '')"
               aria-label="记忆控制台页" @click="onMemoryRailClick">
-              <span class="ricon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+              <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
               <span class="rlabel">记忆</span>
               <span v-if="badgeParts.total > 0" class="badge">{{ badgeParts.total > 99 ? '99+' : badgeParts.total }}</span>
             </button>
@@ -883,7 +883,7 @@ export function createApp() {
                 <span class="pacts">
                   <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
                     @click="fileTreeRef && fileTreeRef.collapseAll()">
-                    <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
                   </button>
                 </span>
               </div>
@@ -916,17 +916,17 @@ export function createApp() {
 
         <!-- 移动端（≤860px）记忆控制台 overlay backdrop（≥861px 由 style.css ID 规则隐藏） -->
         <div id="memory-console-backdrop"
-          class="fixed inset-0 bg-black/30 z-40"
+          class="fixed inset-0 bg-black/30 z-40" aria-hidden="true"
           :class="{ hidden: !state.memoryOpen }"
           @click="state.memoryOpen = false"></div>
 
         <!-- 移动端文件面板 overlay backdrop（<1024px，spec §3.5） -->
-        <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+        <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.filePanelOpen }"
           @click="state.filePanelOpen = false"></div>
 
         <!-- 移动端搜索抽屉 backdrop（<1024px，spec §3.5） -->
-        <div id="search-drawer-backdrop" class="search-drawer-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+        <div id="search-drawer-backdrop" class="search-drawer-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.searchDrawerOpen }"
           @click="state.searchDrawerOpen = false"></div>
 
@@ -1014,7 +1014,7 @@ export function createApp() {
           <button id="ai-btn" class="hidden lg:flex absolute top-1/2 -translate-y-1/2 items-center justify-center z-40"
             :class="{ 'ai-open': state.aiOpen }"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
+            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
             </svg>
@@ -1023,7 +1023,7 @@ export function createApp() {
           <!-- AI 面板切换按钮（移动端：圆形，固定右下角） -->
           <button id="ai-btn-mobile" class="lg:hidden fixed right-4 flex items-center justify-center z-40"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
+            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
             </svg>
@@ -1035,7 +1035,7 @@ export function createApp() {
           <!-- 关联 bottom sheet（spec §6.4 候选① 移动 ≤860px：80vh 底部抽屉，.search-drawer 规格 1:1；
                四路关闭 = 关闭钮 / backdrop / 手柄点击 / 顶栏「更多」→「关联」再点一次；
                ≥861px 由 style.css ID 规则隐藏，侧栏承载） -->
-          <div id="rel-sheet-backdrop" class="rel-sheet-backdrop"
+          <div id="rel-sheet-backdrop" class="rel-sheet-backdrop" aria-hidden="true"
             :class="{ show: state.relSheetOpen }"
             @click="state.relSheetOpen = false"></div>
           <div id="rel-sheet" class="rel-sheet" :class="{ open: state.relSheetOpen }">
