@@ -27,9 +27,9 @@ import { api } from '../api.js'
  *   wikilink → 链环（正文 [[wikilink]] 显式链接）
  *   tag      → 标签（共享 tag 的 doc→tag→doc 隐式中介，最弱）
  *   AI 建议  → relatedness（机器发现，黄铜） */
-const IC_LINK = '<svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
-const IC_TAG = '<svg viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
-const IC_REL = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>'
+const IC_LINK = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
+const IC_TAG = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'
+const IC_REL = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>'
 
 export const DocRelated = {
   name: 'DocRelated',
@@ -143,9 +143,9 @@ export const DocRelated = {
   template: `
     <div class="rel-face" ref="faceEl">
       <div class="p-head">
-        <span class="picon"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
+        <span class="picon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg></span>
         <span class="ptitle">关联</span>
-        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="$emit('close')"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="$emit('close')"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="doc-path-line" :title="path">{{ path }}</div>
       <div class="rel-scroll">
@@ -165,7 +165,7 @@ export const DocRelated = {
               <span class="b-ic"><span v-html="IC_LINK"></span></span>
               <span>Wikilink</span>
               <span class="cnt">{{ wikiLinks.length }}</span>
-              <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+              <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
             <div class="fold" :class="{ open: fold.wikilink }" id="fold-wiki"><div>
               <button v-for="l in wikiLinks" :key="l.path" type="button" class="doc-row"
@@ -180,7 +180,7 @@ export const DocRelated = {
               <span class="b-ic b-ic-hot"><span v-html="IC_REL"></span></span>
               <span>AI 建议</span>
               <span class="cnt hot">{{ data.suggestions.length }}</span>
-              <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+              <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
             <div class="fold" :class="{ open: fold.ai }" id="fold-ai"><div>
               <div v-for="s in data.suggestions" :key="s.edge_id" class="doc-row mach"
@@ -199,7 +199,7 @@ export const DocRelated = {
               <span class="b-ic"><span v-html="IC_TAG"></span></span>
               <span>Tag</span>
               <span class="cnt">{{ tagLinks.length }}</span>
-              <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
+              <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
             <div class="fold" :class="{ open: fold.tag }" id="fold-tag"><div>
               <button v-for="l in tagLinks" :key="l.path" type="button" class="doc-row"
@@ -210,7 +210,7 @@ export const DocRelated = {
           </div>
           <!-- 忽略失败提示（404 = 已被他人忽略等；服务端文案直接展示） -->
           <div v-if="actionError" class="m-err">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
             <span>{{ actionError }}</span>
           </div>
         </template>

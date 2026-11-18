@@ -83,7 +83,7 @@ const TreeNode = {
             @dragend="treeOps.onDragEnd()"
             @dragover="treeOps.onDragOver($event, childPath(name))"
             @drop="treeOps.onDrop($event, childPath(name))">
-            <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
+            <svg aria-hidden="true" class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
@@ -96,7 +96,7 @@ const TreeNode = {
             <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
               @click.stop.prevent="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
-              <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+              <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
           </div>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
@@ -127,7 +127,7 @@ const TreeNode = {
           <span v-else class="font-medium flex-1 truncate">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
             @click.stop.prevent="treeOps.openMenu($event, f.path, false)" aria-label="操作">
-            <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+            <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
         </a>
       </div>
@@ -559,11 +559,11 @@ export const FileTree = {
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
       <div class="sp-input">
-        <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <svg aria-hidden="true" class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
           placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
-          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
 
         <!-- RAG 搜索下拉框 -->
@@ -595,7 +595,7 @@ export const FileTree = {
           </div>
           <div v-else-if="!moreLoading && !fuzzyDone && results.length > 0" class="search-more-wrap">
             <button class="search-more" @click="showMore">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
               展示更多
@@ -631,7 +631,7 @@ export const FileTree = {
            .panel-shell 困住（≤1023px 时其 transform 成为 fixed 包含块 + 层叠上下文，
            overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
       <Teleport to="body">
-        <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+        <div v-if="menu" class="fixed inset-0 z-40" aria-hidden="true" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
         <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
           <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"

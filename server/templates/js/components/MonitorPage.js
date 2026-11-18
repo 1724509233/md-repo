@@ -389,7 +389,7 @@ export const MonitorPage = {
           <div class="mp-head">
             <!-- 单出口：回文档视图；面板不自动重开（重入走 rail【记忆】） -->
             <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" aria-label="返回文档视图" @click="back">
-              <svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
             <div class="mp-title">记忆运行时 · 后台监控</div>
             <div class="mp-meta">更新于 {{ updatedAt || '…' }}</div>
           </div>
@@ -496,7 +496,7 @@ export const MonitorPage = {
               :aria-expanded="l2Open" aria-controls="mp-fold-l2"
               title="召回文档榜 / 失败查询 · 各 ≤200 行"
               @click="toggleL2">
-              <span class="car"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
+              <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
             <div class="fold" :class="{ open: l2Open }" id="mp-fold-l2">
               <div>
                 <div class="l2-pad">
@@ -504,7 +504,7 @@ export const MonitorPage = {
                   <div class="l2-top">
                     <span v-if="bySourceLine" class="l2-src">{{ bySourceLine }}</span>
                     <button class="l2-refresh" type="button" title="重新拉取召回明细" aria-label="重新拉取召回明细" :disabled="l2Busy" @click="refreshL2">
-                      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+                      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
                     </button>
                   </div>
                   <div v-if="l2Error" class="tcount" style="align-self:flex-start">GET /api/recall/stats → {{ l2Error }}</div>

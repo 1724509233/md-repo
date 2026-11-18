@@ -530,11 +530,11 @@ function buildFrontmatterCard(entries) {
     .map(s => escapeHtml(s)).join('<span class="sep">·</span>')
   return `<div class="fm-card v1-card${open ? ' open' : ''}">` +
     `<button class="v1-head" type="button" data-fm-toggle aria-expanded="${open ? 'true' : 'false'}">` +
-    `<span class="v1-icon"><svg viewBox="0 0 24 24"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42L12 2z"/><circle cx="7" cy="7" r="1"/></svg></span>` +
+    `<span class="v1-icon"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42L12 2z"/><circle cx="7" cy="7" r="1"/></svg></span>` +
     `<span class="v1-title">元数据</span>` +
     `<span class="fm-count v1-count">${entries.length} 项</span>` +
     `<span class="v1-summary">${summary}</span>` +
-    `<svg class="fm-chev v1-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>` +
+    `<svg aria-hidden="true" class="fm-chev v1-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>` +
     `</button>` +
     `<div class="fm-body"><div class="fm-body-inner"><div class="v1-grid">${cells}</div></div></div>` +
     `</div>`
