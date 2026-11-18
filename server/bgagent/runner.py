@@ -20,6 +20,7 @@ from .. import ledger
 from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
+from ..privacy import PrivacyConfig
 from .notify import NotificationHook, RunReport
 from .readback import ReadbackSystemReminder
 
@@ -308,7 +309,8 @@ async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = ""
 async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
                    hooks: list[NotificationHook] | None = None,
                    runtime_cls: type[Runtime] = LoopRuntime,
-                   trigger: str = "cron") -> RunReport:
+                   trigger: str = "cron",
+                   privacy: PrivacyConfig | None = None) -> RunReport:
     """Run one background agent to completion; write the report; notify hooks.
 
     ``runtime_cls`` is injectable for tests (FakeRuntime). ``trigger`` is the
@@ -318,6 +320,12 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     ``run_id`` (server.log landing: root logger file handler, no new sink).
     The run is bounded by ``cfg.timeout_s``; on timeout/cancel an error
     report is still written.
+
+    ``privacy`` (spec 2026-11-18 §2.2): the process-wide PrivacyConfig
+    reference, injected into the AgentSpec (→ ChannelPolicy/ToolContext).
+    None (default) = not wired yet (lazy, behavior unchanged); the scheduler
+    call-site wiring follows with its task (same parameter chain as
+    executor privacy_dirs).
     """
     vault = vault_dir.resolve()
     started_at = time.time()
@@ -375,6 +383,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # Proposal channel (v2): trusted run stamp + role verb whitelist.
         run_id=run_id,
         verbs=cfg.verbs,
+        # Privacy read boundary (spec 2026-11-18 §2.1): shared live view.
+        privacy=privacy,
     )
     agent = Agent(spec, runtime=runtime_cls())
 

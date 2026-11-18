@@ -40,7 +40,8 @@ def test_gate_noop_for_suggestions_buffer(path, tmp_path):
     """The channel gate has no opinion about the buffer — v2's
     suggestions/ rejection is the vault-level SuggestionsGate's job
     (validate_tool_call applies it unconditionally, see below)."""
-    assert McpExternalGate().check("write_doc", {"path": path}, tmp_path) is None
+    assert McpExternalGate().check("write_doc", {"path": path},
+                                   ChannelPolicy(tmp_path)) is None
 
 
 @pytest.mark.parametrize(
@@ -58,7 +59,8 @@ def test_gate_noop_for_suggestions_buffer(path, tmp_path):
     ],
 )
 def test_gate_refuses_main_memory_area(path, tmp_path):
-    err = McpExternalGate().check("write_doc", {"path": path}, tmp_path)
+    err = McpExternalGate().check("write_doc", {"path": path},
+                                  ChannelPolicy(tmp_path))
     assert err is not None
     assert err.startswith("Error:")
     # Explains the write was NOT performed and points at the propose tool.
@@ -97,8 +99,10 @@ def test_gate_fires_through_validate_tool_call(tmp_path):
 def test_gate_noop_for_read_tools(tmp_path):
     """validate_tool_call invokes gates for every tool; reads must pass."""
     gate = McpExternalGate()
-    assert gate.check("read_doc", {"path": "notes/x.md"}, tmp_path) is None
-    assert gate.check("search_docs", {"query": "x"}, tmp_path) is None
+    assert gate.check("read_doc", {"path": "notes/x.md"},
+                      ChannelPolicy(tmp_path)) is None
+    assert gate.check("search_docs", {"query": "x"},
+                      ChannelPolicy(tmp_path)) is None
 
 
 # --- authenticated write channel (user decision 2026-11-17) ----------------
@@ -109,9 +113,10 @@ def test_authenticated_gate_allows_main_area_write(tmp_path):
     writable over MCP. VAULT_GATES still apply on top (see below)."""
     gate = McpExternalGate(authenticated=True)
     assert gate.check("write_doc", {"path": "notes/a.md", "content": "x"},
-                      tmp_path) is None
+                      ChannelPolicy(tmp_path)) is None
     assert gate.check("edit_doc", {"path": "notes/a.md", "old_string": "a",
-                                   "new_string": "b"}, tmp_path) is None
+                                   "new_string": "b"},
+                      ChannelPolicy(tmp_path)) is None
 
 
 def test_authenticated_gate_still_rejects_suggestions(tmp_path):
@@ -119,7 +124,7 @@ def test_authenticated_gate_still_rejects_suggestions(tmp_path):
     # SuggestionsGate 的拒绝由 validate_tool_call 组合保证（既有测试钉）。
     gate = McpExternalGate(authenticated=True)
     assert gate.check("write_doc", {"path": "suggestions/x.md", "content": "x"},
-                      tmp_path) is None
+                      ChannelPolicy(tmp_path)) is None
 
 
 def test_unauthenticated_gate_unchanged(tmp_path):
@@ -127,7 +132,7 @@ def test_unauthenticated_gate_unchanged(tmp_path):
     main-area ask write is still refused with the protocol guidance."""
     gate = McpExternalGate(authenticated=False)
     assert gate.check("write_doc", {"path": "notes/a.md", "content": "x"},
-                      tmp_path) is not None
+                      ChannelPolicy(tmp_path)) is not None
 
 
 def test_resolve_mcp_auth_constant_time_compare():

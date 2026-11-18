@@ -77,7 +77,7 @@ class McpExternalGate(WriteGate):
     def __init__(self, authenticated: bool = False):
         self._authenticated = authenticated
 
-    def check(self, tool_name: str, args: dict, vault_dir: Path) -> str | None:
+    def check(self, tool_name: str, args: dict, policy) -> str | None:
         if self._authenticated:
             return None  # authenticated: ask tools pass (VAULT_GATES still apply)
         tool = TOOL_REGISTRY.get(tool_name)
@@ -181,7 +181,7 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
 
 
 def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[str],
-                 justification: str) -> str:
+                 justification: str, privacy=None) -> str:
     """The MCP channel's propose entry (oracle gate P0-Q6a).
 
     Restores the external proposal channel after the P0 cutover: the external
@@ -189,6 +189,9 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
     trusted stamps (write_source="mcp" is the ledger's source convention),
     no run stamp (stdio has no bgagent run), unrestricted verbs, full
     envelope + per-verb validation. Returns the tool's result string.
+
+    ``privacy`` (spec 2026-11-18 §2.2): the process-wide PrivacyConfig,
+    carried on the ToolContext (channel entry injects it, never model-set).
     """
     from server.agent.tools.propose import ProposeTool
     from server.agent.tools.tool import ToolContext
@@ -196,7 +199,7 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
     return ProposeTool().call(
         {"type": type, "payload": payload, "source_refs": source_refs,
          "justification": justification},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", privacy=privacy))
 
 
 def _mcp_log_recall(query: str, tier: str, results: list) -> None:
@@ -276,8 +279,17 @@ def main():
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
-    config = load_server_config(str(_find_config()))
+    config_path = _find_config()
+    config = load_server_config(str(config_path))
     vault_dir = config.vault_dir
+
+    # Privacy read boundary (spec 2026-11-18 §2.1/§2.2): one PrivacyConfig
+    # per process — the stdio process and the main server read the same
+    # config.yaml through the same mtime-cache loader, so a privacy.dirs
+    # edit applies to the next query without restarting either process.
+    from server.privacy import PrivacyConfig
+
+    privacy = PrivacyConfig(config_path)
 
     # MCP write-channel authentication (user decision 2026-11-17): the
     # stdio process must present MD_VAULT_MCP_WRITE_TOKEN matching
@@ -332,9 +344,12 @@ def main():
 
     # Channel policy for the external MCP channel: the channel rule gate
     # (main area read-only unless authenticated — user decision
-    # 2026-11-17) is injected here; VAULT_GATES (suggestions invariant)
-    # is applied unconditionally by validate_tool_call.
-    MCP_POLICY = ChannelPolicy(vault_dir, gates=(McpExternalGate(authenticated=authenticated),))
+    # 2026-11-17) is injected here; VAULT_GATES (suggestions invariant +
+    # privacy move gate) is applied unconditionally by validate_tool_call.
+    # The privacy live view (§2.2) rides on the policy: privacy-dir reads get
+    # the uniform INVISIBLE_MSG refusal, move-out is rejected.
+    MCP_POLICY = ChannelPolicy(vault_dir, gates=(McpExternalGate(authenticated=authenticated),),
+                               privacy=privacy)
     
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
@@ -404,7 +419,8 @@ def main():
     async def propose(type: str, payload: dict, source_refs: list[str],
                       justification: str = "") -> str:
         """Create a proposal record — the only write path into the proposal channel (direct writes into suggestions/ are rejected). Types: entity_index {entity, attrs: {field: value}} | relatedness {target} | summary {form: 'cache'|'report', body, assertions?} | errata {contradiction, excerpts: [{path, quote, label?}], candidate, rationale} | reminder {body}. source_refs: vault-relative paths the proposal is based on. justification: human-readable reason (becomes the review material). Auto-channel types (entity_index, relatedness) merge on the next executor cycle; review-channel types (summary, errata, reminder) wait for a human decision."""
-        return _mcp_propose(vault_dir, type, payload, source_refs, justification)
+        return _mcp_propose(vault_dir, type, payload, source_refs, justification,
+                            privacy=privacy)
     
     mcp.run(transport="stdio")
 

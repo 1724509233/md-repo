@@ -14,6 +14,8 @@ from typing import ClassVar
 import openai
 from pydantic import BaseModel, ValidationError
 
+from ...privacy import PrivacyConfig
+
 
 @dataclass
 class ToolContext:
@@ -42,6 +44,11 @@ class ToolContext:
     # recall ledger (recall_queries / recall_log session_id column); empty for
     # the web/mcp channels (no session) and the bgagent (no UI session).
     session_id: str = ""
+    # Privacy read boundary (spec 2026-11-18 §2.2): the shared mtime-cache
+    # PrivacyConfig reference, injected by the channel entry (never model-
+    # visible). Tools use ctx.privacy.dirs to filter their read surfaces;
+    # None = channel not wired (lazy, behavior unchanged).
+    privacy: PrivacyConfig | None = None
 
 
 # ── Shared path validators ──────────────────────────────────────────────

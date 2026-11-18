@@ -155,8 +155,10 @@ def test_gate_structural_ask_check(vault_dir):
 
     gate = SuggestionsGate()
     assert gate.check("write_doc", {"path": "suggestions/a/b/c.md"},
-                      vault_dir) is not None
+                      ChannelPolicy(vault_dir)) is not None
     assert gate.check("delete_doc", {"path": "suggestions/x.md"},
-                      vault_dir) is not None
-    assert gate.check("read_doc", {"path": "suggestions/a.md"}, vault_dir) is None
-    assert gate.check("search_docs", {"query": "x"}, vault_dir) is None
+                      ChannelPolicy(vault_dir)) is not None
+    assert gate.check("read_doc", {"path": "suggestions/a.md"},
+                      ChannelPolicy(vault_dir)) is None
+    assert gate.check("search_docs", {"query": "x"},
+                      ChannelPolicy(vault_dir)) is None

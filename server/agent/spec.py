@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..model import ModelConfig
+from ..privacy import PrivacyConfig
 from .policy import ChannelPolicy
 from .reminders import SystemReminder, UserReminder
 from .tools.tool import Tool
@@ -44,6 +45,11 @@ class AgentSpec:
     # role's allowed proposal verbs (None = unrestricted, desktop agent).
     run_id: str = ""
     verbs: tuple[str, ...] | None = None
+    # Privacy read boundary (spec 2026-11-18 §2.1/§2.2): the shared
+    # PrivacyConfig reference threaded from the channel entry; policy()
+    # carries it so every validate_tool_call in the loop sees the same live
+    # view. None = channel not wired (lazy, behavior unchanged).
+    privacy: PrivacyConfig | None = None
 
     def policy(self) -> ChannelPolicy:
         """Channel permission policy derived from this spec (check inputs).
@@ -55,4 +61,5 @@ class AgentSpec:
             vault_dir=self.vault_dir,
             write_scope=self.write_scope,
             report_dir=self.report_dir,
+            privacy=self.privacy,
         )
