@@ -18,7 +18,7 @@
  * 内容件 = style.css 文档面既有类（.doc-row/.mach/.doc-basis/.doc-ignore/.c-sec-h/.cnt.hot/.doc-path-line/.doc-none/.fold），
  *       候选① 与控制台方案零分叉（设计稿 2026-11-14 取舍说明「内容件零分叉」）。
  */
-const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } = Vue
+const { ref, computed, watch, nextTick, onMounted, onBeforeUnmount, getCurrentInstance } = Vue
 import { api } from '../api.js'
 
 /* 块标题图标（单色线条，stroke: currentColor；.c-sec-h .b-ic 槽 13px）
@@ -38,6 +38,10 @@ export const DocRelated = {
   },
   emits: ['open-doc', 'close'],
   setup(props, { emit }) {
+    // 折叠块 id 去重（P2 §1.3）：vendored Vue 3.4.21 无 useId → getCurrentInstance().uid 拼 id，
+    // 桌面侧栏与移动 sheet 双实例（app.js 各自 v-if）不再撞 fold-* DOM id；aria-controls 同源引用
+    const uid = getCurrentInstance().uid
+    const foldId = k => `fold-${k}-${uid}`
     const data = ref(null)        // null = 加载中；{path, links, suggestions}
     const error = ref(null)       // 404 = 文档已删 → 死文档态（服务端文案直显）
     const actionError = ref(null) // 忽略失败（404 = 已被他人忽略等）
@@ -137,7 +141,7 @@ export const DocRelated = {
     return {
       data, error, actionError, loading, machLeaving, faceEl,
       fold, toggleFold, wikiLinks, tagLinks, noOutLinks,
-      ignoreSuggestion, IC_LINK, IC_TAG, IC_REL
+      ignoreSuggestion, IC_LINK, IC_TAG, IC_REL, foldId
     }
   },
   template: `
@@ -161,13 +165,13 @@ export const DocRelated = {
           <div v-if="noOutLinks" class="c-sec"><div class="doc-none">本文档没有出链</div></div>
           <!-- 块1 Wikilink（显式用户链接 wikilink+related；空 → 不渲染；默认展开） -->
           <div v-if="wikiLinks.length" class="c-sec">
-            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.wikilink" aria-controls="fold-wiki" @click="toggleFold('wikilink')">
+            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.wikilink" :aria-controls="foldId('wiki')" @click="toggleFold('wikilink')">
               <span class="b-ic"><span v-html="IC_LINK"></span></span>
               <span>Wikilink</span>
               <span class="cnt">{{ wikiLinks.length }}</span>
               <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
-            <div class="fold" :class="{ open: fold.wikilink }" id="fold-wiki"><div>
+            <div class="fold" :class="{ open: fold.wikilink }" :id="foldId('wiki')"><div>
               <button v-for="l in wikiLinks" :key="l.path" type="button" class="doc-row"
                 :title="l.path" @click="$emit('open-doc', l.path)">
                 <div class="doc-row-line"><span class="doc-row-path">{{ l.path }}</span></div>
@@ -176,13 +180,13 @@ export const DocRelated = {
           </div>
           <!-- 块2 AI 建议（机器层，黄铜；无建议/全部排干 → 不渲染；最后一条忽略 → 整块淡出；默认展开） -->
           <div v-if="data.suggestions.length || machLeaving" class="c-sec" :class="{ leaving: machLeaving }">
-            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.ai" aria-controls="fold-ai" @click="toggleFold('ai')">
+            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.ai" :aria-controls="foldId('ai')" @click="toggleFold('ai')">
               <span class="b-ic b-ic-hot"><span v-html="IC_REL"></span></span>
               <span>AI 建议</span>
               <span class="cnt hot">{{ data.suggestions.length }}</span>
               <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
-            <div class="fold" :class="{ open: fold.ai }" id="fold-ai"><div>
+            <div class="fold" :class="{ open: fold.ai }" :id="foldId('ai')"><div>
               <div v-for="s in data.suggestions" :key="s.edge_id" class="doc-row mach"
                 :class="{ fading: s.fading }" :title="s.path">
                 <div class="doc-row-line">
@@ -195,13 +199,13 @@ export const DocRelated = {
           </div>
           <!-- 块3 Tag（隐式共享 tag，最弱；空 → 不渲染；默认收起） -->
           <div v-if="tagLinks.length" class="c-sec">
-            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.tag" aria-controls="fold-tag" @click="toggleFold('tag')">
+            <button class="c-sec-h c-sec-fold" type="button" :aria-expanded="fold.tag" :aria-controls="foldId('tag')" @click="toggleFold('tag')">
               <span class="b-ic"><span v-html="IC_TAG"></span></span>
               <span>Tag</span>
               <span class="cnt">{{ tagLinks.length }}</span>
               <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>
             </button>
-            <div class="fold" :class="{ open: fold.tag }" id="fold-tag"><div>
+            <div class="fold" :class="{ open: fold.tag }" :id="foldId('tag')"><div>
               <button v-for="l in tagLinks" :key="l.path" type="button" class="doc-row"
                 :title="l.path" @click="$emit('open-doc', l.path)">
                 <div class="doc-row-line"><span class="doc-row-path">{{ l.path }}</span></div>

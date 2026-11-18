@@ -335,6 +335,18 @@ def test_p2_a11y_text_sweep():
     assert 'aria-label' in t["SearchPanel.js"] and 'class="rsn-ta" aria-label' in t["MemoryConsole.js"]
 
 
+def test_p2_fold_taborder_and_uid():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert css.count("visibility: hidden") >= 5   # 五家族收起态各一处（配合 transition-delay）
+    dr = _templates()["DocRelated.js"]
+    assert "getCurrentInstance" in dr and "uid" in dr
+    assert ':id="foldId(' in dr and ':aria-controls="foldId(' in dr
+    assert 'id="fold-wiki"' not in dr and 'aria-controls="fold-wiki"' not in dr
+    m = re.search(r"return \{([^}]*)\}", dr[dr.rindex("    return {"):])
+    for name in set(re.findall(r'ref="(\w+)"', dr)) | {"foldId"}:
+        assert name in m.group(1), name   # §1.9 定向实现：模板绑定名 ∈ setup return
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]

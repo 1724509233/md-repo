@@ -362,6 +362,10 @@ pre code.hljs { background: transparent; padding: 0; }
 .tool-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .tool-detail.open { grid-template-rows: 1fr; }
 .tool-detail-inner { overflow: hidden; min-height: 0; }
+/* 0fr 行内 0 高内容仍可聚焦（P2 §1.4 出 Tab 序）：收起态 visibility 延迟收起（delay=grid 时长，
+   动画收尾才隐，无跳变）；展开态 delay 0s 即刻可见 */
+.tool-detail:not(.open) .tool-detail-inner { visibility: hidden; transition: visibility 0s .2s; }
+.tool-detail.open .tool-detail-inner { visibility: visible; transition: visibility 0s 0s; }
 .tool-pre { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 150px; overflow-y: auto; color: var(--ink); }
 .tool-result-pre { max-height: 200px; border-left: 2px solid var(--brass); padding-left: 8px; }
 .tool-result-label { margin-top: 6px; font-weight: 600; color: var(--ink-soft); font-size: 11px; font-family: 'Inter', sans-serif; }
@@ -388,7 +392,9 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 收起态清零 vertical padding：grid 0fr 行收缩时 grid item 的 border-box 下限 = padding 盒，
    min-height: 0 压不掉 padding → 2+6=8px 透明盒漏在 thinking-line 下（.tool-detail 无此问题
    因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁 */
-.thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; }
+/* visibility 延迟收起（delay=grid 时长 .2s，动画收尾才隐，P2 §1.4 出 Tab 序）；展开态即刻可见 */
+.thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; visibility: hidden; transition: visibility 0s .2s; }
+.thinking-detail.open .thinking-text { visibility: visible; transition: visibility 0s 0s; }
 
 /* ============ Confirm buttons（黄铜强调）============ */
 .confirm-btns { display: flex; gap: 8px; margin-top: 6px; margin-bottom: 4px; }
@@ -647,6 +653,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .fm-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .22s ease; }
 .fm-card.open .fm-body { grid-template-rows: 1fr; }
 .fm-body-inner { overflow: hidden; min-height: 0; }
+/* 收起态出 Tab 序（P2 §1.4；开态标记在 .fm-card 父级）；delay=grid 时长 .22s */
+.fm-card:not(.open) .fm-body-inner { visibility: hidden; transition: visibility 0s .22s; }
+.fm-card.open .fm-body-inner { visibility: visible; transition: visibility 0s 0s; }
 @media (prefers-reduced-motion: reduce) { .fm-body { transition: none; } }
 
 /* 通用小件 */
@@ -920,6 +929,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .rcl-tipbox { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .rcl-tipbox.open { grid-template-rows: 1fr; }
 .rcl-tipbox-in { overflow: hidden; min-height: 0; }
+/* 收起态出 Tab 序（P2 §1.4，纯文本也统一口径）；delay=grid 时长 .2s */
+.rcl-tipbox:not(.open) .rcl-tipbox-in { visibility: hidden; transition: visibility 0s .2s; }
+.rcl-tipbox.open .rcl-tipbox-in { visibility: visible; transition: visibility 0s 0s; }
 .rcl-tipbox-in p { margin: 0; padding: 1px 0 5px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9.5px; line-height: 1.5; color: var(--ink-soft); }
 
 /* 详情面：五段材料按判断顺序（类型+状态+标题+年龄 / 内容 / 来源 / 批次·可逆 / 相似记忆） */
@@ -1076,6 +1088,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s var(--ease); }
 .fold.open { grid-template-rows: 1fr; }
 .fold > div { overflow: hidden; min-height: 0; }
+/* 收起态出 Tab 序（P2 §1.4：DocRelated 按钮行 / L2 深钻钮在 0fr 裁剪下仍可聚焦）；
+   visibility 延迟收起（delay=grid 时长 .25s，动画收尾才隐），展开态即刻可见 */
+.fold:not(.open) > div { visibility: hidden; transition: visibility 0s .25s; }
+.fold.open > div { visibility: visible; transition: visibility 0s 0s; }
 .l2-pad { padding-top: 12px; }
 .l2-sub { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin: 14px 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .l2-sub:first-child { margin-top: 0; }
