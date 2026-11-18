@@ -121,7 +121,7 @@ async function openDoc(path, heading, fromLink) {
     resume: () => openDoc(path, heading, fromLink),
     replaceHash: p => history.replaceState(null, '', docHash(p, { edit: !state.previewMode })),
     toast: showToast, message: '保存失败，未离开当前文档',
-  }) === 'held') return
+  }) === 'held') return 'held'
   state.currentPath = path
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -133,7 +133,7 @@ async function openDoc(path, heading, fromLink) {
     text = await api.getDoc(path)
   } catch (e) {
     state.docContent = '加载失败: ' + e.message
-    return
+    return 'proceed'  // 导航未被守卫中止（加载失败是另一回事）——hashchange 侧据此照落 previewMode
   }
 
   // page-turn 动画（桌面端淡出→替换→淡入）
@@ -178,6 +178,7 @@ async function openDoc(path, heading, fromLink) {
     const pv = editorPaneRef.value ? editorPaneRef.value.previewEl : null
     if (pv) pv.scrollIntoView({ behavior: 'auto', block: 'start' })
   }
+  return 'proceed'
 }
 
 async function saveDoc() {
@@ -196,6 +197,7 @@ async function saveDoc() {
 // 手动保存（spec §5.9）：失败挂「保存失败，编辑内容已保留」+ 重试（无续接目标——
 // 本就没有被中止的切换）；再败由 saveWithRetry 自递归重挂同按钮
 async function saveWithRetry() {
+  if (!state.currentPath) return  // M-1：未开文档时静默直退（与 saveDoc 的 null 守卫同语义，免挂无效重试）
   if (await saveDoc()) return
   showToast('保存失败，编辑内容已保留', 'error', { label: '重试', onClick: saveWithRetry })
 }
@@ -704,8 +706,13 @@ export function createApp() {
       window.addEventListener('hashchange', () => {
         const h = parseHash(location.hash)
         if (!h) return
-        if (h.path !== state.currentPath) openDoc(h.path)
-        if (!state.monitoring) state.previewMode = h.mode !== 'edit'
+        if (h.path !== state.currentPath) {
+          // I-3：守卫中止（held）时文档没切，previewMode 绝不能跟随被中止目标的 hash 落位——
+          // 等 openDoc 出结果再决定（mode-only 同路径变更不经此路，保持下方同步应用）
+          openDoc(h.path).then(r => { if (r !== 'held') state.previewMode = h.mode !== 'edit' })
+        } else if (!state.monitoring) {
+          state.previewMode = h.mode !== 'edit'
+        }
       })
 
       onMounted(() => {

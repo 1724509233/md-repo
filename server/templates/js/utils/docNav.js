@@ -4,12 +4,10 @@
 
 // 续接令牌盒：openDoc 每次进入 bump()，retry 执行时比对自己发起时的 token，
 // 过期（其间有新的 openDoc）→ 续接作废（spec §5.5 C1）。
+// 闭包自增（M-3）：不依赖 this，解构/传参搬运安全。
 export function createAttemptBox() {
-  return {
-    n: 0,
-    bump() { this.n += 1; return this.n },
-    isStale(token) { return token !== this.n },
-  }
+  let n = 0
+  return { bump: () => ++n, isStale: t => t !== n }
 }
 
 export async function guardSwitch({ dirty, currentPath, saveDoc, captured, attemptBox,
@@ -26,11 +24,16 @@ export async function guardSwitch({ dirty, currentPath, saveDoc, captured, attem
     // 续接作废（C1）：挂起期间已有新的 openDoc 发起 → 旧按钮 no-op，绝不复活旧目标
     if (attemptBox.isStale(captured)) return
     if (await saveDoc()) {
+      // 在途过期复查（I-1）：saveDoc 挂起期间用户已移动（新 openDoc bump 过）→ 不 resume
+      // 复活旧切换目标；但内容确实存成了，如实报「已保存」
+      if (attemptBox.isStale(captured)) { toast('已保存', 'success'); return }
       toast('已保存', 'success')
       resume() // 闭包目标自动续接（含 heading/fromLink；重入 openDoc 时 dirty 已清，守卫直通）
       return
     }
-    replaceHash(currentPath) // 重试路径同样可能源自 hash 已偏态，回写维持一致
+    // 同上（I-1）：失败且已过期 → 直接 return——旧 retry 不得顶掉新 held 的 toast/URL 回写
+    if (attemptBox.isStale(captured)) return
+    replaceHash(currentPath)
     toast(message, 'error', { label: '重试', onClick: retry }) // 刷新文本续挂同按钮
   }
   toast(message, 'error', { label: '重试', onClick: retry })

@@ -480,6 +480,7 @@ def test_p2_toast_action_api():
     assert re.search(r"action \? 12000|12000", toast)
     assert "pointer-events" in toast and "stopPropagation" in toast
     assert "el.appendChild" in toast and "button" in toast  # 原生 button 进 toast
+    assert "el.inert = true" in toast and "el.inert = false" in toast  # I-2 键盘面命中封堵
 
 
 def test_p2_docnav_guard():
@@ -515,5 +516,30 @@ def test_p2_docnav_guard():
         "box.bump();const before=log.length;"
         "await cap.a.onClick();"
         "if(log.length!==before)process.exit(6);"
+        # M-3: 闭包自增——解构调用不得丢 this 语义
+        "const { bump: bx, isStale: st } = m.createAttemptBox();"
+        "if(bx()!==1||st(1)||!st(0))process.exit(7);"
+        # 6) I-1 在途过期：retry 的 saveDoc pending 期间 box.bump()（用户其间已移动）→
+        #    resolve 后必须复查 token——成功分支只报「已保存」不 resume；失败分支直接 return
+        #    （旧 retry 不得顶掉新 held toast）
+        "box=m.createAttemptBox();cap={};let rel;let k=0;"
+        "const slow2=async()=>{if(++k===1)return false;return new Promise(r=>{rel=r})};"
+        "g=await m.guardSwitch({dirty:true,currentPath:'e.md',saveDoc:slow2,captured:box.bump(),attemptBox:box,message:'x',...mkDeps(cap)});"
+        "if(g!=='held')process.exit(8);"
+        "const before6=log.length;const p=cap.a.onClick();box.bump();rel(true);await p;"
+        "if(log.slice(before6).includes('resume'))process.exit(9);"
+        "if(!log.slice(before6).includes('toast:success'))process.exit(10);"
+        "box=m.createAttemptBox();cap={};let rel2;let k2=0;"
+        "const slow3=async()=>{if(++k2===1)return false;return new Promise(r=>{rel2=r})};"
+        "g=await m.guardSwitch({dirty:true,currentPath:'f.md',saveDoc:slow3,captured:box.bump(),attemptBox:box,message:'x',...mkDeps(cap)});"
+        "if(g!=='held')process.exit(11);"
+        "const before7=log.length;const p2=cap.a.onClick();box.bump();rel2(false);await p2;"
+        "if(log.length!==before7)process.exit(12);"
         "process.exit(0)})") % (TPL / "js/utils/docNav.js").as_uri()
     subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
+    # I-3 静态钉：openDoc 各归口有返回值；hashchange 非同路径分支 .then 判 'held' 后才落 previewMode
+    app = _templates()["app.js"]
+    od = app[app.index("async function openDoc"):app.index("async function saveDoc")]
+    assert "return 'held'" in od and "return 'proceed'" in od
+    hc = app[app.index("addEventListener('hashchange'"):app.index("onMounted(()")]
+    assert "if (r !== 'held') state.previewMode = h.mode !== 'edit'" in hc

@@ -17,8 +17,10 @@ function hide(el) {
   el.style.opacity = '0'
   el.style.transform = 'translateX(1rem)'
   // spec §5.6（C1）：fade 只降 opacity——含「重试」按钮的隐藏体是视口右下角的隐形命中靶，
-  // 不可见按钮永不可点：隐藏即撤 pointer-events（show 时恢复）
+  // 不可见按钮永不可点：隐藏即撤 pointer-events（show 时恢复）；
+  // I-2：pointer-events 封不死键盘面——Tab 仍能聚焦隐形按钮，inert 连 Tab 一起封
   el.style.pointerEvents = 'none'
+  el.inert = true
 }
 
 export function showToast(message, kind = 'error', action = null) {
@@ -63,6 +65,7 @@ export function showToast(message, kind = 'error', action = null) {
   el.style.opacity = '1'
   el.style.transform = 'translateX(0)'
   el.style.pointerEvents = 'auto' // 恢复命中（hide 撤过；见 §5.6 注释）
+  el.inert = false                // 解除 inert（I-2；与 pointer-events 同对）
   if (timer) clearTimeout(timer)
   // 带 action 驻留 12s（给用户点「重试」的反应窗口），纯提示仍 6s
   timer = setTimeout(() => hide(el), action ? 12000 : 6000)
