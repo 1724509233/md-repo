@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-from ...privacy import is_privacy
+from ...core.privacy import is_privacy
 from ..fs.vault_ops import _iter_vault_md
 
 

@@ -16,7 +16,7 @@ from fastapi import File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from .. import ledger
-from ..privacy import detect_privacy_refs, is_privacy
+from ..core.privacy import detect_privacy_refs, is_privacy
 from ..vault.db.file_index import get_all_files
 from ..vault.fs.vault_ops import EXCLUDED_INDEX_DIRS, safe_rel_path as _safe_rel_path
 

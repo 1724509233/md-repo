@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
-from ...privacy import detect_privacy_refs, is_privacy
+from ...core.privacy import detect_privacy_refs, is_privacy
 from .tool import DocTool, ToolContext, _check_md_path
 
 

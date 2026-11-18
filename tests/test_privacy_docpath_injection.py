@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.api import create_app
-from server.privacy import DOC_PRIVACY_NOTICE, PrivacyConfig
+from server.core.privacy import DOC_PRIVACY_NOTICE, PrivacyConfig
 
 
 def _write(vault: Path, rel: str, content: str) -> None:

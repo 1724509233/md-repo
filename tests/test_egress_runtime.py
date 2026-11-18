@@ -268,7 +268,7 @@ def test_flush_double_insurance_skips_privacy(vault_dir, ledger_conn,
                                               tmp_path, monkeypatch):
     """ctx.privacy carries spec.privacy to the flush (§3.4): a privacy path
     that somehow reached touched (here: a faked tool stamp) never lands."""
-    from server.privacy import PrivacyConfig
+    from server.core.privacy import PrivacyConfig
 
     cfg = tmp_path / "config.yaml"
     cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",

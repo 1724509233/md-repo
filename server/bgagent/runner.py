@@ -20,7 +20,7 @@ from .. import ledger
 from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
-from ..privacy import PrivacyConfig
+from ..core.privacy import PrivacyConfig
 from ..egress import EgressTarget, parse_endpoint, should_record
 from .notify import NotificationHook, RunReport
 from .readback import ReadbackSystemReminder

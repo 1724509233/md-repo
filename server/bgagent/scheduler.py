@@ -36,7 +36,7 @@ from typing import Callable
 from croniter import croniter
 
 from ..config import BackgroundAgentConfig
-from ..privacy import PrivacyConfig
+from ..core.privacy import PrivacyConfig
 from ..proposals import EXPIRE_AFTER_S, scan as scan_proposals
 from ..core import events
 from ..vault.db import recall as recall_db

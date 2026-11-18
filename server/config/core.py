@@ -10,7 +10,7 @@ import yaml
 from .ai import AIConfig
 from .log import LogConfig
 from ..agent.tools import TOOL_REGISTRY
-from ..privacy import parse_privacy_dirs
+from ..core.privacy import parse_privacy_dirs
 
 
 @dataclass

@@ -6,7 +6,7 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
-from ..privacy import is_privacy
+from ..core.privacy import is_privacy
 from .rerank import ScoredItem, fuse, validate_weights
 
 

@@ -18,7 +18,7 @@ from .bgagent.scheduler import self_exclusion
 from .config import load_background_agents, load_notifications, load_server_config
 from .config.core import lan_gate_check
 from .egress import log_model_endpoints
-from .privacy import PrivacyConfig
+from .core.privacy import PrivacyConfig
 from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed

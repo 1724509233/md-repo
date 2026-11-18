@@ -69,7 +69,7 @@ class DocPathUserReminder(UserReminder):
             if ctx.get("privacy_doc"):
                 # 隐私打开文档（spec 2026-11-18 语义升级）：路径不进上下文，
                 # 注入逐字引导文案（前缀同族 → strip() 天然覆盖旧提醒）。
-                from ..privacy import DOC_PRIVACY_NOTICE
+                from ..core.privacy import DOC_PRIVACY_NOTICE
 
                 return DOC_PRIVACY_NOTICE
             return None

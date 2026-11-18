@@ -33,7 +33,7 @@ from server.agent.tools.recent_changes import RecentChangesTool
 from server.agent.tools.tool import ToolContext
 from server.agent.tools.write_doc import WriteDocTool
 from server.ai.search import rag_search
-from server.privacy import INVISIBLE_MSG, PrivacyConfig, privacy_clause
+from server.core.privacy import INVISIBLE_MSG, PrivacyConfig, privacy_clause
 from server.vault.db.graph_sql import (
     graph_add_edge,
     graph_get_related,

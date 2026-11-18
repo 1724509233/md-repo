@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..egress import EgressTarget
-from ..model import ModelConfig
-from ..privacy import PrivacyConfig
+from ..core.types import ModelConfig
+from ..core.privacy import PrivacyConfig
 from .policy import ChannelPolicy
 from .reminders import SystemReminder, UserReminder
 from .tools.tool import Tool

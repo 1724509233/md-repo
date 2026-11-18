@@ -24,7 +24,7 @@ from server.agent.policy import (
     VAULT_GATES,
     validate_tool_call,
 )
-from server.privacy import INVISIBLE_MSG, PrivacyConfig
+from server.core.privacy import INVISIBLE_MSG, PrivacyConfig
 
 
 def _policy(vault_dir: Path, tmp_path: Path, dirs_yaml: str = "[日记]") -> ChannelPolicy:

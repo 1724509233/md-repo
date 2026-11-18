@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import functools
 
-from server.privacy import PrivacyConfig
+from server.core.privacy import PrivacyConfig
 from server.bgagent.executor import run_executor
 from server import proposals
 from tests.test_executor import _adopted

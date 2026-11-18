@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
-from ...privacy import privacy_clause
+from ...core.privacy import privacy_clause
 from .schema import _ACTION_TO_OP, _OP_TO_ACTION
 
 

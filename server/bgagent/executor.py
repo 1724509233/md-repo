@@ -69,7 +69,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import ledger
-from ..privacy import is_privacy
+from ..core.privacy import is_privacy
 from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..snapshots import capture, finalize, gc, hash_bytes
 from ..vault.db import egress_sql

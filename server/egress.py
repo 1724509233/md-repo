@@ -119,7 +119,7 @@ def _is_privacy_path(dirs: tuple[str, ...], path: str) -> bool:
     if not dirs:
         return False
     try:
-        from server.privacy import is_privacy
+        from server.core.privacy import is_privacy
     except ImportError:
         return False
     return is_privacy(tuple(dirs), path)

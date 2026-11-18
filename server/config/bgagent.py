@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
-from ..model import ModelConfig
+from ..core.types import ModelConfig
 from ..proposals import PROPOSALS_DIR
 
 logger = logging.getLogger("md-vault.config")

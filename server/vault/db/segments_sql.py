@@ -5,7 +5,7 @@ import re
 import sqlite3
 from collections import defaultdict
 
-from ...privacy import privacy_clause
+from ...core.privacy import privacy_clause
 from .fts_query import and_expr, exclude_code, near_expr, or_expr, phrase, prefix
 
 

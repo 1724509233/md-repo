@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from server.privacy import (
+from server.core.privacy import (
     INVISIBLE_MSG,
     PrivacyConfig,
     detect_privacy_refs,

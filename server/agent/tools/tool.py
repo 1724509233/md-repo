@@ -14,7 +14,7 @@ from typing import ClassVar
 import openai
 from pydantic import BaseModel, ValidationError
 
-from ...privacy import PrivacyConfig
+from ...core.privacy import PrivacyConfig
 
 
 @dataclass

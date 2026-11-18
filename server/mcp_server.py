@@ -294,7 +294,7 @@ def main():
     # per process — the stdio process and the main server read the same
     # config.yaml through the same mtime-cache loader, so a privacy.dirs
     # edit applies to the next query without restarting either process.
-    from server.privacy import PrivacyConfig
+    from server.core.privacy import PrivacyConfig
 
     privacy = PrivacyConfig(config_path)
 

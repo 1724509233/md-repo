@@ -25,7 +25,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from ..privacy import INVISIBLE_MSG, PrivacyConfig, is_privacy
+from ..core.privacy import INVISIBLE_MSG, PrivacyConfig, is_privacy
 from .tools import TOOL_ARGS, TOOL_REGISTRY
 
 

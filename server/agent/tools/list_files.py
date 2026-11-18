@@ -70,7 +70,7 @@ class ListFilesTool(Tool):
         return "No markdown files found in the vault."
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...privacy import is_privacy
+        from ...core.privacy import is_privacy
 
         base = _resolve_dir_case_insensitive(ctx.vault_dir, args.dir)
         files = [

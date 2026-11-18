@@ -28,7 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from server.api import create_app
-from server.privacy import INVISIBLE_MSG, PrivacyConfig
+from server.core.privacy import INVISIBLE_MSG, PrivacyConfig
 
 REFS_BODY = "see [[日记/2026]] and 日记/x.md"
 REPO_ROOT = Path(__file__).resolve().parents[1]
