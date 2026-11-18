@@ -8,7 +8,8 @@ export const EditorPane = {
   name: 'EditorPane',
   props: {
     content: { type: String, default: '' },
-    mode: { type: String, default: 'preview' } // 'edit' | 'preview'
+    mode: { type: String, default: 'preview' }, // 'edit' | 'preview'
+    docMissing: { type: Boolean, default: false }  // 404 幽灵文档（目检轮 A）：textarea 禁用双保险
   },
   emits: ['input', 'save', 'download'],
   setup(props, { emit }) {
@@ -452,6 +453,7 @@ export const EditorPane = {
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
       <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
+        :disabled="docMissing"
         class="w-full flex-1 border-0 bg-transparent resize-none focus:outline-none"
         placeholder="从左侧选择一个文档…"
         @input="onInput"></textarea>

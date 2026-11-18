@@ -38,6 +38,7 @@ const state = reactive({
   tocOpen: false,       // 本文目录浮层（P4-3）
   conflict: null,       // { toolName, path } | null
   docContent: '',        // 当前文档内容
+  docMissing: false,     // 当前文档加载失败（404，目检轮 A）：锁编辑/保存/下载——保存 = PUT 重建幽灵文档
   notifOpen: false,
   notifications: [],
   unreadCount: 0,
@@ -132,6 +133,7 @@ async function openDoc(path, heading, fromLink) {
   try {
     text = await api.getDoc(path)
   } catch (e) {
+    state.docMissing = true  // 404 → 锁编辑/保存/下载（目检轮 A；「加载失败」文案只读展示）
     state.docContent = '加载失败: ' + e.message
     return 'proceed'  // 导航未被守卫中止（加载失败是另一回事）——hashchange 侧据此照落 previewMode
   }
@@ -142,6 +144,7 @@ async function openDoc(path, heading, fromLink) {
   }
 
   state.docContent = text
+  state.docMissing = false  // 成功加载复位（目检轮 A；外部删除分支 :222 一带维持现行为不动）
 
   // 移动端：选中文件后关闭文件面板 overlay（spec §3.5）
   if (window.innerWidth < 1024) {
@@ -197,7 +200,7 @@ async function saveDoc() {
 // 手动保存（spec §5.9）：失败挂「保存失败，编辑内容已保留」+ 重试（无续接目标——
 // 本就没有被中止的切换）；再败由 saveWithRetry 自递归重挂同按钮
 async function saveWithRetry() {
-  if (!state.currentPath) return  // M-1：未开文档时静默直退（与 saveDoc 的 null 守卫同语义，免挂无效重试）
+  if (!state.currentPath || state.docMissing) return  // M-1 未开文档直退 + A：404 文档保存=PUT 重建幽灵
   if (await saveDoc()) return
   showToast('保存失败，编辑内容已保留', 'error', { label: '重试', onClick: saveWithRetry })
 }
@@ -235,7 +238,7 @@ async function _applyChangeToCurrentDoc(changes) {
 }
 
 function downloadDoc() {
-  if (!state.currentPath) return
+  if (!state.currentPath || state.docMissing) return  // 404 文档下载的会是「加载失败」文案（目检轮 A）
   const blob = new Blob([state.docContent], { type: 'text/markdown' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -245,6 +248,7 @@ function downloadDoc() {
 }
 
 function setMode(mode) {
+  if (state.docMissing) return  // 404 幽灵文档锁进编辑（目检轮 A：编辑后保存 = PUT 重建）
   state.previewMode = mode === 'preview'
 }
 
@@ -744,7 +748,9 @@ export function createApp() {
           else if (state.relOpen) state.relOpen = false
           else if (state.tocOpen) toggleToc()
           else if (state.aiOpen) toggleAI(false)
-          else if (state.memoryOpen) state.memoryOpen = false
+          // 关台同 @close 集合（目检轮 B）：只清 open 会让详情面/报告（含 rsn-ta）
+          // 保持挂载——面板关了残面犹在，下次开台直落旧详情
+          else if (state.memoryOpen) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null }
           else if (state.monitoring) exitMonitorPage()
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
@@ -766,7 +772,7 @@ export function createApp() {
         // MemoryConsole 监控页不接跳转。活链带 data-vault-path（死链/歧义无该属性 → 选择器不命中，本就不可点）。
         // 点击落账（spec 2026-11-13 §4.4）：openDoc 之前发出、不 await（fire-and-forget，恒 204）；
         // filetree 点击无 md-softlink 不经过此处（D5 不落账）；未遂点击（openDoc 404）不补记（D8）。
-        // 修饰键（P2⑥ / I-1，见函数体内注）：alt 不落账先放行；meta/ctrl 先落账后放行；均不进站内切换。
+        // 修饰键（P2⑥ / I-1，见函数体内注）：alt 不落账先放行；meta/ctrl 先落账后自开新标签；均不进站内切换。
         document.addEventListener('click', (e) => {
           const a = e.target && e.target.closest ? e.target.closest('a.md-softlink[data-vault-path]') : null
           if (!a) return
@@ -786,8 +792,15 @@ export function createApp() {
           } else {
             api.recallClick({ path, via: 'preview' })
           }
-          // 修饰键放行（P2⑥）：meta/ctrl 新标签落账后语义交回浏览器，站内切换不参与
-          if (e.metaKey || e.ctrlKey) return
+          // 修饰键（P2⑥ + 目检轮 C）：meta/ctrl 先落账（真实访问意图），再**自开新标签**——
+          // 同页 fragment 链接（#doc/…）修饰键点击 Chrome 并不开新标签，「语义交回浏览器」不成立；
+          // preventDefault + window.open('_blank','noopener') 跨浏览器一致（用户手势内，弹窗拦截不咬）
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault()
+            const href = a.getAttribute('href')
+            if (href) window.open(href, '_blank', 'noopener')
+            return
+          }
           e.preventDefault()
           // 调用式保持原样（bug 83e7241f 回归钉逐字匹配 fromLink=true 实参）
           openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)
@@ -995,6 +1008,7 @@ export function createApp() {
           <main id="main-content" tabindex="-1" class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
+              :doc-missing="state.docMissing"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen" :ai-open="state.aiOpen"
@@ -1016,6 +1030,7 @@ export function createApp() {
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
                   @accept="acceptConflict" @dismiss="state.conflict = null" />
                 <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+                  :doc-missing="state.docMissing"
                   @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
               </div>
               <aside class="rel-side" :class="{ open: state.relOpen }">

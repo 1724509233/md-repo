@@ -7,6 +7,7 @@ export const TopBar = {
   name: 'TopBar',
   props: {
     currentPath: { type: String, default: null },
+    docMissing: { type: Boolean, default: false },  // 当前文档 404（目检轮 A）：编辑/保存/下载禁用，保存=PUT 重建幽灵
     mode: { type: String, default: 'preview' },
     moreMenuOpen: { type: Boolean, default: true },
     notifOpen: { type: Boolean, default: false },
@@ -111,6 +112,7 @@ export const TopBar = {
       <!-- 桌面端模式切换：无外框分段控件，仅激活态黄铜 -->
       <div class="hidden lg:flex mode-pill">
         <button class="mode-btn topbar-btn" :class="{ active: mode === 'edit' }" :aria-pressed="mode === 'edit'"
+          :disabled="!currentPath || docMissing"
           @click="setMode('edit')" title="编辑" aria-label="编辑">
           <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg><span class="tb-label">编辑</span>
         </button>
@@ -150,10 +152,12 @@ export const TopBar = {
            （lg:block 会压掉基类 inline-flex，行内 .tb-label 的 max-width 收纳失效，2026-11-17 评审）。
            保存图标 = 软盘（同移动端「更多」菜单）：铅笔与「编辑」重复，图标化后两键不可区分 -->
       <button class="hidden lg:inline-flex topbar-btn"
+        :disabled="!currentPath || docMissing"
         @click="download" title="下载" aria-label="下载">
         <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="tb-label">下载</span>
       </button>
       <button class="hidden lg:inline-flex topbar-btn btn-save"
+        :disabled="!currentPath || docMissing"
         @click="save" title="保存" aria-label="保存">
         <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg><span class="tb-label">保存</span>
       </button>
@@ -165,7 +169,8 @@ export const TopBar = {
           <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
         </button>
         <div v-show="moreMenuOpen" ref="moreMenuEl" role="menu" class="absolute right-0 top-full mt-1 w-36 bg-surface border border-border rounded-lg shadow-lg z-50">
-          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
+            :disabled="!currentPath || docMissing"
             @click="$emit('setMode', 'edit'); $emit('toggleMoreMenu')">
             <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>编辑
           </button>
@@ -178,11 +183,13 @@ export const TopBar = {
             @click="$emit('open-doc-face'); $emit('toggleMoreMenu')">
             <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>关联
           </button>
-          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
+            :disabled="!currentPath || docMissing"
             @click="$emit('save'); $emit('toggleMoreMenu')">
             <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></svg>保存
           </button>
-          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
+          <button role="menuitem" class="w-full text-left flex items-center gap-2 px-3 py-2.5 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)] disabled:opacity-40"
+            :disabled="!currentPath || docMissing"
             @click="$emit('download'); $emit('toggleMoreMenu')">
             <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>下载
           </button>

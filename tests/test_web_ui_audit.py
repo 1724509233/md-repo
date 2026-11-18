@@ -515,9 +515,11 @@ def test_p2_softlink_alt_click_not_logged():
     body = app[app.index("a.md-softlink[data-vault-path]"):
                 app.index("openDoc(a.getAttribute('data-vault-path')")]
     assert "if (e.altKey) return" in body
-    assert "if (e.metaKey || e.ctrlKey) return" in body
+    # 目检轮 C 改形：meta/ctrl 不再裸 return（Chrome 同页 fragment 链接修饰键不开新标签，
+    # 「语义交回浏览器」不成立）→ 落账后自开新标签；I-1 顺序语义（alt 先退、meta/ctrl 落账后）不变
+    assert "if (e.metaKey || e.ctrlKey) {" in body and "window.open(href, '_blank', 'noopener')" in body
     assert body.index("if (e.altKey) return") < body.index("api.recallClick")
-    assert body.index("if (e.metaKey || e.ctrlKey) return") > body.index("api.recallClick")
+    assert body.index("if (e.metaKey || e.ctrlKey) {") > body.index("api.recallClick")
 
 
 def test_p2_toast_action_api():
@@ -589,3 +591,30 @@ def test_p2_docnav_guard():
     assert "return 'held'" in od and "return 'proceed'" in od
     hc = app[app.index("addEventListener('hashchange'"):app.index("onMounted(()")]
     assert "if (r !== 'held') state.previewMode = h.mode !== 'edit'" in hc
+
+
+def test_p2_visual_round_js():
+    # 目检轮三组（2026-11-18）：A 404 幽灵文档锁编辑/保存 · B Escape 关监控台清全套 ·
+    # C Cmd/Ctrl 软链自开新标签（同页 fragment 链接 Chrome 修饰键不开新标签）
+    t = _templates(); app = t["app.js"]; tb = t["TopBar.js"]; ep = t["EditorPane.js"]
+    # ── A：docMissing 三态锁 ──
+    assert "docMissing: false" in app
+    od = app[app.index("async function openDoc"):app.index("async function saveDoc")]
+    assert "state.docMissing = true" in od     # catch 置位
+    assert "state.docMissing = false" in od    # 成功加载复位
+    assert "if (state.docMissing) return" in app[app.index("function setMode"):][:160]
+    assert "docMissing: { type: Boolean, default: false }" in tb
+    assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 桌面 编辑/下载/保存 + 移动菜单同三项
+    assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）
+    assert "docMissing: { type: Boolean, default: false }" in ep
+    assert ':disabled="docMissing"' in ep       # textarea 双保险
+    assert app.count(':doc-missing="state.docMissing"') == 2  # TopBar + EditorPane 传通
+    assert app.count("if (!state.currentPath || state.docMissing) return") == 2  # saveWithRetry + downloadDoc
+    # ── B：Escape 关台对齐 @close 清理集合 ──
+    esc = app[app.index("Escape 分层关闭"):][:900]
+    assert "state.memoryDetail = null" in esc and "state.memoryReport = null" in esc
+    # ── C：软链修饰键自开新标签（落账在前、站内路径在后，alt 先退不动）──
+    dl = app[app.index("'a.md-softlink[data-vault-path]'"):app.index("openDoc(a.getAttribute('data-vault-path')")]
+    assert "if (e.metaKey || e.ctrlKey) {" in dl
+    assert "window.open(href, '_blank', 'noopener')" in dl
+    assert dl.index("api.recallClick") < dl.index("window.open")
