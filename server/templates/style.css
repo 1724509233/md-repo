@@ -62,6 +62,14 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .sp-results, .notif-list, .toc-list, .c-scroll, .m-scroll, .rel-scroll,
 .search-dropdown { overscroll-behavior: contain; }
 
+/* ============ UI 铬件文本禁选（P2 目检轮）============ */
+/* 按钮（全站，含已 button 化的 .search-item 等）/rail 标签/文件树行/当前文件名 点拖出选区、
+   方向键令原生 caret 现形闪烁——铬件文字非抄录对象。正文 #preview 与编辑区 #editor 不受影响；
+   user-select 是继承属性 → 表单控件显式复位（Chrome/WebKit 祖先 none 会传染 input，
+   树行内改名框首当其冲） */
+button, .tree-row, .tree-file, .rlabel, #current-file { -webkit-user-select: none; user-select: none; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+
 /* ============ 焦点环内描（P2②）============ */
 /* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
    滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
@@ -237,10 +245,11 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #preview { font-family: 'Source Serif 4', serif; font-size: 16px; line-height: 1.75; color: var(--ink); position: relative; /* ✎ 定位锚（spec 2026-11-17） */ }
 /* sticky 选中块（spec 2026-11-17）：outline 不改布局 */
 .md-sel-block { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
-/* 块落位 ✎：隐藏态 pointer-events:none，class 切 opacity（display 切换会杀淡变） */
-#block-edit-btn { position: absolute; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-soft); font-size: 14px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
-#block-edit-btn.on { opacity: 1; pointer-events: auto; }
-@media (prefers-reduced-motion: reduce) { #block-edit-btn { transition: none; } }
+/* 块落位 ✎：隐藏态 pointer-events:none + visibility:hidden（opacity:0 仍可聚焦=焦点黑洞，P2 目检轮），
+   class 切 opacity（display 切换会杀淡变；visibility 以合并过渡延迟收起，淡出不丢） */
+#block-edit-btn { position: absolute; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-soft); font-size: 14px; cursor: pointer; opacity: 0; pointer-events: none; visibility: hidden; transition: opacity .15s ease, visibility 0s .15s; }
+#block-edit-btn.on { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .15s ease, visibility 0s 0s; }
+@media (prefers-reduced-motion: reduce) { #block-edit-btn, #block-edit-btn.on { transition: none; } }
 #preview h1 { font-size: 28px; font-weight: 700; line-height: 1.3; margin: 2rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid color-mix(in srgb, var(--brass) 45%, transparent); }
 #preview h2 { font-size: 20px; font-weight: 600; line-height: 1.4; margin: 1.5rem 0 .75rem; }
 #preview h3 { font-size: 17px; font-weight: 600; line-height: 1.4; margin: 1.25rem 0 .5rem; }
@@ -774,7 +783,7 @@ pre code.hljs { background: transparent; padding: 0; }
 @keyframes panelInFade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .panel-shell > .panel-face { animation: none; }
-  .panel-shell, .search-drawer { transition: none; } /* 移动 overlay/抽屉直切（spec §3.5） */
+  .panel-shell, .panel-shell.open, .search-drawer, .search-drawer.open { transition: none; } /* 移动 overlay/抽屉直切（spec §3.5）；两态都杀：.open 自带合并 transition 特异度高于基础态，只杀基础态则 RM 下滑入 + visibility 孤儿延迟复活 */
 }
 
 /* 面板头：48px，surface 底（B 变体 .p-head） */
@@ -854,22 +863,23 @@ pre code.hljs { background: transparent; padding: 0; }
   .panel-shell {
     width: 260px !important; position: fixed; left: 0px; top: 0; bottom: 0; z-index: 40;
     background: var(--paper); border-right: 1px solid var(--line);
-    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transform: translateX(-102%); visibility: hidden;
+    transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s; /* 滑出收尾才隐；开态 delay 0s 即刻可见（.rel-sheet 同款合并写法） */
   }
-  .panel-shell.open { transform: translateX(0); }
+  .panel-shell.open { transform: translateX(0); visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
 
   /* 搜索抽屉：80vh 底部抽屉（同 #ai-panel 移动抽屉：圆角 24、backdrop、拖拽手柄） */
   .search-drawer {
     top: auto; bottom: 0; height: 80vh; width: 100%;
-    transform: translateY(100%);
+    transform: translateY(100%); visibility: hidden; /* P2 目检轮：滑出屏外仍 Tab 可达；delay=.38s 滑出收尾才隐，开态 delay 0s 即刻可见（.rel-sheet 同款） */
     background: var(--surface);
     border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
-    transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s;
     padding-bottom: env(safe-area-inset-bottom); /* P1-7 */
   }
-  .search-drawer.open { transform: none; }
+  .search-drawer.open { transform: none; visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
   #search-sheet-handle { display: flex; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
   #search-sheet-handle::before { content: ''; width: 44px; height: 5px; border-radius: 9999px; background: var(--line); transition: background .15s; }
   #search-sheet-handle:active::before { background: var(--brass); }
@@ -880,14 +890,16 @@ pre code.hljs { background: transparent; padding: 0; }
 }
 
 /* ============ 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html，spec 2026-10-21 §7）============ */
-/* 容器：关闭态 width 0（不占位、不可点）；.open 300px。开合为瞬时宽切换 + 面入场 opacity+transform，
-   宽度无过渡 → 主区一次性布局，不做逐帧回流；面切换仅 8px 位移 + 淡入 */
+/* 容器：关闭态 width 0（不占位、不可点、visibility 出 Tab 序）；.open 300px。开合为瞬时宽切换 + 面入场 opacity+transform，
+   宽度无过渡 → 主区一次性布局，不做逐帧回流；面切换仅 8px 位移 + 淡入。
+   P2 目检轮：width:0+overflow:hidden 子树（含 rsn-ta）仍 Tab 可达 → 关闭态 visibility:hidden；
+   桌面瞬时族无过渡、零孤儿延迟；移动滑入形态在下方 ≤860 块并入 transform 过渡（delay .38s） */
 .console-shell {
   flex-shrink: 0; width: 0; position: relative; overflow: hidden;
   background: var(--paper); border-right: 1px solid var(--line);
-  opacity: 0; pointer-events: none;
+  opacity: 0; pointer-events: none; visibility: hidden;
 }
-.console-shell.open { width: 300px; opacity: 1; pointer-events: auto; }
+.console-shell.open { width: 300px; opacity: 1; pointer-events: auto; visibility: visible; }
 #memory-console-shell > .c-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); }
 #memory-console-shell > .c-face.out { opacity: 0; pointer-events: none; }
 @keyframes cFaceIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
@@ -1054,16 +1066,16 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .console-shell {
     position: fixed; left: 0; right: 0; top: 0; bottom: 0;
     width: 100% !important; z-index: 45; border-right: none;
-    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s; /* visibility:hidden 承桌面基础态；滑出收尾才隐 */
   }
-  .console-shell.open { transform: translateX(0); }
+  .console-shell.open { transform: translateX(0); visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
 }
 @media (min-width: 861px) {
   #memory-console-backdrop { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   #memory-console-shell > .c-face.anim { animation: none; }
-  .console-shell { transition: none; }
+  .console-shell, .console-shell.open { transition: none; }
   .spill.awaiting::before { animation: none; }
   .done { animation: none; }
 }

@@ -408,6 +408,42 @@ def test_p2_meta_and_motion():
     assert re.search(r"box-shadow: inset", css)  # inset ring 存在
 
 
+def test_p2_visual_round_css():
+    # P2 目检轮：视觉隐藏但 Tab 可达的容器 → 容器级 visibility（fold 家族同族手法：
+    # 收起 delay=过渡时长、展开 delay 0s 即时）；UI 铬件文本禁选（点拖出选区+原生 caret 闪烁）
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    def bodies(sel):  # 该选择器独立成头的全部规则体（含媒体查询形态）
+        return [m.group(1) for m in re.finditer(re.escape(sel) + r"\s*\{([^}]*)\}", css)]
+
+    for sel, opn in ((".console-shell", ".console-shell.open"),
+                     (".panel-shell", ".panel-shell.open"),
+                     (".search-drawer", ".search-drawer.open")):
+        assert any("visibility: hidden" in b for b in bodies(sel)), sel
+        assert any("visibility: visible" in b and "visibility 0s 0s" in b
+                   for b in bodies(opn)), opn
+        # 滑入三壳收起态：visibility 延迟挂 .38s transform 过渡上（滑出收尾才隐，防中途隐身）
+    assert any("visibility 0s .38s" in b for b in bodies(".panel-shell")), "panel-shell"
+    assert any("visibility 0s .38s" in b for b in bodies(".search-drawer")), "search-drawer"
+    assert any("visibility 0s .38s" in b for b in bodies(".console-shell")), "console-shell 移动"
+    # #block-edit-btn：opacity .15s 淡变保留（delay 挂时长），.on 态 delay 0s 即刻可见
+    assert any("visibility: hidden" in b and "visibility 0s .15s" in b
+               for b in bodies("#block-edit-btn"))
+    assert any("visibility: visible" in b and "visibility 0s 0s" in b
+               for b in bodies("#block-edit-btn.on"))
+    # 铬件禁选集 + 表单控件复位（user-select 继承属性，防祖先 none 传染 input——树行内改名框）
+    m = re.search(r"button, \.tree-row, \.tree-file, \.rlabel, #current-file \{([^}]*)\}", css)
+    assert m and "user-select: none" in m.group(1)
+    m2 = re.search(r"\ninput, textarea \{([^}]*)\}", css)
+    assert m2 and "user-select: text" in m2.group(1)
+    # reduced-motion：三壳 .open 自带合并 transition（特异度高于基础态击杀）——
+    # .open 不杀则 RM 下滑入复活 + 收起态 visibility 延迟成孤儿延迟（fold 家族终审同教训）
+    assert re.search(r"\.console-shell, \.console-shell\.open \{ transition: none", css)
+    assert re.search(r"\.panel-shell, \.panel-shell\.open, \.search-drawer, \.search-drawer\.open"
+                     r" \{ transition: none", css)
+    assert re.search(r"#block-edit-btn, #block-edit-btn\.on \{ transition: none", css)
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]
