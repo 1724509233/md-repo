@@ -30,6 +30,16 @@ import yaml
 # same thing, so the refusal surface behaves as one constant.
 INVISIBLE_MSG = "Path is invisible to agents"
 
+# 隐私打开文档的固定引导文案（2026-11-18 语义升级）：编辑器自动带上隐私目录
+# 内文档时不再静默跳过，而是注入这条逐字常量教 agent 引导用户。前缀与
+# DocPathUserReminder._PREFIX 同族（[当前打开: ）——strip() 按该前缀清理旧
+# 提醒，新提醒天然覆盖旧条，不堆叠。绝不内插真实路径（文案即常量本体）。
+DOC_PRIVACY_NOTICE = (
+    "[当前打开: （隐私目录内文档，模型不可见）勿尝试读取或推测其内容。"
+    "若用户需要处理它，按此引导：优先建议用户把相关片段粘贴到对话中；"
+    "或由其自行在配置中将该目录移出隐私名单。不可代用户修改名单或绕开限制。]"
+)
+
 # First segments that must never be privacy-scoped (§2.1): system dirs with
 # their own exclusion semantics — folding them into the privacy filter
 # would create behavioral ambiguity.

@@ -73,10 +73,15 @@ class Agent:
         tool-retrieved paths to it; chat() seeds the open doc_path."""
         return self._evidence_paths
 
-    async def chat(self, message: str, **ctx) -> AsyncIterator[Event]:
+    async def chat(self, message: str, privacy_doc: bool = False,
+                   **ctx) -> AsyncIterator[Event]:
         """Process one user turn. Yields runtime events (token, tool_call, ...).
 
         ``ctx`` carries per-call extras for user reminders (e.g. ``doc_path``).
+        ``privacy_doc`` (spec 2026-11-18 P0 语义升级): the route layer sets it
+        when the editor's open doc hit the privacy list — the path itself
+        never travels (doc_path stays None, no evidence seeding); user
+        reminders render the fixed guided notice instead.
         """
         # Seed the citation-grounding set with the currently-open document
         # (spec 2026-11-13 §5.2 D9: the open doc is a legitimate grounding
@@ -84,6 +89,7 @@ class Agent:
         doc_path = ctx.get("doc_path")
         if doc_path:
             self._evidence_paths.add(doc_path)
+        ctx["privacy_doc"] = privacy_doc
         for r in self._spec.user_reminders:
             content = r.render(self, ctx)
             if content is not None:

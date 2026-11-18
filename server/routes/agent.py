@@ -16,7 +16,7 @@ from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
 from ..egress import EgressTarget, parse_endpoint, should_record
-from ..privacy import is_privacy
+from ..privacy import DOC_PRIVACY_NOTICE, is_privacy
 from ..vault.db.sessions import get_auto_approve, set_auto_approve
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
@@ -121,10 +121,11 @@ def _privacy_hit(ctx, rel) -> bool:
     """Privacy read-boundary check for an auto doc-path (P0 leak, spec
     2026-11-18 §2.2): the editor-attached ``doc_path`` reaches the model
     context on both chat channels (user reminder / content injection) —
-    a privacy-scoped path must behave as if it does not exist (same
-    semantics as the INVISIBLE read refusal): silent skip, no injection,
-    no validation error (a 409 would leak path existence). ``ctx.privacy``
-    None / empty dirs → False (zero behavior change)."""
+    a privacy-scoped path is never named or read; instead both channels
+    inject the fixed guided notice (``DOC_PRIVACY_NOTICE``, 2026-11-18
+    语义升级). No validation error either (a 409 would leak path
+    existence). ``ctx.privacy`` None / empty dirs → False (zero behavior
+    change)."""
     return bool(ctx.privacy) and is_privacy(ctx.privacy.dirs, rel.as_posix())
 
 
@@ -168,8 +169,11 @@ def register(app, ctx) -> None:
         messages = [{"role": "system", "content": "You are a helpful assistant for markdown documents."}]
         if mode == "current_doc" and doc_path:
             rel = _safe_rel_path(doc_path)
-            # P0 leak: 隐私打开文档 = 对模型不存在（静默不注入全文）
-            if rel and not _privacy_hit(ctx, rel):
+            if rel and _privacy_hit(ctx, rel):
+                # P0 语义升级：隐私打开文档 → 逐字引导文案（不注入全文，
+                # 文案是常量，真实路径不出域）
+                messages.append({"role": "system", "content": DOC_PRIVACY_NOTICE})
+            elif rel:
                 fp = ctx.vault_dir / rel
                 if fp.is_file():
                     content = fp.read_bytes().decode("utf-8", errors="replace")
@@ -227,14 +231,15 @@ def register(app, ctx) -> None:
 
         # Pre-check doc_path（不修改 session，只验证；409 走 HTTP 异常）
         doc_context = None
+        privacy_doc = False
         if doc_path:
             rel = _safe_rel_path(doc_path)
             if rel is None:
                 logger.info("doc_context skipped: _safe_rel_path rejected %r", doc_path)
             elif _privacy_hit(ctx, rel):
-                # P0 leak: 隐私打开文档 = 对模型不存在——当无 doc_path，
-                # 静默跳过注入，409 校验也不触达（存在性本身不泄漏）
-                doc_context = None
+                # P0 语义升级：隐私打开文档 → 路径当无 doc_path（409 校验不
+                # 触达，存在性不泄漏），chat 带 privacy_doc 注入固定引导文案
+                privacy_doc = True
             elif not (ctx.vault_dir / rel).is_file():
                 raise HTTPException(status_code=409, detail=f"doc_path '{rel.as_posix()}' not on disk")
             else:
@@ -247,9 +252,12 @@ def register(app, ctx) -> None:
             agent = _get_agent(session_id)
             exc_to_raise: BaseException | None = None
             try:
-                # doc_context 注入 + user message 由 agent.chat 处理（user reminder）
+                # doc_context 注入 + user message 由 agent.chat 处理（user
+                # reminder）；隐私打开文档走 privacy_doc 引导文案（路径不入参）
                 async for event in agent.chat(
-                    message, doc_path=doc_context.as_posix() if doc_context else None
+                    message,
+                    doc_path=doc_context.as_posix() if doc_context else None,
+                    privacy_doc=privacy_doc,
                 ):
                     yield sse(event.type, event.data)
             except (GeneratorExit, asyncio.CancelledError):

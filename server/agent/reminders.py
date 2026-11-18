@@ -66,6 +66,12 @@ class DocPathUserReminder(UserReminder):
     def render(self, agent, ctx: dict) -> str | None:
         rel = ctx.get("doc_path")
         if not rel:
+            if ctx.get("privacy_doc"):
+                # 隐私打开文档（spec 2026-11-18 语义升级）：路径不进上下文，
+                # 注入逐字引导文案（前缀同族 → strip() 天然覆盖旧提醒）。
+                from ..privacy import DOC_PRIVACY_NOTICE
+
+                return DOC_PRIVACY_NOTICE
             return None
         warning = ""
         last_read_ts = agent.last_read_ts.get(rel, 0)
