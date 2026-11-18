@@ -738,14 +738,16 @@ export function createApp() {
         // MemoryConsole 监控页不接跳转。活链带 data-vault-path（死链/歧义无该属性 → 选择器不命中，本就不可点）。
         // 点击落账（spec 2026-11-13 §4.4）：openDoc 之前发出、不 await（fire-and-forget，恒 204）；
         // filetree 点击无 md-softlink 不经过此处（D5 不落账）；未遂点击（openDoc 404）不补记（D8）。
-        // 落账先于修饰键放行（P2⑥ 裁决）：meta/ctrl/alt 的新标签/下载同样是用户对召回结果的真实点击意图，
-        // 信号计点击事件本身而非站内导航方式——先落账，再放行原生语义（不 preventDefault、不 openDoc）。
+        // 修饰键（P2⑥ / I-1，见函数体内注）：alt 不落账先放行；meta/ctrl 先落账后放行；均不进站内切换。
         document.addEventListener('click', (e) => {
           const a = e.target && e.target.closest ? e.target.closest('a.md-softlink[data-vault-path]') : null
           if (!a) return
           const inAi = !!a.closest('#ai-messages')
           if (!inAi && !a.closest('#preview')) return
           const path = a.getAttribute('data-vault-path')
+          // I-1 收口（终审 2026-11-18）：alt=下载语义，对 #doc/ 片段链即下载当前页——非访问意图，
+          // 不落账直接放行（spec D8「点击=打开成功才落」字面口径；meta/ctrl 新标签仍是真实访问，照常落账）
+          if (e.altKey) return
           if (inAi) {
             api.recallClick({
               path,
@@ -756,8 +758,8 @@ export function createApp() {
           } else {
             api.recallClick({ path, via: 'preview' })
           }
-          // 修饰键放行（P2⑥）：新标签/下载语义交回浏览器，站内切换不参与
-          if (e.metaKey || e.ctrlKey || e.altKey) return
+          // 修饰键放行（P2⑥）：meta/ctrl 新标签落账后语义交回浏览器，站内切换不参与
+          if (e.metaKey || e.ctrlKey) return
           e.preventDefault()
           // 调用式保持原样（bug 83e7241f 回归钉逐字匹配 fromLink=true 实参）
           openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)

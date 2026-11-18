@@ -460,3 +460,15 @@ def test_p2_review_sweeps():
     assert "e.metaKey" in app and "e.altKey" in app  # 软链委托放行
     assert re.search(r"\.tree-more\s*\{[^}]*pointer-events:\s*none", css)
     assert "<h1 class=\"mp-title\">" in mp
+
+
+def test_p2_softlink_alt_click_not_logged():
+    # I-1 收口（终审）：alt=对 #doc/ 片段链下载当前页，非访问意图 → 不落账仅放行（spec D8）；
+    # meta/ctrl=新标签是真实访问意图，仍「先落账后放行」。按委托函数体内代码顺序钉。
+    app = _templates()["app.js"]
+    body = app[app.index("a.md-softlink[data-vault-path]"):
+                app.index("openDoc(a.getAttribute('data-vault-path')")]
+    assert "if (e.altKey) return" in body
+    assert "if (e.metaKey || e.ctrlKey) return" in body
+    assert body.index("if (e.altKey) return") < body.index("api.recallClick")
+    assert body.index("if (e.metaKey || e.ctrlKey) return") > body.index("api.recallClick")
