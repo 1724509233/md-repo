@@ -13,7 +13,8 @@ from datetime import datetime
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import ledger, proposals
+from .. import proposals
+from ..services import ledger
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
 

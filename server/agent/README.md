@@ -154,7 +154,7 @@ flowchart LR
         vaultdb["vault.db<br/>conn 双连接 · sessions ·<br/>changes · recall · graph_sql"]
         vaultfs["vault.fs.vault_ops<br/>edit_file · EXCLUDED_INDEX_DIRS"]
         refs["vault.orchestration.refs<br/>update_references_batch"]
-        ledger["ledger.py<br/>record() 写后同步落行 + skip"]
+        ledger["services/ledger.py<br/>record() 写后同步落行 + skip"]
         snapshots["snapshots.py<br/>capture / finalize / discard"]
         proposals["proposals.py<br/>create / advance / scan / record"]
         ai["ai.py<br/>rag_search()"]

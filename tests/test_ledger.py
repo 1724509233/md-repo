@@ -1,4 +1,4 @@
-"""Pin tests for the change ledger (server/ledger.py).
+"""Pin tests for the change ledger (server/services/ledger.py).
 
 The ledger is the sole write surface for change_log + files (AGENTS.md
 "Change ledger discipline"): writers register BEFORE writing (register) or
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 
-from server import ledger
+from server.services import ledger
 
 
 def test_register_pop_returns_tuple(tmp_path):

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 
-from server import ledger
+from server.services import ledger
 from server.agent import ToolContext, execute_tool
 from server.vault import upsert_file
 from server.vault.orchestration.indexer import index_segments

@@ -41,7 +41,7 @@ server/vault/
 | `index_segments(conn, vault_dir, path)` / `delete_segments(conn, path)` | `orchestration.indexer` | 单文件分段索引 upsert / 删除 |
 | `rebuild_segments_all(conn, vault_dir)` → int / `graph_rebuild_all(conn, vault_dir)` → int | `orchestration.indexer` | 全量重建（FTS / 图谱） |
 | `ensure_indexed(conn, vault_dir)` | `orchestration.indexer` | 启动索引检查：首跑全量重建 / FTS 失步修复 |
-| `apply_change(conn, vault_dir, path, action, ...)` / `apply_folder_change(conn, vault_dir, relpath, action, ...)` | `orchestration.file_ops` | 变更应用 chokepoint（**唯一外部 importer 是 `server/ledger.py`**） |
+| `apply_change(conn, vault_dir, path, action, ...)` / `apply_folder_change(conn, vault_dir, relpath, action, ...)` | `orchestration.file_ops` | 变更应用 chokepoint（**唯一外部 importer 是 `server/services/ledger.py`**） |
 | `reconcile(disk, conn, vault_dir)` → dict | `orchestration.file_ops` | 启动对账：返回 created/modified/deleted/moved/unchanged/duplicates |
 | `edit_file(vault_dir, path, old_string, new_string)` → str | `fs.vault_ops` | 精确文本替换（Agent 工具写入面） |
 | `segment_markdown(content)` → list[dict] | `fs.segmenter` | Markdown 分段（kind/content/heading_path） |
@@ -108,13 +108,13 @@ server/vault/
 
 ### 变更归因（双 chokepoint）
 
-- `apply_change` / `apply_folder_change` 是 `change_log` + `files` 行的唯一 mutator，**唯一外部 importer 是 `server/ledger.py`**（`consume` / `record` / `record_folder` 三入口，归因后一次落库；spec：`~/md-vault/projects/md-repo/specs/2026-10-01-file-change-log-design.md`）
+- `apply_change` / `apply_folder_change` 是 `change_log` + `files` 行的唯一 mutator，**唯一外部 importer 是 `server/services/ledger.py`**（`consume` / `record` / `record_folder` 三入口，归因后一次落库；spec：`~/md-vault/projects/md-repo/specs/2026-10-01-file-change-log-design.md`）
 - agent 写工具写盘**后** `ledger.record()`（同步行 + skip，恰一行）；其余 in-process 通道（executor / bgagent runner / web 异步写路径）写盘**前** `ledger.register()`；web 直写 `ledger.record()`（同步行）；文件夹 `ledger.record_folder()`（watcher 无 folder 回调 → 无 double-row 风险）；watcher consumer `ledger.consume()`（未注册写入兜底 `source="watchdog"`）
 
 ## 依赖方向
 
 ```
-server/ledger.py ─────────────────► file_ops.apply_change / apply_folder_change
+server/services/ledger.py ────────► file_ops.apply_change / apply_folder_change
                                （唯一外部 importer：consume/record/record_folder）
 server/vault/watcher.py ──────────► file_ops.reconcile     （启动对账，source="reconcile"）
 server/main.py / mcp_server.py / recovery.py ───► indexer.ensure_indexed （启动索引检查；recovery 演练镜像生产启动路径）

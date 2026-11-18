@@ -7,7 +7,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from ..vault.db.file_index import get_all_files
-from ..sync import compare_files, derive_deleted_hashes
+from ..services.sync import compare_files, derive_deleted_hashes
 
 
 def register(app, ctx) -> None:

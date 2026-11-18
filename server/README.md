@@ -10,9 +10,9 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 |------|------|
 | `main.py` | 入口：config → 双账本（index.db + ledger.db）→ `create_app` → `build_runtime()`（事件总线 + publisher 过滤、四个 ledger 回调、SnapshotWatcher、bgagent 任务；返回带 `stop()` 的 `Runtime`）→ uvicorn |
 | `api.py` | `create_app()` 工厂：构造 `WebContext`、挂载 `/static`（templates 目录）、`routes.register_all`（wiring only，路由在 `routes/`） |
-| `ledger.py` | 变更账本：`change_log` + `files` 的**唯一写入面**。四函数 `register` / `record` / `record_folder` / `consume` |
+| `services/ledger.py` | 变更账本：`change_log` + `files` 的**唯一写入面**。四函数 `register` / `record` / `record_folder` / `consume` |
 | `core/events.py` | 进程内事件总线：**wake signal 不是数据通道**——订阅者不得依赖收到每个事件或 payload 内容做决策，权威状态由 consumer 自己的扫描重导出 |
-| `sync.py` | `compare_files()` 纯函数无 IO：返回 `to_pull` / `to_push` / `to_delete` / `conflicts`（`recent_moves` 检测服务端改名 → stale copy 移入 `to_delete`） |
+| `services/sync.py` | `compare_files()` 纯函数无 IO：返回 `to_pull` / `to_push` / `to_delete` / `conflicts`（`recent_moves` 检测服务端改名 → stale copy 移入 `to_delete`） |
 | `vault/watcher.py` | `SnapshotWatcher`：watchdog 事件（doorbell）→ 线程去抖 → 快照对比；脏集合 + doorbell；启动调 `file_ops.reconcile`（惰性 import，一次）；周期兜底为 watcher 自身 `_reconcile` 扫描级标 dirty（事件经 `ledger.consume` 落库） |
 | `snapshots.py` | pre-image 快照（可逆层）：LLM 写入（agent 直写工具、executor merge）与交互式删除（Web 文档管理）写前捕获全文 pre-image；回滚入口（verify-all-then-write-all） |
 | `proposals.py` | 提案状态机：8 状态 `TRANSITIONS`、`advance`；DB 行是唯一状态源（v2a 零文件落）；`VALID_TYPES` 5 类动词；14 天 TTL |
@@ -23,7 +23,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `ai.py` | RAG 搜索 `rag_search()`（转交 raw query，委派 `segments_sql` 做 jieba 分词 + FTS 四档召回）+ LLM 流式 `chat_stream()` |
 | `mcp_server.py` | MCP stdio 独立入口（`md-vault-mcp`，不经 main.py）：6 工具，有效写入面仅 `propose`（`write_doc`/`edit_doc` 被双重 gate 拒绝），自管 config 发现与 DB 初始化 |
 
-### 子目录（7）
+### 子目录（9）
 
 | 目录 | 说明 | 详细文档 |
 |------|------|----------|
@@ -32,6 +32,8 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `vault/` | 索引子系统：db（SQLite）/ fs（文件系统）/ orchestration（协调层） | [vault/README.md](vault/README.md)（待更新） |
 | `routes/` | Web 路由：6 个 URL 前缀域，每域一模块 | [routes/README.md](routes/README.md) |
 | `config/` | YAML 配置解析包（core / ai / log / notifications / bgagent） | [config/README.md](config/README.md) |
+| `core/` | 共享内核（零上行依赖，`tests/test_architecture.py` 钉死）：events 总线 · privacy 读边界 · sync_lock · logrotate · types（FileEntry/ModelConfig） | — |
+| `services/` | 应用层领域服务：ledger（变更账本唯一写面）· sync（三向分类纯函数）· egress（出域台账） | — |
 | `prompts/` | 提示词：bgagent 各角色 prompt（md）+ agent system prompt（`system.md`） | — |
 | `templates/` | Web UI 静态资源：`index.html` 壳 + `js/` + `style.css`（`/static` 挂载源） | — |
 
@@ -45,7 +47,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `ledger.record` | `(conn, vault_dir, rel_path, action, source, *, from_path="", new_hash="", batch_id="", **passthrough)` | 同步落行 + skip（agent 写工具 + web 直写） |
 | `ledger.record_folder` | `(conn, vault_dir, relpath, action, source="web", from_path="")` | 文件夹行（不触 registry） |
 | `ledger.consume` | `(conn, vault_dir, rel_path, action, from_path="") -> tuple[str, str, bool]` | watcher 消费侧记账 |
-| `compare_files` | `(local, server, recent_moves=None) -> dict` | 同步比对（`sync.py`） |
+| `compare_files` | `(local, server, recent_moves=None) -> dict` | 同步比对（`services/sync.py`） |
 | `rag_search` | `(vault_dir, query, top_k=5, expand=True, recall="strict", include_code=False) -> list[dict]` | FTS 四档召回（`ai.py`） |
 | `chat_stream` | `(base_url, api_key, model, messages, max_tokens=4096, temperature=0.7)`（async generator） | OpenAI 兼容 SSE 流（`ai.py`） |
 | `SnapshotWatcher` | `(vault_dir, db_conn=None, on_file_created=None, on_file_modified=None, on_file_moved=None, on_file_deleted=None, debounce=1.5, reconcile_interval=30.0)` | 快照对比 watcher |

@@ -31,7 +31,7 @@ each has recorded its first run.
 """
 from __future__ import annotations
 
-from ..egress import _is_loopback_host, parse_endpoint
+from ..services.egress import _is_loopback_host, parse_endpoint
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 500

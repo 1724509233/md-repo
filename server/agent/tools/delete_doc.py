@@ -58,7 +58,7 @@ class DeleteDocTool(DocTool):
         # capture → unlink → record → finalize. A failed unlink discards
         # the snapshot (the file is intact); a failed record leaves the
         # file gone but the snapshot still rollback-able.
-        from ... import ledger
+        from ...services import ledger
         from ...snapshots import capture, discard, finalize, gc_after_capture
         from ...vault.db.conn import get_ledger_conn
 

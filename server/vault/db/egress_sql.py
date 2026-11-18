@@ -3,7 +3,7 @@ lock-holding (card 5 — same split discipline as ``snapshot_records``).
 
 Only SQL + the shared ``_ledger_lock`` live here. The policy/shaping half
 (endpoint parsing, loopback gating, privacy double-insurance skip,
-fail-open) is ``server/egress.py`` — callers never touch the lock and
+fail-open) is ``server/services/egress.py`` — callers never touch the lock and
 ``egress_log`` mutations never bypass this module.
 
 Concurrency (card 5): the lock is held INTERNALLY by these functions —

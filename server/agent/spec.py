@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..egress import EgressTarget
+from ..services.egress import EgressTarget
 from ..core.types import ModelConfig
 from ..core.privacy import PrivacyConfig
 from .policy import ChannelPolicy

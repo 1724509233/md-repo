@@ -18,7 +18,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 from server.api import create_app
-from server.ledger import consume
+from server.services.ledger import consume
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
 from server.vault.db.schema import init_ledger_db
@@ -27,7 +27,7 @@ from server.vault.db.schema import init_ledger_db
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
                       from_path: str = ""):
     """Drive the production watcher-consumer path
-    (``consume`` in server/ledger.py — the same one server/main.py's four
+    (``consume`` in server/services/ledger.py — the same one server/main.py's four
     _on_* callbacks call) once for ``path``. Returns the popped
     ``(source, batch_id, skip)`` attribution.
 

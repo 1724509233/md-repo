@@ -8,7 +8,7 @@ LAN 多设备 Markdown 文档同步系统。Win PC 跑 FastAPI 服务端，Mac/�
 - **Web 工作台** — Vue 3 CDN SPA，文件树浏览、Markdown 编辑/预览（marked.js + DOMPurify + highlight.js + mermaid）、AI 助手、记忆控制台、后台监控页
 - **FTS5 检索** — SQLite FTS5 + jieba 中文分词，BM25 排序，四档召回（strict/near/relaxed/fuzzy），增量索引
 - **知识图谱** — wikilink/tag/related 关系抽取，关联文档发现（N-hop）
-- **变更账本（双账本）** — `.sync/` 下两个 SQLite：`index.db` 可重建缓存（files/segments/edges/change_log/trigger_state/recall_log/sessions/notifications 等），`ledger.db` 权威状态（proposals/proposal_transitions/snapshots/relatedness，无重建来源）。变更由 `server/ledger.py` 统一归因记账
+- **变更账本（双账本）** — `.sync/` 下两个 SQLite：`index.db` 可重建缓存（files/segments/edges/change_log/trigger_state/recall_log/sessions/notifications 等），`ledger.db` 权威状态（proposals/proposal_transitions/snapshots/relatedness，无重建来源）。变更由 `server/services/ledger.py` 统一归因记账
 - **AI Agent** — 基于 OpenAI 兼容 API 的 15 个工具调用 agent，可读写/搜索/移动/删除文档、创建并评审提案，写操作需用户确认
 - **提案通道** — bgagent/agent 产出提案 → 状态机（8 状态）→ 双通道（Web 控制台 / agent 工具）同一 decide 路径 → executor 落地 → 回读反馈；DB 为唯一状态源，零文件落
 - **后台 agent（五角色）** — 碎片整理（事件驱动）· 矛盾批注（低频巡查：cron + change 源 arming）· 执行器（确定性、无 LLM、adopted 提案唯一落地者）· 召回诊断 · 历史回顾（生产禁用）
@@ -285,8 +285,7 @@ MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码�
 ├── server/
 │   ├── main.py               # 入口：config → 双账本(index.db+ledger.db) → app → build_runtime() → uvicorn
 │   ├── api.py                # create_app 工厂（WebContext + /static 挂载 + routes 注册）
-│   ├── ledger.py             # 变更账本（change_log+files 唯一写入面：register/record/record_folder/consume）
-│   ├── sync.py               # compare_files（无 IO 纯函数，manifest 对比）
+│   ├── services/             # 应用层领域服务：ledger.py（变更账本，唯一写入面）· sync.py（compare_files 无 IO 纯函数）· egress.py（出域台账写面）
 │   ├── snapshots.py          # 快照（可逆层：删除/写前全文快照，回滚入口）
 │   ├── proposals.py          # 提案状态机（8 状态，DB 为状态源，零文件落）
 │   ├── recovery.py           # 恢复演练：证明 index.db 是可重建缓存（只动 index.db）

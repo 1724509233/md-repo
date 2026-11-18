@@ -38,7 +38,7 @@ import pytest
 
 from server import snapshots
 from server.agent import ToolContext, execute_tool
-from server.ledger import consume
+from server.services.ledger import consume
 from server.vault.db.changes import (
     count_changes_sources,
     get_changes,
@@ -239,7 +239,7 @@ def test_snapshot_side_record_failure_leaves_snapshot_recoverable(vault_dir,
     recovers it (the snapshot IS the backstop — no half state)."""
     (vault_dir / "notes" / "gone.md").write_bytes(b"precious")
     monkeypatch.setattr(
-        "server.ledger.record",
+        "server.services.ledger.record",
         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("simulated db failure")),
     )
     # The tool does not catch record failures — the error surfaces, but the
@@ -312,7 +312,7 @@ def test_sync_external_delete_without_pre_hash_goes_to_delete(client, vault_dir,
     # compute one) → always stale.
     (vault_dir / "notes" / "ext.md").write_bytes(b"external")
     (vault_dir / "notes" / "ext.md").unlink()
-    from server import ledger
+    from server.services import ledger
 
     ledger.record(db_conn, vault_dir, "notes/ext.md", "deleted", "watchdog")
     r = client.post("/api/sync", json={
@@ -631,7 +631,8 @@ def test_rollback_route_books_move_pair(client, vault_dir, db_conn, ledger_conn)
 def test_rollback_move_reverses_refs_and_relatedness(vault_dir, db_conn, ledger_conn):
     # F8：move 的回滚必须逆转 move 时的两处副作用——referrer 正文改写
     # （[[a]]→[[b]]）与 relatedness 路径改写（D19）。
-    from server import ledger, snapshots as snap_mod
+    from server import snapshots as snap_mod
+    from server.services import ledger
     from server.vault.db.relatedness import merge_edge
 
     (vault_dir / "notes").mkdir(exist_ok=True)
@@ -668,7 +669,8 @@ def test_rollback_move_refs_reversal_survives_nonempty_edges(vault_dir, db_conn,
     # referrer→new 边尚未建（watcher 未跑或事件丢失），edges 查找返回空且
     # 不触发 fallback（fallback 只在整表空时触发）→ refs 逆转静默 no-op。
     # 修复后走 G1 级 _referrers（edges 优先 + 无条件内容扫描兜底）。
-    from server import ledger, snapshots as snap_mod
+    from server import snapshots as snap_mod
+    from server.services import ledger
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "a.md").write_bytes(b"a content")
@@ -700,7 +702,7 @@ def test_move_refs_rewrite_survives_nonempty_edges(vault_dir, db_conn, ledger_co
     # _update_references 跑在 graph_delete_file(from) 之后——referrer→旧
     # 边已被删，edges 表非空时查找返回空且 fallback 不触发 → 真实 vault
     # 上 move 的引用改写静默失效。修复 = 改写移到图删除之前。
-    from server import ledger
+    from server.services import ledger
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "a.md").write_bytes(b"a content")

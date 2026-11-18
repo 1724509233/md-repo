@@ -64,7 +64,7 @@ class MoveDocsTool(DocTool):
             apply_reference_updates,
             prepare_reference_updates,
         )
-        from ... import ledger
+        from ...services import ledger
 
         moves = [(m.from_path, m.to_path) for m in args.moves]
 

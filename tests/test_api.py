@@ -119,7 +119,7 @@ def test_upload_doc(client, vault_dir, db_conn) -> None:
 
     # DB update is handled asynchronously by the watcher; verify file on disk
     # and that ledger.register was called (source attribution).
-    from server.ledger import _registry, _registry_lock
+    from server.services.ledger import _registry, _registry_lock
     with _registry_lock:
         assert "new/file.md" in _registry
 

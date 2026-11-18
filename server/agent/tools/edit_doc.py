@@ -36,7 +36,7 @@ class EditDocTool(DocTool):
         from ...snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
         from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.fs.vault_ops import edit_file
-        from ... import ledger
+        from ...services import ledger
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():

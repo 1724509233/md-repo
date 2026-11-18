@@ -15,7 +15,7 @@ from ..agent.prompts import SYSTEM_PROMPT, sse
 from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
-from ..egress import EgressTarget, parse_endpoint, should_record
+from ..services.egress import EgressTarget, parse_endpoint, should_record
 from ..core.privacy import DOC_PRIVACY_NOTICE, is_privacy
 from ..vault.db.sessions import get_auto_approve, set_auto_approve
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path

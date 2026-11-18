@@ -1,7 +1,7 @@
-"""Tests for server.sync.compare_files."""
+"""Tests for server.services.sync.compare_files."""
 from __future__ import annotations
 
-from server.sync import compare_files, derive_deleted_hashes
+from server.services.sync import compare_files, derive_deleted_hashes
 
 
 def test_no_changes() -> None:

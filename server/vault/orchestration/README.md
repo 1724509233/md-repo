@@ -16,7 +16,7 @@
 | 函数 | 签名 |
 | --- | --- |
 | `ensure_indexed` | `ensure_indexed(conn, vault_dir) -> None` — 两级启动检查：① segments 空 → 全量重建 segments + graph；② FTS 失步（docsize 行数 ≠ segments 行数）→ 仅从内容表修复 FTS。server/main.py 与 server/mcp_server.py 共用 |
-| `apply_change` | `apply_change(conn, vault_dir, path, action, source="unknown", from_path="", new_hash="", update_refs=True, batch_id="") -> None` — 变更应用 chokepoint；**唯一外部 importer 是 `server/ledger.py`** |
+| `apply_change` | `apply_change(conn, vault_dir, path, action, source="unknown", from_path="", new_hash="", update_refs=True, batch_id="") -> None` — 变更应用 chokepoint；**唯一外部 importer 是 `server/services/ledger.py`** |
 | `apply_folder_change` | `apply_folder_change(conn, vault_dir, relpath, action, source="web", from_path="") -> None` — 文件夹行变体（见下节） |
 | `reconcile` | `reconcile(disk, conn, vault_dir) -> dict` — 启动对账，返回 `{"created", "modified", "deleted", "moved", "unchanged", "duplicates"}` |
 | `pair_moves` | `pair_moves(gone, new) -> (moves, deletes, creates)` — gone/new 为 `{path: FileEntry}`；返回 (move 对, 真删, 真建) |
@@ -103,7 +103,7 @@ delete 后从引用方文档中**删除**指向已删文件的 wikilink（全路
 （ledger 模型：in-process 写入走 `ledger.register()`，watcher 事件经 `ledger.consume()` 归因后落库；spec `~/md-vault/projects/md-repo/specs/2026-10-31-ledger-file-split-design.md`）
 
 ```
-server/ledger.py            ──► apply_change / apply_folder_change（唯一外部 importer：
+server/services/ledger.py   ──► apply_change / apply_folder_change（唯一外部 importer：
                                consume/record/record_folder 三入口，归因后一次落库）
 server/main.py              ──► ensure_indexed（启动索引检查：首跑全量重建 / FTS 失步修复）
 server/mcp_server.py        ──► ensure_indexed（MCP 入口共用）

@@ -25,7 +25,7 @@ class WriteDocTool(Tool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...snapshots import capture, finalize, gc_after_capture, hash_bytes
         from ...vault.db.conn import get_index_conn, get_ledger_conn
-        from ... import ledger
+        from ...services import ledger
 
         fp = ctx.vault_dir / args.path
         existed = fp.is_file()

@@ -18,7 +18,7 @@ from typing import AsyncIterator
 
 from openai import APIError, AsyncOpenAI
 
-from ..egress import flush_touches
+from ..services.egress import flush_touches
 from ..vault.db.conn import get_ledger_conn
 from .events import Event
 from .execute import execute_tool

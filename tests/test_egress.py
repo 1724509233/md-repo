@@ -2,14 +2,14 @@
 egress_log table + write face + endpoint helpers.
 
 Task 6 scope: schema DDL, egress_sql write face (lock-holding, card-5),
-server/egress.py policy/shaping layer (parse_endpoint / EgressTarget /
+server/services/egress.py policy/shaping layer (parse_endpoint / EgressTarget /
 should_record / flush_touches). The runtime flush wiring is Task 7.
 """
 from __future__ import annotations
 
 import logging
 
-from server.egress import EgressTarget, flush_touches, parse_endpoint, should_record
+from server.services.egress import EgressTarget, flush_touches, parse_endpoint, should_record
 from server.vault.db import egress_sql
 
 
@@ -120,7 +120,7 @@ def test_loopback_single_source_no_local_fallback_set():
     本地回退集合死代码已删—— ImportError 直接上抛，不得回退成第二处真值。"""
     import inspect
 
-    from server import egress
+    from server.services import egress
 
     src = inspect.getsource(egress._is_loopback_host)
     assert "from server.config.core import is_loopback" in src
@@ -171,6 +171,6 @@ def test_flush_touches_fail_open(ledger_conn, caplog):
     """A broken conn must NOT propagate (audit never bites the run) and
     MUST leave a logged trace."""
     ledger_conn.close()  # every subsequent statement raises
-    with caplog.at_level(logging.ERROR, logger="server.egress"):
+    with caplog.at_level(logging.ERROR, logger="server.services.egress"):
         flush_touches(ledger_conn, (), _target(), {"notes/a.md": "read"})
     assert any("egress" in rec.message.lower() for rec in caplog.records)

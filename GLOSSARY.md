@@ -23,7 +23,7 @@ _Avoid_: local_files（线格式名，不是术语）、文件清单（裸词）
 _Avoid_: to_delete（字段名，不是术语）、delete、旧文件
 
 **delete**：
-vault 内一次真实文件删除，记入 change_log（op 枚举之一：created / modified / deleted / moved），经变更账本（`server/ledger.py`）落账。与 stale copy 分属两层：op enum（文件 changelog）vs actionType（同步协议）。
+vault 内一次真实文件删除，记入 change_log（op 枚举之一：created / modified / deleted / moved），经变更账本（`server/services/ledger.py`）落账。与 stale copy 分属两层：op enum（文件 changelog）vs actionType（同步协议）。
 _Avoid_: stale copy、to_delete、删除文件（裸词）
 
 **sync lock**：
@@ -45,11 +45,11 @@ change_log.source 的取值：非项目内修改的统一兜底来源——服�
 _Avoid_: 「watchdog 库写的」、local write（裸词）
 
 **变更账本**：
-change_log + files 表的唯一写面（module `server/ledger.py`）：`register`（watcher 记账，恰好一行）/ `record`（web 直写同步落账）/ `record_folder`（folder 行，不碰 registry）；row mutator `apply_change` 住 ledger 内部，无其他 module import。write registry 是其内部登记状态。
+change_log + files 表的唯一写面（module `server/services/ledger.py`）：`register`（watcher 记账，恰好一行）/ `record`（web 直写同步落账）/ `record_folder`（folder 行，不碰 registry）；row mutator `apply_change` 住 ledger 内部，无其他 module import。write registry 是其内部登记状态。
 _Avoid_: ledger module（模块名）、write registry（内部状态，不是写面）
 
 **write registry**：
-变更账本内部登记（server/ledger.py 模块级 dict，TTL 10s）：writer 落盘前 `register(path, source[, batch_id])` 登记（batch_id = 执行批次标识，executor / run 透传）；snapshot watcher 观察到变更后 pop 取走 `(source, batch_id)` 记入 change_log；`record()` 路径标记 skip，watcher 不重复记账（防双行 = 方法选择，不是布尔）；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
+变更账本内部登记（server/services/ledger.py 模块级 dict，TTL 10s）：writer 落盘前 `register(path, source[, batch_id])` 登记（batch_id = 执行批次标识，executor / run 透传）；snapshot watcher 观察到变更后 pop 取走 `(source, batch_id)` 记入 change_log；`record()` 路径标记 skip，watcher 不重复记账（防双行 = 方法选择，不是布尔）；查不到 = 非项目内修改 → 兜底 `source="watchdog"`。
 _Avoid_: write_registry（模块名，不是术语）、归因表
 
 **reconcile**：

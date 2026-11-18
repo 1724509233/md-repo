@@ -1392,20 +1392,20 @@ def test_write_source_attribution(tmp_path: Path):
     conn = init_db(vault / ".sync" / "index.db")
     register_db_conn(conn, None)
 
-    with patch("server.ledger.record") as m:
+    with patch("server.services.ledger.record") as m:
         execute_tool("write_doc", {"path": "a.md", "content": "x"},
                      ToolContext(vault_dir=vault, write_source="notes-organizer"))
     # Interactive run: run_id "" → batch_id stays empty (behavior unchanged).
     m.assert_called_once_with(conn, vault, "a.md", "created", "notes-organizer",
                               new_hash=ANY, batch_id="")
 
-    with patch("server.ledger.record") as m:
+    with patch("server.services.ledger.record") as m:
         execute_tool("write_doc", {"path": "b.md", "content": "x"},
                      ToolContext(vault_dir=vault))
     m.assert_called_once_with(conn, vault, "b.md", "created", "agent",
                               new_hash=ANY, batch_id="")
 
-    with patch("server.ledger.record") as m:
+    with patch("server.services.ledger.record") as m:
         execute_tool("write_doc", {"path": "c.md", "content": "x"},
                      ToolContext(vault_dir=vault, run_id="run-9"))
     # Bgagent run: the run_id is stamped as batch_id (ledger run attribution).

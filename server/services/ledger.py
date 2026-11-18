@@ -23,8 +23,8 @@ import threading
 import time
 from pathlib import Path
 
-from .vault.fs.vault_ops import resolve_disk_case
-from .vault.orchestration.file_ops import apply_change, apply_folder_change
+from ..vault.fs.vault_ops import resolve_disk_case
+from ..vault.orchestration.file_ops import apply_change, apply_folder_change
 
 _registry: dict[str, tuple[tuple[str, str, bool], float]] = {}
 _registry_lock = threading.Lock()

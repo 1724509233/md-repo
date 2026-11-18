@@ -32,7 +32,7 @@ from server.agent.events import Event
 from server.agent.runtime import LoopRuntime, Runtime
 from server.agent.spec import AgentSpec, ModelConfig
 from server.agent.tools import TOOL_REGISTRY
-from server.egress import (
+from server.services.egress import (
     EgressTarget,
     log_model_endpoints,
     parse_endpoint,
