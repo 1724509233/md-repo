@@ -20,6 +20,36 @@ class ServerConfig:
     ai: AIConfig | None = None
     log: LogConfig = field(default_factory=LogConfig)
     mcp_write_token: str = ""
+    lan_exposure: bool = False
+
+
+def is_loopback(host: str) -> bool:
+    """Loopback bind hosts: localhost, ::1, and the 127.0.0.0/8 block.
+
+    Single definition shared by the LAN gate (server/main.py startup) and
+    the egress endpoint classifier (spec §1/§4-2). Anything else —
+    including the wildcard 0.0.0.0 and "" — is non-loopback.
+    """
+    return host == "localhost" or host == "::1" or host.startswith("127.")
+
+
+def lan_gate_check(host: str, lan_exposure: bool) -> None:
+    """Hard LAN gate (redline 6: 默认保守、放开显式).
+
+    A non-loopback bind host without the explicit ``lan_exposure: true``
+    opt-in raises ValueError. Called ONLY from server/main.py's startup
+    path — deliberately NOT from load_server_config: MCP stdio shares that
+    loader and listens on nothing, so legacy ``host: 0.0.0.0`` configs must
+    keep loading there (spec §1 闸门落点钉死).
+    """
+    if lan_exposure or is_loopback(host):
+        return
+    raise ValueError(
+        f"server.host '{host}' 绑定非回环地址且 lan_exposure 未开启，拒绝启动。"
+        "非回环监听意味着局域网内任何人可读写 vault、批准提案（无鉴权面）。"
+        "如确需局域网访问，请在 config.yaml 的 server: 节显式加一行 "
+        "lan_exposure: true。"
+    )
 
 
 def _parse_ai_tools(tools_raw) -> list[str] | None:
@@ -99,4 +129,5 @@ def load_server_config(config_path: str) -> ServerConfig:
         ai=ai_cfg,
         log=LogConfig.from_raw(server, str(path)),
         mcp_write_token=mcp_write_token,
+        lan_exposure=bool(server.get("lan_exposure", False)),
     )

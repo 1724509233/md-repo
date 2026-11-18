@@ -15,6 +15,7 @@ from .bgagent import start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import self_exclusion
 from .config import load_background_agents, load_notifications, load_server_config
+from .config.core import lan_gate_check
 from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed
@@ -123,6 +124,10 @@ def main(argv: list[str] | None = None) -> None:
     config_path = argv[0] if argv else "config.yaml"
 
     config = load_server_config(config_path)
+    # LAN hard gate (redline 6): non-loopback bind host needs an explicit
+    # lan_exposure: true. Gate lives HERE, not in the shared loader — MCP
+    # stdio reuses load_server_config and listens on nothing (spec §1).
+    lan_gate_check(config.host, config.lan_exposure)
     vault_dir = config.vault_dir
     vault_dir.mkdir(parents=True, exist_ok=True)
 

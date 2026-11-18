@@ -1,6 +1,7 @@
 # 服务端配置 (Win PC)
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1  # 监听地址；0.0.0.0（局域网暴露）需显式加下方 lan_exposure: true，否则启动报错退出
+  # lan_exposure: true  # 非回环 host 的显式开闸（缺省 false；开启 = 局域网内任何人可读写 vault）
   port: 9888
   vault_dir: ./vault
   log_level: INFO  # 可选: DEBUG / INFO / WARNING / ERROR / CRITICAL（非法值启动报错）；DEBUG 含 watcher 事件/IO 细节

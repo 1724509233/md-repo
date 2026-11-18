@@ -437,3 +437,28 @@ def test_server_config_mcp_write_token_empty_is_empty(tmp_path: Path) -> None:
         "mcp:\n"
         "  write_token: \"\"\n")))
     assert cfg.mcp_write_token == ""
+
+
+# ── server.lan_exposure (LAN hard gate, redline 6; spec §1) ───────────────
+
+def test_server_config_lan_exposure_default_false(tmp_path: Path) -> None:
+    """Absent lan_exposure → False (safe default: 默认保守, 放开显式)."""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path)))
+    assert cfg.lan_exposure is False
+
+
+def test_server_config_lan_exposure_true(tmp_path: Path) -> None:
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "  lan_exposure: true\n")))
+    assert cfg.lan_exposure is True
+
+
+def test_server_config_nonloopback_host_loads_ungated(tmp_path: Path) -> None:
+    """MCP-mis-kill pin (spec §1 闸门落点钉死): the loader performs NO LAN
+    gate judgement — a legacy ``host: 0.0.0.0`` config with no flag must
+    load clean through load_server_config. MCP stdio shares this loader and
+    listens on nothing; only server/main.py's startup path enforces the
+    gate (tests/test_lan_gate.py)."""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path)))
+    assert cfg.host == "0.0.0.0"
+    assert cfg.lan_exposure is False
