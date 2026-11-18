@@ -112,6 +112,23 @@ def mark_ignored_edge(conn: sqlite3.Connection, edge_id: int) -> bool:
         return mark_ignored(conn, edge_id)
 
 
+def pair_ignored(conn: sqlite3.Connection, source: str, target: str) -> bool:
+    """D12 mechanical filter (v2b②, spec §6.3-① layer 2): does an
+    ``ignored = 1`` row exist for this pair — BIDIRECTIONALLY (D13: the
+    edge is document-level, a dismissal must not be bypassed by a reversed
+    re-propose)? Pure read, lock-free (card 9 sink of the executor's
+    inline probe; the relatedness table's semantics live here)."""
+    row = conn.execute(
+        """
+        SELECT 1 FROM relatedness
+        WHERE ignored = 1
+          AND ((source = ? AND target = ?) OR (source = ? AND target = ?))
+        """,
+        (source, target, target, source),
+    ).fetchone()
+    return row is not None
+
+
 def rewrite_paths(conn: sqlite3.Connection, old_path: str, new_path: str) -> int:
     """D19 move rewrite: map ``old_path`` → ``new_path`` on both endpoints
     of every row carrying the old path (source or target).

@@ -18,6 +18,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .db.file_index import get_all_files
 from .orchestration.move_detect import pair_moves
 from ..core.types import FileEntry
 
@@ -292,10 +293,8 @@ class SnapshotWatcher:
         # 1. Query DB state (for the mtime fast-skip in full_scan).
         db_state = None
         if self._db_conn:
-            db_state = {
-                row[0]: (row[1], row[2])
-                for row in self._db_conn.execute("SELECT path, hash, mtime FROM files")
-            }
+            db_state = {d["path"]: (d["hash"], d["mtime"])
+                        for d in get_all_files(self._db_conn)}
 
         # 2. Scan disk (single scan, with mtime skip).
         self._snapshot = full_scan(self._vault, db=db_state)

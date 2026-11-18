@@ -73,7 +73,7 @@ from ..core.privacy import is_privacy
 from ..services.proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..services.snapshots import capture, finalize, gc, hash_bytes
 from ..vault.db import egress_sql
-from ..vault.db.relatedness import merge_edge
+from ..vault.db.relatedness import merge_edge, pair_ignored
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 
 logger = logging.getLogger("md-vault.bgagent")
@@ -254,15 +254,7 @@ def _merge_relatedness(conn: sqlite3.Connection, vault: Path, p: dict,
             raise ValueError(f"relatedness file not found: {rel}")
 
     # D12: ignored-pair mechanical filter — both directions (D13).
-    ignored = conn.execute(
-        """
-        SELECT 1 FROM relatedness
-        WHERE ignored = 1
-          AND ((source = ? AND target = ?) OR (source = ? AND target = ?))
-        """,
-        (source, target, target, source),
-    ).fetchone()
-    if ignored is not None:
+    if pair_ignored(conn, source, target):
         raise _MergeFailed(
             "ignored pair — mechanical filter (human dismissed)"
         )

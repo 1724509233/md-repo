@@ -12,7 +12,11 @@ from __future__ import annotations
 import time
 from datetime import datetime
 
+import pytest
+
+from server.vault.db import graph_sql as graph_db
 from server.vault.db import notifications as notify_db
+from server.vault.db import segments_sql as seg_db
 from server.vault.db import trigger_state as ts_db
 from server.vault.db.changes import log_change
 
@@ -170,3 +174,79 @@ def test_cleanup_old_returns_deleted_count(db_conn):
     aliases = [r["alias"] for r in db_conn.execute(
         "SELECT alias FROM notifications").fetchall()]
     assert aliases == ["fresh"]
+
+
+# ── card 9 sinks: segments/graph write face (lock-free named functions) ────
+# Deadlock guard is behavioral: file_ops drives these functions through
+# apply_change while holding schema._db_lock — if any of them re-took the
+# (non-reentrant) lock, the move_detect / reconcile / api suites would
+# hang. These cases pin the row effects instead (file convention).
+
+def _seg_row(path: str, i: int) -> tuple:
+    return (path, 1000.0, i, "", "text", f"c{i}", f"tok{i}", "", "")
+
+
+def test_segments_insert_and_delete_path_row_effects(db_conn):
+    seg_db.segments_insert(db_conn, [_seg_row("a.md", 0), _seg_row("a.md", 1),
+                                      _seg_row("b.md", 0)])
+    assert seg_db.count_segments(db_conn) == 3
+    seg_db.segments_delete_path(db_conn, "a.md")
+    assert seg_db.count_segments(db_conn) == 1
+    # the FTS trigger face follows every row-level write
+    assert seg_db.fts_docsize_count(db_conn) == seg_db.count_segments(db_conn)
+
+
+def test_segments_replace_all_swaps_all_and_skips_none(db_conn):
+    seg_db.segments_insert(db_conn, [_seg_row("old.md", 0)])
+    db_conn.commit()
+
+    def gen():
+        yield "a.md", [_seg_row("a.md", 0)]
+        yield "gone.md", None                      # vanished mid-scan
+        yield "b.md", [_seg_row("b.md", 0), _seg_row("b.md", 1)]
+
+    assert seg_db.segments_replace_all(db_conn, gen()) == 2
+    paths = {r["path"] for r in db_conn.execute(
+        "SELECT DISTINCT path FROM segments")}
+    assert paths == {"a.md", "b.md"}               # old.md gone entirely
+
+
+def test_segments_replace_all_rolls_back_on_error(db_conn):
+    seg_db.segments_insert(db_conn, [_seg_row("keep.md", 0)])
+    db_conn.commit()
+
+    def boom():
+        yield "a.md", [_seg_row("a.md", 0)]
+        raise RuntimeError("mid-scan disk error")
+
+    with pytest.raises(RuntimeError):
+        seg_db.segments_replace_all(db_conn, boom())
+    assert seg_db.count_segments(db_conn) == 1     # old content intact
+
+
+def test_rebuild_fts_repairs_docsize_desync(db_conn):
+    seg_db.segments_insert(db_conn, [_seg_row("a.md", 0)])
+    db_conn.commit()
+    db_conn.execute("DELETE FROM segments_fts_docsize")  # simulate desync
+    db_conn.commit()
+    assert seg_db.fts_docsize_count(db_conn) != seg_db.count_segments(db_conn)
+    seg_db.rebuild_fts(db_conn)
+    assert seg_db.fts_docsize_count(db_conn) == seg_db.count_segments(db_conn)
+
+
+def test_graph_delete_edges_from_keeps_inbound(db_conn):
+    a = graph_db.graph_upsert_entity(db_conn, "a.md", "doc", "a.md")
+    b = graph_db.graph_upsert_entity(db_conn, "b.md", "doc", "b.md")
+    graph_db.graph_add_edge(db_conn, a, b, "wikilink", "a.md")
+    graph_db.graph_add_edge(db_conn, b, a, "wikilink", "b.md")
+    graph_db.graph_delete_edges_from(db_conn, a)
+    rows = db_conn.execute("SELECT src_id, dst_id FROM edges").fetchall()
+    assert [(r["src_id"], r["dst_id"]) for r in rows] == [(b, a)]
+
+
+def test_graph_clear_empties_both_tables(db_conn):
+    a = graph_db.graph_upsert_entity(db_conn, "a.md", "doc", "a.md")
+    graph_db.graph_add_edge(db_conn, a, a, "tag", "a.md")
+    graph_db.graph_clear(db_conn)
+    assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] == 0
+    assert db_conn.execute("SELECT count(*) FROM entities").fetchone()[0] == 0
