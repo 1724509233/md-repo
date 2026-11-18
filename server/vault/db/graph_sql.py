@@ -93,7 +93,7 @@ def graph_docs_for_tags(conn: sqlite3.Connection, tags: list[str]) -> dict[str, 
     """Documents that have an edge to any of the given canonical tag names.
 
     ``tags`` must already be normalized with the ADR-0003 canonical form
-    (``_normalize_tag`` in orchestration/indexer.py) — entity names are
+    (``normalize_tag`` in fs/tags.py) — entity names are
     matched exactly. Returns ``{doc_path: number of matched tags}`` (a doc
     carrying two of the requested tags counts twice), or ``{}`` when no tags
     are given. Pure SQL over the graph tables (no disk I/O).

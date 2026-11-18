@@ -17,16 +17,8 @@ from ..db.graph_sql import (
 from ..db.segments_sql import init_segments  # noqa: F401  (re-exported for compat)
 from ..fs.link_parser import _clear_wikilink_cache, _resolve_wikilink
 from ..fs.segmenter import _tokenize_for_index, segment_markdown
+from ..fs.tags import normalize_tag
 from ..fs.vault_ops import _iter_vault_md
-
-def _normalize_tag(tag: str) -> str:
-    """Normalize a raw tag: strip whitespace, remove a leading '#', lowercase.
-
-    Obsidian tags are case-insensitive; the leading '#' (frontmatter style)
-    and surrounding whitespace are removed so the entity name is canonical.
-    """
-    return tag.strip().lstrip("#").strip().lower()
-
 
 def _rebuild_fts(conn: sqlite3.Connection) -> None:
     """Rebuild the segments FTS index from the segments table."""
@@ -196,9 +188,9 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
             if isinstance(raw_tags, (list, tuple)):
                 for item in raw_tags:
                     if isinstance(item, str):
-                        tag = _normalize_tag(item)
+                        tag = normalize_tag(item)
                     elif isinstance(item, (int, float)) and not isinstance(item, bool):
-                        tag = _normalize_tag(str(item))
+                        tag = normalize_tag(str(item))
                     else:
                         continue
                     if tag:
@@ -213,7 +205,7 @@ def graph_extract_file(conn: sqlite3.Connection, vault_dir: Path, path: str) -> 
     no_code = re.sub(r"`[^`]+`", "", no_code)
     no_headings = re.sub(r"^\s{0,3}#{1,6}.*$", "", no_code, flags=re.MULTILINE)
     for match in re.finditer(r"(?:^|\s)#(\w+)", no_headings, flags=re.MULTILINE):
-        tag = _normalize_tag(match.group(1))
+        tag = normalize_tag(match.group(1))
         dst_id = graph_upsert_entity(conn, tag, "tag")
         graph_add_edge(conn, doc_id, dst_id, "tag", path)
 

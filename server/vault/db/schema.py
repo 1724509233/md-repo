@@ -233,16 +233,22 @@ def _ensure_change_log_restore_op(conn: sqlite3.Connection) -> None:
         raise
 
 
-def init_db(db_path: Path) -> sqlite3.Connection:
+def init_db(db_path: Path, *, busy_timeout_ms: int = 0) -> sqlite3.Connection:
     """Create (or open) the index database and ensure the schema exists.
 
     Enables WAL mode for concurrent read access. Migrates the legacy
     ``file_changes`` table into the new ``change_log`` table if present.
+    ``busy_timeout_ms`` > 0 arms the writer-lock wait (card 8: the MCP
+    stdio process runs against the main server's index.db — 5000 there,
+    the PRAGMA lives HERE, not at the channel).
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    if busy_timeout_ms:
+        # PRAGMA takes no bind params; int() is the injection guard.
+        conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS files (

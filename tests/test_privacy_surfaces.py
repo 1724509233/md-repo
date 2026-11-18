@@ -58,10 +58,14 @@ def _pcfg(tmp_path: Path, dirs_yaml: str) -> PrivacyConfig:
 
 @pytest.fixture
 def search_vault(vault_dir, db_conn):
-    """Two-file vault: 日记/a.md (zebrafish) + notes/b.md — indexed lazily
-    by the first rag_search call (rebuild_segments_all on empty segments)."""
+    """Two-file vault: 日记/a.md (zebrafish) + notes/b.md — indexed
+    explicitly here (案 A: rag_search no longer lazily rebuilds an empty
+    index; the fixture drives the canonical ensure_indexed entry)."""
+    from server.vault.orchestration.indexer import ensure_indexed
+
     _write(vault_dir, "日记/a.md", "# 秘密\n\nzebrafish habitat notes\n")
     _write(vault_dir, "notes/b.md", "# Public\n\nzebrafish zoo plan\n")
+    ensure_indexed(db_conn, vault_dir)
     return vault_dir
 
 

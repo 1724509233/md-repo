@@ -443,3 +443,26 @@ def segments_search(
                                 tie_break=True, privacy_dirs=privacy_dirs)
 
 
+def first_segments(conn: sqlite3.Connection, path: str, *,
+                   include_code: bool = True,
+                   limit: int = 3) -> list[sqlite3.Row]:
+    """First ``limit`` segments of one doc in index order (frontmatter meta
+    first, then the earliest body segments) — the tag-axis hit evidence
+    (card 8 sink of ``ai/search._tag_segments``). The dynamic ``kind``
+    filter is assembled HERE, the same discipline as
+    :func:`segments_search`'s ``exclude_code`` FTS filter."""
+    where = "path = ?"
+    if not include_code:
+        where += " AND kind != 'code'"
+    return conn.execute(
+        f"SELECT heading_path, kind, content FROM segments "
+        f"WHERE {where} ORDER BY seg_index LIMIT ?",
+        (path, limit),
+    ).fetchall()
+
+
+def count_segments(conn: sqlite3.Connection) -> int:
+    """Total ``segments`` rows — the index-empty probe (boot checks and the
+    ai search degrade gate, 案 A: empty index = explicit legacy fallback,
+    NOT a lazy rebuild; card 8 sink)."""
+    return conn.execute("SELECT count(*) FROM segments").fetchone()[0]

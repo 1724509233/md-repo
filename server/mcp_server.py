@@ -312,14 +312,13 @@ def main():
         if authenticated else
         "read-only + propose — set MD_VAULT_MCP_WRITE_TOKEN to match "
         "config.yaml mcp.write_token to enable main-area writes")
-    db_conn = init_db(vault_dir / ".sync" / "index.db")
+    db_conn = init_db(vault_dir / ".sync" / "index.db", busy_timeout_ms=5000)
     # Cross-process concurrency with the main server (both processes can
     # write index.db): WAL is already on via init_db, so readers are
-    # unaffected; this makes the writer lock paths (the recall ledger
-    # write, the rare lazy FTS rebuild) wait up to 5s for the other
-    # process's transaction instead of failing the MCP search with
-    # SQLITE_BUSY (P0 L5).
-    db_conn.execute("PRAGMA busy_timeout = 5000")
+    # unaffected; the busy_timeout (armed inside init_db, card 8) makes
+    # the writer lock paths (the recall ledger write) wait up to 5s for
+    # the other process's transaction instead of failing the MCP search
+    # with SQLITE_BUSY (P0 L5).
 
     # Ledger file split (2026-10-31, L4): same first-boot migration as
     # server/main.py — the four authoritative-state tables move to ledger.db.

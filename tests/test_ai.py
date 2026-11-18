@@ -68,6 +68,18 @@ def _setup_fts_db(tmp_path):
     conn.close()
 
 
+def _index_vault(tmp_path):
+    """Explicit indexing before a search (案 A, gate2-addendum 缺口 2:
+    rag_search no longer lazily rebuilds an empty index — tests drive the
+    canonical production entry point instead)."""
+    from server.vault.db.schema import init_db
+    from server.vault.orchestration.indexer import ensure_indexed
+
+    conn = init_db(tmp_path / ".sync" / "index.db")
+    ensure_indexed(conn, tmp_path)
+    conn.close()
+
+
 def test_rag_search_basic(tmp_path):
     """Search returns relevant docs ranked by FTS5 BM25."""
     _setup_fts_db(tmp_path)
@@ -84,6 +96,7 @@ def test_rag_search_basic(tmp_path):
     )
 
     # "YARA pattern detection": skill-scanner.md contains all terms.
+    _index_vault(tmp_path)
     results = rag_search(str(tmp_path), "YARA pattern detection", top_k=2)
     assert len(results) >= 1
     assert "skill-scanner" in results[0]["path"]
@@ -101,6 +114,7 @@ def test_rag_search_no_match(tmp_path):
     (tmp_path / "notes").mkdir()
     (tmp_path / "notes" / "a.md").write_bytes(b"# A\n\nHello world.")
 
+    _index_vault(tmp_path)
     results = rag_search(str(tmp_path), "quantum entanglement", top_k=3)
     assert results == []
 
@@ -115,6 +129,7 @@ def test_rag_search_respects_top_k(tmp_path):
             f"# Doc {i}\n\ncommon keyword here.".encode()
         )
 
+    _index_vault(tmp_path)
     results = rag_search(str(tmp_path), "common keyword", top_k=3)
     assert len(results) == 3
 
@@ -131,6 +146,7 @@ def test_rag_search_chinese(tmp_path):
         "# 其他\n\n无关内容。".encode()
     )
 
+    _index_vault(tmp_path)
     results = rag_search(str(tmp_path), "路由冲突", top_k=3)
     assert len(results) >= 1
     assert "fastapi" in results[0]["path"]
@@ -145,8 +161,32 @@ def test_rag_search_special_chars(tmp_path):
         b"# YARA\n\nYARA rules and quoted strings with (parens) and OR logic."
     )
 
+    _index_vault(tmp_path)
     results = rag_search(str(tmp_path), 'YARA "quoted" OR (a AND b)', top_k=3)
     assert isinstance(results, list)
+
+
+def test_rag_search_empty_index_degrades_to_legacy(tmp_path):
+    """案 A 回归钉（gate2-addendum 缺口 2）：空索引显式降级 legacy 命中，
+    不懒重建——搜索适配器不再携带全库重建写路。"""
+    _setup_fts_db(tmp_path)
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes" / "degraded.md").write_bytes(
+        b"# Degraded\n\nquantum flux capacitor resonance."
+    )
+
+    results = rag_search(str(tmp_path), "quantum flux resonance", top_k=3)
+    assert results, "空索引必须降级到 legacy 扫描命中，而非静默"
+    assert "degraded" in results[0]["path"]
+
+    # 且 segments 表仍为空：搜索路径零重建副作用（写路已删）。
+    from server.vault.db.schema import init_db
+
+    conn = init_db(tmp_path / ".sync" / "index.db")
+    try:
+        assert conn.execute("SELECT count(*) FROM segments").fetchone()[0] == 0
+    finally:
+        conn.close()
 
 
 import json

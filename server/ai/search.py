@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..core.privacy import is_privacy
 from .rerank import ScoredItem, fuse, validate_weights
+from ..vault.fs.tags import normalize_tag
 
 
 def _tokenize(text: str) -> list[str]:
@@ -31,14 +32,12 @@ def _parse_tag_query(query: str) -> tuple[list[str], str]:
 
     Returns ``(tags, rest)``: the normalized tags (first-appearance order,
     deduped) and the query with the tag tokens removed (the FTS part).
-    Normalization reuses the ADR-0003 canonical form (``_normalize_tag``),
-    so ``#Beta`` matches a doc tagged ``beta``.
+    Normalization reuses the ADR-0003 canonical form (``normalize_tag`` in
+    ``server/vault/fs/tags.py``), so ``#Beta`` matches a doc tagged ``beta``.
     """
-    from ..vault.orchestration.indexer import _normalize_tag
-
     tags: list[str] = []
     for m in _TAG_QUERY_RE.finditer(query):
-        t = _normalize_tag(m.group(1))
+        t = normalize_tag(m.group(1))
         if t and t not in tags:
             tags.append(t)
     rest = _TAG_QUERY_RE.sub(" ", query).strip()
@@ -57,14 +56,9 @@ def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
     may be. ``score`` is the doc's matched-tag count (the replacement for
     the retired v1 ``TAG_HIT_SCORE`` constant, spec 2026-11-13 §1).
     """
-    where = "path = ?"
-    if not include_code:
-        where += " AND kind != 'code'"
-    rows = conn.execute(
-        f"SELECT heading_path, kind, content FROM segments "
-        f"WHERE {where} ORDER BY seg_index LIMIT ?",
-        (path, limit),
-    ).fetchall()
+    from ..vault.db.segments_sql import first_segments
+
+    rows = first_segments(conn, path, include_code=include_code, limit=limit)
     return [
         {
             "heading_path": hp,
@@ -77,25 +71,19 @@ def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
 
 
 def _get_or_open_conn(vault: Path):
-    """Open a read-write connection to the vault's index db, or None if absent.
+    """Open a connection to the vault's index db, or None if absent.
 
-    Read-write is required because the lazy rebuild path (empty FTS table on
-    first run) must be able to write into ``docs_fts``.
+    The connect + PRAGMAs live in ``db/conn.open_index_db`` (R1 residency).
+    Read-write remains (the read-only conversion is a recorded backlog);
+    since 案 A (gate2 addendum 缺口 2) the search adapter carries NO
+    rebuild write path — an empty index degrades to the legacy scan.
     """
+    from ..vault.db.conn import open_index_db
+
     db_path = vault / ".sync" / "index.db"
     if not db_path.is_file():
         return None
-    try:
-        conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL")
-        # Cross-process writer contention (e.g. the MCP stdio process
-        # against the main server, P0 L5): the rare lazy-rebuild write
-        # waits up to 5s for the writer lock instead of failing the
-        # search with SQLITE_BUSY.
-        conn.execute("PRAGMA busy_timeout = 5000")
-        return conn
-    except sqlite3.Error:
-        return None
+    return open_index_db(db_path, busy_timeout_ms=5000)
 
 
 def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5,
@@ -193,9 +181,8 @@ def rag_search(
 
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
-    from ..vault.db.segments_sql import segments_search
+    from ..vault.db.segments_sql import count_segments, segments_search
     from ..vault.db.graph_sql import graph_docs_for_tags
-    from ..vault.orchestration.indexer import rebuild_segments_all
 
     weights = validate_weights(weights)
 
@@ -207,9 +194,12 @@ def rag_search(
                                   privacy_dirs=privacy_dirs)
 
     try:
-        cursor = conn.execute("SELECT count(*) FROM segments")
-        if cursor.fetchone()[0] == 0:
-            rebuild_segments_all(conn, vault)
+        if count_segments(conn) == 0:
+            # 案 A（gate2 补裁缺口 2 终值）：空索引=显式降级 legacy——生产三入口
+            # （main / mcp / recovery）全部先跑 ensure_indexed，搜索适配器不再
+            # 携带全库重建写路（顺带消灭懒重建×file_ops 写交叠窗口）。
+            return _legacy_rag_search(vault_dir, query, top_k,
+                                      privacy_dirs=privacy_dirs)
     except Exception:
         return _legacy_rag_search(vault_dir, query, top_k,
                                   privacy_dirs=privacy_dirs)

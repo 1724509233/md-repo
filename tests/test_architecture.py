@@ -52,9 +52,11 @@ Rule keys (JSON keys, stable):
   ``orchestration ⊄ {services, routes}``,
   ``services ⊄ {agent, bgagent, routes}``,
   ``db ⊄ {orchestration, services, agent, bgagent, routes}``,
-  ``ai ⊄ {services, agent, bgagent, routes}``.
-  ``ai → orchestration`` (search.py:37/:198) is STAGED in the baseline and
-  dies with card 8 (spec §7-A7). Entry: ``path:lineno:target_module``.
+  ``ai ⊄ {services, agent, bgagent, routes, vault.orchestration}`` (the
+  orchestration edge was staged and died with card 8b; spec §7-A7 closed).
+  ``_STAGED_EDGES`` is permanently empty since card 8b — pinned by
+  test_detector_staged_edges_permanently_empty (M9). Entry:
+  ``path:lineno:target_module``.
 - ``R6_identity_assignment`` — ``agent/tools/**`` may never assign
   ``ctx.write_source`` / ``ctx.run_id`` / ``ctx.session_id`` (identity is
   injected by channel entry points only — red-line 3). AnnAssign dataclass
@@ -90,12 +92,18 @@ _FORBIDDEN_EDGES: dict[str, tuple[str, ...]] = {
         "server.bgagent", "server.routes",
     ),
     "server/ai": ("server.services", "server.agent", "server.bgagent",
-                  "server.routes"),
+                  "server.routes",
+                  # card 8b: ai ⊄ orchestration moved from staged to HARD
+                  # forbidden (A7 closed — _normalize_tag → fs/tags.py,
+                  # lazy rebuild deleted per 案 A).
+                  "server.vault.orchestration"),
 }
-# Staged edges (in the baseline today, must die with card 8).
-_STAGED_EDGES: dict[str, tuple[str, ...]] = {
-    "server/ai": ("server.vault.orchestration",),
-}
+# Staged edges: permanently empty since card 8b (M9). The mechanism stays
+# (R5 edges read both tables) but the table must never hold entries again —
+# pinned by test_detector_staged_edges_permanently_empty. A future edge that
+# genuinely needs staging must edit that test on purpose (forced review),
+# never quietly land a zombie entry here.
+_STAGED_EDGES: dict[str, tuple[str, ...]] = {}
 _DB_PKG = "server/vault/db"
 _CONN_MODULE = "server/vault/db/conn.py"
 _SQL_METHODS = frozenset({"execute", "executemany", "executescript"})
@@ -106,8 +114,9 @@ _IDENTITY_ATTRS = frozenset({"write_source", "run_id", "session_id"})
 # module's interface-layer SQL reaches zero its name is PERMANENTLY banned —
 # live violations are banned, and baseline entries may not return via
 # --update-arch-baseline (the banned checks run after the flag rewrite too).
-# mcp_server.py joins at card 8.
+# mcp_server.py joined at card 8b (PRAGMA → init_db(busy_timeout_ms=…)).
 R2_ZEROED_MODULES: frozenset[str] = frozenset({
+    "server/mcp_server.py",
     "server/routes/agent.py",
     "server/routes/egress.py",
     "server/routes/memory.py",
@@ -506,6 +515,20 @@ def test_detector_r5_edges_subpackage_safe() -> None:
     assert "server.routes" in _edges_for("server/services/sub/deeper")
     assert "server.agent" in _edges_for("server/services")  # sanity: base
     assert "server.vault.orchestration" in _edges_for("server/vault/db/x")
-    assert "server.vault.orchestration" in _edges_for("server/ai/sub")  # staged
+    assert "server.vault.orchestration" in _edges_for("server/ai/sub")  # hard-forbidden since card 8b
     assert _edges_for("server") == ()          # root is no source group
     assert _edges_for("server/templates") == ()  # untracked dir: no edges
+
+
+def test_detector_staged_edges_permanently_empty() -> None:
+    """M9 (Gate-2 review, executed card 8b): the staged-edge channel is
+    sealed forever.
+
+    Card 5b's staging mechanism carried exactly the two ai→orchestration
+    edges; card 8b cleared them for real (``normalize_tag`` moved to
+    ``fs/tags.py``, the lazy rebuild deleted per 案 A) and emptied the
+    table. A non-empty ``_STAGED_EDGES`` would re-open a pre-approved
+    upward edge without any test noticing — the zombie staging channel.
+    Any future staging must edit THIS assertion on purpose (forced review).
+    """
+    assert _STAGED_EDGES == {}
