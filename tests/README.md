@@ -1,6 +1,6 @@
 # tests — pytest 测试套件
 
-md-sync 的测试套件：覆盖服务端 / 客户端各域（api / vault / ledger / proposals / agent / bgagent / sync / recall / ui / mcp 等）的单元与集成测试，外加一组**扫 `server/` 源码树来"钉住纪律"的元测试**（import 纪律、路由表顺序、vault shim 面）。入口：`pytest tests/ -v`；单测 `pytest tests/test_api.py::test_health -v`。
+md-sync 的测试套件：覆盖服务端 / 客户端各域（api / vault / ledger / proposals / agent / bgagent / sync / recall / ui / mcp 等）的单元与集成测试，外加一组**扫 `server/` 源码树来"钉住纪律"的元测试**（import 纪律、路由表顺序、分层架构棘轮）。入口：`pytest tests/ -v`；单测 `pytest tests/test_api.py::test_health -v`。
 
 套件持续增长，**不钉测试总数**。
 
@@ -94,14 +94,14 @@ _autouse_ _db_handle_isolation   每个测试前后重置句柄对（init(None, 
 
 - `test_ledger_import_discipline.py`：双锁 import 纪律。断言 (i) **ledger 域三模块**（`proposal_records.py` / `snapshot_records.py` / `relatedness.py`）不再引用 `_db_lock`（它们现持 `_ledger_lock`）；(ii) `_ledger_lock` 在 `server/vault/db` 包外**零出现**。测试文件本身在包外，故用 `_`.join 拼出标识符，使扫描不命中自身（card-5 模式）。
 - `test_routes_order.py`：路由表注册顺序快照。Starlette 按**注册顺序**匹配第一个完全命中、静默遮蔽后续重复，故 order IS behavior（console 内 manage ⪯ upload、changes ⪯ get_doc；memory 内 `{relpath}/subpath` ⪯ detail catchall）。快照钉住整张 31 路由表 + `/static` mount + 无重复不变量。
-- `test_vault_shim.py`：`server.vault` 根 shim 的 **38 个 re-export 名**钉住（12 public + 26 test-only），`from server.vault import *` 恰好 12 public。`service.py` facade 已删（card-5），shim emit `DeprecationWarning`，tests 仍走 shim —— **不要破坏**。
+- `test_vault_root_shim_retired.py`：`server.vault` 根 shim（38 名 re-export + DeprecationWarning）已于卡 12 退役——反复活钉：包必须是 namespace（`__file__ is None`）、属性面无任何旧名、真实子模块照常可解析。
 
 ## 依赖方向
 
-- `conftest.py` → `server.api`（`create_app`）、`server.ledger`（`consume`）、`server.vault`（`init_db` / `upsert_file`）、`server.vault.db`（`conn` 句柄）、`server.vault.db.schema`（`init_ledger_db`）。
+- `conftest.py` → `server.api`（`create_app`）、`server.ledger`（`consume`）、`server.vault.db.file_index`（`upsert_file`）、`server.vault.db`（`conn` 句柄）、`server.vault.db.schema`（`init_db` / `init_ledger_db`）。
 - 各 `test_*.py` → conftest fixtures + 被测 `server.*` 模块。
 - `functional/` → `server.*` 生产模块（`proposals` / `bgagent.executor` / `bgagent.runner` / `bgagent.notify` / `vault.db.schema` / `vault.db.conn` / `vault.db.migrate_ledger` / `config`）；其中 `mock_llm.py` **零 server 依赖**（纯 stdlib http.server），`seed.py` 依赖 `server.proposals` + `server.vault.db.changes` / `recall` / `schema`，`run_sentinel_once.py` import `vault.db.conn` 注册句柄对（mock 下 recall/proposal 工具可用的前提）。
-- 元测试（import 纪律 / 路由顺序 / shim）→ 读 `server/` 源码树做静态断言，不 import 被测对象本身。
+- 元测试（import 纪律 / 路由顺序 / 架构棘轮）→ 读 `server/` 源码树做静态断言，不 import 被测对象本身。
 
 ## 注意事项
 

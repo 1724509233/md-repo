@@ -6,18 +6,17 @@ Vault 索引子系统：Markdown 文档的 SQLite FTS5 全文检索、知识图�
 - **`fs/`** — 文件系统层：分段/分词、wikilink 解析、编辑与遍历，**不碰数据库**
 - **`orchestration/`** — 协调层：FS + DB 组合操作 —— 索引构建、引用维护、move 检测、变更应用与对账
 
-**import 纪律**：新代码一律从 `server.vault.db` / `.fs` / `.orchestration` 的真实模块直接导入（另有顶层 `file_entry`）。顶层 `__init__.py` 是废弃兼容 shim —— `service.py` facade 已删除（card 5），shim re-export 其原有 38 个名字（12 public + 26 test-only）并 emit `DeprecationWarning`，将在未来版本移除。shim 的完整面由 `tests/test_vault_shim.py` 钉住：**tests 仍走 shim，不要破坏，也不要向 shim 加新名字**。
+**import 纪律**：一律从 `server.vault.db` / `.fs` / `.orchestration` 的真实模块直接导入。根 shim（顶层 `__init__.py` re-export 38 个旧名）已于卡 12 退役删除——`server/vault/` 现为 PEP 420 namespace 包，`FileEntry` 的正主是 `server.core.types`；反复活钉见 `tests/test_vault_root_shim_retired.py`。
 
 ## 模块结构
 
 ```
-server/vault/
-├── __init__.py        ← 废弃兼容 shim（re-export 38 个旧名，emit DeprecationWarning）
-├── file_entry.py      ← FileEntry 数据类（hash/size/mtime）
+server/vault/          ← PEP 420 namespace 包（根 shim 已于卡 12 退役删除）
 ├── db/                ← 数据层（纯 SQL；双账本 15 表；锁纪律见 db/README.md）
 ├── fs/                ← 文件系统层（无 DB；per-file API 见 fs/README.md）
 └── orchestration/     ← 协调层（FS+DB 组合；调用方图见 orchestration/README.md）
 ```
+（`FileEntry` 数据类在 `server/core/types.py`，card 2 迁入、卡 12 删除存根。）
 
 | 子目录 | 职责 | 细节 |
 | --- | --- | --- |
@@ -132,6 +131,5 @@ fs/ 无数据库依赖（纯 base 层）
 ## 注意事项
 
 - **锁纪律（摘要，全文见 `db/README.md`）**：`_db_lock`（index 域）与 `_ledger_lock`（四表域）只由 vault.db 具名持锁 mutation 函数在函数内持有；具名持锁函数 = 接口；**`_ledger_lock` 包外零出现**（`tests/test_ledger_import_discipline.py` 钉住）。纯读 helper 无锁（单把非重入锁，读持锁会在锁内调用时同线程死锁）。（db 层重构 spec：`~/md-vault/projects/md-repo/specs/2026-10-10-db-layer-refactor-design.md`）
-- **shim 纪律**：`server/vault/__init__.py` 的面由 `tests/test_vault_shim.py` 钉住——不加新名、不动旧名，移除 shim 时一并删。
 - **FTS 失步检测盲区**：`count(*) FROM segments_fts` 检测不到失步，用 `segments_fts_docsize` 行数比对（见上「ensure_indexed 两级启动检查」）。
 - **索引排除目录**：vault 顶层 `suggestions/` 与 `index/` 不做分段/图谱（`files` 表与 `change_log` 仍维护）；遍历另排除 `.sync/`、`.obsidian/`（见 `fs/README.md`）。
