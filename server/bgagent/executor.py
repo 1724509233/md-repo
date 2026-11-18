@@ -64,6 +64,7 @@ import functools
 import logging
 import re
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -71,6 +72,7 @@ from .. import ledger
 from ..privacy import is_privacy
 from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
 from ..snapshots import capture, finalize, gc, hash_bytes
+from ..vault.db import egress_sql
 from ..vault.db.relatedness import merge_edge
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path
 
@@ -523,5 +525,15 @@ def run_executor(vault_dir, conn: sqlite3.Connection,
         gc(conn, vault)
     except Exception:
         logger.warning("[executor] snapshot gc failed", exc_info=True)
+
+    # Egress retention (spec 2026-11-18 §3.6): 90-day rolling window, swept
+    # on the same station as the snapshot GC (both are ledger.db housekeeping
+    # on this connection). Best-effort, same brace: a failed prune must never
+    # dent the merge summary — the audit feed is not the merge cycle's
+    # dependency (fail-open, redline-7 ledger discipline).
+    try:
+        egress_sql.prune(conn, time.time() - 90 * 86400)
+    except Exception:
+        logger.warning("[executor] egress prune failed", exc_info=True)
 
     return {"merged": merged, "expired": expired, "errors": errors}

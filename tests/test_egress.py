@@ -9,9 +9,6 @@ from __future__ import annotations
 
 import logging
 
-import pytest
-
-from server import egress
 from server.egress import EgressTarget, flush_touches, parse_endpoint, should_record
 from server.vault.db import egress_sql
 
@@ -142,12 +139,12 @@ def test_flush_touches_writes_one_row_per_path(ledger_conn):
         assert r["ts"] > 0
 
 
-@pytest.mark.xfail(reason="waiting Task 2: server/privacy.py (is_privacy)", strict=False)
 def test_flush_touches_skips_privacy_paths(ledger_conn):
     """Double insurance (spec §3.4): even if an upstream surface leaks a
-    privacy path into touched, the flush must not audit it."""
-    import server.privacy  # noqa: F401  — the predicate lives there (Task 2)
+    privacy path into touched, the flush must not audit it.
 
+    (Un-marked xfail 2026-11-19: Task 2's server/privacy.py has landed —
+    the predicate is live, this pin now runs for real.)"""
     touched = {"notes/a.md": "read", "日记/b.md": "search", "DIARY/c.md": "recent"}
     flush_touches(ledger_conn, ("日记", "DIARY"), _target(), touched)
     paths = {r["path"] for r in ledger_conn.execute("SELECT path FROM egress_log")}

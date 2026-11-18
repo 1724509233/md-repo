@@ -70,7 +70,7 @@ def _is_loopback_host(host: str) -> bool:
     predicate rules — do not grow a second truth here.
     """
     try:
-        from server.config import is_loopback
+        from server.config.core import is_loopback
     except ImportError:
         pass
     else:
