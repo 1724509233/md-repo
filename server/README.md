@@ -175,7 +175,7 @@ spec `~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`。
 
 ## 注意事项
 
-- **`server.vault` 根 shim 已废弃**：`service.py` facade 已删除（card 5）；新代码直接从 `server.vault.db` / `.fs` / `.orchestration` 导入。`__init__.py` 是兼容 shim（re-export 38 个旧名，emit DeprecationWarning），面由 `tests/test_vault_shim.py` 钉住；tests 仍走 shim——不要破坏它。
+- **`server.vault` 根 shim 已退役（卡 12，2026-11-19）**：`__init__.py` 兼容 shim、`file_entry.py` 存根、`test_vault_shim.py` 钉测已全部删除；`server/vault` 现为 PEP 420 命名空间包。导入一律直连真模块：`server.vault.db` / `.fs` / `.orchestration` / `server.vault.watcher`；`FileEntry` 在 `server.core.types`。`tests/test_vault_root_shim_retired.py` 钉住 38 旧名零复活。
 - **sync 锁是注入的**：`SyncLock` 实例由 `create_app` 构造并注入 `WebContext`（`app.state.ctx.sync_lock`）；测试经该 seam 直设 `lock.locked_at` 模拟锁定，不碰模块全局；进程重启后重置。超 300s 的锁视为 stale，可重取（崩溃自愈）。
 - **`_db_lock` / `_ledger_lock` 纪律**：两把锁（非重入 `threading.Lock`）均只由 `vault.db` 的具名持锁 mutation 函数**在函数内部持有**（复合临界区锁内原子）。`tests/test_ledger_import_discipline.py` 扫源码钉住两条：(i) ledger 域三模块（`proposal_records` / `snapshot_records` / `relatedness`）持 `_ledger_lock`，**不得再引用 `_db_lock`**；(ii) **`_ledger_lock` 在 `server/vault/db` 包外零出现**（具名函数即接口）。没有测试钉「`_db_lock` 包外不可 import」——但卡 10b 起引用面已是**包外零**：包内为 `recall` / `notifications` / `trigger_state` 的具名持锁函数（函数内持有）+ `schema.index_write()` 公开锁接口；包外的复合临界区持有者（`file_ops` 的 `apply_change` / `apply_folder_change`）改经 `index_write()` 进入，不再 import 锁标识符本身。`init_db`/DDL、`recovery._rebuild_files_table`、`migrate_ledger` 的 ATTACH 均为单进程/启动语境，不持锁，不在该纪律范围。
 - **`_db_lock` 死锁陷阱**：单把非重入锁，若读者在锁内持有它再调用同模块读 helper 会同线程死锁——故**纯读 helper 无锁**，由 mutation 具名函数负责加锁，锁内调用读 helper 安全。读函数调用方不要再包 `with _db_lock`。

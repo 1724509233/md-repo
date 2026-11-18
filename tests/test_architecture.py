@@ -30,7 +30,7 @@ Rule keys (JSON keys, stable):
 - ``R1_sql_outside_db`` — ``.execute/.executemany/.executescript`` and
   ``sqlite3.connect`` only inside ``server/vault/db/**``.
   Entry: ``path:lineno:method`` (method includes ``sqlite3.connect``).
-  Exceptions frozen as baseline: recovery.py:100/:251 are the legitimate
+  Exceptions frozen as baseline: recovery.py:101/:246 are the legitimate
   self-owned connections of the cold-rebuild / drill (spec §7-A1).
 - ``R2_interface_sql`` — ``routes/**`` + ``api.py`` + ``mcp_server.py`` are
   SQL-free. Subset of R1, pinned separately so it zeroes first (cards 7/8).

@@ -98,7 +98,7 @@ def _ledger_row_counts(vault_dir: Path) -> dict[str, int] | None:
     path = vault_dir / ".sync" / "ledger.db"
     if not path.is_file():
         return None
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path)  # A1 合法例外：drill 自持连接（R1 长期基线，tests/test_architecture.py）
     try:
         return {t: count_table_rows(conn, t) for t in LEDGER_TABLES}
     finally:
