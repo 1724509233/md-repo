@@ -374,11 +374,16 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
     """
     run_fn = run_fn or run_once
     executor_fn = executor_fn or run_executor
+    if run_fn is run_once:
+        # card 11 (案 β): the default run_once binding carries the
+        # scheduler's dual conns along the parameter chain (AgentSpec →
+        # ToolContext/readback); T3's privacy live view stays partial-bound
+        # only when configured. Custom run_fn overrides keep their own
+        # signatures.
+        run_fn = functools.partial(
+            run_once, db_conn=db_conn, ledger_conn=ledger_conn,
+            **({"privacy": privacy} if privacy is not None else {}))
     if privacy is not None:
-        if run_fn is run_once:
-            # T3 wired run_once's privacy kwarg (in-package interface,
-            # runner.py untouched) — partial-bind the live PrivacyConfig.
-            run_fn = functools.partial(run_once, privacy=privacy)
         _exec = executor_fn
 
         def _privacy_executor(vault, conn):

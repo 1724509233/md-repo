@@ -88,7 +88,7 @@ def test_edges_for_actor_newest_first(ledger_conn):
     assert [e["source"] for e in out] == ["notes/c.md", "notes/a.md"]
 
 
-def test_readback_relatedness_section(tmp_path, ledger_conn):
+def test_readback_relatedness_section(tmp_path, db_conn, ledger_conn):
     """spec §5.3: the role's context head shows its live machine edges and
     the ignored-pair telemetry in the dedicated section — DB-only, bounded."""
     vault = tmp_path / "vault"
@@ -101,11 +101,13 @@ def test_readback_relatedness_section(tmp_path, ledger_conn):
     rel.mark_ignored(ledger_conn, ignored_eid)
 
     tools = list(TOOL_REGISTRY.values())  # effective surface incl. propose → gate open
-    block = ReadbackSystemReminder("test-org", tools).render() or ""
+    block = ReadbackSystemReminder("test-org", tools,
+                                   db_conn=db_conn, ledger_conn=ledger_conn).render() or ""
     assert "## 相关性边（机器建议层 · 只进账本，不进笔记）" in block
     assert "notes/a.md → notes/b.md" in block
     assert "same topic" in block
     assert "notes/c.md → notes/d.md（忽略 ×1）" in block
     # The section is silent for a role with nothing to report.
-    block_other = ReadbackSystemReminder("other-role", tools).render() or ""
+    block_other = ReadbackSystemReminder("other-role", tools,
+                                         db_conn=db_conn, ledger_conn=ledger_conn).render() or ""
     assert "相关性边" not in block_other

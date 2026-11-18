@@ -141,7 +141,8 @@ def _web_ctx(vault_dir: Path, privacy=None) -> SimpleNamespace:
             tools=None, model="m", base_url="http://x", api_key="k",
             context_window=16384, max_rounds=8, read_doc_max_chars=8000),
         vault_dir=vault_dir,
-        privacy=privacy)
+        privacy=privacy,
+        db_conn=None, ledger_conn=None)
 
 
 def test_interactive_spec_privacy_wired(vault_dir, tmp_path):

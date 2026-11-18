@@ -521,7 +521,7 @@ def test_run_report_folds_proposal_records(tmp_path: Path, monkeypatch):
         {"id": 2, "type": "summary", "status": "awaiting_review",
          "relpath": "suggestions/2026-10-21_summary_b.md"},
     ]
-    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at: recs)
+    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at, ledger_conn: recs)
 
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"
@@ -549,7 +549,7 @@ def test_run_report_kind_batch_without_review_records(tmp_path: Path, monkeypatc
         def notify(self, r: RunReport) -> None:
             seen.append(r)
 
-    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at: [
+    monkeypatch.setattr(runner, "_run_records", lambda run_id, started_at, ledger_conn: [
         {"id": 1, "type": "relatedness", "status": "adopted",
          "relpath": "suggestions/2026-10-21_relatedness_a.md"}])
 
@@ -640,7 +640,7 @@ def test_run_report_folds_report_paths(tmp_path: Path):
     assert report.files_changed == 2  # 普通路径照常计数（deep links 只是分流）
 
 
-def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
+def test_readback_injected_into_context_head(tmp_path: Path, db_conn, ledger_conn):
     """inv-8: a run's failures are visible in the NEXT run's context — the
     readback (open counts + failed + rejected with reject_reason) is a
     <system-reminder> message (R3), ordered after the system_prompt (which
@@ -668,7 +668,8 @@ def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
     rt = FakeRuntime(_events())
 
     async def go():
-        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+        return await run_once(cfg, vault, runtime_cls=lambda: rt,
+                          db_conn=db_conn, ledger_conn=ledger_conn)
 
     asyncio.run(go())
     # The readback is a reminder message (not in system_prompt anymore).
@@ -687,7 +688,7 @@ def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
     assert sys_idx < rem_idx
 
 
-def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
+def test_readback_injects_newest_failures_first(tmp_path: Path, db_conn, ledger_conn):
     """inv-8 (oracle gate P0-Q6b): with more than READBACK_TOP_N recorded
     failures, the injected list is the N most recent (updated_at desc)."""
     import time
@@ -714,7 +715,8 @@ def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
     rt = FakeRuntime(_events())
 
     async def go():
-        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+        return await run_once(cfg, vault, runtime_cls=lambda: rt,
+                          db_conn=db_conn, ledger_conn=ledger_conn)
 
     asyncio.run(go())
     msg = _readback_msg(rt.agent)
@@ -750,7 +752,8 @@ def test_readback_injects_click_feedback_telemetry(tmp_path: Path, db_conn,
     rt = FakeRuntime(_events())
 
     async def go():
-        return await run_once(cfg, vault, runtime_cls=lambda: rt)
+        return await run_once(cfg, vault, runtime_cls=lambda: rt,
+                          db_conn=db_conn, ledger_conn=ledger_conn)
 
     asyncio.run(go())
     msg = _readback_msg(rt.agent)

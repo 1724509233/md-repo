@@ -6,6 +6,7 @@ streaming LLM + tool-call orchestration; other runtimes can be added).
 """
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -51,6 +52,12 @@ class AgentSpec:
     # carries it so every validate_tool_call in the loop sees the same live
     # view. None = channel not wired (lazy, behavior unchanged).
     privacy: PrivacyConfig | None = None
+    # Dual connections (card 11, 案 β): the channel assembly point injects
+    # them (routes/agent for the interactive channel, runner.run_once for
+    # bgagent) and the runtime forwards both into every ToolContext —
+    # tools never touch the connection registry.
+    db_conn: sqlite3.Connection | None = None
+    ledger_conn: sqlite3.Connection | None = None
     # Egress audit target (spec 2026-11-18 §3.2): built by the CHANNEL code
     # (trusted stamp, redline 3). None = no audit — LoopRuntime collects
     # nothing and the egress_log table stays empty (local model / unwired).

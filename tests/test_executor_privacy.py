@@ -241,7 +241,8 @@ def test_start_background_agents_wires_live_privacy_dirs(tmp_path, vault_dir,
 
 def test_start_background_agents_forwards_privacy_to_run_once(tmp_path, monkeypatch):
     """run_fn chain: the default run_once gets the SAME PrivacyConfig
-    partial-bound (T3's run_once privacy kwarg — runner.py untouched)."""
+    partial-bound — now together with the scheduler's dual conns
+    (card 11 案 β parameter chain)."""
     from server.bgagent import scheduler as sch
 
     cfg_path = _write_privacy_cfg(tmp_path, ["diary"])
@@ -266,13 +267,15 @@ def test_start_background_agents_forwards_privacy_to_run_once(tmp_path, monkeypa
     rf = captured["run_fn"]
     assert isinstance(rf, functools.partial)
     assert rf.func is sch.run_once
-    assert rf.keywords == {"privacy": pc}
+    assert rf.keywords == {"db_conn": None, "ledger_conn": None, "privacy": pc}
 
 
-def test_start_background_agents_privacy_none_is_identity(tmp_path, vault_dir,
-                                                          ledger_conn, monkeypatch):
-    """Equivalence pin: privacy=None → run_fn/run_executor stay the bare
-    module functions — every call identical to the pre-privacy chain."""
+def test_start_background_agents_privacy_none_binds_conns_only(tmp_path, vault_dir,
+                                                               ledger_conn, monkeypatch):
+    """card 11 (案 β) contract: privacy=None → run_once still gets the
+    scheduler's dual conns partial-bound (the parameter chain is no longer
+    conditional on privacy), and no privacy kwarg at all; executor_fn
+    stays the bare module function."""
     from server.bgagent import scheduler as sch
 
     captured: dict = {}
@@ -297,5 +300,8 @@ def test_start_background_agents_privacy_none_is_identity(tmp_path, vault_dir,
         await asyncio.gather(*tasks)
 
     asyncio.run(go())
-    assert captured["run_fn"] is sch.run_once
+    rf = captured["run_fn"]
+    assert isinstance(rf, functools.partial)
+    assert rf.func is sch.run_once
+    assert rf.keywords == {"db_conn": None, "ledger_conn": ledger_conn}
     assert captured["executor_fn"] is sch.run_executor

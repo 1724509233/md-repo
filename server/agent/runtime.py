@@ -157,6 +157,10 @@ class LoopRuntime(Runtime):
             # tool layer (read-side refusal) AND to the egress flush below
             # (§3.4 double insurance).
             privacy=spec.privacy,
+            # card 11 (案 β): channel-injected dual conns (AgentSpec is the
+            # assembly seam; tools never fetch the registry themselves).
+            db_conn=spec.db_conn,
+            ledger_conn=spec.ledger_conn,
         )
 
         # egress 采集（spec 2026-11-18 §3.2）：path → via，首触优先；

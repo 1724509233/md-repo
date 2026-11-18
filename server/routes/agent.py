@@ -101,6 +101,10 @@ def _build_agent_spec(ctx) -> AgentSpec:
         # 的共享活视图直入 spec → policy()/ToolContext，读边界对聊天通道
         # 生效。None（未配置）= 行为逐字节等价。
         privacy=ctx.privacy,
+        # card 11 (案 β): the dual conns in hand at the route assembly point
+        # flow into every ToolContext via the spec (channel-entry injection).
+        db_conn=ctx.db_conn,
+        ledger_conn=ctx.ledger_conn,
     )
 
 

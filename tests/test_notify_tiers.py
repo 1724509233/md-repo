@@ -56,7 +56,7 @@ def _run_with_records(tmp_path: Path, monkeypatch,
     from server.bgagent import runner
 
     monkeypatch.setattr(runner, "_run_records",
-                        lambda run_id, started_at: records)
+                        lambda run_id, started_at, ledger_conn: records)
 
     cfg = _cfg(tmp_path)
     vault = tmp_path / "vault"

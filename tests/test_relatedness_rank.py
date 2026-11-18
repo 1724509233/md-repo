@@ -93,7 +93,8 @@ def test_ignored_pair_repropose_failed_both_directions(vault_dir, db_conn, ledge
     # Readback injection surfaces the failed rows (the agent sees
     # "human dismissed, stop proposing" next run).
     tools = list(TOOL_REGISTRY.values())  # effective surface incl. propose → gate open
-    block = ReadbackSystemReminder("consolidator", tools).render() or ""
+    block = ReadbackSystemReminder("consolidator", tools,
+                                   db_conn=db_conn, ledger_conn=ledger_conn).render() or ""
     assert "mechanical filter" in block
 
 

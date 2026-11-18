@@ -375,7 +375,8 @@ def _web_ctx(base_url: str, vault: Path) -> SimpleNamespace:
             api_key="sk-k", context_window=16384, max_rounds=8,
             read_doc_max_chars=8000),
         vault_dir=vault,
-        privacy=None)  # T9: _build_agent_spec 现读 ctx.privacy（机械跟补）
+        privacy=None,  # T9: _build_agent_spec 现读 ctx.privacy（机械跟补）
+        db_conn=None, ledger_conn=None)
 
 
 def test_build_agent_spec_interactive_target(tmp_path):

@@ -1,8 +1,10 @@
 """Unit tests for ReadbackSystemReminder (server/bgagent/readback.py).
 
 The reminder is constructed directly (no runner): ReadbackSystemReminder(alias,
-tools). ``tools`` = the effective tool list (tool objects with ``.name``); the
-block-level gate checks ``"propose" in {t.name}`` (R1/R3).
+tools, db_conn=…, ledger_conn=…) — the dual conns are injected at the
+construction site (card 11, 案 β; runner is the production one). ``tools`` =
+the effective tool list (tool objects with ``.name``); the block-level gate
+checks ``"propose" in {t.name}`` (R1/R3).
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ def _no_propose_tools() -> list:
 
 # ── Gate (R1) ────────────────────────────────────────────────────────────
 
-def test_gate_no_propose_returns_none(tmp_path, ledger_conn):
+def test_gate_no_propose_returns_none(tmp_path, db_conn, ledger_conn):
     """R1: effective tools without propose → render() is None, even when the
     role has proposal data (the whole block is suppressed)."""
     from server.services import proposals
@@ -41,10 +43,10 @@ def test_gate_no_propose_returns_none(tmp_path, ledger_conn):
     proposals.advance(ledger_conn, vault, rec["id"], "processing", actor="t")
     proposals.advance(ledger_conn, vault, rec["id"], "failed", actor="t",
                       reject_reason="boom")
-    assert ReadbackSystemReminder("role-x", _no_propose_tools()).render() is None
+    assert ReadbackSystemReminder("role-x", _no_propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render() is None
 
 
-def test_gate_with_propose_renders(tmp_path, ledger_conn):
+def test_gate_with_propose_renders(tmp_path, db_conn, ledger_conn):
     """R1: effective tools with propose → the block renders (section 1)."""
     from server.services import proposals
 
@@ -55,7 +57,7 @@ def test_gate_with_propose_renders(tmp_path, ledger_conn):
     proposals.advance(ledger_conn, vault, rec["id"], "processing", actor="t")
     proposals.advance(ledger_conn, vault, rec["id"], "failed", actor="t",
                       reject_reason="boom")
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out is not None
     assert "## 你的提案回读（未决积压 / 失败 / 驳回）" in out
     assert "失败 #" in out and "boom" in out
@@ -63,7 +65,7 @@ def test_gate_with_propose_renders(tmp_path, ledger_conn):
 
 # ── Rejected section (R5) ────────────────────────────────────────────────
 
-def test_rejected_section_alias_filter_newest_first_top5(tmp_path, ledger_conn):
+def test_rejected_section_alias_filter_newest_first_top5(tmp_path, db_conn, ledger_conn):
     """R5: rejected rows are alias-filtered, newest-first, top 5 + marker,
     reason = reject_reason (the human's reason)."""
     from server.services import proposals
@@ -87,7 +89,7 @@ def test_rejected_section_alias_filter_newest_first_top5(tmp_path, ledger_conn):
     proposals.advance(ledger_conn, vault, other["id"], "rejected", actor="human",
                       reject_reason="other-reason")
 
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out is not None
     assert "驳回 #" in out
     assert "reason-5" in out            # newest present
@@ -96,7 +98,7 @@ def test_rejected_section_alias_filter_newest_first_top5(tmp_path, ledger_conn):
     assert "other-reason" not in out    # alias filter
 
 
-def test_rejected_empty_reason_fallback(tmp_path, ledger_conn):
+def test_rejected_empty_reason_fallback(tmp_path, db_conn, ledger_conn):
     """R5: an empty reject_reason falls back to '(no reason recorded)' (defensive)."""
     from server.services import proposals
 
@@ -107,14 +109,14 @@ def test_rejected_empty_reason_fallback(tmp_path, ledger_conn):
     proposals.advance(ledger_conn, vault, rec["id"], "processing", actor="t")
     proposals.advance(ledger_conn, vault, rec["id"], "awaiting_review", actor="t")
     proposals.advance(ledger_conn, vault, rec["id"], "rejected", actor="human")
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out is not None
     assert "(no reason recorded)" in out
 
 
 # ── Section 2 regression (relatedness) ───────────────────────────────────
 
-def test_relatedness_section_live_and_ignored(tmp_path, ledger_conn):
+def test_relatedness_section_live_and_ignored(tmp_path, db_conn, ledger_conn):
     """Section 2: the role's live machine edges + ignored-pair telemetry,
     alias-filtered; silent for a role with nothing."""
     from server.vault.db import relatedness as rel
@@ -128,13 +130,13 @@ def test_relatedness_section_live_and_ignored(tmp_path, ledger_conn):
                           "role-x", now=t0 + 1)
     rel.mark_ignored(ledger_conn, eid)
 
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out is not None
     assert "## 相关性边（机器建议层 · 只进账本，不进笔记）" in out
     assert "notes/a.md → notes/b.md" in out
     assert "notes/c.md → notes/d.md（忽略 ×1）" in out
     # A role with no edges → the relatedness section is absent.
-    out2 = ReadbackSystemReminder("other-role", _propose_tools()).render()
+    out2 = ReadbackSystemReminder("other-role", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out2 is None or "相关性边" not in out2
 
 
@@ -157,7 +159,7 @@ def test_telemetry_section_co_click_and_ungrounded(tmp_path, db_conn, ledger_con
             {"path": "notes/c.md", "exists": "ok", "grounded": "ungrounded"}])))
     db_conn.commit()
 
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render()
     assert out is not None
     assert "## 消费信号" in out
     assert "notes/a.md ↔ notes/b.md（×1）" in out
@@ -168,12 +170,12 @@ def test_telemetry_section_co_click_and_ungrounded(tmp_path, db_conn, ledger_con
 
 def test_silent_when_no_data(tmp_path, db_conn, ledger_conn):
     """No proposal / relatedness / telemetry data → render() is None."""
-    assert ReadbackSystemReminder("role-x", _propose_tools()).render() is None
+    assert ReadbackSystemReminder("role-x", _propose_tools(), db_conn=db_conn, ledger_conn=ledger_conn).render() is None
 
 
 # ── Degraded independence (S4) ───────────────────────────────────────────
 
-def test_degraded_ledger_down_index_up(tmp_path, db_conn, ledger_conn, monkeypatch):
+def test_degraded_ledger_down_index_up(tmp_path, db_conn, ledger_conn):
     """S4: ledger conn None → sections 1/2 silent; index conn up → section 3
     still renders (the old code killed the whole block including section 3)."""
     import json
@@ -185,10 +187,11 @@ def test_degraded_ledger_down_index_up(tmp_path, db_conn, ledger_conn, monkeypat
             "VALUES (?, ?, 'ai', 's1')", (now, path))
     db_conn.commit()
 
-    import server.vault.db.conn as conn_mod
-    monkeypatch.setattr(conn_mod, "get_ledger_conn", lambda: None)
+    # card 11 (案 β): degradation is now the injected conn itself —
+    # ledger_conn=None reproduces the "ledger down" state directly.
 
-    out = ReadbackSystemReminder("role-x", _propose_tools()).render()
+    out = ReadbackSystemReminder("role-x", _propose_tools(),
+                                 db_conn=db_conn, ledger_conn=None).render()
     assert out is not None
     assert "## 消费信号" in out          # section 3 renders
     assert "你的提案回读" not in out      # section 1 silent

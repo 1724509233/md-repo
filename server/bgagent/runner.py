@@ -148,19 +148,18 @@ def _status_icon(op: dict) -> str:
     return {"ok": "✓", "error": "✗"}.get(op.get("status"), "⏳")
 
 
-def _run_records(run_id: str, started_at: float) -> list[dict]:
+def _run_records(run_id: str, started_at: float, ledger_conn) -> list[dict]:
     """The proposal records this run produced (via the propose tool).
 
     The propose tool emits no path args, so record attribution goes through
     the run_id stamp (trusted, ctx-injected): records whose run_id matches
-    and whose creation falls in this run's window. Lazy DB access; empty on
-    no-connection/degraded — the run proceeds, the console simply lacks the
-    deep links.
+    and whose creation falls in this run's window. The ledger conn is
+    injected (card 11, 案 β); empty on no-connection/degraded — the run
+    proceeds, the console simply lacks the deep links.
     """
     from ..services import proposals
-    from ..vault.db.conn import get_ledger_conn
 
-    conn = get_ledger_conn()
+    conn = ledger_conn
     if conn is None:
         return []
     try:
@@ -322,7 +321,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
                    hooks: list[NotificationHook] | None = None,
                    runtime_cls: type[Runtime] = LoopRuntime,
                    trigger: str = "cron",
-                   privacy: PrivacyConfig | None = None) -> RunReport:
+                   privacy: PrivacyConfig | None = None,
+                   db_conn=None, ledger_conn=None) -> RunReport:
     """Run one background agent to completion; write the report; notify hooks.
 
     ``runtime_cls`` is injectable for tests (FakeRuntime). ``trigger`` is the
@@ -338,6 +338,9 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     None (default) = not wired yet (lazy, behavior unchanged); the scheduler
     call-site wiring follows with its task (same parameter chain as
     executor privacy_dirs).
+    ``db_conn``/``ledger_conn`` (card 11, 案 β): the scheduler's dual
+    connections, flowing through AgentSpec into every ToolContext and the
+    readback. None = degraded no-conn run (the pre-wiring behavior).
     """
     vault = vault_dir.resolve()
     started_at = time.time()
@@ -381,7 +384,9 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # SystemReminder（R3）：runner 零判断，gate 全在 reminder 内。
         system_prompt=cfg.prompt.read_text(encoding="utf-8")
         + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
-        system_reminders=[ReadbackSystemReminder(cfg.alias, tools)],
+        system_reminders=[ReadbackSystemReminder(cfg.alias, tools,
+                                                  db_conn=db_conn,
+                                                  ledger_conn=ledger_conn)],
         model=cfg.model,
         tools=tools,
         max_rounds=cfg.max_rounds,
@@ -397,6 +402,10 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         verbs=cfg.verbs,
         # Privacy read boundary (spec 2026-11-18 §2.1): shared live view.
         privacy=privacy,
+        # card 11 (案 β): dual conns flow spec → ToolContext (channel-entry
+        # injection; the scheduler bound them on the default run_once).
+        db_conn=db_conn,
+        ledger_conn=ledger_conn,
         # Egress audit (spec §3.2/§3.3): a non-loopback model endpoint means
         # documents leave the machine — audit one row per touched doc at run
         # end (LoopRuntime finally). Local endpoints (Ollama) attach nothing:
@@ -446,7 +455,7 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
     # their relpaths stay OUT of files_changed (no backing file exists;
     # listing one in the report's 变更文件 would be a ghost path). They
     # feed the notification deep links + kind below.
-    records = _run_records(run_id, started_at)
+    records = _run_records(run_id, started_at, ledger_conn)
 
     _write_report_and_prune(cfg, vault, started_at, status, stats, error_msg,
                             trigger, run_id)

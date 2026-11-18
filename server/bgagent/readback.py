@@ -31,6 +31,11 @@ READBACK_TOP_N = 5  # readback entries are bounded (top N + truncation marker)
 class RoleCtx:
     alias: str
     tools: frozenset[str]
+    # card 11 (案 β): the run's dual conns, injected by ReadbackSystemReminder's
+    # constructor (runner is the sole construction site). Sections read these
+    # instead of fetching the registry; None = degraded (section stays silent).
+    db_conn: object | None = None
+    ledger_conn: object | None = None
 
 
 Gate = Callable[[RoleCtx], bool]
@@ -54,9 +59,8 @@ def _build_proposal_section(ctx: RoleCtx) -> list[str] | None:
     reject_reason (the trust-escalation feedback). Newest-first, top N +
     marker. Ledger conn; silent when unavailable or the role has nothing."""
     from ..services import proposals
-    from ..vault.db.conn import get_ledger_conn
 
-    conn = get_ledger_conn()
+    conn = ctx.ledger_conn
     if conn is None:
         return None
     try:
@@ -111,9 +115,8 @@ def _build_relatedness_section(ctx: RoleCtx) -> list[str] | None:
     layer) + the ignored pairs the human dismissed (telemetry — propose them
     less). Ledger conn; silent when unavailable or the role has nothing."""
     from ..vault.db import relatedness as rel_mod
-    from ..vault.db.conn import get_ledger_conn
 
-    conn = get_ledger_conn()
+    conn = ctx.ledger_conn
     if conn is None:
         return None
     try:
@@ -158,9 +161,8 @@ def _build_telemetry_section(ctx: RoleCtx) -> list[str] | None:
     alias filter — R8 known cost). Index conn; silent when unavailable or
     there is nothing to say."""
     from ..vault.db import recall as recall_mod
-    from ..vault.db.conn import get_index_conn
 
-    index_conn = get_index_conn()
+    index_conn = ctx.db_conn
     if index_conn is None:
         return None
     try:
@@ -207,8 +209,9 @@ class ReadbackSystemReminder(SystemReminder):
         _Section(gate=has_propose, build=_build_telemetry_section),
     )
 
-    def __init__(self, alias: str, tools: list):
-        self._ctx = RoleCtx(alias, frozenset(t.name for t in tools))
+    def __init__(self, alias: str, tools: list, db_conn=None, ledger_conn=None):
+        self._ctx = RoleCtx(alias, frozenset(t.name for t in tools),
+                            db_conn=db_conn, ledger_conn=ledger_conn)
 
     def render(self) -> str | None:
         lines: list[str] = []
