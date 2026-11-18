@@ -1691,7 +1691,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 动效降级（本分节新增件：面入场 / 抽屉滑入 / backdrop / 整节退场） */
 @media (prefers-reduced-motion: reduce) {
   .rel-side .rel-face.anim { animation: none; }
-  .rel-sheet, .rel-sheet-backdrop { transition: none; }
+  .rel-sheet, .rel-sheet.open, .rel-sheet-backdrop { transition: none; } /* 两态都杀：.open 自带合并 transition 特异度高于基础态，只杀基础态则 RM 下滑入 + visibility 孤儿延迟复活（同 .panel-shell/.console-shell） */
   .rel-sheet-handle::before { transition: none; }
   .c-sec.leaving { transition: none; }
 }

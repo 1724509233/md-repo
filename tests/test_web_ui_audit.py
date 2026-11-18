@@ -442,6 +442,8 @@ def test_p2_visual_round_css():
     assert re.search(r"\.panel-shell, \.panel-shell\.open, \.search-drawer, \.search-drawer\.open"
                      r" \{ transition: none", css)
     assert re.search(r"#block-edit-btn, #block-edit-btn\.on \{ transition: none", css)
+    # 搭车：.rel-sheet.open 既有同款盲区（自带合并 transition，RM 只杀基础态=滑入+孤儿延迟复活）
+    assert re.search(r"\.rel-sheet, \.rel-sheet\.open, \.rel-sheet-backdrop \{ transition: none", css)
 
 
 def test_landing_integration_pins():
