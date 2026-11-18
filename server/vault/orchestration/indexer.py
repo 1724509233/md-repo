@@ -98,7 +98,7 @@ def delete_segments(conn: sqlite3.Connection, path: str) -> None:
     """Remove all segments for a path.
 
     FTS rows are removed per row by the segments_fts_ad trigger. Lock-free
-    by contract: file_ops calls this while holding _db_lock.
+    by contract: file_ops calls this inside the index-write section.
     """
     segments_delete_path(conn, path)
     conn.commit()

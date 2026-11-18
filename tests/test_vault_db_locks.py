@@ -178,7 +178,7 @@ def test_cleanup_old_returns_deleted_count(db_conn):
 
 # ── card 9 sinks: segments/graph write face (lock-free named functions) ────
 # Deadlock guard is behavioral: file_ops drives these functions through
-# apply_change while holding schema._db_lock — if any of them re-took the
+# apply_change's index-write section — if any of them re-took the
 # (non-reentrant) lock, the move_detect / reconcile / api suites would
 # hang. These cases pin the row effects instead (file convention).
 

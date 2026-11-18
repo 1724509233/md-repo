@@ -2,9 +2,7 @@
   "R5_core_upward": [],
   "R1_sql_outside_db": [
     "server/services/recovery.py:101:sqlite3.connect",
-    "server/services/recovery.py:246:sqlite3.connect",
-    "server/vault/orchestration/file_ops.py:153:execute",
-    "server/vault/orchestration/file_ops.py:253:execute"
+    "server/services/recovery.py:246:sqlite3.connect"
   ],
   "R2_interface_sql": [],
   "R4_lazy_conn": [
@@ -45,7 +43,7 @@
     "server/services/snapshots.py:547:get_index_conn",
     "server/services/snapshots.py:548:get_ledger_conn",
     "server/vault/db/segments_sql.py:227:get_ledger_conn",
-    "server/vault/orchestration/file_ops.py:197:get_ledger_conn"
+    "server/vault/orchestration/file_ops.py:195:get_ledger_conn"
   ],
   "R6_identity_assignment": [],
   "R3_private_cross_dir": [
@@ -65,8 +63,6 @@
     "server/vault/__init__.py:47:_is_filename_unique,_update_references",
     "server/vault/db/graph_sql.py:14:_iter_vault_md",
     "server/vault/db/segments_sql.py:166:_STOPWORDS",
-    "server/vault/orchestration/file_ops.py:19:_ACTION_TO_OP,_db_lock",
-    "server/vault/orchestration/file_ops.py:21:_invalidate_wikilink_filename",
     "server/vault/orchestration/indexer.py:28:_clear_wikilink_cache,_resolve_wikilink",
     "server/vault/orchestration/indexer.py:29:_tokenize_for_index",
     "server/vault/orchestration/indexer.py:31:_iter_vault_md",

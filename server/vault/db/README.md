@@ -8,7 +8,7 @@ Vault 索引子系统的 SQLite 数据层：连接创建、schema 初始化，�
 
 | 文件 | 职责 |
 | --- | --- |
-| `schema.py` | `init_db()` / `init_ledger_db()`：建连接（WAL）、建表、legacy 迁移；模块级 `_db_lock` / `_ledger_lock`（只由 vault.db 具名持锁 mutation 函数在内持有） |
+| `schema.py` | `init_db()` / `init_ledger_db()`：建连接（WAL）、建表、legacy 迁移；模块级 `_db_lock` / `_ledger_lock`（只由 vault.db 具名持锁 mutation 函数与包外唯一公开接口 `index_write()` 持有）；op 词表 `ACTION_TO_OP`（公开） |
 | `conn.py` | conn 对单例：`init(index_conn, ledger_conn)` 由 main.py 启动时注册一次；`get_index_conn()` / `get_ledger_conn()` 供 agent tools / mcp 懒取；**两连接共享一个生命周期**（一处 init、一处注册、一处关闭） |
 | `migrate_ledger.py` | `migrate_ledger(index_conn, ledger_path)`：首启把四表从 index.db 迁入 ledger.db；幂等，单显式事务（ATTACH 语境） |
 | `file_index.py` | `files` 表：path/hash/mtime 索引的增删查（写函数无锁，锁由具名 mutation 函数 / 包内调用方持有） |
@@ -154,8 +154,8 @@ relatedness(id PK AUTOINC, source, target, basis, actor,
 ### 连接与并发
 
 - **两文件两连接（2026-10-31 ledger-file split，L4）**：`init_db()` 开 `.sync/index.db`（可重建缓存：files / segments / edges / change_log / trigger_state / recall / …），`init_ledger_db()` 开 `.sync/ledger.db`（四张无重建来源的权威状态表：proposals / proposal_transitions / snapshots / relatedness——spec `~/md-vault/projects/md-repo/specs/2026-10-31-ledger-file-split-design.md`）。两连接同参：`check_same_thread=False, isolation_level=None`（autocommit）+ **WAL**。conn 对注册在 `conn.py`（`init(index_conn, ledger_conn)` / `get_index_conn()` / `get_ledger_conn()`），**共享一个生命周期**（一处 init、一处注册、一处关闭；L5-prod 每线程连接的迁移单位 = 这对）。
-- **两把锁，同一纪律**：`schema.py` 提供 `_db_lock`（只守卫 index 域）与 `_ledger_lock`（只守卫四表域），均为非重入 `threading.Lock`。import 纪律照抄 card 5：**`_ledger_lock` 在 `server/vault/db` 包外零出现**（具名持锁函数 = 接口）；ledger 域三模块（proposal_records / snapshot_records / relatedness）**不得再引用 `_db_lock`**——两条都由 `tests/test_ledger_import_discipline.py` 扫源码钉住。`_db_lock` 的存量引用面（包内 `recall` / `notifications` / `trigger_state`，包外仅 `file_ops` 的 apply 路径）是 L4 之前形态，不在本纪律扩张范围。两域写者互不排队（L3 基准量化的跨域竞争面在跨域方向归零）。
-- **并发规则（card 5 起，L4 扩展到两域）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）。`_db_lock` 现行引用面：定义在 `schema.py`；**包内持有者** = `recall` / `notifications` / `trigger_state` 的具名持锁函数（函数内 `with _db_lock`）；**包外持有者 = 仅 `file_ops.py`**（orchestration，apply 复合临界区，card-5 先例例外）。`init_db`/DDL、`recovery._rebuild_files_table`、`migrate_ledger` 的 ATTACH 在**现行代码零 `_db_lock` 引用**——它们是单进程/启动语境，不持锁，不在纪律范围（旧「包外例外清单」是 L4 之前历史形态，不得以现在时断言）。上层（bgagent、proposals、snapshots、routes、agent tools）调用具名函数，不再持锁、不再裸 SQL。
+- **两把锁，同一纪律**：`schema.py` 提供 `_db_lock`（只守卫 index 域）与 `_ledger_lock`（只守卫四表域），均为非重入 `threading.Lock`。import 纪律照抄 card 5：**`_ledger_lock` 在 `server/vault/db` 包外零出现**（具名持锁函数 = 接口）；ledger 域三模块（proposal_records / snapshot_records / relatedness）**不得再引用 `_db_lock`**——两条都由 `tests/test_ledger_import_discipline.py` 扫源码钉住。`_db_lock` 现行引用面（卡 10b 后）：包内 `recall` / `notifications` / `trigger_state` 的具名持锁函数 + `schema.index_write()` 公开锁接口；**包外 py 源码零直接引用**（`file_ops` 的 apply 复合临界区已改走 `index_write()`）。两域写者互不排队（L3 基准量化的跨域竞争面在跨域方向归零）。
+- **并发规则（card 5 起，L4 扩展到两域）**：锁只由 vault.db 的 **mutation functions 在函数内部持有**（复合临界区——read-then-write——在锁内保持原子）。`_db_lock` 现行引用面：定义在 `schema.py`；**包内持有者** = `recall` / `notifications` / `trigger_state` 的具名持锁函数（函数内 `with _db_lock`）；**包外持有者 = 零**（卡 10b）——`file_ops.py` 的 apply 复合临界区改经 `schema.index_write()` 公开上下文管理器进入（非重入纪律不变：锁内不得再调具名持锁函数）。`init_db`/DDL、`recovery._rebuild_files_table`、`migrate_ledger` 的 ATTACH 在**现行代码零 `_db_lock` 引用**——它们是单进程/启动语境，不持锁，不在纪律范围（旧「包外例外清单」是 L4 之前历史形态，不得以现在时断言）。上层（bgagent、proposals、snapshots、routes、agent tools）调用具名函数，不再持锁、不再裸 SQL。
 - **纯读 helper 保持无锁**：非重入锁被读者持有会在锁内调用时同线程死锁——所以读函数无锁，同模块的 mutation functions 负责加锁；锁内调用读 helper 是安全的。
 - **调用方惯例：读到底要不要包锁**
   - **读不持锁**：纯读函数（如 `get_changes_sources` / `count_changes_sources`，`changes.py`）锁外直读，调用方**不要**再包 `with _db_lock`（或 `with _ledger_lock`）。
@@ -167,7 +167,7 @@ relatedness(id PK AUTOINC, source, target, basis, actor,
 
 （change_log 设计：spec `~/md-vault/projects/md-repo/specs/2026-10-01-file-change-log-design.md`）
 
-- `change_log.op` 使用新命名（`create/update/delete/move`）；`schema.py` 中的 `_ACTION_TO_OP` / `_OP_TO_ACTION` 负责与旧 `file_changes.action`（`created/modified/deleted/moved`）互转。
+- `change_log.op` 使用新命名（`create/update/delete/move`）；`schema.py` 中的 `ACTION_TO_OP`（卡 10b 公开化——`file_ops` 的 events.publish op 载荷也读它）/ `_OP_TO_ACTION` 负责与旧 `file_changes.action`（`created/modified/deleted/moved`）互转。
 - `init_db()` 启动时若发现旧 `file_changes` 表，自动迁移到 `change_log` 后删除。
 - `get_changes()` 返回的 dict 同时携带新旧两套键（`action`/`from_path` 与 `seq`/`source`/`new_hash`），保证向后兼容。
 - `clear_changes()` 清空事件流（当前仅 test 面使用）。

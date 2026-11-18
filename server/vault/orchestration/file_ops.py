@@ -15,10 +15,10 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from ..db.changes import log_change
-from ..db.file_index import delete_file, upsert_file
-from ..db.schema import _ACTION_TO_OP, _db_lock
+from ..db.file_index import delete_file, get_all_files, get_file_hash, upsert_file
+from ..db.schema import ACTION_TO_OP, index_write
 from ..file_entry import FileEntry
-from ..fs.link_parser import _invalidate_wikilink_filename
+from ..fs.link_parser import invalidate_wikilink_filename
 from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .move_detect import pair_moves
 from .indexer import (
@@ -56,7 +56,9 @@ def apply_change(
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
-    Thread-safe via the module-level ``_db_lock``. Replaces the duplicated
+    Thread-safe via the db public lock interface (``db.schema.index_write``;
+    card 10b — the lock identifier itself stays inside ``vault.db``).
+    Replaces the duplicated
     upsert/log/fts/graph logic that previously lived in agent.py, api.py and
     watcher.py.
 
@@ -88,7 +90,7 @@ def apply_change(
     its stale-copy pre-hash map from these rows, unbounded); '' on all
     other ops.
     """
-    with _db_lock:
+    with index_write():
         if action in ("created", "modified", "create", "update", "restore"):
             fp = vault_dir / path
             if not fp.is_file():
@@ -110,7 +112,7 @@ def apply_change(
             # (Pure content modification does not change the filename→path
             # existence map, so only create invalidates here.)
             if action in ("created", "create", "restore"):
-                _invalidate_wikilink_filename(Path(path).name)
+                invalidate_wikilink_filename(Path(path).name)
             if not _is_index_excluded(path):
                 index_segments(conn, vault_dir, path)
                 graph_extract_file(conn, vault_dir, path)
@@ -120,7 +122,7 @@ def apply_change(
                        pre_hash=pre_hash)
             # The filename no longer exists on disk; drop its cached entry so
             # later resolutions don't point at a dead path.
-            _invalidate_wikilink_filename(Path(path).name)
+            invalidate_wikilink_filename(Path(path).name)
             if not _is_index_excluded(path):
                 delete_segments(conn, path)
                 graph_delete_file(conn, path)
@@ -129,9 +131,9 @@ def apply_change(
         elif action in ("moved", "move"):
             # Rename: the old filename disappears and the new one appears —
             # drop both cached entries so later resolutions re-scan disk.
-            _invalidate_wikilink_filename(Path(path).name)
+            invalidate_wikilink_filename(Path(path).name)
             if from_path:
-                _invalidate_wikilink_filename(Path(from_path).name)
+                invalidate_wikilink_filename(Path(from_path).name)
             src = vault_dir / from_path
             dst = vault_dir / path
             if new_hash:
@@ -150,11 +152,7 @@ def apply_change(
             # Look up the old hash before deleting the old record.
             old_hash = ""
             if from_path:
-                row = conn.execute(
-                    "SELECT hash FROM files WHERE path = ?", (from_path,)
-                ).fetchone()
-                if row:
-                    old_hash = row[0]
+                old_hash = get_file_hash(conn, from_path) or ""
             if from_path:
                 delete_file(conn, from_path)
             log_change(conn, path, action, from_path=from_path, source=source,
@@ -201,7 +199,7 @@ def apply_change(
     # Event wakeup (after the change_log row is committed by log_change).
     # Publisher-side filter (registered at startup) drops self/excluded
     # sources; the scan-side exclusion stays the authority (spec §4a).
-    events.publish("change", {"op": _ACTION_TO_OP.get(action, action),
+    events.publish("change", {"op": ACTION_TO_OP.get(action, action),
                               "source": source, "path": path})
 
 
@@ -217,7 +215,7 @@ def apply_folder_change(
     files-table / FTS / graph work; the ledger row still flows through the
     file_ops change surface so that EVERY change_log row passes this module
     (the web folder paths previously called log_change bare)."""
-    with _db_lock:
+    with index_write():
         log_change(conn, relpath, action, from_path=from_path, source=source,
                    batch_id="")
 
@@ -249,8 +247,7 @@ def reconcile(
 
     # Phase 1: read the DB. {path: (hash, mtime)}
     db: dict[str, tuple[str, float]] = {
-        row[0]: (row[1], row[2])
-        for row in conn.execute("SELECT path, hash, mtime FROM files")
+        d["path"]: (d["hash"], d["mtime"]) for d in get_all_files(conn)
     }
 
     # Phase 2: set comparison.

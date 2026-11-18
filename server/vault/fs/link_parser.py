@@ -10,7 +10,7 @@ from pathlib import Path
 # safe to cache because the one event that can make them stale — a file
 # create/delete/move changing which paths that filename resolves to — goes
 # through apply_change, which pops exactly that filename's entry
-# (_invalidate_wikilink_filename). A truly-dead target's filename never fires
+# (invalidate_wikilink_filename). A truly-dead target's filename never fires
 # a change event, so its cached empty stays valid and cheap. Full rebuilds
 # clear the whole cache (_clear_wikilink_cache).
 _wikilink_cache: dict[str, list[str]] = {}
@@ -25,8 +25,10 @@ def _clear_wikilink_cache() -> None:
     _wikilink_cache.clear()
 
 
-def _invalidate_wikilink_filename(filename: str) -> None:
+def invalidate_wikilink_filename(filename: str) -> None:
     """Drop the cache entry for a single changed filename.
+
+    Public (card 10b): the apply_change write path is the caller.
 
     Called from ``apply_change`` on create/rename/delete file-change events
     so the next resolution re-scans disk: the filename→path existence map
@@ -59,7 +61,7 @@ def _resolve_wikilink(vault_dir: Path, target: str) -> str | None:
     #    Only resolves when the filename is unique; ambiguous matches return None.
     #    Results (empty included) are cached per filename to avoid repeated scans;
     #    they are invalidated on the file-change event that would make them stale
-    #    (apply_change → _invalidate_wikilink_filename) and cleared in full by
+    #    (apply_change → invalidate_wikilink_filename) and cleared in full by
     #    rebuilds (_clear_wikilink_cache).
     filename = Path(target).name
     matches = _wikilink_cache.get(filename)

@@ -915,7 +915,7 @@ def test_apply_change_create_invalidates_wikilink_cache(vault_dir):
         apply_change(conn, vault_dir, "notes/a.md", "created")
 
         # 2. Target appears; its creation is what invalidates the cached
-        #    "b.md" miss (apply_change → _invalidate_wikilink_filename).
+        #    "b.md" miss (apply_change → invalidate_wikilink_filename).
         (vault_dir / "notes" / "b.md").write_text("See [[a]].")
         apply_change(conn, vault_dir, "notes/b.md", "created")
 

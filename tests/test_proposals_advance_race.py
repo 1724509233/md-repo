@@ -9,7 +9,7 @@ Known flake（刻意保留，2026-10-30 裁决 = L5 暂缓）：
 ``check_same_thread=False`` 的共享连接，而 ``proposals.advance`` 裸读
 （``record()``，无锁）与锁内条件 UPDATE 交错——同一连接对象跨线程并发使用
 本身非线程安全。这是**生产模式的金丝雀**：``db_handle.init`` 全局单例连接
-被 uvicorn/agent/executor/watcher 多线程共享，写由 ``_db_lock`` 串行化但裸读
+被 uvicorn/agent/executor/watcher 多线程共享，写由 db 具名持锁函数串行化但裸读
 与读-判断-写间隙不在保护内。**不要静音此测试**（测试内改每线程连接会掩盖
 生产暴露）；正解 = L5-prod 生产每线程连接（WAL），见架构评审 backlog
 ``docs/superpowers/plans/2026-10-29-arch-review-leftovers.md`` L5。

@@ -1,6 +1,7 @@
 """Database connection creation, schema init, and the shared mutation lock."""
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 import time
@@ -24,7 +25,11 @@ _db_lock = threading.Lock()
 _ledger_lock = threading.Lock()
 
 # Map legacy action names (old file_changes.action) to new op names (change_log.op).
-_ACTION_TO_OP = {
+# Public (card 10b): the canonical op normalizer is also read by callers
+# outside the package (file_ops publishes the canonical op to the event
+# bus) — the vocabulary contract is the AGENTS.md "do not fix op
+# vocabulary in callers" rule.
+ACTION_TO_OP = {
     "created": "create",
     "modified": "update",
     "deleted": "delete",
@@ -32,7 +37,23 @@ _ACTION_TO_OP = {
 }
 
 # Reverse mapping: new op names back to legacy action names for backward compat.
-_OP_TO_ACTION = {v: k for k, v in _ACTION_TO_OP.items()}
+_OP_TO_ACTION = {v: k for k, v in ACTION_TO_OP.items()}
+
+
+@contextlib.contextmanager
+def index_write():
+    """Public index-write lock interface (card 10b): hold the shared
+    mutation lock across a compound read-then-write critical section.
+
+    The named lock-holding functions inside ``vault.db`` are the normal
+    interface; this context manager exists for the one legitimate caller
+    that cannot be a single db function — ``file_ops.apply_change``'s
+    composite (disk read + files + change_log + FTS + graph in ONE
+    section). Lock discipline unchanged: non-reentrant, mutation-only,
+    never nested (callers must not call a lock-holding named function
+    while holding this)."""
+    with _db_lock:
+        yield
 
 
 def count_table_rows(conn: sqlite3.Connection, table: str) -> int:

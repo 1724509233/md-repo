@@ -22,6 +22,14 @@ def get_all_files(conn: sqlite3.Connection) -> list[dict]:
     ]
 
 
+def get_file_hash(conn: sqlite3.Connection, path: str) -> str | None:
+    """Stored hash of one indexed file, or None when absent (card 10b sink
+    of the apply_change moved-branch lookup — read helper, lock-free: safe
+    to call while holding the index-write lock)."""
+    row = conn.execute("SELECT hash FROM files WHERE path = ?", (path,)).fetchone()
+    return row[0] if row else None
+
+
 def delete_file(conn: sqlite3.Connection, path: str) -> None:
     """Remove a file entry from the index."""
     conn.execute("DELETE FROM files WHERE path = ?", (path,))

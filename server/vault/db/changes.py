@@ -5,7 +5,7 @@ import sqlite3
 import time
 
 from ...core.privacy import privacy_clause
-from .schema import _ACTION_TO_OP, _OP_TO_ACTION
+from .schema import ACTION_TO_OP, _OP_TO_ACTION
 
 
 def log_change(
@@ -29,7 +29,7 @@ def log_change(
     lane's stale-copy pre-hash map derives from these rows, unbounded);
     '' on all other ops.
     """
-    op = _ACTION_TO_OP.get(action, action)
+    op = ACTION_TO_OP.get(action, action)
     conn.execute(
         "INSERT INTO change_log (ts, source, op, path, old_path, new_hash, batch_id, pre_hash) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
