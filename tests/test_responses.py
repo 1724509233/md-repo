@@ -132,7 +132,7 @@ def test_read_doc_moved_hint(tmp_path: Path):
     (vault / "new.md").write_bytes(b"moved content")
 
     register_db_conn(conn, None)
-    result = execute_tool("read_doc", {"path": "old.md"}, ToolContext(vault_dir=vault))
+    result = execute_tool("read_doc", {"path": "old.md"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "moved to" in result
     assert "new.md" in result
     conn.close()
@@ -151,7 +151,7 @@ def test_delete_doc_deleted_hint(tmp_path: Path):
     log_change(conn, "temp.md", "deleted", source="agent", ts=time.time() - 300)
 
     register_db_conn(conn, None)
-    result = execute_tool("delete_doc", {"path": "temp.md"}, ToolContext(vault_dir=vault))
+    result = execute_tool("delete_doc", {"path": "temp.md"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "previously deleted" in result
     conn.close()
 

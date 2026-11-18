@@ -30,7 +30,7 @@ class ReadDocTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return self._file_not_found_hint(args.path)
+            return self._file_not_found_hint(args.path, ctx.db_conn)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         total = len(lines)

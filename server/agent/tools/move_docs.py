@@ -59,7 +59,6 @@ class MoveDocsTool(DocTool):
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...services.snapshots import (capture, discard, finalize, gc_after_capture,
                                   hash_bytes, new_call_id)
-        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.orchestration.refs import (
             apply_reference_updates,
             prepare_reference_updates,
@@ -72,7 +71,7 @@ class MoveDocsTool(DocTool):
         for from_path, to_path in moves:
             src = ctx.vault_dir / from_path
             if not src.is_file():
-                return self._file_not_found_hint(from_path)
+                return self._file_not_found_hint(from_path, ctx.db_conn)
             dst = ctx.vault_dir / to_path
             if dst.is_file():
                 return self.move_dest_exists(to_path)
@@ -81,15 +80,15 @@ class MoveDocsTool(DocTool):
         # rename (pre-rename uniqueness; in-batch referrers read at their
         # old paths) — touches no disk, so a partial-rename failure in
         # Phase 3 raises with every referrer byte-identical (F9).
-        prepared = prepare_reference_updates(get_index_conn(), ctx.vault_dir, moves)
+        prepared = prepare_reference_updates(ctx.db_conn, ctx.vault_dir, moves)
 
         # Phase 3: perform all filesystem renames. The whole batch is ONE
         # tool call → one call_id snapshot group (rollback unit, P1): every
         # source file's pre-image is captured before any rename. On a
         # partial-rename failure the captures are discarded (the live slot
         # is untouched) and the error surfaces as before.
-        conn = get_ledger_conn()
-        index_conn = get_index_conn()
+        conn = ctx.ledger_conn
+        index_conn = ctx.db_conn
         pairs = []  # (from_path, to_path, snapshot | None)
         if conn is not None:
             call_id = new_call_id()

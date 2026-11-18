@@ -128,7 +128,7 @@ def test_agent_delete_trash_no_snapshot_and_pre_hash_row(vault_dir, db_conn,
     (vault_dir / "notes" / "del.md").write_bytes(b"agent delete me")
     pre_hash = hashlib.sha256(b"agent delete me").hexdigest()
     result = execute_tool("delete_doc", {"path": "notes/del.md"},
-                          ToolContext(vault_dir=vault_dir, run_id="run-x"))
+                          ToolContext(vault_dir=vault_dir, run_id="run-x", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Moved to trash" in result
     assert "restorable via the trash UI" in result
     assert not (vault_dir / "notes" / "del.md").exists()
@@ -158,10 +158,10 @@ def test_bgagent_delete_snapshot_side_and_run_level_call(vault_dir, db_conn,
     (vault_dir / "notes" / "y.md").write_bytes(b"y")
     r1 = execute_tool("delete_doc", {"path": "notes/x.md"},
                       ToolContext(vault_dir=vault_dir, write_source="nightly",
-                                  run_id="run-1"))
+                                  run_id="run-1", db_conn=db_conn, ledger_conn=ledger_conn))
     r2 = execute_tool("delete_doc", {"path": "notes/y.md"},
                       ToolContext(vault_dir=vault_dir, write_source="nightly",
-                                  run_id="run-1"))
+                                  run_id="run-1", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Deleted:" in r1 and "restorable via rollback within 30 days" in r1
     assert "Deleted:" in r2
     # No trash (the non-workbench channel never touches it).
@@ -193,7 +193,7 @@ def test_bgagent_delete_snapshot_side_and_run_level_call(vault_dir, db_conn,
 def test_mcp_delete_single_file_single_call(vault_dir, db_conn, ledger_conn):
     (vault_dir / "notes" / "m.md").write_bytes(b"mcp delete me")
     result = execute_tool("delete_doc", {"path": "notes/m.md"},
-                          ToolContext(vault_dir=vault_dir, write_source="mcp"))
+                          ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Deleted:" in result and "restorable via rollback within 30 days" in result
     assert not (vault_dir / ".trash").exists()
     assert not (vault_dir / "notes" / "m.md").exists()
@@ -222,7 +222,7 @@ def test_snapshot_side_unlink_failure_discards_snapshot(vault_dir, db_conn,
 
     monkeypatch.setattr(Path, "unlink", flaky)
     result = execute_tool("delete_doc", {"path": "notes/gone.md"},
-                          ToolContext(vault_dir=vault_dir, write_source="mcp"))
+                          ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     assert result.startswith("Error:")
     # File intact; the capture was discarded (no snapshot residue).
     assert (vault_dir / "notes" / "gone.md").read_bytes() == b"precious"
@@ -246,7 +246,7 @@ def test_snapshot_side_record_failure_leaves_snapshot_recoverable(vault_dir,
     # disk + snapshot state is the recovery credential.
     with pytest.raises(RuntimeError):
         execute_tool("delete_doc", {"path": "notes/gone.md"},
-                     ToolContext(vault_dir=vault_dir, write_source="mcp"))
+                     ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     assert not (vault_dir / "notes" / "gone.md").exists()
     # The snapshot row is in-flight (finalize never ran — record raised
     # first): live=0/finalized=0, but GC never reclaims in-flight rows
@@ -273,7 +273,7 @@ def test_sync_stale_copy_after_snapshot_side_delete(client, vault_dir, db_conn,
     pre_hash = hashlib.sha256(SAMPLE).hexdigest()
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/test.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     assert not (vault_dir / ".trash").exists()  # the hole's premise
     # Client still holds the identical local copy → to_delete, not to_push.
     r = client.post("/api/sync", json={
@@ -292,7 +292,7 @@ def test_sync_local_recreate_after_delete_stays_to_push(client, vault_dir,
                                                         db_conn, ledger_conn):
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/test.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     # Local copy rewritten after the deletion (hash differs from pre_hash)
     # → a genuine new file, pushed normally.
     r = client.post("/api/sync", json={
@@ -357,13 +357,13 @@ def test_sync_latest_delete_row_wins(client, vault_dir, db_conn, ledger_conn):
     h1 = hashlib.sha256(SAMPLE).hexdigest()
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/test.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     # Restore + rewrite + delete again (newer pre_hash).
     (vault_dir / "notes" / "test.md").write_bytes(b"rewritten")
     h2 = hashlib.sha256(b"rewritten").hexdigest()
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/test.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     # Local copy identical to the NEWER pre-delete content → stale → to_delete.
     r = client.post("/api/sync", json={
         "device_name": "mac",
@@ -507,7 +507,7 @@ def test_rollback_delete_restore_revives_backlinks(client, vault_dir, db_conn,
 
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/b.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     # The deletion removed the referrer→target edge (and the entity).
     assert graph_get_backlinks(db_conn, "notes/b.md") == []
 
@@ -537,7 +537,7 @@ def test_rollback_delete_restore_content_scan_fallback(client, vault_dir, db_con
 
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/b.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     assert graph_get_backlinks(db_conn, "notes/b.md") == []
     # The edges table is still non-empty (other.md's tag edge survives).
     assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] > 0
@@ -555,7 +555,7 @@ def test_rollback_route_books_restore_op_not_created(client, vault_dir, db_conn,
                                                      ledger_conn):
     assert "Deleted:" in execute_tool(
         "delete_doc", {"path": "notes/test.md"},
-        ToolContext(vault_dir=vault_dir, write_source="mcp"))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", db_conn=db_conn, ledger_conn=ledger_conn))
     call_id = _call_id_for(ledger_conn, "notes/test.md")
     r = client.post("/api/memory/rollback", json={"call_id": call_id})
     assert r.status_code == 200

@@ -157,7 +157,7 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
 
     fp = vault_dir / path
     if not fp.is_file():
-        return _edit_doc_tool._file_not_found_hint(path)
+        return _edit_doc_tool._file_not_found_hint(path, db_conn)
     conn = get_ledger_conn()
     snap = None
     if conn is not None:
@@ -181,7 +181,8 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
 
 
 def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[str],
-                 justification: str, privacy=None) -> str:
+                 justification: str, privacy=None,
+                 db_conn=None, ledger_conn=None) -> str:
     """The MCP channel's propose entry (oracle gate P0-Q6a).
 
     Restores the external proposal channel after the P0 cutover: the external
@@ -192,6 +193,9 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
 
     ``privacy`` (spec 2026-11-18 §2.2): the process-wide PrivacyConfig,
     carried on the ToolContext (channel entry injects it, never model-set).
+    ``db_conn``/``ledger_conn`` (card 11, 案 β): the stdio process's own
+    registered pair, passed in from the tool wrapper (channel-entry
+    injection; the tool never fetches the registry itself).
     """
     from server.agent.tools.propose import ProposeTool
     from server.agent.tools.tool import ToolContext
@@ -199,7 +203,8 @@ def _mcp_propose(vault_dir: Path, type: str, payload: dict, source_refs: list[st
     return ProposeTool().call(
         {"type": type, "payload": payload, "source_refs": source_refs,
          "justification": justification},
-        ToolContext(vault_dir=vault_dir, write_source="mcp", privacy=privacy))
+        ToolContext(vault_dir=vault_dir, write_source="mcp", privacy=privacy,
+                    db_conn=db_conn, ledger_conn=ledger_conn))
 
 
 def _mcp_log_recall(query: str, tier: str, results: list) -> None:
@@ -409,7 +414,7 @@ def main():
             return error
         fp = vault_dir / path
         if not fp.is_file():
-            return _read_doc_tool._file_not_found_hint(path)
+            return _read_doc_tool._file_not_found_hint(path, db_conn)
         content = fp.read_bytes().decode("utf-8", errors="replace")
         return f"File: {path} ({len(content)} chars)\n\n{content}"
     
@@ -434,7 +439,7 @@ def main():
                       justification: str = "") -> str:
         """Create a proposal record — the only write path into the proposal channel (direct writes into suggestions/ are rejected). Types: entity_index {entity, attrs: {field: value}} | relatedness {target} | summary {form: 'cache'|'report', body, assertions?} | errata {contradiction, excerpts: [{path, quote, label?}], candidate, rationale} | reminder {body}. source_refs: vault-relative paths the proposal is based on. justification: human-readable reason (becomes the review material). Auto-channel types (entity_index, relatedness) merge on the next executor cycle; review-channel types (summary, errata, reminder) wait for a human decision."""
         return _mcp_propose(vault_dir, type, payload, source_refs, justification,
-                            privacy=privacy)
+                            privacy=privacy, db_conn=db_conn, ledger_conn=ledger_conn)
     
     mcp.run(transport="stdio")
 

@@ -6,6 +6,7 @@ Subclasses declare ``name`` + ``args_model`` and implement ``_execute``.
 from __future__ import annotations
 
 import re
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +22,13 @@ from ...core.privacy import PrivacyConfig
 class ToolContext:
     """Runtime context passed to every tool call.
 
-    DB access is not threaded here — tools fetch the connection lazily from
-    ``server.vault.db.conn.get_index_conn()`` / ``get_ledger_conn()``.
+    DB access IS threaded here (card 11, 案 β 全显式): the channel assembly
+    points (LoopRuntime from AgentSpec; the MCP stdio entry from its own
+    registered pair) inject both connections, and tools read ``ctx.db_conn``
+    / ``ctx.ledger_conn`` directly — lazy registry fetch is banned inside
+    tools (R4). The None defaults exist for dataclass compatibility ONLY,
+    never as a registry fallback: a conn-using tool run on an unwired ctx
+    goes red at ``None.execute`` — that red is the enforcement design.
     """
 
     vault_dir: Path
@@ -49,6 +55,12 @@ class ToolContext:
     # visible). Tools use ctx.privacy.dirs to filter their read surfaces;
     # None = channel not wired (lazy, behavior unchanged).
     privacy: PrivacyConfig | None = None
+    # Dual connections (card 11): index.db / ledger.db handles injected by
+    # the channel assembly point (trusted — tools never fetch them from the
+    # registry). See class docstring: None defaults are compatibility-only;
+    # conn-using tools go red on unwired ctx by design.
+    db_conn: sqlite3.Connection | None = None
+    ledger_conn: sqlite3.Connection | None = None
 
 
 # ── Shared path validators ──────────────────────────────────────────────
@@ -207,17 +219,16 @@ class DocTool(Tool):
             return time.strftime("%Y-%m-%d", time.localtime(ts))
 
     @staticmethod
-    def _missing_lookup(path: str):
+    def _missing_lookup(db_conn, path: str):
         """Shared change-log lookup: why is this file missing?
 
+        ``db_conn`` is the channel-injected index conn (card 11 案 (a) chain
+        — the lookup never fetches the registry itself).
         Returns ``("moved", new_path)`` / ``("deleted", ts)`` / ``None`` (no history).
         Returns the ``_UNAVAILABLE`` sentinel when history cannot be queried
-        (no db registered or lookup error) — the template maps that to a plain
+        (no conn wired or lookup error) — the template maps that to a plain
         ``file_not_found`` regardless of subclass. No message logic here.
         """
-        from ...vault.db.conn import get_index_conn
-
-        db_conn = get_index_conn()
         if db_conn is None:
             return _UNAVAILABLE
         from ...vault.db.changes import get_changes
@@ -252,9 +263,13 @@ class DocTool(Tool):
             return DocTool.file_moved(path, value)
         return DocTool.file_deleted(path, DocTool._relative_time(value))
 
-    def _file_not_found_hint(self, path: str) -> str:
-        """Template: shared lookup → this tool's message (polymorphic, no tool arg)."""
-        lookup = DocTool._missing_lookup(path)
+    def _file_not_found_hint(self, path: str, db_conn=None) -> str:
+        """Template: shared lookup → this tool's message (polymorphic, no tool arg).
+
+        ``db_conn`` = the channel-injected index conn (card 11 案 (a) chain);
+        None (unwired ctx) keeps the sentinel path — a missing-history query
+        never crashes the tool."""
+        lookup = DocTool._missing_lookup(db_conn, path)
         if lookup is _UNAVAILABLE:
             return DocTool.file_not_found(path)
         return self._missing_message(path, lookup)

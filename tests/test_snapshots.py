@@ -161,20 +161,20 @@ def test_agent_write_doc_produces_preimage(vault_dir, ledger_conn):
     assert _blob(vault_dir, live) == SAMPLE  # pre-image = the full original text
 
 
-def test_agent_edit_doc_produces_preimage(vault_dir, ledger_conn):
+def test_agent_edit_doc_produces_preimage(vault_dir, db_conn, ledger_conn):
     (vault_dir / "notes" / "edit.md").write_bytes(b"# T\n\nOld text here.\n")
     result = execute_tool(
         "edit_doc",
         {"path": "notes/edit.md", "old_string": "Old text here.",
          "new_string": "New text here."},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Edited" in result
     live = snapshots.live_preimage(ledger_conn, "notes/edit.md")
     assert live is not None and live["op"] == "update"
     assert _blob(vault_dir, live) == b"# T\n\nOld text here.\n"
 
 
-def test_agent_edit_doc_failure_does_not_take_the_slot(vault_dir, ledger_conn):
+def test_agent_edit_doc_failure_does_not_take_the_slot(vault_dir, db_conn, ledger_conn):
     """A failed edit (old_string absent) must NOT displace the file's live
     pre-image slot — the previous write's pre-image stays recoverable."""
     fp = vault_dir / "notes" / "slot.md"
@@ -185,7 +185,7 @@ def test_agent_edit_doc_failure_does_not_take_the_slot(vault_dir, ledger_conn):
 
     result = execute_tool(
         "edit_doc", {"path": "notes/slot.md", "old_string": "absent", "new_string": "x"},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert result.startswith("Error")
 
     live = snapshots.live_preimage(ledger_conn, "notes/slot.md")
@@ -193,11 +193,11 @@ def test_agent_edit_doc_failure_does_not_take_the_slot(vault_dir, ledger_conn):
     assert _blob(vault_dir, live) == b"v0"  # pre-image of the v1-write
 
 
-def test_agent_move_docs_produces_preimage(vault_dir, ledger_conn):
+def test_agent_move_docs_produces_preimage(vault_dir, db_conn, ledger_conn):
     (vault_dir / "mv.md").write_bytes(b"move me")
     result = execute_tool(
         "move_docs", {"moves": [{"from_path": "mv.md", "to_path": "sub/mv.md"}]},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Moved 1 file(s)" in result
     live = snapshots.live_preimage(ledger_conn, "mv.md")
     assert live is not None and live["op"] == "move"
@@ -321,12 +321,13 @@ def test_rollback_unknown_call(vault_dir, ledger_conn):
 # tests/test_deletion_rollback.py; the snapshot-side delete tests there
 # cover the full pre-image capture.)
 
-def test_agent_delete_tool_trash_no_snapshot(vault_dir, ledger_conn):
+def test_agent_delete_tool_trash_no_snapshot(vault_dir, db_conn, ledger_conn):
     """The interactive agent deletes via the trash — no snapshot row (the
     snapshot is the bgagent/mcp channel's recovery credential)."""
     (vault_dir / "notes" / "gone.md").write_bytes(b"precious content")
     result = execute_tool("delete_doc", {"path": "notes/gone.md"},
-                          ToolContext(vault_dir=vault_dir))
+                          ToolContext(vault_dir=vault_dir, db_conn=db_conn,
+                                      ledger_conn=ledger_conn))
     assert "Moved to trash" in result
     assert not (vault_dir / "notes" / "gone.md").exists()
     assert snapshots.live_preimage(ledger_conn, "notes/gone.md") is None

@@ -104,7 +104,7 @@ def test_edit_doc_books_update_row(vault_dir, db_conn, ledger_conn):
         "edit_doc",
         {"path": "notes/edit.md", "old_string": "Old text here.",
          "new_string": "New text here."},
-        ToolContext(vault_dir=vault_dir, run_id="run-e"))
+        ToolContext(vault_dir=vault_dir, run_id="run-e", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Edited" in result
 
     rows = _change_rows(db_conn, "notes/edit.md")
@@ -134,7 +134,7 @@ def test_edit_doc_failure_books_nothing_and_leaves_no_residue(vault_dir, db_conn
     result = execute_tool(
         "edit_doc",
         {"path": "notes/fail.md", "old_string": "absent", "new_string": "x"},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert result.startswith("Error")
 
     assert _change_rows(db_conn, "notes/fail.md") == []
@@ -153,7 +153,7 @@ def test_delete_doc_books_row_and_cleans_tables(vault_dir, db_conn, ledger_conn)
     assert "notes/test.md" in _segment_paths(db_conn)
 
     result = execute_tool("delete_doc", {"path": "notes/test.md"},
-                          ToolContext(vault_dir=vault_dir, run_id="run-d"))
+                          ToolContext(vault_dir=vault_dir, run_id="run-d", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Moved to trash" in result  # P4-4: move semantics, not unlink
     assert not (vault_dir / "notes" / "test.md").exists()
 
@@ -188,7 +188,7 @@ def test_move_docs_books_move_row_single_ref_rewrite(vault_dir, db_conn, ledger_
 
     result = execute_tool(
         "move_docs", {"moves": [{"from_path": "b.md", "to_path": "b2.md"}]},
-        ToolContext(vault_dir=vault_dir, run_id="run-m"))
+        ToolContext(vault_dir=vault_dir, run_id="run-m", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Moved 1 file(s)" in result
 
     # Reference rewritten exactly once — no double rewrite

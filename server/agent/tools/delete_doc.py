@@ -31,12 +31,11 @@ class DeleteDocTool(DocTool):
         return None
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...vault.db.conn import get_index_conn
         from ...services import trash
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():
-            return self._file_not_found_hint(args.path)
+            return self._file_not_found_hint(args.path, ctx.db_conn)
 
         if ctx.write_source == "agent":
             # Workbench channel (actor separation 2026-11-15): the
@@ -45,7 +44,7 @@ class DeleteDocTool(DocTool):
             # via the trash UI). No snapshot: the 30-day rollback is the
             # bgagent/mcp channel's. The pre-delete hash is booked inside
             # move_to_trash (change_log pre_hash) for the sync lane.
-            index_conn = get_index_conn()
+            index_conn = ctx.db_conn
             try:
                 trash.move_to_trash(index_conn, ctx.vault_dir, [args.path],
                                     ctx.write_source, batch_id=ctx.run_id)
@@ -60,10 +59,9 @@ class DeleteDocTool(DocTool):
         # file gone but the snapshot still rollback-able.
         from ...services import ledger
         from ...services.snapshots import capture, discard, finalize, gc_after_capture
-        from ...vault.db.conn import get_ledger_conn
 
-        conn = get_ledger_conn()
-        index_conn = get_index_conn()
+        conn = ctx.ledger_conn
+        index_conn = ctx.db_conn
         if conn is None:
             return f"Error: snapshot layer unavailable for {args.path}"
         pre_hash = hashlib.sha256(fp.read_bytes()).hexdigest()
