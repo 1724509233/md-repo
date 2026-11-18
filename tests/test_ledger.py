@@ -114,3 +114,35 @@ def test_record_folder_does_not_register(vault_dir, db_conn):
     assert ledger._pop("f") == ("watchdog", "", False)
     ledger.record_folder(db_conn, vault_dir, "f", "created", "web")
     assert ledger._pop("f") == ("watchdog", "", False)
+
+
+def test_registry_residue_neutralized_between_boundaries(vault_dir, db_conn):
+    """自证钉（卡 11a）：registry 清洗 fixture 有效且语义不伤。
+
+    ① 进入任意测试时 `_registry` 恒空——上一测试遗留的未消费 skip 标记
+    （跨测试残留形态，TTL 10s 内本会存活）已被 autouse fixture 中和；
+    ② 清洗只斩跨测试残留：测试内 record→consume 的 skip 配对语义原样，
+    清洗后同路径二次 record 照常 book 行。"""
+    assert ledger._registry == {}          # ① 残留恒零（否则本钉红）
+
+    (vault_dir / "notes" / "dup.md").write_bytes(b"v1\n")
+    ledger.record(db_conn, vault_dir, "notes/dup.md", "created", "web")
+    n1 = db_conn.execute(
+        "SELECT count(*) FROM change_log WHERE path = 'notes/dup.md'"
+    ).fetchone()[0]
+    assert n1 == 1
+    # 测试内配对原语义：skip 标记被 consume 弹出，记零行
+    _, _, skip = ledger.consume(db_conn, vault_dir, "notes/dup.md", "modified")
+    assert skip is True
+
+    # 测试边界动作（=autouse fixture 每测前后所行）：
+    ledger._registry.clear()
+    # ② 清洗后同路径二次 record 照常 book
+    (vault_dir / "notes" / "dup.md").write_bytes(b"v2\n")
+    ledger.record(db_conn, vault_dir, "notes/dup.md", "modified", "web")
+    n2 = db_conn.execute(
+        "SELECT count(*) FROM change_log WHERE path = 'notes/dup.md'"
+    ).fetchone()[0]
+    assert n2 == 2
+    assert db_conn.execute(
+        "SELECT hash FROM files WHERE path = 'notes/dup.md'").fetchone() is not None

@@ -18,6 +18,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 from server.api import create_app
+from server.services import ledger
 from server.services.ledger import consume
 from server.vault import init_db, upsert_file
 from server.vault.db import conn as db_handle
@@ -57,6 +58,24 @@ def _db_handle_isolation():
     db_handle.init(None, None)
     yield
     db_handle.init(None, None)
+
+
+@pytest.fixture(autouse=True)
+def _ledger_registry_clean():
+    """Neutralize cross-test residue in the ledger write registry (card 11a,
+    gate3 ④.1 — the fixture card 11's test surface is the second residue peak).
+
+    ``ledger.record()`` leaves a skip mark keyed by the RELATIVE path with a
+    10s TTL (server/services/ledger.py:_REGISTRY_TTL). A test that records a
+    path without consuming the mark leaves it alive for the next test: a
+    same-path ``consume`` there pops the stale mark and books NOTHING
+    silently — no red signal. This fixture performs the registry clear that
+    belongs at every test boundary; self-pinned by
+    ``test_registry_residue_neutralized_between_boundaries`` in test_ledger.py.
+    """
+    ledger._registry.clear()
+    yield
+    ledger._registry.clear()
 
 
 @pytest.fixture
