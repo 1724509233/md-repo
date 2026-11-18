@@ -7,7 +7,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `indexer.py` | 单文件/全量的 FTS 分段索引与图谱抽取；启动检查 `ensure_indexed` |
-| `move_detect.py` | `pair_moves`：两阶段级联重命名检测（与 snapshot_watcher 共用） |
+| `move_detect.py` | `pair_moves`：两阶段级联重命名检测（与 `../watcher.py` 共用） |
 | `refs.py` | move/delete 后的 wikilink 引用维护（改写/清除） |
 | `file_ops.py` | 变更应用中枢 `apply_change` / `apply_folder_change` + 启动对账 `reconcile` |
 
@@ -108,7 +108,7 @@ server/ledger.py            ──► apply_change / apply_folder_change（唯�
 server/main.py              ──► ensure_indexed（启动索引检查：首跑全量重建 / FTS 失步修复）
 server/mcp_server.py        ──► ensure_indexed（MCP 入口共用）
 server/recovery.py          ──► ensure_indexed（恢复演练镜像生产启动路径）
-server/snapshot_watcher.py  ──► reconcile（启动对账，source="reconcile"）
+server/vault/watcher.py     ──► reconcile（启动对账，source="reconcile"）
 （file_ops 包内）            ──► reconcile 是 apply_change 唯一包内调用方（离线启动，无 watcher）
 ```
 

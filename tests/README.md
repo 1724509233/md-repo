@@ -106,7 +106,7 @@ _autouse_ _db_handle_isolation   每个测试前后重置句柄对（init(None, 
 ## 注意事项
 
 - **Windows 换行**：测试 fixture 写样本文件**一律 `write_bytes`**（二进制），否则 SHA-256 在 Windows 上因换行转译（CRLF）不匹配。新增文本 fixture 必须沿用二进制写入。
-- **sync 锁是内存的**：测试模拟锁定直设 `app.state.ctx.sync_lock.locked_at`（seam 在 `WebContext.sync_lock`，`app.state.ctx` 暴露；`server/sync_lock.py` 明确"通过该 seam 驱动，而非戳模块全局"），**不碰模块全局**。sync 锁 stale 300s。
+- **sync 锁是内存的**：测试模拟锁定直设 `app.state.ctx.sync_lock.locked_at`（seam 在 `WebContext.sync_lock`，`app.state.ctx` 暴露；`server/core/sync_lock.py` 明确"通过该 seam 驱动，而非戳模块全局"），**不碰模块全局**。sync 锁 stale 300s。
 - **双域 fixture 不可混用**：`db_conn` 与 `ledger_conn` 分属两个 SQLite 文件，分别覆盖 index 域与 ledger 域；断言权威状态表的测试要用 `ledger_conn`，断言可重建缓存的用 `db_conn`。
 - **不钉测试总数**：套件持续增长，README 不写"共 N 个测试"，只给运行方式（`pytest tests/ -v`）。
 - **functional harness 的配置不入库**：`config.fun.yaml` 由 `config.example.fun.yaml` sed 生成（含本地 scratch-vault 绝对路径），不提交。

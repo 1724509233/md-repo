@@ -134,12 +134,12 @@ config/
   （leaf：只 import 数据类 + 注册表常量，不依赖 main / api / routes / vault）
 ```
 
-`model.py`（`server/model.py`）是 `ModelConfig` 的**单一**定义（base-layer leaf），被 `config` 与 `agent` 共同 import——bgagent.py 从 `..model` 引入并重导出。
+`ModelConfig` 的**单一**定义在 `server/core/types.py`（卡 1b 迁入，base-layer leaf），被 `config` 与 `agent` 共同 import——bgagent.py 从 `..core.types` 引入并重导出。
 
 ## 注意事项
 
 - **相对路径解析基准不同（三处）**：服务端 `vault_dir` 相对**进程 cwd** 解析（`Path(...).resolve()`，无 config 目录参与）；bgagent 的 `target_dir` / `report_dir` 相对 `vault_dir` 解析（且须落在 vault 内），`prompt` 相对 **config 文件所在目录**解析（`load_background_agents` 用 `path.parent`）；`server.log_dir` 的相对路径按 `vault_dir` 解析（main.py 做 `vault_dir / logs_dir`）。改路径语义时区分这些基准（客户端 `vault_dir` 相对 config 文件目录，见 client/README）。
-- **ModelConfig 单一化**：`ModelConfig` 只在 `server/model.py` 定义一次；新增字段须改这一处，别在 config / agent 各建一份。
+- **ModelConfig 单一化**：`ModelConfig` 只在 `server/core/types.py` 定义一次；新增字段须改这一处，别在 config / agent 各建一份。
 - **AI 段是可选的**：顶层无 `ai:` 段（或缺 `base_url`）→ `ServerConfig.ai = None`，对应路由端点返回 503；但 bgagent 的 `model` 是**必填**的（每个 bgagent 独立 provider 配置，不沿用 `ai:` 段）。
 - **cap 是法**：`daily_cap` / `budget_runs_per_day` / `budget_max_proposals` 都从 YAML 读，是配置法律而非框架硬编码——框架只 enforcement。
 

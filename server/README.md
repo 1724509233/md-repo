@@ -11,15 +11,15 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `main.py` | 入口：config → 双账本（index.db + ledger.db）→ `create_app` → `build_runtime()`（事件总线 + publisher 过滤、四个 ledger 回调、SnapshotWatcher、bgagent 任务；返回带 `stop()` 的 `Runtime`）→ uvicorn |
 | `api.py` | `create_app()` 工厂：构造 `WebContext`、挂载 `/static`（templates 目录）、`routes.register_all`（wiring only，路由在 `routes/`） |
 | `ledger.py` | 变更账本：`change_log` + `files` 的**唯一写入面**。四函数 `register` / `record` / `record_folder` / `consume` |
-| `events.py` | 进程内事件总线：**wake signal 不是数据通道**——订阅者不得依赖收到每个事件或 payload 内容做决策，权威状态由 consumer 自己的扫描重导出 |
+| `core/events.py` | 进程内事件总线：**wake signal 不是数据通道**——订阅者不得依赖收到每个事件或 payload 内容做决策，权威状态由 consumer 自己的扫描重导出 |
 | `sync.py` | `compare_files()` 纯函数无 IO：返回 `to_pull` / `to_push` / `to_delete` / `conflicts`（`recent_moves` 检测服务端改名 → stale copy 移入 `to_delete`） |
-| `snapshot_watcher.py` | `SnapshotWatcher`：watchdog 事件（doorbell）→ 线程去抖 → 快照对比；脏集合 + doorbell；启动调 `file_ops.reconcile`（惰性 import，一次）；周期兜底为 watcher 自身 `_reconcile` 扫描级标 dirty（事件经 `ledger.consume` 落库） |
+| `vault/watcher.py` | `SnapshotWatcher`：watchdog 事件（doorbell）→ 线程去抖 → 快照对比；脏集合 + doorbell；启动调 `file_ops.reconcile`（惰性 import，一次）；周期兜底为 watcher 自身 `_reconcile` 扫描级标 dirty（事件经 `ledger.consume` 落库） |
 | `snapshots.py` | pre-image 快照（可逆层）：LLM 写入（agent 直写工具、executor merge）与交互式删除（Web 文档管理）写前捕获全文 pre-image；回滚入口（verify-all-then-write-all） |
 | `proposals.py` | 提案状态机：8 状态 `TRANSITIONS`、`advance`；DB 行是唯一状态源（v2a 零文件落）；`VALID_TYPES` 5 类动词；14 天 TTL |
 | `recovery.py` | 恢复演练：证明 index.db 是可重建缓存（只动 index.db，可重复可测） |
-| `sync_lock.py` | 内存同步锁：一进程同时一个 sync；超 300s 视为 stale 可重取（崩溃自愈） |
-| `logrotate.py` | 服务端日志定期清理：`.sync/logs` 下 `server.log.*` 轮转文件，每日 3 点后清扫超 retention 天数的 |
-| `model.py` | `ModelConfig` 单一数据类（base-layer leaf，被 `server.config` 与 `server.agent` 共同 import） |
+| `core/sync_lock.py` | 内存同步锁：一进程同时一个 sync；超 300s 视为 stale 可重取（崩溃自愈） |
+| `core/logrotate.py` | 服务端日志定期清理：`.sync/logs` 下 `server.log.*` 轮转文件，每日 3 点后清扫超 retention 天数的 |
+| `core/types.py` | 跨层值对象：`ModelConfig`（base-layer leaf，被 `server.config` 与 `server.agent` 共同 import）+ `FileEntry`（文件状态快照，卡 2 迁入） |
 | `ai.py` | RAG 搜索 `rag_search()`（转交 raw query，委派 `segments_sql` 做 jieba 分词 + FTS 四档召回）+ LLM 流式 `chat_stream()` |
 | `mcp_server.py` | MCP stdio 独立入口（`md-vault-mcp`，不经 main.py）：6 工具，有效写入面仅 `propose`（`write_doc`/`edit_doc` 被双重 gate 拒绝），自管 config 发现与 DB 初始化 |
 
@@ -52,7 +52,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `proposals.create` / `advance` | `create(conn, vault_dir, type, actor, run_id, source_refs, justification, payload=None, now=None)` / `advance(conn, vault_dir, record_id, new_status, actor, reject_reason="")` | 提案创建 / 状态迁移 |
 | `snapshots.capture` / `finalize` / `rollback` | `capture(conn, vault_dir, path, op, actor, *, run_id="", call_id="", new_path="", now=None)` / `finalize(conn, snapshot, post_hash)` / `rollback(conn, vault_dir, call_id) -> dict` | pre-image 捕获 / 落定 / 回滚 |
 | `run_recovery_drill` | `(vault_dir) -> dict` | 恢复演练（`recovery.py`，CLI `python -m server.recovery drill <vault>`） |
-| `SyncLock.try_acquire` / `.release` | `-> bool` / `-> None` | 内存同步锁（`sync_lock.py`） |
+| `SyncLock.try_acquire` / `.release` | `-> bool` / `-> None` | 内存同步锁（`core/sync_lock.py`） |
 
 ## 关键设计
 
@@ -141,7 +141,7 @@ spec `~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`。
                                 main.py（入口：装配 + uvicorn）
            ┌─────────────────────┬─────────────────────┬───────────────┐
             ▼                     ▼                     ▼               ▼
-         api.py           snapshot_watcher          bgagent/        ledger.py
+         api.py           vault/watcher           bgagent/        ledger.py
       (create_app)        (SnapshotWatcher)       (cron+arming)     (变更账本)
                                                    ─写前 register 归因─►
             ▼
@@ -160,15 +160,15 @@ spec `~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`。
       mcp_server.py ──► config/ vault/ agent/ ai.py snapshots/
 
     base 层 leaf（被多模块读取，自身不依赖上层）：
-      events.py（事件总线，stdlib-only）▲ 单一上行边，importer：
+      core/events.py（事件总线，stdlib-only）▲ 单一上行边，importer：
                   main / proposals / file_ops / recall / bgagent/scheduler
-      config/  ·  model.py（ModelConfig 单一化，config 与 agent 共同 import）
+      config/  ·  core/types.py（ModelConfig + FileEntry，config 与 agent 共同 import）
 ```
 
 方向纪律：
 - `ledger.py` 居中——`apply_change` / `apply_folder_change` 只被它 import；上层（routes / agent / snapshots / proposals）写账一律经 `ledger` 四函数。
-- `events.py` 是 stdlib-only leaf——vault file_ops / proposals / db recall / bgagent scheduler 都可 import 而不成环。
-- `config/` 与 `model.py` 是 base 层 leaf，不依赖 main / api / routes / vault。
+- `core/events.py` 是 stdlib-only leaf——vault file_ops / proposals / db recall / bgagent scheduler 都可 import 而不成环。
+- `config/` 与 `core/` 是 base 层 leaf，不依赖 main / api / routes / vault（`core ⊄ 任何东西` 由 `tests/test_architecture.py` 钉死）。
 - `mcp_server.py` 是独立入口，与 main.py 平行，各自装配 config + 双账本 + 共享 `ensure_indexed`。
 
 ## 注意事项

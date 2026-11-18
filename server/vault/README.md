@@ -116,7 +116,7 @@ server/vault/
 ```
 server/ledger.py ─────────────────► file_ops.apply_change / apply_folder_change
                                （唯一外部 importer：consume/record/record_folder）
-server/snapshot_watcher.py ───────► file_ops.reconcile     （启动对账，source="reconcile"）
+server/vault/watcher.py ──────────► file_ops.reconcile     （启动对账，source="reconcile"）
 server/main.py / mcp_server.py / recovery.py ───► indexer.ensure_indexed （启动索引检查；recovery 演练镜像生产启动路径）
 server/ai.py（rag_search）────────► db.segments_sql.segments_search（搜索工具入口）
 

@@ -9,9 +9,9 @@
 | `agent.py` | `Agent` — 对话状态机：messages、pending confirms、read-tracking；`chat()` / `confirm()` |
 | `runtime.py` | `Runtime` 基类 + `LoopRuntime` — 流式 LLM 循环，最多 `max_rounds` 轮，yield `Event` |
 | `session.py` | `SessionManager` — 会话持久化（DB）+ 每会话 `asyncio.Lock` + 30 分钟 TTL 淘汰 |
-| `spec.py` | `AgentSpec` 声明式配置 dataclass；`policy()` 派生 `ChannelPolicy`（`ModelConfig` 定义在 `server/model.py`，此处重导出） |
+| `spec.py` | `AgentSpec` 声明式配置 dataclass；`policy()` 派生 `ChannelPolicy`（`ModelConfig` 定义在 `server/core/types.py`，此处重导出） |
 | `prompts.py` | `SYSTEM_PROMPT`（从 `server/prompts/system.md` 加载）、时间块 `_build_time_block`、SSE 格式化 `sse()` |
-| `events.py` | `Event(type, data)` — 运行时事件数据类（**注意：非 `server/events.py` 进程内事件总线**） |
+| `events.py` | `Event(type, data)` — 运行时事件数据类（**注意：非 `server/core/events.py` 进程内事件总线**） |
 | `execute.py` | `execute_tool(name, args, ctx)` — 工具执行门面，只解析注册表实例 |
 | `policy.py` | `ChannelPolicy` 通道能力声明、`validate_tool_call()` 检查单入口（L1/L2/L3）、`VAULT_GATES`（`SuggestionsGate`） |
 | `validate.py` | `parse_since()` 等时间解析辅助（旧 `validate_tool_call` 已移入 `policy.py`） |
@@ -158,7 +158,7 @@ flowchart LR
         snapshots["snapshots.py<br/>capture / finalize / discard"]
         proposals["proposals.py<br/>create / advance / scan / record"]
         ai["ai.py<br/>rag_search()"]
-        model["model.py<br/>ModelConfig"]
+        model["core/types.py<br/>ModelConfig"]
         sysmd["prompts/system.md<br/>（文件系统读取）"]
     end
 
@@ -183,14 +183,14 @@ flowchart LR
     spec -- "ModelConfig 重导出（模块级）" --> model
 ```
 
-- **子图边界 = 包内 / 包外**；**实线 = 模块级依赖，虚线 = 方法内 lazy import**（执行时才解析——工具模块自包含、无 import 环）。跨包依赖以 lazy 为主，模块级仅三处：`session → vault.db.sessions`、`spec → model.ModelConfig`（重导出）、`tools/list_files → vault.fs.vault_ops.EXCLUDED_INDEX_DIRS`。`prompts.py → prompts/system.md` 是文件读取、非模块 import（图中实线）。
+- **子图边界 = 包内 / 包外**；**实线 = 模块级依赖，虚线 = 方法内 lazy import**（执行时才解析——工具模块自包含、无 import 环）。跨包依赖以 lazy 为主，模块级仅三处：`session → vault.db.sessions`、`spec → core.types.ModelConfig`（重导出）、`tools/list_files → vault.fs.vault_ops.EXCLUDED_INDEX_DIRS`。`prompts.py → prompts/system.md` 是文件读取、非模块 import（图中实线）。
 - 双连接 `get_index_conn()` / `get_ledger_conn()` 由工具经 `vault.db.conn` 懒加载（index 侧读变更日志/图谱 + recall 遥测写；ledger 侧写提案/快照）。
 - 三方依赖仅 `openai`（`AsyncOpenAI`，runtime）与 `pydantic`（工具参数模型 / policy）。
-- 本模块**不** import `server/events.py`（进程内事件总线）——本模块的 `events.py` 是运行时 `Event` 数据类，二者不同物。
+- 本模块**不** import `server/core/events.py`（进程内事件总线）——本模块的 `events.py` 是运行时 `Event` 数据类，二者不同物。
 
 ## 注意事项
 
-- **`events.py` 易混淆**：本模块的 `Event` 是运行时事件数据类；`server/events.py` 是 bgagent 调度用的进程内事件总线。import 路径不同，勿混。
+- **`events.py` 易混淆**：本模块的 `Event` 是运行时事件数据类；`server/core/events.py` 是 bgagent 调度用的进程内事件总线。import 路径不同，勿混。
 - **`auto_approve` 不是权限**：它在 `LoopRuntime` 决定是否发 `confirm_request`（跳过确认提示），不进 `ChannelPolicy`。bgagent 恒 `auto_approve=True`；桌面渠道默认 `False`。
 - **ask 工具的 L2 边界才生效**：`write_scope` / `report_dir` 只约束 `permission=="ask"` 的写工具；读工具不受限（agent 可查阅报告与更宽 vault）。
 - **`propose` 是 allow 但非落盘**：提案通道零文件落（DB 记录 + `proposal_transitions` 是唯一状态源），`propose` 不经 `confirm`（它不是对现有文件的写），其状态迁移（adopt/reject）才走 ask 工具。

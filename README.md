@@ -286,19 +286,15 @@ MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码�
 │   ├── main.py               # 入口：config → 双账本(index.db+ledger.db) → app → build_runtime() → uvicorn
 │   ├── api.py                # create_app 工厂（WebContext + /static 挂载 + routes 注册）
 │   ├── ledger.py             # 变更账本（change_log+files 唯一写入面：register/record/record_folder/consume）
-│   ├── events.py             # 进程内事件总线（change / recall 等）
 │   ├── sync.py               # compare_files（无 IO 纯函数，manifest 对比）
-│   ├── snapshot_watcher.py   # SnapshotWatcher：doorbell + 脏集合 + 快照对比
 │   ├── snapshots.py          # 快照（可逆层：删除/写前全文快照，回滚入口）
 │   ├── proposals.py          # 提案状态机（8 状态，DB 为状态源，零文件落）
 │   ├── recovery.py           # 恢复演练：证明 index.db 是可重建缓存（只动 index.db）
-│   ├── sync_lock.py          # 内存同步锁（try_acquire，300s 自愈）
-│   ├── logrotate.py          # 服务端日志定期清理（.sync/logs，保留 N 天）
-│   ├── model.py              # ModelConfig（bgagent base-layer 模型配置）
 │   ├── ai.py                 # RAG 搜索（rag_search）+ LLM 流式（chat_stream）
 │   ├── mcp_server.py         # MCP stdio server（6 工具，接入 OpenCode 等）
 │   ├── config/               # YAML 配置解析包（core/ai/log/notifications/bgagent）
-│   ├── vault/                # 索引子系统：db/（SQLite+FTS5+图谱+账本表）· fs/（切块+链接解析+vault_ops）· orchestration/（indexer+refs+移动检测+file_ops）
+│   ├── core/                 # 共享内核（零上行依赖，test_architecture 钉死）：events 总线 · privacy · sync_lock · logrotate · types（FileEntry/ModelConfig）
+│   ├── vault/                # 索引子系统：db/（SQLite+FTS5+图谱+账本表）· fs/（切块+链接解析+vault_ops）· orchestration/（indexer+refs+移动检测+file_ops）· watcher.py（SnapshotWatcher）
 │   ├── agent/                # LLM agent：tools/（15 工具，一模块一工具）· runtime · session · policy · prompts · reminders
 │   ├── bgagent/              # 后台 agent：scheduler（cron+事件arming）· runner · notify · executor（确定性框架角色）
 │   ├── routes/               # 路由 6 域（console/notifications/sync/recall/memory/agent），每域 register(app, ctx)
