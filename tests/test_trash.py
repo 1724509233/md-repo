@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from server.snapshot_watcher import _full_scan, _norm_rel
+from server.vault.watcher import _full_scan, _norm_rel
 from server.vault.db.changes import count_changes_sources, get_changes
 from server.vault.db.file_index import get_all_files
 from server.vault.db.graph_sql import graph_get_backlinks

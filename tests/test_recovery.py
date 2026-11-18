@@ -58,7 +58,7 @@ def _prepopulate_db(vault_dir: Path) -> None:
 def _files_on_disk(vault_dir: Path) -> int:
     """Count of vault .md files the production files-index would hold:
     everything under the vault except .sync/ and .obsidian/ (suggestions/ and
-    index/ included). Mirrors snapshot_watcher._full_scan's file set."""
+    index/ included). Mirrors watcher._full_scan's file set."""
     n = 0
     for f in vault_dir.rglob("*.md"):
         if ".sync" in f.parts or ".obsidian" in f.parts:

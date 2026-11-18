@@ -8,6 +8,10 @@ LATE (bounded by the consumer's backstop timeout), never missed.
 
 Leaf module: stdlib imports only, so vault file_ops, proposals, db recall
 and bgagent scheduler can all import it without cycles.
+
+Not to be confused with ``server/agent/events.py`` (SSE event adaptation for
+agent runtimes) — bus events and runtime stream events are two different
+things.
 """
 from __future__ import annotations
 

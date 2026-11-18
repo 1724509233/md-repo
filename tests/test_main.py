@@ -12,7 +12,7 @@ import hashlib
 from pathlib import Path
 
 from server.vault import init_db, upsert_file
-from server.snapshot_watcher import SnapshotWatcher
+from server.vault.watcher import SnapshotWatcher
 
 
 def _seed(vault: Path, rel: str, content: bytes):

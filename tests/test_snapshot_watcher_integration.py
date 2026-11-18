@@ -1,7 +1,7 @@
 """Integration test for SnapshotWatcher: real watchdog + real filesystem.
 
 Usage:
-    python scripts/test_snapshot_watcher.py [basic|advanced|all]
+    python tests/test_snapshot_watcher_integration.py [basic|advanced|all]
 
 Basic: create, rename, cross-dir move, dir rename, atomic save, modify, delete.
 Advanced: burst, concurrent moves, same-name files, dir delete, callback exception.
@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from server.snapshot_watcher import SnapshotWatcher
+from server.vault.watcher import SnapshotWatcher
 
-LOG_FILE = Path(__file__).parent / "snapshot_watcher_test.log"
+LOG_FILE = Path(__file__).parent / "watcher_test.log"
 VAULT = Path(__file__).parent / "snapshot_probe_vault"
 
 

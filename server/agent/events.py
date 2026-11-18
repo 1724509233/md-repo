@@ -3,6 +3,9 @@
 Runtimes yield :class:`Event`; the API layer formats them as SSE lines
 (``sse(event.type, event.data)``). Keeping the two apart means runtimes stay
 transport-agnostic.
+
+Not to be confused with ``server/core/events.py`` (the in-process wake-signal
+event bus) — SSE stream events and bus events are two different things.
 """
 from __future__ import annotations
 

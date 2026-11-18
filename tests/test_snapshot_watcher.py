@@ -1,4 +1,4 @@
-"""Unit tests for server/snapshot_watcher.py."""
+"""Unit tests for server/vault/watcher.py."""
 from __future__ import annotations
 
 import os
@@ -10,35 +10,35 @@ import pytest
 
 class TestNormRel:
     def test_basic_file(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         vault.mkdir()
         result = _norm_rel(str(vault / "notes" / "a.md"), vault)
         assert result == "notes/a.md"
 
     def test_root_file(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         vault.mkdir()
         result = _norm_rel(str(vault / "a.md"), vault)
         assert result == "a.md"
 
     def test_sync_filtered(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         (vault / ".sync").mkdir(parents=True)
         result = _norm_rel(str(vault / ".sync" / "index.db"), vault)
         assert result is None
 
     def test_obsidian_filtered(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         (vault / ".obsidian").mkdir(parents=True)
         result = _norm_rel(str(vault / ".obsidian" / "app.json"), vault)
         assert result is None
 
     def test_outside_vault(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         vault.mkdir()
         outside = tmp_path / "other" / "a.md"
@@ -46,21 +46,21 @@ class TestNormRel:
         assert result is None
 
     def test_parent_traversal(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         vault.mkdir()
         result = _norm_rel(str(vault.parent / "evil.md"), vault)
         assert result is None
 
     def test_nested_sync(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         (vault / "notes" / ".sync").mkdir(parents=True)
         result = _norm_rel(str(vault / "notes" / ".sync" / "x.md"), vault)
         assert result is None
 
     def test_deep_path(self, tmp_path):
-        from server.snapshot_watcher import _norm_rel
+        from server.vault.watcher import _norm_rel
         vault = tmp_path / "vault"
         (vault / "a" / "b" / "c").mkdir(parents=True)
         result = _norm_rel(str(vault / "a" / "b" / "c" / "deep.md"), vault)
@@ -69,7 +69,7 @@ class TestNormRel:
 
 class TestFullScan:
     def test_empty_vault(self, tmp_path):
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         vault.mkdir()
         snap = _full_scan(vault)
@@ -77,7 +77,7 @@ class TestFullScan:
 
     def test_single_file(self, tmp_path):
         import hashlib
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         vault.mkdir()
         (vault / "a.md").write_bytes(b"# Hello\n")
@@ -89,7 +89,7 @@ class TestFullScan:
         assert snap["a.md"].size == 8
 
     def test_nested_files(self, tmp_path):
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         (vault / "notes" / "sub").mkdir(parents=True)
         (vault / "notes" / "a.md").write_bytes(b"# A\n")
@@ -98,7 +98,7 @@ class TestFullScan:
         assert set(snap.keys()) == {"notes/a.md", "notes/sub/b.md"}
 
     def test_sync_filtered(self, tmp_path):
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         vault.mkdir()
         (vault / ".sync").mkdir()
@@ -108,7 +108,7 @@ class TestFullScan:
         assert set(snap.keys()) == {"a.md"}
 
     def test_non_md_filtered(self, tmp_path):
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         vault.mkdir()
         (vault / "a.md").write_bytes(b"# A\n")
@@ -118,7 +118,7 @@ class TestFullScan:
         assert set(snap.keys()) == {"a.md"}
 
     def test_unreadable_file_skipped(self, tmp_path):
-        from server.snapshot_watcher import _full_scan
+        from server.vault.watcher import _full_scan
         vault = tmp_path / "vault"
         vault.mkdir()
         (vault / "a.md").write_bytes(b"# A\n")
@@ -131,7 +131,7 @@ class TestFullScan:
 class TestReadStable:
     def test_stable_file(self, tmp_path):
         import hashlib
-        from server.snapshot_watcher import _read_stable
+        from server.vault.watcher import _read_stable
         fp = tmp_path / "stable.md"
         fp.write_bytes(b"# Stable\n")
         retry = {}
@@ -141,7 +141,7 @@ class TestReadStable:
         assert entry.size == 9
 
     def test_missing_file(self, tmp_path):
-        from server.snapshot_watcher import _read_stable
+        from server.vault.watcher import _read_stable
         fp = tmp_path / "missing.md"
         retry = {}
         entry = _read_stable(fp, retry)
@@ -154,7 +154,7 @@ class TestReadStable:
         so we verify the retry_count mechanism works by calling with a
         pre-populated count near the limit.
         """
-        from server.snapshot_watcher import _read_stable
+        from server.vault.watcher import _read_stable
         fp = tmp_path / "test.md"
         fp.write_bytes(b"# Test\n")
         # Pre-populate retry count to max-1; next unstable read should force-accept
@@ -165,7 +165,7 @@ class TestReadStable:
         assert str(fp) not in retry  # cleared on success
 
     def test_returns_none_for_directory(self, tmp_path):
-        from server.snapshot_watcher import _read_stable
+        from server.vault.watcher import _read_stable
         d = tmp_path / "adir.md"
         d.mkdir()
         retry = {}
@@ -175,14 +175,14 @@ class TestReadStable:
 
 class TestPairMoves:
     def test_no_gone_no_new(self):
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         moves, deletes, creates = _pair_moves({}, {})
         assert moves == []
         assert deletes == []
         assert creates == []
 
     def test_simple_move(self):
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "abc123"
         gone = {"old/a.md": FileEntry(h, 10, 0.0)}
@@ -194,7 +194,7 @@ class TestPairMoves:
 
     def test_same_name_different_hash(self):
         """Same filename, different content, 1:1 → move (Phase 2: move after edit)."""
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         gone = {"dirA/notes.md": FileEntry("hash_a", 10, 0.0)}
         new = {"dirB/notes.md": FileEntry("hash_b", 20, 0.0)}
@@ -204,7 +204,7 @@ class TestPairMoves:
         assert creates == []
 
     def test_1_to_1_same_hash(self):
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "same_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
@@ -215,7 +215,7 @@ class TestPairMoves:
     def test_2_to_1_same_hash_nearest_neighbor(self):
         """Two gone, one new with same hash → Phase 2 nearest-neighbor pairs
         the closest gone; the other degrades to delete."""
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "dup_hash"
         gone = {
@@ -232,7 +232,7 @@ class TestPairMoves:
     def test_1_to_2_same_hash_move_plus_copy(self):
         """One gone, two new with same hash → move + copy: the closest new is
         paired as a move, the other stays a create."""
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         h = "dup_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
@@ -247,7 +247,7 @@ class TestPairMoves:
         assert creates == ["c/x.md"]
 
     def test_multiple_independent_moves(self):
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         gone = {
             "a/1.md": FileEntry("h1", 1, 0.0),
@@ -263,7 +263,7 @@ class TestPairMoves:
         assert creates == []
 
     def test_mixed_move_and_delete_and_create(self):
-        from server.snapshot_watcher import _pair_moves
+        from server.vault.watcher import _pair_moves
         from server.vault.file_entry import FileEntry
         gone = {
             "a/move.md": FileEntry("h_move", 10, 0.0),
@@ -289,7 +289,7 @@ class _FakeEvent:
 
 class TestRawHandler:
     def _make_handler(self, tmp_path):
-        from server.snapshot_watcher import _RawHandler
+        from server.vault.watcher import _RawHandler
         vault = tmp_path / "vault"
         vault.mkdir(exist_ok=True)
 
@@ -366,7 +366,7 @@ class TestRawHandler:
 class TestWorker:
     def test_notify_wakes_worker(self, tmp_path):
         """notify() sets the dirty_event, waking a waiting worker."""
-        from server.snapshot_watcher import _Worker
+        from server.vault.watcher import _Worker
         # We can't easily test the full run() loop in a unit test,
         # so we verify the event mechanism works.
         import threading as th
@@ -382,7 +382,7 @@ class TestWorker:
 
     def test_request_stop_sets_both_events(self, tmp_path):
         """request_stop() sets stop_event AND dirty_event (to wake worker)."""
-        from server.snapshot_watcher import _Worker
+        from server.vault.watcher import _Worker
         # Verify the pattern: both events must be set for clean shutdown
         import threading as th
         stop_event = th.Event()
@@ -410,7 +410,7 @@ class TestFlush:
     """Test _flush by driving it directly (no real watchdog)."""
 
     def _make_watcher(self, tmp_path):
-        from server.snapshot_watcher import SnapshotWatcher
+        from server.vault.watcher import SnapshotWatcher
         vault = tmp_path / "vault"
         vault.mkdir(exist_ok=True)
 
@@ -544,7 +544,7 @@ class TestFlush:
     def test_callback_exception_isolated(self, tmp_path):
         """A callback exception doesn't prevent subsequent callbacks."""
         import hashlib
-        from server.snapshot_watcher import SnapshotWatcher
+        from server.vault.watcher import SnapshotWatcher
         vault = tmp_path / "vault"
         vault.mkdir()
         events = []

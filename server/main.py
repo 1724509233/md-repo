@@ -23,7 +23,7 @@ from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed
 from .core.logrotate import start_logrotate
-from .snapshot_watcher import SnapshotWatcher
+from .vault.watcher import SnapshotWatcher
 
 # Logging is configured in main() with console + file handlers.
 

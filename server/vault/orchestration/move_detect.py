@@ -1,4 +1,5 @@
-"""Two-level cascade move detection, shared by snapshot_watcher and reconcile.
+"""Two-level cascade move detection, shared by the snapshot watcher
+(``vault/watcher.py``) and reconcile.
 
 Design intent
 -------------

@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from server.ai import rag_search
-from server.snapshot_watcher import _full_scan
+from server.vault.watcher import _full_scan
 from server.vault.fs.segmenter import _STOPWORDS
 from server.vault.fs.vault_ops import _iter_vault_md
 from server.vault.db.schema import init_db
