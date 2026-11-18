@@ -43,9 +43,9 @@ def _drive(vault_dir, conn, rec_id, target, actor="tester"):
     raise ValueError(f"test helper: unknown target {target}")
 
 
-def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None):
+def _ctx(vault_dir, run_id="consolidator-20261026T000000", verbs=None, ledger_conn=None):
     return ToolContext(vault_dir=vault_dir, write_source="consolidator",
-                       run_id=run_id, verbs=verbs)
+                       run_id=run_id, verbs=verbs, ledger_conn=ledger_conn)
 
 
 # ── create ──────────────────────────────────────────────────────────────
@@ -368,16 +368,16 @@ def test_propose_malformed_payload_zero_disk(vault_dir, ledger_conn):
     out = tool.call({"type": "entity_index",
                      "payload": {"entity": "e", "attrs": {}},
                      "source_refs": ["notes/test.md"],
-                     "justification": "j"}, _ctx(vault_dir))
+                     "justification": "j"}, _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     # relatedness without source_refs
     out = tool.call({"type": "relatedness", "payload": {"target": "notes/x.md"},
-                     "source_refs": [], "justification": "j"}, _ctx(vault_dir))
+                     "source_refs": [], "justification": "j"}, _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     # summary without a form
     out = tool.call({"type": "summary", "payload": {},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir))
+                    _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
 
     assert _count_files(vault_dir) == before_files  # nothing on disk
@@ -387,7 +387,7 @@ def test_propose_malformed_payload_zero_disk(vault_dir, ledger_conn):
 def test_propose_unknown_type_rejected(vault_dir, ledger_conn):
     tool = ProposeTool()
     out = tool.call({"type": "bogus", "payload": None,
-                     "source_refs": [], "justification": "j"}, _ctx(vault_dir))
+                     "source_refs": [], "justification": "j"}, _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     assert "unknown proposal type" in out
     assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
@@ -398,7 +398,7 @@ def test_propose_privileged_verb_rejected(vault_dir, ledger_conn):
     tool = ProposeTool()
     out = tool.call({"type": "reminder", "payload": {"body": "at 07:00"},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir, verbs=("entity_index", "relatedness", "summary")))
+                    _ctx(vault_dir, verbs=("entity_index", "relatedness", "summary"), ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     assert "reminder" in out and "entity_index" in out  # lists the allowed verbs
     assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
@@ -410,7 +410,7 @@ def test_propose_success_auto_and_review(vault_dir, ledger_conn):
     out = tool.call(
         {"type": "entity_index", "payload": {"entity": "e", "attrs": {"f": "v"}},
          "source_refs": ["notes/test.md"], "justification": "why"},
-        _ctx(vault_dir, verbs=("entity_index",)))
+        _ctx(vault_dir, verbs=("entity_index",), ledger_conn=ledger_conn))
     assert out.startswith("proposal #")
     rec = proposals.scan(ledger_conn)[0]
     assert rec["status"] == "adopted"  # auto channel
@@ -422,7 +422,7 @@ def test_propose_success_auto_and_review(vault_dir, ledger_conn):
     out2 = tool.call(
         {"type": "summary", "payload": {"form": "cache", "body": "decision draft"},
          "source_refs": ["notes/test.md"], "justification": "why"},
-        _ctx(vault_dir, verbs=("summary",)))
+        _ctx(vault_dir, verbs=("summary",), ledger_conn=ledger_conn))
     assert out2.startswith("proposal #")
     rec2 = proposals.scan(ledger_conn, status="awaiting_review")[0]
     assert rec2["status"] == "awaiting_review"  # review channel
@@ -439,7 +439,7 @@ def test_propose_retired_types_redirect_operational(vault_dir, ledger_conn):
                       ("correction", "errata"),
                       ("archive", "read-only")):
         out = tool.call({"type": t, "payload": None, "source_refs": [],
-                         "justification": "j"}, _ctx(vault_dir))
+                         "justification": "j"}, _ctx(vault_dir, ledger_conn=ledger_conn))
         assert out.startswith("Error:")
         assert "retired" in out, f"{t} must be named retired"
         assert needle in out, f"{t} redirect must name its replacement ({needle!r})"
@@ -454,7 +454,7 @@ def test_propose_entity_v1_prose_shape_rejected(vault_dir, ledger_conn):
     out = tool.call({"type": "entity_index",
                      "payload": {"entity": "e", "value": "some prose"},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir))
+                    _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     assert "attrs" in out  # names the required structured shape
     assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0
@@ -470,14 +470,14 @@ def test_propose_summary_report_refs_rejected(vault_dir, ledger_conn):
                      "payload": {"form": "report", "body": "b",
                                  "assertions": [{"text": "t", "refs": []}]},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir))
+                    _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     assert "refs" in out
     # assertions missing entirely.
     out = tool.call({"type": "summary",
                      "payload": {"form": "report", "body": "b"},
                      "source_refs": ["notes/test.md"], "justification": "j"},
-                    _ctx(vault_dir))
+                    _ctx(vault_dir, ledger_conn=ledger_conn))
     assert out.startswith("Error:")
     assert "assertions" in out
     assert ledger_conn.execute("SELECT COUNT(*) FROM proposals").fetchone()[0] == 0

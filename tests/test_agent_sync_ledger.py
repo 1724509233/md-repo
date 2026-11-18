@@ -58,7 +58,7 @@ def test_write_doc_create_books_row_synchronously(vault_dir, db_conn, ledger_con
     content = "# Fresh\n\nBrand new note.\n"
     result = execute_tool(
         "write_doc", {"path": "notes/fresh.md", "content": content},
-        ToolContext(vault_dir=vault_dir, run_id="run-wc"))
+        ToolContext(vault_dir=vault_dir, run_id="run-wc", db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Saved" in result
 
     rows = _change_rows(db_conn, "notes/fresh.md")
@@ -83,7 +83,7 @@ def test_write_doc_overwrite_books_update(vault_dir, db_conn, ledger_conn):
     moved, but the row must be correct either way)."""
     result = execute_tool(
         "write_doc", {"path": "notes/test.md", "content": "overwritten\n"},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Saved" in result
 
     rows = _change_rows(db_conn, "notes/test.md")

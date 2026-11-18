@@ -28,13 +28,12 @@ class RejectProposalTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...services.proposals import advance
-        from ...vault.db.conn import get_ledger_conn
 
         if not args.reason.strip():
             return ("Error: reject_proposal requires a non-empty reason — "
                     "state what the human objects to (it is stored verbatim).")
 
-        conn = get_ledger_conn()
+        conn = ctx.ledger_conn
         if conn is None:
             return "Error: proposal database unavailable (server DB not initialized)"
 

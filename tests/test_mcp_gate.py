@@ -162,7 +162,8 @@ def test_mcp_propose_creates_stamped_record(ledger_conn, tmp_path):
          "excerpts": [{"path": "notes/a.md", "quote": "x"},
                       {"path": "notes/b.md", "quote": "y"}],
          "candidate": "reading A", "rationale": "dates conflict"},
-        ["notes/a.md"], "surface the contradiction")
+        ["notes/a.md"], "surface the contradiction",
+        db_conn=None, ledger_conn=ledger_conn)
     assert out.startswith("proposal #")
     rec = proposals.scan(ledger_conn)[0]
     assert rec["actor"] == "mcp"
@@ -184,7 +185,8 @@ def test_mcp_propose_malformed_is_zero_disk(ledger_conn, tmp_path):
          "excerpts": [{"path": "notes/a.md", "quote": "x"},
                       {"path": "notes/b.md", "quote": "y"}],
          "rationale": "r"},  # candidate missing
-        ["notes/a.md"], "j")
+        ["notes/a.md"], "j",
+        db_conn=None, ledger_conn=ledger_conn)
     assert out.startswith("Error:")
     assert "candidate" in out
     assert proposals.scan(ledger_conn) == []
@@ -201,7 +203,8 @@ def test_mcp_propose_retired_type_redirects(ledger_conn, tmp_path):
     out = _mcp_propose(
         vault, "correction",
         {"file": "notes/a.md", "old": "x", "new": "y"},
-        ["notes/a.md"], "j")
+        ["notes/a.md"], "j",
+        db_conn=None, ledger_conn=ledger_conn)
     assert out.startswith("Error:")
     assert "retired" in out and "errata" in out
     assert proposals.scan(ledger_conn) == []

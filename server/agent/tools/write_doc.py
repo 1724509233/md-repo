@@ -24,7 +24,6 @@ class WriteDocTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...services.snapshots import capture, finalize, gc_after_capture, hash_bytes
-        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...services import ledger
 
         fp = ctx.vault_dir / args.path
@@ -36,7 +35,7 @@ class WriteDocTool(Tool):
         # 可逆层（P1）：LLM 发起的写强制 pre-image（不变量 10）。新建文件
         # 无 pre-image，记 create；覆写已有文件捕获写入前的全文字节。
         # 捕捉失败不阻塞写（degraded 模式，见 server/services/snapshots.py）。
-        conn = get_ledger_conn()
+        conn = ctx.ledger_conn
         snap = None
         if conn is not None:
             snap = capture(conn, ctx.vault_dir, args.path,
@@ -59,7 +58,7 @@ class WriteDocTool(Tool):
             gc_after_capture(conn, ctx.vault_dir)
         # 新约定：change_log 行必须在 tool_result SSE 前入库（UI 快路径
         # loadDocs 得 200）；skip 标记使 watcher 事件记零行，恰好一行。
-        index_conn = get_index_conn()
+        index_conn = ctx.db_conn
         if index_conn is not None:
             ledger.record(index_conn, ctx.vault_dir, args.path,
                           "modified" if existed else "created",

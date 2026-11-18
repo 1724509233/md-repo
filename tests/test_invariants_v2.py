@@ -45,7 +45,8 @@ def test_user_area_zero_writes_through_full_flow(vault_dir, ledger_conn):
 
     tool = ProposeTool()
     ctx = ToolContext(vault_dir=vault_dir, write_source="consolidator",
-                      run_id="consolidator-20261026T000000")
+                      run_id="consolidator-20261026T000000",
+                      ledger_conn=ledger_conn)
     # Auto channel: entity_index + relatedness → adopted immediately.
     assert tool.call(
         {"type": "entity_index",

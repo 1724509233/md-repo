@@ -35,7 +35,8 @@ def test_no_batch_adopt_code_path(ledger_conn, vault_dir):
 def test_adopt_writes_human_receipt(ledger_conn, vault_dir):
     """不变量 9：对话渠道 adopt 的 transitions 行 = actor human + via: 主agent 回执。"""
     rec = _awaiting(ledger_conn, vault_dir)
-    ctx = ToolContext(vault_dir=vault_dir, write_source="human", run_id="", verbs=None)
+    ctx = ToolContext(vault_dir=vault_dir, write_source="human", run_id="", verbs=None,
+                    ledger_conn=ledger_conn)
     out = TOOL_REGISTRY["adopt_proposal"]._execute(
         AdoptProposalArgs(id=rec["id"], note="ok"), ctx)
     assert "adopted" in out
@@ -49,7 +50,8 @@ def test_adopt_writes_human_receipt(ledger_conn, vault_dir):
 def test_get_proposal_carries_attribution(ledger_conn, vault_dir):
     """红线 2：justification 区块原样引用 + 标注生成角色。"""
     rec = _awaiting(ledger_conn, vault_dir)
-    ctx = ToolContext(vault_dir=vault_dir, write_source="human", run_id="", verbs=None)
+    ctx = ToolContext(vault_dir=vault_dir, write_source="human", run_id="", verbs=None,
+                    ledger_conn=ledger_conn)
     out = GetProposalTool()._execute(GetProposalArgs(id=rec["id"]), ctx)
     data = json.loads(out)
     assert data["justification"]["text"] == "请采纳此总结"

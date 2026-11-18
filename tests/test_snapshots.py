@@ -150,10 +150,10 @@ def test_create_op_has_no_preimage_bytes(vault_dir, ledger_conn):
 
 # ── invariant 10: LLM-originated writes produce pre-image rows ────────────
 
-def test_agent_write_doc_produces_preimage(vault_dir, ledger_conn):
+def test_agent_write_doc_produces_preimage(vault_dir, db_conn, ledger_conn):
     result = execute_tool(
         "write_doc", {"path": "notes/test.md", "content": "agent overwrite"},
-        ToolContext(vault_dir=vault_dir))
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert "Saved" in result
     live = snapshots.live_preimage(ledger_conn, "notes/test.md")
     assert live is not None and live["op"] == "update"
