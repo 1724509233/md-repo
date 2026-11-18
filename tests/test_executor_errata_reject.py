@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from server import proposals
+from server.services import proposals
 from server.bgagent.executor import _merge_errata, run_executor
 
 

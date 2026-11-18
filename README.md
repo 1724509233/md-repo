@@ -285,10 +285,7 @@ MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码�
 ├── server/
 │   ├── main.py               # 入口：config → 双账本(index.db+ledger.db) → app → build_runtime() → uvicorn
 │   ├── api.py                # create_app 工厂（WebContext + /static 挂载 + routes 注册）
-│   ├── services/             # 应用层领域服务：ledger.py（变更账本，唯一写入面）· sync.py（compare_files 无 IO 纯函数）· egress.py（出域台账写面）· trash.py（回收站用例，卡 5 迁入）
-│   ├── snapshots.py          # 快照（可逆层：删除/写前全文快照，回滚入口）
-│   ├── proposals.py          # 提案状态机（8 状态，DB 为状态源，零文件落）
-│   ├── recovery.py           # 恢复演练：证明 index.db 是可重建缓存（只动 index.db）
+│   ├── services/             # 应用层领域服务：ledger.py（变更账本，唯一写入面）· sync.py（compare_files 无 IO 纯函数）· egress.py（出域台账写面）· trash.py（回收站用例，卡 5 迁入）· snapshots.py（可逆层快照，回滚入口）· proposals.py（提案状态机，DB 为状态源）· recovery.py（恢复演练，只动 index.db）（后三件卡 6 迁入）
 │   ├── ai.py                 # RAG 搜索（rag_search）+ LLM 流式（chat_stream）
 │   ├── mcp_server.py         # MCP stdio server（6 工具，接入 OpenCode 等）
 │   ├── config/               # YAML 配置解析包（core/ai/log/notifications/bgagent）

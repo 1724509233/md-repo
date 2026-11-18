@@ -18,7 +18,7 @@ import json as _json
 import time
 from pathlib import Path
 
-from server import proposals
+from server.services import proposals
 from server.bgagent.executor import run_executor
 from server.vault.db.changes import get_changes
 from server.vault.fs.vault_ops import atomic_write_bytes, safe_rel_path, _iter_vault_md

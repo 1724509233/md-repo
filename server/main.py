@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> None:
     # rebuilt, change_log is empty — re-book the delete rows the sync lane's
     # stale-copy gate needs from trash meta + ledger snapshots. No-op on a
     # vault with live history (idempotent gate inside).
-    from .recovery import seed_deleted_prehashes
+    from .services.recovery import seed_deleted_prehashes
     seeded = seed_deleted_prehashes(conn, vault_dir, ledger_conn)
     if seeded:
         logging.getLogger("md-vault.recovery").info(

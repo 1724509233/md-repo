@@ -32,7 +32,7 @@ def _no_propose_tools() -> list:
 def test_gate_no_propose_returns_none(tmp_path, ledger_conn):
     """R1: effective tools without propose → render() is None, even when the
     role has proposal data (the whole block is suppressed)."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
@@ -46,7 +46,7 @@ def test_gate_no_propose_returns_none(tmp_path, ledger_conn):
 
 def test_gate_with_propose_renders(tmp_path, ledger_conn):
     """R1: effective tools with propose → the block renders (section 1)."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
@@ -66,7 +66,7 @@ def test_gate_with_propose_renders(tmp_path, ledger_conn):
 def test_rejected_section_alias_filter_newest_first_top5(tmp_path, ledger_conn):
     """R5: rejected rows are alias-filtered, newest-first, top 5 + marker,
     reason = reject_reason (the human's reason)."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
@@ -98,7 +98,7 @@ def test_rejected_section_alias_filter_newest_first_top5(tmp_path, ledger_conn):
 
 def test_rejected_empty_reason_fallback(tmp_path, ledger_conn):
     """R5: an empty reject_reason falls back to '(no reason recorded)' (defensive)."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)

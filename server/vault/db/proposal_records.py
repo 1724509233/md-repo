@@ -2,7 +2,7 @@
 mutations, lock-holding (card 5).
 
 Split along the lock boundary: this module owns the write SQL (each
-mutation below runs inside the shared ``_ledger_lock``); ``server/proposals.py``
+mutation below runs inside the shared ``_ledger_lock``); ``server/services/proposals.py``
 keeps the read face (record/scan/trail) and the state-machine orchestration
 (transition legality, the authorization policy, event publishing).
 
@@ -13,9 +13,9 @@ lock-free: the single non-reentrant lock must never be held by a reader
 (a reader inside a locked section would deadlock the same thread).
 
 Import direction (pinned): this module must NOT import
-``server/proposals.py`` (that would be a cycle — proposals depends on
+``server/services/proposals.py`` (that would be a cycle — proposals depends on
 proposal_records). It returns ids/rows only; the record-dict shaping stays
-in ``server/proposals.py`` (the caller reads the record back through the
+in ``server/services/proposals.py`` (the caller reads the record back through the
 lock-free ``record()`` after the mutation returns).
 """
 from __future__ import annotations

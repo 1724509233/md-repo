@@ -2,9 +2,9 @@
 lock-holding (card 5).
 
 Split along the lock boundary: this module owns the SQL half of
-``server/snapshots.py``'s capture/finalize/discard/gc — each mutation runs
+``server/services/snapshots.py``'s capture/finalize/discard/gc — each mutation runs
 inside the shared ``_ledger_lock``; the disk half (pre-image blob reads/writes,
-blob deletion) stays with the ``server/snapshots.py`` caller, outside the
+blob deletion) stays with the ``server/services/snapshots.py`` caller, outside the
 lock.
 
 Concurrency (card 5): the lock is held INTERNALLY by these functions —

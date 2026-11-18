@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from server import proposals
+from server.services import proposals
 from server.agent.policy import ChannelPolicy, validate_tool_call
 from server.agent.tools.propose import ProposeTool
 from server.agent.tools.tool import ToolContext

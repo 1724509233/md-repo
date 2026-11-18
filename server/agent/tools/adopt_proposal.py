@@ -30,7 +30,7 @@ class AdoptProposalTool(Tool):
     permission = "ask"  # 红线 3 框架级闸门：adopt 是人的决策，运行中先发 confirm_request 等人批准（runtime.py）
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...proposals import advance
+        from ...services.proposals import advance
         from ...vault.db.conn import get_ledger_conn
 
         conn = get_ledger_conn()

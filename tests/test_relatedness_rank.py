@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from server import proposals
+from server.services import proposals
 from server.bgagent import runner
 from server.bgagent.readback import ReadbackSystemReminder
 from server.agent.tools import TOOL_REGISTRY

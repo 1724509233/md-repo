@@ -16,7 +16,7 @@ Usage:
 
 Design notes (verified against the code this mirrors):
 
-- Proposal records follow ``server/proposals.py`` (v2a): the state source is
+- Proposal records follow ``server/services/proposals.py`` (v2a): the state source is
   the ``proposals`` table in ``<vault>/.sync/ledger.db`` (the four
   authoritative-state tables moved there in the 2026-10-31 ledger-file
   split); the card relpath
@@ -50,7 +50,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from server import proposals as P
+from server.services import proposals as P
 from server.vault.db.changes import log_change
 from server.vault.db.recall import _traffic
 from server.vault.db.schema import init_db, init_ledger_db

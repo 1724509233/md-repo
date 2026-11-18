@@ -57,7 +57,7 @@ class MoveDocsTool(DocTool):
         return None
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...snapshots import (capture, discard, finalize, gc_after_capture,
+        from ...services.snapshots import (capture, discard, finalize, gc_after_capture,
                                   hash_bytes, new_call_id)
         from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.orchestration.refs import (

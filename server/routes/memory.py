@@ -13,7 +13,7 @@ from datetime import datetime
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from .. import proposals
+from ..services import proposals
 from ..services import ledger
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
@@ -32,7 +32,7 @@ def _guard_proposal_relpath(relpath: str) -> str:
     Returns the normalized posix relpath; raises HTTPException otherwise
     (unsafe path or not a top-level proposal file → 400).
     """
-    from .. import proposals
+    from ..services import proposals
 
     safe = _safe_rel_path(relpath)
     if safe is None:
@@ -79,7 +79,7 @@ def register(app, ctx) -> None:
         suggestions/ files are inert legacy projections, never scanned). Response shape
         is stable vs the v1 frontmatter list: ``reversible`` derives from
         the authorization tier, ``title`` from source_refs/type."""
-        from .. import proposals
+        from ..services import proposals
 
         now = time.time()
         items: list[dict] = []
@@ -114,7 +114,7 @@ def register(app, ctx) -> None:
         The API never applies the change; the executor merges adopted
         proposals on its next cycle.
         """
-        from .. import proposals
+        from ..services import proposals
 
         rel = _guard_proposal_relpath(relpath)
         rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
@@ -142,7 +142,7 @@ def register(app, ctx) -> None:
         window base and ``proposals.revive`` sets it to now — the original
         creation moment stays in the state ledger (no audit loss).
         """
-        from .. import proposals
+        from ..services import proposals
 
         rel = _guard_proposal_relpath(relpath)
         rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
@@ -164,7 +164,7 @@ def register(app, ctx) -> None:
     async def memory_proposal_reject(relpath: str, request: Request) -> dict:
         """Move an awaiting_review proposal to rejected, threading the reason
         into reject_reason (the trust-upgrade data source)."""
-        from .. import proposals
+        from ..services import proposals
 
         rel = _guard_proposal_relpath(relpath)
         rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
@@ -211,7 +211,7 @@ def register(app, ctx) -> None:
         ``created`` / ``updated`` are ISO dates (the list endpoint's
         style); ``merged_at`` passes the ledger's ISO timestamp through.
         """
-        from .. import proposals
+        from ..services import proposals
 
         rel = _guard_proposal_relpath(relpath)
         rec = proposals.record_by_relpath(ctx.ledger_conn, rel)
@@ -243,7 +243,7 @@ def register(app, ctx) -> None:
         Deliberately NOT an agent tool and NOT exposed to bgagent: rollback
         and rebase are human-exclusive verbs (spec §四 unmerge 行).
         """
-        from .. import snapshots as snap_mod
+        from ..services import snapshots as snap_mod
 
         try:
             body = await request.json()
@@ -297,7 +297,7 @@ def register(app, ctx) -> None:
         the call_id to POST to /api/memory/rollback. Human-readable surface
         only — not an agent tool (rollback stays human-exclusive).
         """
-        from .. import snapshots as snap_mod
+        from ..services import snapshots as snap_mod
 
         calls = snap_mod.recent_calls(ctx.ledger_conn, limit=limit)
         for c in calls:
@@ -414,8 +414,8 @@ def register(app, ctx) -> None:
     async def memory_status() -> dict:
         """The 30-second scan target: proposal counts + review queue, the
         background-agent trigger state, and recall demand over 7/30 days."""
-        from .. import proposals
-        from .. import snapshots
+        from ..services import proposals
+        from ..services import snapshots
         from ..vault.db import recall as recall_db
 
         # proposals: by_status counts + the awaiting_review review queue.

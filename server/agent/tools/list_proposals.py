@@ -38,7 +38,7 @@ class ListProposalsTool(Tool):
     permission = "allow"
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...proposals import scan
+        from ...services.proposals import scan
         from ...vault.db.conn import get_ledger_conn
 
         conn = get_ledger_conn()

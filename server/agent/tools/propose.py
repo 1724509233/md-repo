@@ -204,7 +204,7 @@ class ProposeTool(Tool):
             return f"Error: {_RETIRED_REDIRECTS[args.type]}"
 
         # 2. envelope
-        from ...proposals import VALID_TYPES
+        from ...services.proposals import VALID_TYPES
         if args.type not in VALID_TYPES:
             return (f"Error: unknown proposal type '{args.type}'. "
                     f"Valid types: {', '.join(sorted(VALID_TYPES))}")
@@ -221,7 +221,7 @@ class ProposeTool(Tool):
             return err
 
         # Success path: DB unavailable → error, nothing on disk.
-        from ...proposals import create, process_proposal
+        from ...services.proposals import create, process_proposal
         from ...vault.db.conn import get_ledger_conn
 
         conn = get_ledger_conn()

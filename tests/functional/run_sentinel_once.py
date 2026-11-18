@@ -37,7 +37,7 @@ from pathlib import Path
 from server.bgagent.notify import InAppHook
 from server.bgagent.runner import run_once
 from server.config import load_background_agents
-from server import proposals
+from server.services import proposals
 from server.vault.db import conn as db_conn
 from server.vault.db.migrate_ledger import migrate_ledger
 from server.vault.db.schema import init_db, init_ledger_db

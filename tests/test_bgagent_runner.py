@@ -645,7 +645,7 @@ def test_readback_injected_into_context_head(tmp_path: Path, ledger_conn):
     readback (open counts + failed + rejected with reject_reason) is a
     <system-reminder> message (R3), ordered after the system_prompt (which
     carries the 当前时间 line)."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)
@@ -692,7 +692,7 @@ def test_readback_injects_newest_failures_first(tmp_path: Path, ledger_conn):
     failures, the injected list is the N most recent (updated_at desc)."""
     import time
 
-    from server import proposals
+    from server.services import proposals
     from server.bgagent.readback import READBACK_TOP_N
 
     vault = tmp_path / "vault"
@@ -777,7 +777,7 @@ def test_readback_telemetry_silent_without_data(tmp_path: Path, db_conn,
 def test_readback_gated_out_for_non_proposal_role(tmp_path: Path, ledger_conn):
     """R1 integration: a role whose effective tools lack propose (sentinel
     view) gets NO readback reminder, even with proposal data present."""
-    from server import proposals
+    from server.services import proposals
 
     vault = tmp_path / "vault"
     vault.mkdir(exist_ok=True)

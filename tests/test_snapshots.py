@@ -28,13 +28,13 @@ from pathlib import Path
 
 import pytest
 
-from server import snapshots
+from server.services import snapshots
 from server.agent import ToolContext, execute_tool
 from server.agent.events import Event
 from server.agent.runtime import Runtime
 from server.bgagent.executor import run_executor
 from server.bgagent.runner import run_once
-from server import proposals
+from server.services import proposals
 
 
 SAMPLE = b"# Test note\n\nSample content.\n"  # == notes/test.md in the vault_dir fixture

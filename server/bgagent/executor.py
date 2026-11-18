@@ -70,8 +70,8 @@ from pathlib import Path
 
 from ..services import ledger
 from ..core.privacy import is_privacy
-from ..proposals import RETIRED_TYPES, advance, expire_overdue, scan
-from ..snapshots import capture, finalize, gc, hash_bytes
+from ..services.proposals import RETIRED_TYPES, advance, expire_overdue, scan
+from ..services.snapshots import capture, finalize, gc, hash_bytes
 from ..vault.db import egress_sql
 from ..vault.db.relatedness import merge_edge
 from ..vault.fs.vault_ops import atomic_write_bytes, safe_rel_path

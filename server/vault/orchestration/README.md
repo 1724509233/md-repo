@@ -107,7 +107,7 @@ server/services/ledger.py   ──► apply_change / apply_folder_change（唯�
                                consume/record/record_folder 三入口，归因后一次落库）
 server/main.py              ──► ensure_indexed（启动索引检查：首跑全量重建 / FTS 失步修复）
 server/mcp_server.py        ──► ensure_indexed（MCP 入口共用）
-server/recovery.py          ──► ensure_indexed（恢复演练镜像生产启动路径）
+server/services/recovery.py ──► ensure_indexed（恢复演练镜像生产启动路径）
 server/vault/watcher.py     ──► reconcile（启动对账，source="reconcile"）
 （file_ops 包内）            ──► reconcile 是 apply_change 唯一包内调用方（离线启动，无 watcher）
 ```

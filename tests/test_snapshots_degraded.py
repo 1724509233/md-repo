@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from server import snapshots
+from server.services import snapshots
 from server.vault.db import conn as db_handle
 from server.vault.db.schema import init_ledger_db
 

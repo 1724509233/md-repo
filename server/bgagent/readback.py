@@ -53,7 +53,7 @@ def _build_proposal_section(ctx: RoleCtx) -> list[str] | None:
     type breakdown), failed proposals, and rejected proposals (R5) with their
     reject_reason (the trust-escalation feedback). Newest-first, top N +
     marker. Ledger conn; silent when unavailable or the role has nothing."""
-    from .. import proposals
+    from ..services import proposals
     from ..vault.db.conn import get_ledger_conn
 
     conn = get_ledger_conn()

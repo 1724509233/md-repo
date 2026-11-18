@@ -93,7 +93,7 @@ class McpExternalGate(WriteGate):
                     "type 'relatedness' with payload {target} to suggest a relation); "
                     "direct writes into suggestions/ are also rejected — proposal "
                     "records live in the ledger only (no file; see "
-                    "server/proposals.py)."
+                    "server/services/proposals.py)."
                 )
         return None
 
@@ -112,7 +112,7 @@ def _mcp_write(vault_dir: Path, db_conn, path: str, content: str) -> str:
     (source="watchdog") — the 2026-10-07 ledger convention (MCP 归入
     watchdog 兜底).
     """
-    from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
+    from server.services.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
     from server.vault.db.conn import get_ledger_conn
 
     fp = vault_dir / path
@@ -151,7 +151,7 @@ def _mcp_edit(vault_dir: Path, db_conn, path: str, old_string: str, new_string: 
     captured before the edit; an errored edit (not-found/ambiguous) drops
     the capture so it never claims the file's live slot. Mirrors
     ``server/agent/tools/edit_doc.py`` (actor="mcp")."""
-    from server.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
+    from server.services.snapshots import capture, discard, finalize, gc_after_capture, hash_bytes
     from server.vault.db.conn import get_ledger_conn
     from server.vault.fs.vault_ops import edit_file
 

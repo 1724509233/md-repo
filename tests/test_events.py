@@ -256,7 +256,7 @@ def test_advance_publishes_only_adopted(ledger_conn, vault_dir):
     real_bus = events._bus
     events._bus = _Rec()
     try:
-        from server import proposals
+        from server.services import proposals
 
         def rec_at(status):
             rec = proposals.create(

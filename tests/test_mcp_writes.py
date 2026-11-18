@@ -17,7 +17,7 @@ ledger convention. Pinned:
 """
 from __future__ import annotations
 
-from server import snapshots
+from server.services import snapshots
 from server.mcp_server import _mcp_edit, _mcp_write
 from tests.conftest import simulate_consumer
 

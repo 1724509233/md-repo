@@ -61,8 +61,8 @@ import time
 import uuid
 from pathlib import Path
 
-from .vault.db import snapshot_records
-from .vault.fs.vault_ops import _iter_vault_md, atomic_write_bytes
+from ..vault.db import snapshot_records
+from ..vault.fs.vault_ops import _iter_vault_md, atomic_write_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,7 @@ def _referrers(conn, vault_dir: Path, rel: str) -> list[str]:
     scan is the accepted fallback (design §11-4: restore/GC cleanup are
     low-frequency ops).
     """
-    from .vault.db.graph_sql import _find_referrers
+    from ..vault.db.graph_sql import _find_referrers
 
     referrers = [r for r in _find_referrers(conn, vault_dir, rel) if r != rel]
     if referrers:
@@ -397,11 +397,11 @@ def gc(conn, vault_dir, now: float | None = None) -> int:
     # the ledger conn that owns the snapshots table — the module handle
     # pair (lazy, same pattern as file_ops' move branch); None = no index
     # registered (unit-test mode) → cleanup skipped, never a crash.
-    from .vault.db.conn import get_index_conn
+    from ..vault.db.conn import get_index_conn
 
     index_conn = get_index_conn()
     if index_conn is not None:
-        from .vault.orchestration.refs import remove_dead_links
+        from ..vault.orchestration.refs import remove_dead_links
 
         # Newest first; the LIMIT bounds the scan for a long-lived vault
         # whose deletion history outgrows the retention window. Workbench
@@ -545,11 +545,11 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
     # Delete-class restore: revive the referrer→target graph edges (G1).
     restored_set = set(restored)
     if any(s["op"] == "delete" and s["path"] in restored_set for s in snaps):
-        from .vault.db.conn import get_index_conn
+        from ..vault.db.conn import get_index_conn
 
         index_conn = get_index_conn()
         if index_conn is not None:
-            from .vault.orchestration.indexer import graph_extract_file
+            from ..vault.orchestration.indexer import graph_extract_file
 
             for s in snaps:
                 if s["op"] == "delete" and s["path"] in restored_set:
@@ -561,8 +561,8 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
     # Module handles, None-safe: same discipline as the G1 block above.
     move_snaps = [s for s in snaps if s["op"] == "move" and s["path"] in restored_set]
     if move_snaps:
-        from .vault.db.conn import get_index_conn, get_ledger_conn
-        from .vault.orchestration.refs import update_references_batch
+        from ..vault.db.conn import get_index_conn, get_ledger_conn
+        from ..vault.orchestration.refs import update_references_batch
 
         index_conn = get_index_conn()
         handle_ledger_conn = get_ledger_conn()
@@ -578,7 +578,7 @@ def rollback(conn, vault_dir, call_id: str) -> dict:
                     index_conn, vault, [(s["new_path"], s["path"])],
                     src_paths=_referrers(index_conn, vault, s["new_path"]))
             if handle_ledger_conn is not None:
-                from .vault.db.relatedness import rewrite_paths
+                from ..vault.db.relatedness import rewrite_paths
 
                 rewrite_paths(handle_ledger_conn, s["new_path"], s["path"])
     return {"ok": True, "restored": restored}

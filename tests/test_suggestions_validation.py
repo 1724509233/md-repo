@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from server import proposals
+from server.services import proposals
 from server.agent import ChannelPolicy, validate_tool_call
 
 PATH = "suggestions/2026-10-26_summary_x.md"

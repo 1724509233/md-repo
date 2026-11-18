@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 
-from server import proposals
+from server.services import proposals
 from server.agent.tools.propose import ProposeTool
 from server.agent.tools.tool import ToolContext
 from server.bgagent.executor import run_executor

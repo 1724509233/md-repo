@@ -36,7 +36,7 @@ from pathlib import Path
 
 import pytest
 
-from server import snapshots
+from server.services import snapshots
 from server.agent import ToolContext, execute_tool
 from server.services.ledger import consume
 from server.vault.db.changes import (
@@ -577,7 +577,7 @@ def test_rollback_route_books_delete_for_create_op(client, vault_dir, db_conn,
                                                    ledger_conn):
     # F7：create-op 回滚 = unlink。路由必须记 op='delete'（旧行为记 'restore'
     # → apply_change 查盘无文件 → 零行，且 skip 标记压制 watcher → 幽灵行）。
-    from server import snapshots as snap_mod
+    from server.services import snapshots as snap_mod
     from tests.conftest import simulate_consumer
 
     (vault_dir / "notes").mkdir(exist_ok=True)
@@ -609,7 +609,7 @@ def test_rollback_route_books_delete_for_create_op(client, vault_dir, db_conn,
 
 def test_rollback_route_books_move_pair(client, vault_dir, db_conn, ledger_conn):
     # F7：move-op 回滚 = 旧路径 restore + 新路径 delete。
-    from server import snapshots as snap_mod
+    from server.services import snapshots as snap_mod
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     (vault_dir / "notes" / "a.md").write_bytes(b"payload")
@@ -631,7 +631,7 @@ def test_rollback_route_books_move_pair(client, vault_dir, db_conn, ledger_conn)
 def test_rollback_move_reverses_refs_and_relatedness(vault_dir, db_conn, ledger_conn):
     # F8：move 的回滚必须逆转 move 时的两处副作用——referrer 正文改写
     # （[[a]]→[[b]]）与 relatedness 路径改写（D19）。
-    from server import snapshots as snap_mod
+    from server.services import snapshots as snap_mod
     from server.services import ledger
     from server.vault.db.relatedness import merge_edge
 
@@ -669,7 +669,7 @@ def test_rollback_move_refs_reversal_survives_nonempty_edges(vault_dir, db_conn,
     # referrer→new 边尚未建（watcher 未跑或事件丢失），edges 查找返回空且
     # 不触发 fallback（fallback 只在整表空时触发）→ refs 逆转静默 no-op。
     # 修复后走 G1 级 _referrers（edges 优先 + 无条件内容扫描兜底）。
-    from server import snapshots as snap_mod
+    from server.services import snapshots as snap_mod
     from server.services import ledger
 
     (vault_dir / "notes").mkdir(exist_ok=True)

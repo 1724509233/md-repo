@@ -1,4 +1,4 @@
-"""Tests for server.recovery (the v1 real recovery drill)."""
+"""Tests for server.services.recovery (the v1 real recovery drill)."""
 from __future__ import annotations
 
 import hashlib
@@ -6,8 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
-from server.recovery import main as recovery_main
-from server.recovery import run_recovery_drill
+from server.services.recovery import main as recovery_main
+from server.services.recovery import run_recovery_drill
 from server.vault.db.schema import init_db, init_ledger_db
 from server.vault.db.file_index import upsert_file
 
@@ -240,7 +240,7 @@ def test_recovery_drill_ledger_absent_is_note_not_ok_flip(vault_dir: Path) -> No
 def test_seed_deleted_prehashes_from_trash_and_snapshots(vault_dir, db_conn, ledger_conn):
     import hashlib
 
-    from server.recovery import seed_deleted_prehashes
+    from server.services.recovery import seed_deleted_prehashes
     from server.services.sync import derive_deleted_hashes
     from server.vault.db.schema import init_db
     from server.services.trash import move_to_trash
@@ -280,7 +280,7 @@ def test_seed_deleted_prehashes_from_trash_and_snapshots(vault_dir, db_conn, led
 
 
 def test_seed_noop_when_change_log_nonempty(vault_dir, db_conn, ledger_conn):
-    from server.recovery import seed_deleted_prehashes
+    from server.services.recovery import seed_deleted_prehashes
     from server.vault.db.changes import log_change
 
     log_change(db_conn, "notes/live.md", "created", source="web")

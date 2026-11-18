@@ -21,7 +21,7 @@ Vault 索引子系统的 SQLite 数据层：连接创建、schema 初始化，�
 | `relatedness.py` | relatedness 边写面：`upsert_edge`（无锁）/ `merge_edge`（executor 复合操作，**函数内持锁**）/ `mark_ignored` |
 | `trigger_state.py` | `trigger_state` 表：bgagent 触发状态；`ensure_row`/`record_run`/`arm_change`/`arm_recall` 复合临界区**函数内持锁** |
 | `notifications.py` | `notifications` 表：bgagent 通知；`guarded_insert` **函数内持锁**（硬 cap，count-then-act 一锁） |
-| `proposal_records.py` | `proposals` 表写面 SQL：`create`/`advance`/`revive_rearm`（**函数内持锁**）；不 import server/proposals.py |
+| `proposal_records.py` | `proposals` 表写面 SQL：`create`/`advance`/`revive_rearm`（**函数内持锁**）；不 import server/services/proposals.py |
 | `snapshot_records.py` | `snapshots` 表：`insert_capture`/`finalize`/`discard`/`gc_sweep`（**全部函数内持锁**；gc 的 SELECT+DELETE 复合一锁，blob 删除在锁外） |
 
 ### 表分布（双账本 15 表）
@@ -205,7 +205,7 @@ orchestration/* ──► segments_sql / graph_sql / changes / file_index（写�
 agent tools     ──► conn（get_index_conn / get_ledger_conn 懒取）+ 四表域具名函数
 bgagent/*       ──► trigger_state / notifications / recall / conn
 routes/*        ──► 各域具名函数
-server/proposals.py / snapshots.py ──► proposal_records / snapshot_records / relatedness（持锁具名函数）
+server/services/{proposals,snapshots}.py ──► proposal_records / snapshot_records / relatedness（持锁具名函数）
 ```
 
 ## 注意事项

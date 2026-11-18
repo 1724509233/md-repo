@@ -152,7 +152,7 @@ def test_mcp_propose_creates_stamped_record(ledger_conn, tmp_path):
     (the ledger's source convention), no run stamp, unrestricted verbs.
     errata is a review-tier type → the record lands awaiting_review
     for a human (no silent merge)."""
-    from server import proposals
+    from server.services import proposals
     from server.mcp_server import _mcp_propose
 
     vault = tmp_path / "vault"
@@ -174,7 +174,7 @@ def test_mcp_propose_creates_stamped_record(ledger_conn, tmp_path):
 def test_mcp_propose_malformed_is_zero_disk(ledger_conn, tmp_path):
     """The channel entry enforces the same per-verb validation: an errata
     missing 'candidate' → error string, no record, no file."""
-    from server import proposals
+    from server.services import proposals
     from server.mcp_server import _mcp_propose
 
     vault = tmp_path / "vault"
@@ -194,7 +194,7 @@ def test_mcp_propose_malformed_is_zero_disk(ledger_conn, tmp_path):
 def test_mcp_propose_retired_type_redirects(ledger_conn, tmp_path):
     """D5: a retired v1 verb through the external channel gets the
     operational redirect (names the replacement), not a record."""
-    from server import proposals
+    from server.services import proposals
     from server.mcp_server import _mcp_propose
 
     vault = tmp_path / "vault"

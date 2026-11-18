@@ -345,12 +345,12 @@ def run_recovery_drill(vault_dir: Path) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """CLI: ``python -m server.recovery drill <vault-dir>``.
+    """CLI: ``python -m server.services.recovery drill <vault-dir>``.
 
     Prints the drill report as JSON. Exit code 0 iff ok, else 1.
     """
     argv = argv if argv is not None else sys.argv[1:]
-    parser = argparse.ArgumentParser(prog="server.recovery")
+    parser = argparse.ArgumentParser(prog="server.services.recovery")
     parser.add_argument("command", choices=["drill"], help="operation to run")
     parser.add_argument("vault_dir", help="vault directory to drill on")
     args = parser.parse_args(argv)

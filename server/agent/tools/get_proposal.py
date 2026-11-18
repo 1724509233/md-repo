@@ -26,7 +26,7 @@ class GetProposalTool(Tool):
     permission = "allow"
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...proposals import record
+        from ...services.proposals import record
         from ...vault.db.conn import get_ledger_conn
 
         conn = get_ledger_conn()

@@ -9,7 +9,7 @@ import yaml
 from croniter import croniter
 
 from ..core.types import ModelConfig
-from ..proposals import PROPOSALS_DIR
+from ..services.proposals import PROPOSALS_DIR
 
 logger = logging.getLogger("md-vault.config")
 
@@ -234,7 +234,7 @@ def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
         raise ValueError(
             f"background_agents[{index}] ({alias}): verbs must be a list of "
             f"non-empty strings")
-    from ..proposals import VALID_TYPES
+    from ..services.proposals import VALID_TYPES
     bad = [v for v in verbs_raw if v not in VALID_TYPES]
     if bad:
         raise ValueError(

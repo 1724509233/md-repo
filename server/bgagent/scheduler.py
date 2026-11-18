@@ -37,7 +37,7 @@ from croniter import croniter
 
 from ..config import BackgroundAgentConfig
 from ..core.privacy import PrivacyConfig
-from ..proposals import EXPIRE_AFTER_S, scan as scan_proposals
+from ..services.proposals import EXPIRE_AFTER_S, scan as scan_proposals
 from ..core import events
 from ..vault.db import recall as recall_db
 from ..vault.db import trigger_state as trigger_db

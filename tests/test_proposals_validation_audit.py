@@ -36,7 +36,7 @@ Coverage map (audit objects 1-5 of the plan):
    (MCP channel rule) — existing rows in test_proposals.py and
    test_mcp_gate.py; this file adds the composite validate_tool_call
    check so the matrix row is self-contained.
-5. state machine (server/proposals.py advance): covered by
+5. state machine (server/services/proposals.py advance): covered by
    test_proposals.py (illegal transitions), test_proposals_revive.py
    (invariant 12: revive human-only, no agent entry),
    test_proposals_advance_race.py (invariant 11), test_proposals_dead_

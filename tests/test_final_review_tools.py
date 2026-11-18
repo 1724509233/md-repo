@@ -7,7 +7,7 @@ from server.agent.tools.reject_proposal import RejectProposalArgs
 from server.agent.tools.get_proposal import GetProposalArgs, GetProposalTool
 from server.agent.tools.list_proposals import ListProposalsTool
 from server.agent.tools.tool import ToolContext
-from server import proposals
+from server.services import proposals
 
 
 def _awaiting(ledger_conn, vault_dir):

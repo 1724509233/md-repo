@@ -14,9 +14,9 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `core/events.py` | 进程内事件总线：**wake signal 不是数据通道**——订阅者不得依赖收到每个事件或 payload 内容做决策，权威状态由 consumer 自己的扫描重导出 |
 | `services/sync.py` | `compare_files()` 纯函数无 IO：返回 `to_pull` / `to_push` / `to_delete` / `conflicts`（`recent_moves` 检测服务端改名 → stale copy 移入 `to_delete`） |
 | `vault/watcher.py` | `SnapshotWatcher`：watchdog 事件（doorbell）→ 线程去抖 → 快照对比；脏集合 + doorbell；启动调 `file_ops.reconcile`（惰性 import，一次）；周期兜底为 watcher 自身 `_reconcile` 扫描级标 dirty（事件经 `ledger.consume` 落库） |
-| `snapshots.py` | pre-image 快照（可逆层）：LLM 写入（agent 直写工具、executor merge）与交互式删除（Web 文档管理）写前捕获全文 pre-image；回滚入口（verify-all-then-write-all） |
-| `proposals.py` | 提案状态机：8 状态 `TRANSITIONS`、`advance`；DB 行是唯一状态源（v2a 零文件落）；`VALID_TYPES` 5 类动词；14 天 TTL |
-| `recovery.py` | 恢复演练：证明 index.db 是可重建缓存（只动 index.db，可重复可测） |
+| `services/snapshots.py` | pre-image 快照（可逆层）：LLM 写入（agent 直写工具、executor merge）与交互式删除（Web 文档管理）写前捕获全文 pre-image；回滚入口（verify-all-then-write-all） |
+| `services/proposals.py` | 提案状态机：8 状态 `TRANSITIONS`、`advance`；DB 行是唯一状态源（v2a 零文件落）；`VALID_TYPES` 5 类动词；14 天 TTL |
+| `services/recovery.py` | 恢复演练：证明 index.db 是可重建缓存（只动 index.db，可重复可测；CLI `python -m server.services.recovery drill`） |
 | `core/sync_lock.py` | 内存同步锁：一进程同时一个 sync；超 300s 视为 stale 可重取（崩溃自愈） |
 | `core/logrotate.py` | 服务端日志定期清理：`.sync/logs` 下 `server.log.*` 轮转文件，每日 3 点后清扫超 retention 天数的 |
 | `core/types.py` | 跨层值对象：`ModelConfig`（base-layer leaf，被 `server.config` 与 `server.agent` 共同 import）+ `FileEntry`（文件状态快照，卡 2 迁入） |
@@ -33,7 +33,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `routes/` | Web 路由：6 个 URL 前缀域，每域一模块 | [routes/README.md](routes/README.md) |
 | `config/` | YAML 配置解析包（core / ai / log / notifications / bgagent） | [config/README.md](config/README.md) |
 | `core/` | 共享内核（零上行依赖，`tests/test_architecture.py` 钉死）：events 总线 · privacy 读边界 · sync_lock · logrotate · types（FileEntry/ModelConfig） | — |
-| `services/` | 应用层领域服务：ledger（变更账本唯一写面）· sync（三向分类纯函数）· egress（出域台账）· trash（回收站用例，卡 5 迁入） | — |
+| `services/` | 应用层领域服务：ledger（变更账本唯一写面）· sync（三向分类纯函数）· egress（出域台账）· trash（回收站用例，卡 5 迁入）· proposals（提案状态机）· snapshots（pre-image 快照可逆层）· recovery（恢复演练）（后三件卡 6 迁入） | — |
 | `prompts/` | 提示词：bgagent 各角色 prompt（md）+ agent system prompt（`system.md`） | — |
 | `templates/` | Web UI 静态资源：`index.html` 壳 + `js/` + `style.css`（`/static` 挂载源） | — |
 
@@ -53,7 +53,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `SnapshotWatcher` | `(vault_dir, db_conn=None, on_file_created=None, on_file_modified=None, on_file_moved=None, on_file_deleted=None, debounce=1.5, reconcile_interval=30.0)` | 快照对比 watcher |
 | `proposals.create` / `advance` | `create(conn, vault_dir, type, actor, run_id, source_refs, justification, payload=None, now=None)` / `advance(conn, vault_dir, record_id, new_status, actor, reject_reason="")` | 提案创建 / 状态迁移 |
 | `snapshots.capture` / `finalize` / `rollback` | `capture(conn, vault_dir, path, op, actor, *, run_id="", call_id="", new_path="", now=None)` / `finalize(conn, snapshot, post_hash)` / `rollback(conn, vault_dir, call_id) -> dict` | pre-image 捕获 / 落定 / 回滚 |
-| `run_recovery_drill` | `(vault_dir) -> dict` | 恢复演练（`recovery.py`，CLI `python -m server.recovery drill <vault>`） |
+| `run_recovery_drill` | `(vault_dir) -> dict` | 恢复演练（`services/recovery.py`，CLI `python -m server.services.recovery drill <vault>`） |
 | `SyncLock.try_acquire` / `.release` | `-> bool` / `-> None` | 内存同步锁（`core/sync_lock.py`） |
 
 ## 关键设计
@@ -187,6 +187,6 @@ spec `~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`。
 
 ```bash
 python -m server.main config.yaml          # 启动服务（默认端口 9888）
-python -m server.recovery drill <vault>    # 运行恢复演练（index.db 可重建性证明）
+python -m server.services.recovery drill <vault>  # 运行恢复演练（index.db 可重建性证明）
 md-vault-mcp                               # MCP stdio 独立入口
 ```

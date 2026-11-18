@@ -59,7 +59,7 @@ class DeleteDocTool(DocTool):
         # the snapshot (the file is intact); a failed record leaves the
         # file gone but the snapshot still rollback-able.
         from ...services import ledger
-        from ...snapshots import capture, discard, finalize, gc_after_capture
+        from ...services.snapshots import capture, discard, finalize, gc_after_capture
         from ...vault.db.conn import get_ledger_conn
 
         conn = get_ledger_conn()

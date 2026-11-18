@@ -407,7 +407,7 @@ def test_change_tick_still_idle_without_human_event(db_conn, vault_dir, tmp_path
 
 def _adopted_proposal(vault_dir, ledger_conn, title="wake"):
     """Create a proposal record and drive it to adopted (arms the executor scan)."""
-    from server import proposals
+    from server.services import proposals
 
     rec = proposals.create(
         ledger_conn, vault_dir, "summary", actor="test", run_id="wake-test",

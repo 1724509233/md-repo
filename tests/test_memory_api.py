@@ -18,7 +18,7 @@ from datetime import datetime
 
 from fastapi.testclient import TestClient
 
-from server import proposals
+from server.services import proposals
 from server.api import create_app
 from server.vault.db.changes import log_change
 

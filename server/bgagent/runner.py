@@ -157,7 +157,7 @@ def _run_records(run_id: str, started_at: float) -> list[dict]:
     no-connection/degraded — the run proceeds, the console simply lacks the
     deep links.
     """
-    from .. import proposals
+    from ..services import proposals
     from ..vault.db.conn import get_ledger_conn
 
     conn = get_ledger_conn()

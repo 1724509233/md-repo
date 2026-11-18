@@ -7,7 +7,7 @@ revive() function is tested directly with the endpoint's error parity
 """
 import pytest
 
-from server import proposals
+from server.services import proposals
 from server.vault.db import conn as db_handle
 from server.vault.db.schema import init_ledger_db
 
