@@ -69,6 +69,9 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
    树行内改名框首当其冲） */
 button, .tree-row, .tree-file, .rlabel, #current-file { -webkit-user-select: none; user-select: none; }
 input, textarea { -webkit-user-select: text; user-select: text; }
+/* 豁免：搜索结果文本需可划词抄录（树搜索下拉行 + 搜索页结果卡，后者 button 化后语义保留）——
+   button 语义与划选共存；caret 点击后滞留的 mac 风险此两面可控（结果行点击即跳转/关下拉，选区不留存） */
+.search-item, .sp-card { -webkit-user-select: text; user-select: text; }
 
 /* ============ 焦点环内描（P2②）============ */
 /* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
@@ -835,7 +838,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .sp-empty-t2 { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: center; }
 /* 平铺卡片：每个 segment 独立成卡（B 变体 .f-card）；flex-shrink:0 —— 卡片不可压缩，
    超出由 .sp-results 滚动（否则默认 shrink:1 + overflow:hidden 会让卡片被压矮而非出滚动条） */
-.sp-card { flex-shrink: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px 0; overflow: hidden; cursor: pointer; transition: border-color .15s, background-color .15s; }
+.sp-card { flex-shrink: 0; appearance: none; width: 100%; text-align: left; font: inherit; color: inherit;
+  /* 原生 button 化（键盘可达，待办 e96cf4ed）UA 重置按 .src-link 先例；焦点环走 .sp-results :focus-visible inset 家族（:80） */
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px 0; overflow: hidden; cursor: pointer; transition: border-color .15s, background-color .15s; }
 .sp-card:hover, .sp-card.active { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
 .sp-top { display: flex; align-items: baseline; gap: 8px; }
 .sp-name { font-size: 13px; font-weight: 500; flex-shrink: 0; color: var(--ink); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }

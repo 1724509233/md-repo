@@ -297,7 +297,7 @@ export const SearchPanel = {
         </div>
         <!-- 平铺卡片：每个 segment 独立成卡 -->
         <template v-else>
-          <div v-for="(item, i) in shaped" :key="item.path + '-' + i"
+          <button v-for="(item, i) in shaped" :key="item.path + '-' + i" type="button"
             class="sp-card" :class="{ active: i === activeIndex }"
             :title="item.path"
             @click="pickItem(item, i)" @mouseenter="activeIndex = i">
@@ -309,7 +309,7 @@ export const SearchPanel = {
             <span v-if="item.heading" class="sp-hchip" :title="item.heading">{{ item.heading }}</span>
             <div class="sp-snip" v-html="renderSnippet(item.content, searchQuery)"></div>
             <div class="sp-bar"><i :style="{ width: item.rel + '%' }"></i></div>
-          </div>
+          </button>
 
           <!-- 底部：显式 fuzzy 请求进行中 → 展示更多（relaxed 有命中且 fuzzy 未跑）→ 耗尽终态 -->
           <div v-if="moreLoading && results.length > 0" class="sp-prefetching">
