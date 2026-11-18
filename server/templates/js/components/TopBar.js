@@ -1,7 +1,8 @@
 /* TopBar 组件：文件路径 + 模式按钮 + 目录浮层（P4-3）+ 保存/下载 */
-const { ref, watch, nextTick, onMounted, onBeforeUnmount } = Vue
+const { ref, watch, computed, nextTick, onMounted, onBeforeUnmount } = Vue
 import { ICONS } from '../utils/icons.js'
 import { initMenuNav } from '../utils/menuNav.js'
+import { isPrivacyScoped } from '../utils/privacy.js'
 
 export const TopBar = {
   name: 'TopBar',
@@ -16,7 +17,8 @@ export const TopBar = {
     tocOpen: { type: Boolean, default: false },
     tocItems: { type: Array, default: () => [] },
     relOpen: { type: Boolean, default: false },  // 关联侧栏开启（spec §6.4 候选①；激活态反馈，只变色不变几何）
-    aiOpen: { type: Boolean, default: false }    // AI 面板展开 ⇔ 顶栏紧凑态（文字展示与面板展开互斥，2026-11-17 用户定稿）
+    aiOpen: { type: Boolean, default: false },   // AI 面板展开 ⇔ 顶栏紧凑态（文字展示与面板展开互斥，2026-11-17 用户定稿）
+    privacyDirs: { type: Array, default: () => [] }  // 隐私名单回显（spec 2026-11-18 §2.5）：当前文档首段命中 → 「模型不可见」徽标
   },
   emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
@@ -80,7 +82,10 @@ export const TopBar = {
     watch(() => props.moreMenuOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
     watch(() => props.notifOpen, v => { if (v && props.tocOpen) emit('toggleToc') })
 
-    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace }
+    // 隐私徽标（spec §2.5）：当前文档落在隐私目录（首段命中）→ 编辑器头「锁 · 模型不可见」
+    const docPrivate = computed(() => !!props.currentPath && isPrivacyScoped(props.privacyDirs, props.currentPath))
+
+    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, docPrivate }
   },
   template: `
     <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
@@ -93,6 +98,9 @@ export const TopBar = {
 
       <!-- 当前文件路径 -->
       <span id="current-file" class="flex-1 truncate">{{ currentPath || '未选择文档' }}</span>
+
+      <!-- 隐私徽标（spec 2026-11-18 §2.5）：文档在隐私目录内 → 「锁 · 模型不可见」（中性灰墨，非告警） -->
+      <span v-if="docPrivate" class="priv-badge" title="此文档位于隐私目录，内容模型不可见"><span v-html="ICONS_LOCAL.lock"></span><span class="priv-badge-label">模型不可见</span></span>
 
       <!-- 通知铃铛 -->
       <button data-notif-bell

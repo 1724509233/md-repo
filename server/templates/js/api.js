@@ -285,6 +285,22 @@ export const api = {
     }
     if (!res.ok) throw new Error(`rollback → ${res.status}`)
     return res.json()
+  },
+
+  // ── 出域审计（spec 2026-11-18 §3.5：监控页⑧块消费）──
+
+  /** GET /api/egress/status — 出域端点快照（{cloud_endpoints:[host...], last_ts}） */
+  async getEgressStatus() {
+    const res = await fetch('/api/egress/status')
+    if (!res.ok) throw new Error(`egress status → ${res.status}`)
+    return res.json()
+  },
+
+  /** GET /api/egress — 出域账本行（ts 倒序，≤limit 行；{rows:[{ts,channel,actor,run_id,endpoint_host,model,path,via}]}） */
+  async getEgress(limit = 50) {
+    const res = await fetch('/api/egress?limit=' + limit)
+    if (!res.ok) throw new Error(`egress → ${res.status}`)
+    return res.json()
   }
 }
 

@@ -1,6 +1,7 @@
 /* MonitorPage 组件：后台监控页 · L1（定稿设计 design/console-v5-prune.html 场景 03 · 非对称网格 02E）
  * 七区块 row-major：组 1「状态（健康吗）」①九态 ∣ ②异常清单 / 组 2「系统（在干什么）」
- *   ③后台任务 ∣ ④执行器 / ⑤召回（通栏）/ ⑥采纳提案（通栏）/ ⑦回滚（通栏，spec 2026-11-14）。
+ *   ③后台任务 ∣ ④执行器 / ⑤召回（通栏）/ ⑥采纳提案（通栏）/ ⑦回滚（通栏，spec 2026-11-14）
+ *   / ⑧出域（通栏，spec 2026-11-18 §3.5）。
  * 空间：≥1024px 网格 1200px（列比 1:1.6）· ≤1023px 单列零重排（= 场景 04 窄屏回退）。
  * 零态 = 常驻淡显：七网格单元永远在场，计数 = 0 → 卡内容 = 淡显占位（.zline：无异常 / 无终态 / 无召回流量 / 无最近调用）。
  * 快照口径：30s 轮询 = 无时序数据，刻度条 / 比例条静态，不画动画填充 / 趋势曲线。
@@ -363,6 +364,49 @@ export const MonitorPage = {
       if (rs) rs.conflict = null
     }
 
+    // ─── ⑧ 出域（spec 2026-11-18 §3.5）：端点快照行 + 按需明细账本（最近 50 行，fold 层同召回 L2）。
+    //     快照 = 开页即拉、页面可见期 30s 跟一轮；「更新于 HH:mm」= 本块快照到达时刻
+    //     （与页头记忆脉搏的「更新于」异源异节奏，二者互不折算）。账本行 = 首次展开拉取，手动刷新两取。
+    //     host 可展示（判断需要，进 title 与明细头行）；key 与完整 URL 段永不出现在本 UI（红线 7）。───
+    const egStatus = ref(null)   // {cloud_endpoints:[host...], last_ts}
+    const egAt = ref('')         // 快照到达时间（HH:mm）；'' = 尚未取到
+    const egOpen = ref(false)
+    const egLoading = ref(false)
+    const egRows = ref(null)     // null = 尚未加载；[] = 加载过且无记录
+    const egErr = ref(null)      // 只放用户文案（服务端原文含端点段，不透传）
+    const egN = computed(() =>
+      (egStatus.value && Array.isArray(egStatus.value.cloud_endpoints)) ? egStatus.value.cloud_endpoints.length : null)
+    const egHosts = computed(() => (egStatus.value && egStatus.value.cloud_endpoints) || [])
+    async function loadEgressStatus() {
+      try {
+        egStatus.value = await api.getEgressStatus()
+        egAt.value = fmtHM(Date.now() / 1000)
+      } catch (e) { /* silent：保留旧快照（同记忆脉搏口径） */ }
+    }
+    async function loadEgressRows() {
+      if (egLoading.value) return
+      egLoading.value = true
+      egErr.value = null
+      try {
+        const d = await api.getEgress(50)
+        egRows.value = (d && d.rows) || []
+      } catch (e) {
+        egErr.value = '出域账本拉取失败，可稍后重试'
+      } finally {
+        egLoading.value = false
+      }
+    }
+    function refreshEgress() { loadEgressStatus(); loadEgressRows() }
+    function toggleEgress() {
+      egOpen.value = !egOpen.value
+      if (egOpen.value && egRows.value === null) loadEgressRows()
+    }
+    let egTimer = null
+    watch(() => state.monitoring, (open) => {
+      clearInterval(egTimer); egTimer = null
+      if (open) { loadEgressStatus(); egTimer = setInterval(loadEgressStatus, 30000) }
+    }, { immediate: true })
+
     function back() { emit('back') }
     function openReport(h) { if (h && h.report) emit('open-doc', h.report) }
 
@@ -373,6 +417,7 @@ export const MonitorPage = {
       finals, back, openReport, fmtDT, relRun,
       calls, rowState, askRollback, cancelRollback, confirmRollback, dismissConflict,
       RB_META, RB_BTN, RB_BTN_DANGER, RB_CONFLICT,
+      egN, egAt, egOpen, egLoading, egRows, egErr, egHosts, toggleEgress, refreshEgress,
       typeIcons: TYPE_ICONS, typeIconDefault: TYPE_ICON_DEFAULT,
       mwrapRef, alertFresh, updatedAt
     }
@@ -600,6 +645,49 @@ export const MonitorPage = {
               </div>
             </div>
             <div v-else class="zline">无最近调用</div>
+          </div>
+
+          <!-- ⑧ 出域 = 模型端点快照 + 账本明细（spec 2026-11-18 §3.5，通栏，组 2 尾部）。
+               状态行 = 「当前出域端点：N 个 · 更新于 HH:mm」（host 集进 title 与明细头行；key 永不出现）；
+               展开 = 按需层：最近 50 行（ts 倒序），列 = 时间/通道/actor/model/文档 -->
+          <div class="mcard full mm-card">
+            <div class="mc-h"><span class="mc-t">出域</span></div>
+            <div class="eg-line" :title="egHosts.length ? '出域端点：' + egHosts.join(' · ') : '模型端点全部本地（无出域）'">当前出域端点：{{ egN == null ? '…' : egN }} 个 · 更新于 {{ egAt || '…' }}</div>
+            <button class="rcl-l2btn" type="button"
+              :aria-expanded="egOpen" aria-controls="mp-fold-eg"
+              title="最近 50 条出域记录"
+              @click="toggleEgress">
+              <span class="car"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></span>展开明细</button>
+            <div class="fold" :class="{ open: egOpen }" id="mp-fold-eg">
+              <div>
+                <div class="l2-pad">
+                  <div class="l2-top">
+                    <span v-if="egHosts.length" class="l2-src">{{ egHosts.join(' · ') }}</span>
+                    <button class="l2-refresh" type="button" title="重新拉取出域明细" aria-label="重新拉取出域明细" :disabled="egLoading" @click="refreshEgress">
+                      <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6"/></svg>
+                    </button>
+                  </div>
+                  <div v-if="egErr" class="tcount" style="align-self:flex-start">{{ egErr }}</div>
+                  <div v-else-if="!egRows && egLoading">加载出域明细…</div>
+                  <div v-else-if="!egRows" class="zline">尚未加载</div>
+                  <div v-else class="mtable">
+                    <table>
+                      <thead><tr><th>时间</th><th>通道</th><th>actor</th><th>model</th><th>文档</th></tr></thead>
+                      <tbody>
+                        <tr v-if="!egRows.length"><td colspan="5">无出域记录</td></tr>
+                        <tr v-for="(r, i) in egRows" :key="i">
+                          <td>{{ fmtDT(r.ts) }}</td>
+                          <td>{{ r.channel }}</td>
+                          <td :title="r.actor">{{ r.actor }}</td>
+                          <td :title="r.model">{{ r.model || '—' }}</td>
+                          <td :title="r.path">{{ r.path }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
         </div>

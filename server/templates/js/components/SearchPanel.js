@@ -6,6 +6,8 @@
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights } from '../utils/search.js'
+import { ICONS } from '../utils/icons.js'
+import { isPrivacyScoped } from '../utils/privacy.js'
 
 const SEARCH_TOP_K = 8
 
@@ -61,6 +63,8 @@ export const SearchPanel = {
     const inputEl = ref(null)
     const rootEl = ref(null) // 组件根元素（作用域查询，避免桌面/移动两实例 id 冲突）
 
+    const ICONS_LOCAL = ICONS
+
     // 共享控制器写入的响应式容器（spec §4.3：与树内下拉同一状态机）
     // 字段必须是 ref（控制器经 .value 读写）；不能包 reactive（会自动解包 ref）
     const state = {
@@ -73,6 +77,8 @@ export const SearchPanel = {
     }
 
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
+    // 隐私回显（spec 2026-11-18 §2.5，display-only）：结果命中隐私目录 → 同款小锁（差集可视化）
+    const isPriv = p => isPrivacyScoped(appState ? appState.privacyDirs : [], p)
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state,
       focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
@@ -218,6 +224,7 @@ export const SearchPanel = {
       results, loading, activeIndex, moreLoading, fuzzyDone,
       shownRowCount, SEARCH_TOP_K,
       pickItem, onKeydown, renderSnippet, search,
+      isPriv, ICONS_LOCAL,
       // ① tag 选择器
       tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
       // ② 权重 popover
@@ -303,6 +310,7 @@ export const SearchPanel = {
             @click="pickItem(item, i)" @mouseenter="activeIndex = i">
             <div class="sp-top">
               <span v-if="item.via === 'tag' || item.via === 'both'" class="sp-via-badge">tag</span>
+              <span v-if="isPriv(item.path)" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS_LOCAL.lock"></span>
               <span class="sp-name">{{ item.name }}</span>
               <span class="sp-path">{{ item.path }}</span>
             </div>

@@ -52,6 +52,7 @@ const state = reactive({
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
+  privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
 })
@@ -101,7 +102,7 @@ function exitMonitorPage() {
 
 async function loadDocs() {
   const data = await api.getDocs()
-  if (data) { state.files = data.files; state.dirs = data.dirs }  // 304 → null，保持旧值
+  if (data) { state.files = data.files; state.dirs = data.dirs; state.privacyDirs = data.privacy_dirs || [] }  // 304 → null，保持旧值
   // false = 304（行尚未消费入 DB）：需要条件推进游标的调用方不得推进
   return !!data
 }
@@ -186,11 +187,19 @@ async function openDoc(path, heading, fromLink) {
 
 async function saveDoc() {
   // spec §5.1：返回成败布尔，**自身不再 toast**——提示策略归调用方
-  // （切换守卫 = docNav.guardSwitch 挂「未离开当前文档」+重试；手动保存 = saveWithRetry）
+  // （切换守卫 = docNav.guardSwitch 挂「未离开当前文档」+重试；手动保存 = saveWithRetry）。
+  // 注意该契约管的是「保存失败」提示；下方隐私引用 advisory 是另一件事：保存成功后的
+  // display-only 回显（spec 2026-11-18 §2.6），单点放本函数 = 手动保存 / 更多菜单 /
+  // 切换守卫自动保存全路径都覆盖，调用方零重复。
   if (!state.currentPath) return false
   try {
-    await api.saveDoc(state.currentPath, state.docContent)
+    const res = await api.saveDoc(state.currentPath, state.docContent)
     state.dirty = false
+    const refs = res && Array.isArray(res.privacy_refs) ? res.privacy_refs : []
+    if (refs.length) {
+      showToast(`本次保存引用了隐私目录 ${refs.length} 处：${refs.slice(0, 3).join('、')}` +
+        `${refs.length > 3 ? '…' : ''}（内容已保存；模型可见这些引用）`)
+    }
     return true
   } catch (e) {
     return false
@@ -1009,7 +1018,7 @@ export function createApp() {
           <main id="main-content" tabindex="-1" class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
-              :doc-missing="state.docMissing"
+              :doc-missing="state.docMissing" :privacy-dirs="state.privacyDirs"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen" :ai-open="state.aiOpen"

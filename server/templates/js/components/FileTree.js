@@ -6,6 +6,7 @@ import { docHash } from '../utils/vaultLinks.js'
 import { showToast } from '../utils/toast.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
+import { isPrivacyScoped, isPrivacyDirHit } from '../utils/privacy.js'
 
 const SEARCH_TOP_K = 8
 
@@ -33,7 +34,12 @@ const TreeNode = {
   setup(props, { emit }) {
     const treeOps = inject('treeOps')
     const treeState = inject('treeState')
+    const appState = inject('state')
     const ICONS_LOCAL = ICONS
+    // 隐私回显（spec 2026-11-18 §2.5，display-only）：名单命中的目录行 = 锁 glyph + 弱色调
+    //（折叠态锁随行本体常驻可见）；其下文件与子目录仅继承弱色调，不逐行挂锁。
+    function isPriv(p) { return !!appState && isPrivacyScoped(appState.privacyDirs, p) }
+    function isPrivHit(p) { return !!appState && isPrivacyDirHit(appState.privacyDirs, p) }
     // 从 FileTree 父组件注入展开状态
 
     function isExpanded(dirPath) {
@@ -53,7 +59,7 @@ const TreeNode = {
       if (e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); emit('toggle', path) }
     }
 
-    return { treeOps, ICONS_LOCAL, isExpanded, childPath, onDirKeydown, docHash }
+    return { treeOps, ICONS_LOCAL, isExpanded, childPath, onDirKeydown, docHash, isPriv, isPrivHit }
   },
   template: `
     <div>
@@ -72,7 +78,7 @@ const TreeNode = {
         <div class="tree-group group" :class="{ open: isExpanded(childPath(name)) }">
           <div class="tree-row w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left cursor-pointer"
             :data-dir="childPath(name)"
-            :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name) }"
+            :class="{ 'tree-drop-target': treeOps.dropTarget === childPath(name), 'tree-priv': isPriv(childPath(name)) }"
             role="button" tabindex="0"
             :aria-expanded="isExpanded(childPath(name)) ? 'true' : 'false'"
             @click="treeOps.isEditing(childPath(name)) || $emit('toggle', childPath(name))"
@@ -88,6 +94,7 @@ const TreeNode = {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
             <span v-html="ICONS_LOCAL.folder"></span>
+            <span v-if="isPrivHit(childPath(name))" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS_LOCAL.lock"></span>
             <input v-if="treeOps.editing && treeOps.editing.path === childPath(name) && treeOps.editing.mode === 'rename'"
               class="tree-edit w-full px-1 py-0.5 text-sm border border-border rounded outline-none"
               v-model="treeOps.editing.name" @keydown.stop="treeOps.onEditKeydown($event)"
@@ -113,7 +120,7 @@ const TreeNode = {
       <div v-for="f in node.files" :key="f.path" class="group">
         <a class="tree-file w-full flex items-center gap-1.5 text-left px-2 py-1.5 rounded-md cursor-pointer"
           :href="docHash(f.path)"
-          :class="{ active: f.path === currentPath }"
+          :class="{ active: f.path === currentPath, 'tree-priv': isPriv(f.path) }"
           :aria-current="f.path === currentPath ? 'page' : undefined"
           @click.prevent="treeOps.isEditing(f.path) || $emit('select', f.path)"
           @contextmenu.prevent="treeOps.openMenu($event, f.path, false)"
@@ -202,6 +209,8 @@ export const FileTree = {
 
     const manage = inject('manage')
     const fileState = inject('state')
+    // 隐私回显（树内搜索下拉，spec §2.5：Web 搜索面不过滤隐私命中——「你看得见、模型看不见」差集可视化）
+    const isPriv = p => isPrivacyScoped(fileState.privacyDirs, p)
 
     // 操作菜单：{ path, isDir, x, y, isRoot } | null
     const menu = ref(null)
@@ -557,7 +566,8 @@ export const FileTree = {
       onNavDragOver, onNavDrop, ROOT_TARGET,
       moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
       docHash,
-      expandToPath, revealActive, collapseAll
+      expandToPath, revealActive, collapseAll,
+      isPriv
     }
   },
   template: `
@@ -595,6 +605,7 @@ export const FileTree = {
             @click="pickResult(item, i)" @mouseenter="activeIndex = i">
             <div class="flex items-center gap-1.5">
               <span class="search-item-name">{{ item.name }}</span>
+              <span v-if="isPriv(item.path)" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS.lock"></span>
             </div>
             <div v-if="item.heading" class="search-item-heading mt-0.5" :title="item.heading">{{ item.heading }}</div>
           </button>

@@ -1700,3 +1700,19 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .rel-sheet-handle::before { transition: none; }
   .c-sec.leaving { transition: none; }
 }
+
+/* ============ 隐私区回显（spec 2026-11-18 §2.5）============
+   中性属性不是危险：灰墨弱色调（--ink-soft）+ 同源小锁 glyph（ICONS.lock），
+   禁用告警红；三处（文件树 / 编辑器头徽标 / 搜索结果行）共用本分节。 */
+/* 树：名单命中目录行与其下文件继承弱色调（active 态保持黄铜，徽标另言隐私） */
+.tree-row.tree-priv, .tree-file.tree-priv:not(.active) { color: var(--ink-soft); }
+.tree-priv .tree-count { opacity: .8; }
+/* 小锁 glyph：树目录行 / 搜索结果行共用；随所在行文字色（树内弱调、搜索内灰墨） */
+.priv-lock { display: inline-flex; flex-shrink: 0; }
+.search-item .priv-lock, .sp-top .priv-lock { color: var(--ink-soft); }
+/* 编辑器头徽标：同 .spill 形态家族（pill + 边框 + 弱色），锁 glyph 替代状态点 */
+.priv-badge { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); white-space: nowrap; }
+.priv-badge .icon { width: 11px; height: 11px; }
+@media (max-width: 479px) { .priv-badge-label { display: none; } } /* 窄屏收纳文案，锁本体常驻（同顶栏图标化口径） */
+/* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
+.eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
