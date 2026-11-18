@@ -305,7 +305,7 @@ def test_read_doc_meta_paths(tmp_path: Path):
 
 def test_get_related_docs_meta_paths(vault_dir: Path, db_conn):
     """get_related_docs stamps every surfaced path (user + machine layers)."""
-    from server.vault import init_graph
+    from server.vault.db.graph_sql import init_graph
     from server.vault.orchestration.indexer import graph_extract_file
 
     init_graph(db_conn)
@@ -324,7 +324,7 @@ def test_get_related_docs_meta_paths(vault_dir: Path, db_conn):
 
 def test_get_related_docs_meta_paths_empty(vault_dir: Path, db_conn):
     """No-links branch: meta.paths = [] (nothing surfaced)."""
-    from server.vault import init_graph
+    from server.vault.db.graph_sql import init_graph
 
     init_graph(db_conn)
     (vault_dir / "lonely.md").write_bytes(b"# Lonely\n\nNo links at all.")

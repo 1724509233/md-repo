@@ -20,9 +20,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 from server.api import create_app
 from server.services import ledger
 from server.services.ledger import consume
-from server.vault import init_db, upsert_file
+from server.vault.db.file_index import upsert_file
 from server.vault.db import conn as db_handle
-from server.vault.db.schema import init_ledger_db
+from server.vault.db.schema import init_db, init_ledger_db
 
 
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",

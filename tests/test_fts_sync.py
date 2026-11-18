@@ -11,7 +11,7 @@ Covers:
 """
 from __future__ import annotations
 
-from server.vault import init_db
+from server.vault.db.schema import init_db
 from server.vault.db.segments_sql import segments_search
 from server.vault.orchestration.file_ops import apply_change
 from server.vault.orchestration.indexer import ensure_indexed

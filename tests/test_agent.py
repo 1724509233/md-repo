@@ -117,7 +117,7 @@ def test_tool_permission_declarations():
 
 def test_execute_get_related_docs(vault_dir, db_conn, ledger_conn):
     """get_related_docs returns linked documents."""
-    from server.vault import init_graph
+    from server.vault.db.graph_sql import init_graph
     from server.vault.orchestration.indexer import graph_extract_file
 
     init_graph(db_conn)
@@ -804,7 +804,7 @@ def test_parse_since_invalid():
 
 def test_execute_recent_changes(tmp_path: Path):
     from server.agent import execute_tool
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
     from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
@@ -830,7 +830,7 @@ def test_execute_recent_changes(tmp_path: Path):
 
 def test_execute_recent_changes_filter(tmp_path: Path):
     from server.agent import execute_tool
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
     from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
@@ -861,7 +861,7 @@ def test_execute_recent_changes_filter(tmp_path: Path):
 
 def test_execute_recent_changes_empty(tmp_path: Path):
     from server.agent import execute_tool
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
 
     vault = tmp_path / "vault"
     vault.mkdir()
@@ -884,7 +884,8 @@ def test_execute_recent_changes_no_db(tmp_path: Path):
 def test_execute_recent_changes_dir_prefix(tmp_path: Path):
     """path="test2" returns test2 itself + everything under test2/, not test3."""
     from server.agent import execute_tool
-    from server.vault import init_db, log_change
+    from server.vault.db.changes import log_change
+    from server.vault.db.schema import init_db
     from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
@@ -922,7 +923,8 @@ def test_execute_recent_changes_dir_prefix(tmp_path: Path):
 def test_execute_recent_changes_prefix_boundary(tmp_path: Path):
     """path="test" must NOT match test2/a.md (the / boundary prevents sibling-prefix matches)."""
     from server.agent import execute_tool
-    from server.vault import init_db, log_change
+    from server.vault.db.changes import log_change
+    from server.vault.db.schema import init_db
     from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
@@ -943,7 +945,7 @@ def test_execute_recent_changes_prefix_boundary(tmp_path: Path):
 def test_execute_recent_changes_prefix_metachars(tmp_path: Path):
     """% and _ in the path param are treated as literal characters, not LIKE wildcards."""
     from server.agent import execute_tool
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
     from server.vault.orchestration.file_ops import apply_change
 
     vault = tmp_path / "vault"
@@ -1385,7 +1387,7 @@ def test_write_source_attribution(tmp_path: Path):
     from unittest.mock import ANY
 
     from server.agent import execute_tool, ToolContext
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
 
     vault = tmp_path / "vault"
     vault.mkdir()

@@ -25,7 +25,7 @@ import hashlib
 
 from server.services import ledger
 from server.agent import ToolContext, execute_tool
-from server.vault import upsert_file
+from server.vault.db.file_index import upsert_file
 from server.vault.orchestration.indexer import index_segments
 
 

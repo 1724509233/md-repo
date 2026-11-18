@@ -100,7 +100,7 @@ def test_notifications_proposal_paths_migration(tmp_path: Path):
     """
     import sqlite3
 
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
 
     db_path = tmp_path / "index.db"
     conn = sqlite3.connect(str(db_path))
@@ -159,7 +159,7 @@ def test_notifications_report_paths_migration(tmp_path: Path):
     """
     import sqlite3
 
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
 
     db_path = tmp_path / "index.db"
     conn = sqlite3.connect(str(db_path))
@@ -350,7 +350,7 @@ def test_notifications_run_id_trigger_migration(tmp_path: Path):
     （30 天易失铃数据，无需丢弃存量）。"""
     import sqlite3
 
-    from server.vault import init_db
+    from server.vault.db.schema import init_db
 
     db_path = tmp_path / "index.db"
     conn = sqlite3.connect(str(db_path))

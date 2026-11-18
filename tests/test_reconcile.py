@@ -10,7 +10,10 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from server.vault import FileEntry, init_db, reconcile, upsert_file
+from server.core.types import FileEntry
+from server.vault.db.file_index import upsert_file
+from server.vault.db.schema import init_db
+from server.vault.orchestration.file_ops import reconcile
 
 SAMPLE = b"# Test note\n\nSample content.\n"
 
