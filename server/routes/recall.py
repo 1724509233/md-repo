@@ -127,12 +127,9 @@ def register(app, ctx) -> None:
 
     @app.get("/api/recall")
     async def recall_log(since: float = 0.0) -> list[dict]:
-        rows = ctx.db_conn.execute(
-            "SELECT ts, source, query, path, score, recall FROM recall_log "
-            "WHERE ts > ? ORDER BY ts DESC LIMIT 500",
-            (since,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        from ..vault.db import recall as recall_db
+
+        return recall_db.recall_log_rows_since(ctx.db_conn, since)
 
     @app.get("/api/recall/stats")
     async def recall_stats(days: float = 30, half_life: float = 30.0) -> dict:

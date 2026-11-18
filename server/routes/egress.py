@@ -10,8 +10,9 @@ Two routes:
   endpoint set + the last audited timestamp.
 
 Reads are plain SELECTs with no lock (card-5 reader discipline: the
-non-reentrant ``_ledger_lock`` is never held by a reader; the write face
-lives in ``server/vault/db/egress_sql.py``).
+non-reentrant ``_ledger_lock`` is never held by a reader); since card 7
+the SQL itself lives in ``server/vault/db/egress_sql.py`` — this route
+keeps the limit clamp and the loopback policy filter.
 
 UI norm (spec §3.5): ``endpoint_host`` is display-worthy (the judgement
 needs it) — keys and full URL segments never enter this payload (the table
@@ -32,11 +33,10 @@ each has recorded its first run.
 from __future__ import annotations
 
 from ..services.egress import _is_loopback_host, parse_endpoint
+from ..vault.db import egress_sql
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 500
-
-_COLS = "ts, channel, actor, run_id, endpoint_host, model, path, via"
 
 
 def register(app, ctx) -> None:
@@ -47,24 +47,9 @@ def register(app, ctx) -> None:
         run_id: str | None = None,
         limit: int = _DEFAULT_LIMIT,
     ) -> dict:
-        where: list[str] = []
-        params: list = []
-        if path:
-            where.append("path = ?")
-            params.append(path)
-        if host:
-            where.append("endpoint_host = ?")
-            params.append(host)
-        if run_id:
-            where.append("run_id = ?")
-            params.append(run_id)
         lim = max(1, min(int(limit), _MAX_LIMIT))
-        sql = f"SELECT {_COLS} FROM egress_log"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY ts DESC LIMIT ?"
-        params.append(lim)
-        rows = [dict(r) for r in ctx.ledger_conn.execute(sql, params)]
+        rows = egress_sql.query_rows(
+            ctx.ledger_conn, path=path, host=host, run_id=run_id, limit=lim)
         return {"rows": rows}
 
     @app.get("/api/egress/status")
@@ -75,13 +60,8 @@ def register(app, ctx) -> None:
             host = parse_endpoint(getattr(ai, "base_url", None))
             if not _is_loopback_host(host):  # port-aware (endpoint hosts)
                 endpoints.add(host)
-        for r in ctx.ledger_conn.execute(
-            "SELECT DISTINCT endpoint_host AS h FROM egress_log"
-        ):
-            h = r["h"]
+        for h in egress_sql.distinct_hosts(ctx.ledger_conn):
             if h and not _is_loopback_host(h):
                 endpoints.add(h)
-        last_ts = ctx.ledger_conn.execute(
-            "SELECT MAX(ts) FROM egress_log"
-        ).fetchone()[0]
+        last_ts = egress_sql.max_ts(ctx.ledger_conn)
         return {"cloud_endpoints": sorted(endpoints), "last_ts": last_ts}

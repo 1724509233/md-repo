@@ -416,7 +416,10 @@ def register(app, ctx) -> None:
         background-agent trigger state, and recall demand over 7/30 days."""
         from ..services import proposals
         from ..services import snapshots
+        from ..vault.db import changes as changes_db
+        from ..vault.db import notifications as notifications_db
         from ..vault.db import recall as recall_db
+        from ..vault.db import trigger_state as trigger_state_db
 
         # proposals: by_status counts + the awaiting_review review queue.
         # DB records are the source (suggestions/ files are inert legacy projections).
@@ -429,26 +432,21 @@ def register(app, ctx) -> None:
         # alias — aliases absent from the config keep null.
         today = datetime.now().strftime("%Y-%m-%d")
         agents = []
-        rows = ctx.db_conn.execute(
-            "SELECT agent, last_run_ts, armed, runs_date, runs_count "
-            "FROM trigger_state ORDER BY agent"
-        ).fetchall()
+        rows = trigger_state_db.list_states(ctx.db_conn)
         # Run health per alias (the newest notifications row = the newest
         # finished run): last_status / last_status_ts / last_summary /
         # last_report_path + failed_7d (error-row count over 7d) — the
         # monitor page's failed-run face (bug b621b5b4: previously a failed
         # run was only a feed row, with no status/space on the monitor).
-        latest_runs = {r["alias"]: r for r in ctx.db_conn.execute(
-            "SELECT n.alias, n.ts, n.status, n.summary, n.report_path "
-            "FROM notifications n "
-            "JOIN (SELECT alias, MAX(ts) AS mts FROM notifications "
-            "      GROUP BY alias) m ON m.alias = n.alias AND n.ts = m.mts"
-        ).fetchall()}
-        failed_7d = {r["alias"]: r["c"] for r in ctx.db_conn.execute(
-            "SELECT alias, count(*) AS c FROM notifications "
-            "WHERE status = 'error' AND ts >= ? GROUP BY alias",
-            (time.time() - 7 * 86400,),
-        ).fetchall()}
+        latest_runs = {
+            r["alias"]: r
+            for r in notifications_db.latest_run_per_alias_rows(ctx.db_conn)
+        }
+        failed_7d = {
+            r["alias"]: r["c"]
+            for r in notifications_db.error_count_rows_by_alias(
+                ctx.db_conn, time.time() - 7 * 86400)
+        }
         for r in rows:
             runs_today = r["runs_count"] or 0 if r["runs_date"] == today else 0
             caps = (ctx.bg_targets or {}).get(r["agent"]) or {}
@@ -474,11 +472,9 @@ def register(app, ctx) -> None:
             # the unified recall ledger records all three channels — web /
             # agent / mcp — so the poll face can tell them apart).
             by_source_7d = {
-                r["source"] or "": r["c"] for r in ctx.db_conn.execute(
-                    "SELECT source, count(*) AS c FROM recall_queries "
-                    "WHERE ts > ? GROUP BY source",
-                    (time.time() - 7 * 86400,),
-                ).fetchall()
+                r["source"] or "": r["c"]
+                for r in recall_db.query_count_rows_by_source(
+                    ctx.db_conn, time.time() - 7 * 86400)
             }
             recall_out = {
                 "failed_7d": len(recall_db.failed_queries(ctx.db_conn, time.time() - 7 * 86400)),
@@ -501,14 +497,9 @@ def register(app, ctx) -> None:
         # runs_today), last_batch = that row's run_id (null when unrecorded).
         midnight = datetime.now().replace(
             hour=0, minute=0, second=0, microsecond=0).timestamp()
-        exec_row = ctx.db_conn.execute(
-            "SELECT ts, batch_id FROM change_log WHERE source = 'executor' "
-            "ORDER BY ts DESC, seq DESC LIMIT 1"
-        ).fetchone()
-        exec_ops_today = ctx.db_conn.execute(
-            "SELECT count(*) FROM change_log "
-            "WHERE source = 'executor' AND ts >= ?", (midnight,),
-        ).fetchone()[0]
+        exec_row = changes_db.last_change_by_source(ctx.db_conn, "executor")
+        exec_ops_today = changes_db.count_changes_by_source_since(
+            ctx.db_conn, "executor", midnight)
         if exec_row is None:
             executor_out = {"last_op_ts": 0, "ops_today": 0, "last_batch": None}
         else:

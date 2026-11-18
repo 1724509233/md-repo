@@ -158,3 +158,13 @@ def arm_recall(
         )
         conn.commit()
         return armed + count
+
+
+def list_states(conn: sqlite3.Connection) -> list[dict]:
+    """All trigger_state rows (agent order) — the monitor page's agent
+    face (card 7 sink; the single-alias reader is ``get_state``)."""
+    rows = conn.execute(
+        "SELECT agent, last_run_ts, armed, runs_date, runs_count "
+        "FROM trigger_state ORDER BY agent"
+    ).fetchall()
+    return [dict(r) for r in rows]

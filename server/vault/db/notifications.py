@@ -163,3 +163,77 @@ def cleanup_old(conn: sqlite3.Connection, max_age_s: float = 30 * 86400) -> int:
         conn.execute("DELETE FROM notifications WHERE ts < ?", (cutoff,))
         conn.commit()
     return count
+
+
+# ── Read face + read-side marks (lock-free; card 7 SQL sink) ──────────────
+#
+# Same discipline as every other db reader here: the non-reentrant
+# ``_ledger_lock`` is never taken. The mark_* pair commits inside (the
+# route's single-execute-plus-commit becomes one named statement).
+
+
+def list_notifications(conn: sqlite3.Connection, unread_only: bool = False,
+                       limit: int = 50) -> list[dict]:
+    """Feed rows (ts DESC, capped) — the ``unread`` condition is assembled
+    HERE (the SQL text never leaves the db layer)."""
+    query = ("SELECT id, ts, alias, name, status, report_path, summary, read, "
+             "ops_total, files_changed, proposal_paths, report_paths, "
+             "run_id, trigger FROM notifications")
+    params: list = []
+    if unread_only:
+        query += " WHERE read = 0"
+    query += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def latest_run_per_alias_rows(conn: sqlite3.Connection) -> list[dict]:
+    """The newest notifications row per alias (the run-health face:
+    self-join on MAX(ts); caller folds by alias)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT n.alias, n.ts, n.status, n.summary, n.report_path "
+        "FROM notifications n "
+        "JOIN (SELECT alias, MAX(ts) AS mts FROM notifications "
+        "      GROUP BY alias) m ON m.alias = n.alias AND n.ts = m.mts"
+    ).fetchall()]
+
+
+def error_count_rows_by_alias(conn: sqlite3.Connection,
+                              since: float) -> list[dict]:
+    """Error-row counts per alias since ``since`` (``{alias, c}`` —
+    the monitor page's failed-window face)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT alias, count(*) AS c FROM notifications "
+        "WHERE status = 'error' AND ts >= ? GROUP BY alias",
+        (since,),
+    ).fetchall()]
+
+
+def list_unread_since(conn: sqlite3.Connection, since: float,
+                      limit: int = 50) -> list[dict]:
+    """Unread rows after ``since`` (ts DESC, capped) — the sync poll's
+    notification push projection (its own column set, distinct from the
+    console feed's ``list_notifications``)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT ts, alias, name, status, report_path, summary, "
+        "proposal_paths, report_paths, run_id, trigger "
+        "FROM notifications WHERE read = 0 AND ts > ? "
+        "ORDER BY ts DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()]
+
+
+def mark_all_read(conn: sqlite3.Connection) -> None:
+    """Mark every unread row read."""
+    conn.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+    conn.commit()
+
+
+def mark_read(conn: sqlite3.Connection, ids: list[int]) -> None:
+    """Mark the given ids read (placeholder assembly lives here; an empty
+    list is a no-op — the route's 400 validation stays upstream)."""
+    if not ids:
+        return
+    marks = ",".join("?" * len(ids))
+    conn.execute(f"UPDATE notifications SET read = 1 WHERE id IN ({marks})", ids)
+    conn.commit()

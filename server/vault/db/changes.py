@@ -179,3 +179,34 @@ def clear_changes(conn: sqlite3.Connection) -> None:
     """Remove all change events (called on server startup)."""
     conn.execute("DELETE FROM change_log")
     conn.commit()
+
+
+def last_change_by_source(conn: sqlite3.Connection, source: str) -> dict | None:
+    """Newest ``change_log`` row (ts, batch_id) for one source, or None
+    (card 7 sink — the monitor page's executor face, source parameterized)."""
+    row = conn.execute(
+        "SELECT ts, batch_id FROM change_log WHERE source = ? "
+        "ORDER BY ts DESC, seq DESC LIMIT 1",
+        (source,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def count_changes_by_source_since(conn: sqlite3.Connection, source: str,
+                                  since: float) -> int:
+    """``change_log`` row count for one source since ``since`` (card 7
+    sink — the monitor page's executor ops-today)."""
+    return conn.execute(
+        "SELECT count(*) FROM change_log WHERE source = ? AND ts >= ?",
+        (source, since),
+    ).fetchone()[0]
+
+
+def replay_move_delete_rows(conn: sqlite3.Connection) -> list[dict]:
+    """ALL-TIME move/delete rows (seq ASC, unbounded — spec 2026-11-15 §2):
+    the sync lane's deletion-gate replay material (card 7 sink); consumed
+    by ``services.sync.derive_deleted_hashes``."""
+    return [dict(r) for r in conn.execute(
+        "SELECT op, path, old_path, pre_hash FROM change_log "
+        "WHERE op IN ('move', 'delete') ORDER BY seq ASC"
+    ).fetchall()]

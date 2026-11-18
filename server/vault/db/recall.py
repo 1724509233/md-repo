@@ -339,8 +339,9 @@ def low_score_hits(conn: sqlite3.Connection, since_ts: float,
 def feedback_stats(conn: sqlite3.Connection, since_ts: float) -> dict:
     """Answer-quality aggregates over ``recall_feedback`` since ``since_ts``
     (spec 2026-11-13 §1.5 / §5.3 — the ``recall_feedback_stats`` tool's
-    read face; read-only, the feedback write is the /api/agent/feedback
-    endpoint):
+    read face; read-only. The feedback WRITE lands through this module's
+    ``delete_feedback`` / ``upsert_feedback``, called by the
+    /api/agent/feedback route since card 7):
 
     - ``useful`` / ``not_useful``: verdict counts (useful rate =
       useful / (useful + not_useful)).
@@ -460,3 +461,71 @@ def scan_recall_arming(conn: sqlite3.Connection, query_since_id: int,
     new_hit_cursor = max_h if max_h is not None else hit_since_id
 
     return n_queries + n_hits, new_query_cursor, new_hit_cursor
+
+
+# ── Card 7 SQL sink (lock-free readers / route-facing writes) ─────────────
+
+
+def query_count_rows_by_source(conn: sqlite3.Connection,
+                                since: float) -> list[dict]:
+    """recall_queries counts per source since ``since`` (``{source, c}`` —
+    NULL-source folding stays with the caller, it is presentation)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT source, count(*) AS c FROM recall_queries "
+        "WHERE ts > ? GROUP BY source",
+        (since,),
+    ).fetchall()]
+
+
+def ai_click_paths_by_message(conn: sqlite3.Connection,
+                              message_id: str) -> list[str]:
+    """The via=ai click paths attributed to this message_id (spec
+    2026-11-13 §5.3 D22: precise attribution by the recall_clicks.message_id
+    column — no window heuristic). search/preview clicks carry message_id
+    NULL and never match. Distinct paths, sorted."""
+    rows = conn.execute(
+        "SELECT DISTINCT path FROM recall_clicks "
+        "WHERE via = 'ai' AND message_id = ? ORDER BY path",
+        (message_id,),
+    ).fetchall()
+    return [r["path"] for r in rows]
+
+
+def delete_feedback(conn: sqlite3.Connection, session_id: str,
+                    message_id: str) -> None:
+    """Retract a verdict: delete the feedback row (idempotent — deleting a
+    missing row is a no-op, so re-clicking "cancel" is safe)."""
+    conn.execute(
+        "DELETE FROM recall_feedback "
+        "WHERE session_id = ? AND message_id = ?",
+        (session_id, message_id))
+    conn.commit()
+
+
+def upsert_feedback(conn: sqlite3.Connection, *, ts: float, session_id: str,
+                    message_id: str, verdict: str, citations_json: str,
+                    click_paths_json: str | None) -> None:
+    """Insert-or-update the feedback row for (session_id, message_id) —
+    JSON serialization stays with the caller (shaping, card 7)."""
+    conn.execute(
+        "INSERT INTO recall_feedback "
+        "(ts, session_id, message_id, verdict, citations, click_paths) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(session_id, message_id) DO UPDATE SET "
+        "ts = excluded.ts, verdict = excluded.verdict, "
+        "citations = excluded.citations, click_paths = excluded.click_paths",
+        (ts, session_id, message_id, verdict,
+         citations_json, click_paths_json),
+    )
+    conn.commit()
+
+
+def recall_log_rows_since(conn: sqlite3.Connection, since: float,
+                          limit: int = 500) -> list[dict]:
+    """recall_log rows after ``since`` (ts DESC, capped) — the console's
+    recall feed projection."""
+    return [dict(r) for r in conn.execute(
+        "SELECT ts, source, query, path, score, recall FROM recall_log "
+        "WHERE ts > ? ORDER BY ts DESC LIMIT ?",
+        (since, limit),
+    ).fetchall()]

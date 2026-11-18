@@ -34,8 +34,8 @@ Rule keys (JSON keys, stable):
   self-owned connections of the cold-rebuild / drill (spec §7-A1).
 - ``R2_interface_sql`` — ``routes/**`` + ``api.py`` + ``mcp_server.py`` are
   SQL-free. Subset of R1, pinned separately so it zeroes first (cards 7/8).
-  Once a module reaches zero its name is permanently banned from the
-  baseline (review discipline, enforced at review time).
+  Once a module reaches zero its name is permanently banned — enforced by
+  ``R2_ZEROED_MODULES`` (live violations AND baseline entries, card 7).
 - ``R3_private_cross_dir`` — no ``from <other __init__ dir> import _x``
   (any ``__init__`` directory granularity, spec §7-A2; root modules belong to
   package ``server``). Parent-package-from-child and vice versa both count.
@@ -101,6 +101,20 @@ _CONN_MODULE = "server/vault/db/conn.py"
 _SQL_METHODS = frozenset({"execute", "executemany", "executescript"})
 _CONN_FUNCS = frozenset({"get_index_conn", "get_ledger_conn"})
 _IDENTITY_ATTRS = frozenset({"write_source", "run_id", "session_id"})
+
+# R2 zeroed modules (Gate-2 ③ review discipline made code, card 7): once a
+# module's interface-layer SQL reaches zero its name is PERMANENTLY banned —
+# live violations are banned, and baseline entries may not return via
+# --update-arch-baseline (the banned checks run after the flag rewrite too).
+# mcp_server.py joins at card 8.
+R2_ZEROED_MODULES: frozenset[str] = frozenset({
+    "server/routes/agent.py",
+    "server/routes/egress.py",
+    "server/routes/memory.py",
+    "server/routes/notifications.py",
+    "server/routes/recall.py",
+    "server/routes/sync.py",
+})
 
 
 # --------------------------------------------------------------------------
@@ -409,6 +423,18 @@ def test_interface_layer_sql(request: pytest.FixtureRequest) -> None:
     assert set(pinned.get(R2_INTERFACE_SQL, [])) <= set(
         pinned.get(R1_SQL, [])
     ), "pinned R2 must stay a subset of pinned R1"
+    # Zeroed modules are permanently banned — live and baseline (the flag
+    # rewrite above runs first, so a wash cannot smuggle them back).
+    banned_live = {v for v in current
+                   if v.split(":", 1)[0] in R2_ZEROED_MODULES}
+    assert not banned_live, (
+        f"R2-zeroed modules must not execute SQL again: {sorted(banned_live)}")
+    banned_pinned = {
+        e for e in _load_baseline().get(R2_INTERFACE_SQL, [])
+        if e.split(":", 1)[0] in R2_ZEROED_MODULES
+    }
+    assert not banned_pinned, (
+        f"R2-zeroed modules must not be in the baseline: {sorted(banned_pinned)}")
 
 
 def test_no_private_cross_dir_imports(

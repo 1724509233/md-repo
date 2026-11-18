@@ -6,6 +6,8 @@ import re
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from ..vault.db import changes as changes_db
+from ..vault.db import notifications as notifications_db
 from ..vault.db.file_index import get_all_files
 from ..services.sync import compare_files, derive_deleted_hashes
 
@@ -53,11 +55,8 @@ def register(app, ctx) -> None:
             # in the server manifest is not checked against
             # deleted_hashes).
 
-            replay_rows = ctx.db_conn.execute(
-                "SELECT op, path, old_path, pre_hash FROM change_log "
-                "WHERE op IN ('move', 'delete') ORDER BY seq ASC"
-            ).fetchall()
-            deleted_hashes = derive_deleted_hashes([dict(r) for r in replay_rows])
+            replay_rows = changes_db.replay_move_delete_rows(ctx.db_conn)
+            deleted_hashes = derive_deleted_hashes(replay_rows)
 
             # Move rule keeps its windowed recent_moves (rename detection):
             # moves since the client's last sync (200-row window, newest
@@ -90,12 +89,9 @@ def register(app, ctx) -> None:
             )
 
             # Background agent notifications since the client's last sync (cap 50).
-            rows = ctx.db_conn.execute(
-                "SELECT ts, alias, name, status, report_path, summary, "
-                "proposal_paths, report_paths, run_id, trigger "
-                "FROM notifications WHERE read = 0 AND ts > ? ORDER BY ts DESC LIMIT 50",
-                (float(last_sync),)).fetchall()
-            result["notifications"] = [dict(r) for r in rows]
+            rows = notifications_db.list_unread_since(ctx.db_conn,
+                                                      float(last_sync))
+            result["notifications"] = rows
 
             # Save client logs to vault_dir/.sync/logs/{device_name}.log
             safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", device_name)

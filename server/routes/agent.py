@@ -104,19 +104,6 @@ def _build_agent_spec(ctx) -> AgentSpec:
     )
 
 
-def _click_paths_for_message(conn, message_id: str) -> list[str]:
-    """The via=ai click paths attributed to this message_id (spec 2026-11-13
-    §5.3 D22: precise attribution by the recall_clicks.message_id column — no
-    window heuristic). search/preview clicks carry message_id NULL and never
-    match. Returns distinct paths, sorted."""
-    rows = conn.execute(
-        "SELECT DISTINCT path FROM recall_clicks "
-        "WHERE via = 'ai' AND message_id = ? ORDER BY path",
-        (message_id,),
-    ).fetchall()
-    return [r["path"] for r in rows]
-
-
 def _privacy_hit(ctx, rel) -> bool:
     """Privacy read-boundary check for an auto doc-path (P0 leak, spec
     2026-11-18 §2.2): the editor-attached ``doc_path`` reaches the model
@@ -373,27 +360,26 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=404, detail="message not found")
         citations = msg.get("citations", [])
 
+        # The feedback SQL (retract / upsert) lives in the db layer (card 7);
+        # this handler keeps validation, the message-snapshot read, and the
+        # JSON shaping.
+        from ..vault.db import recall as recall_db
+
         if verdict is None:
             # Retract: delete the row (idempotent — deleting a missing row is a
             # no-op, so re-clicking "cancel" is safe).
-            ctx.db_conn.execute(
-                "DELETE FROM recall_feedback "
-                "WHERE session_id = ? AND message_id = ?",
-                (session_id, message_id))
-            ctx.db_conn.commit()
+            recall_db.delete_feedback(ctx.db_conn, session_id, message_id)
             return {"ok": True, "verdict": None}
 
-        click_paths = _click_paths_for_message(ctx.db_conn, message_id)
-        ctx.db_conn.execute(
-            "INSERT INTO recall_feedback "
-            "(ts, session_id, message_id, verdict, citations, click_paths) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(session_id, message_id) DO UPDATE SET "
-            "ts = excluded.ts, verdict = excluded.verdict, "
-            "citations = excluded.citations, click_paths = excluded.click_paths",
-            (time.time(), session_id, message_id, verdict,
-             json.dumps(citations, ensure_ascii=False),
-             json.dumps(click_paths, ensure_ascii=False) if click_paths else None),
+        click_paths = recall_db.ai_click_paths_by_message(ctx.db_conn, message_id)
+        recall_db.upsert_feedback(
+            ctx.db_conn,
+            ts=time.time(),
+            session_id=session_id,
+            message_id=message_id,
+            verdict=verdict,
+            citations_json=json.dumps(citations, ensure_ascii=False),
+            click_paths_json=(json.dumps(click_paths, ensure_ascii=False)
+                              if click_paths else None),
         )
-        ctx.db_conn.commit()
         return {"ok": True, "verdict": verdict}
