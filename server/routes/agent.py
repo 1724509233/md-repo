@@ -16,6 +16,7 @@ from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
 from ..egress import EgressTarget, parse_endpoint, should_record
+from ..privacy import is_privacy
 from ..vault.db.sessions import get_auto_approve, set_auto_approve
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
@@ -116,6 +117,17 @@ def _click_paths_for_message(conn, message_id: str) -> list[str]:
     return [r["path"] for r in rows]
 
 
+def _privacy_hit(ctx, rel) -> bool:
+    """Privacy read-boundary check for an auto doc-path (P0 leak, spec
+    2026-11-18 §2.2): the editor-attached ``doc_path`` reaches the model
+    context on both chat channels (user reminder / content injection) —
+    a privacy-scoped path must behave as if it does not exist (same
+    semantics as the INVISIBLE read refusal): silent skip, no injection,
+    no validation error (a 409 would leak path existence). ``ctx.privacy``
+    None / empty dirs → False (zero behavior change)."""
+    return bool(ctx.privacy) and is_privacy(ctx.privacy.dirs, rel.as_posix())
+
+
 def register(app, ctx) -> None:
     session_mgr = SessionManager(ctx.db_conn, ctx.vault_dir)
 
@@ -156,14 +168,17 @@ def register(app, ctx) -> None:
         messages = [{"role": "system", "content": "You are a helpful assistant for markdown documents."}]
         if mode == "current_doc" and doc_path:
             rel = _safe_rel_path(doc_path)
-            if rel:
+            # P0 leak: 隐私打开文档 = 对模型不存在（静默不注入全文）
+            if rel and not _privacy_hit(ctx, rel):
                 fp = ctx.vault_dir / rel
                 if fp.is_file():
                     content = fp.read_bytes().decode("utf-8", errors="replace")
                     messages.append({"role": "system", "content": f"Current document:\n\n{content}"})
         elif mode == "rag_search":
             from ..ai import rag_search
-            results = rag_search(str(ctx.vault_dir), message, top_k=3)
+            # P0 leak: 检索层过滤，隐私片段不进 Relevant documents
+            results = rag_search(str(ctx.vault_dir), message, top_k=3,
+                                 privacy_dirs=ctx.privacy.dirs if ctx.privacy else ())
             if results:
                 parts = []
                 for r in results:
@@ -216,6 +231,10 @@ def register(app, ctx) -> None:
             rel = _safe_rel_path(doc_path)
             if rel is None:
                 logger.info("doc_context skipped: _safe_rel_path rejected %r", doc_path)
+            elif _privacy_hit(ctx, rel):
+                # P0 leak: 隐私打开文档 = 对模型不存在——当无 doc_path，
+                # 静默跳过注入，409 校验也不触达（存在性本身不泄漏）
+                doc_context = None
             elif not (ctx.vault_dir / rel).is_file():
                 raise HTTPException(status_code=409, detail=f"doc_path '{rel.as_posix()}' not on disk")
             else:
