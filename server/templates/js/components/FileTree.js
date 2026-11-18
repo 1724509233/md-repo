@@ -459,6 +459,10 @@ export const FileTree = {
     const shapedResults = computed(() => shapeSegments(results.value))
     const shownRowCount = computed(() => countRows(results.value))
 
+    // combobox 微契约（spec §1.7）：option id 单源 helper —— input 的 aria-activedescendant
+    // 与每行的 :id 都只经它拼接（字面量全文件恰一处，两侧漂移即被静态钉打回）
+    const resultOptId = i => `ts-opt-${i}`
+
     // 300ms 尾随防抖；query 变化即重置状态，回到 relaxed
     watch(searchQuery, (q) => search.setInput(q))
 
@@ -547,7 +551,7 @@ export const FileTree = {
 
     return {
       searchQuery, tree, toggleDir, selectFile,
-      results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
+      results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown, resultOptId,
       ICONS, menu, menuEl, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
@@ -561,13 +565,18 @@ export const FileTree = {
       <div class="sp-input">
         <svg aria-hidden="true" class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
+          role="combobox" aria-controls="tree-search-results"
+          :aria-expanded="searchOpen && shapedResults.length > 0"
+          :aria-activedescendant="activeIndex >= 0 ? resultOptId(activeIndex) : undefined"
           placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
 
-        <!-- RAG 搜索下拉框 -->
-        <div class="search-dropdown" v-show="searchOpen">
+        <!-- RAG 搜索下拉框：listbox 容器（combobox 微契约，spec §1.7）。
+             状态行（加载/无匹配/展示更多/已耗尽）留在 listbox 内但为无 role 的普通节点——
+             不进 role=option（假 option 会被 aria-activedescendant 导航邻域误认作可选项） -->
+        <div id="tree-search-results" role="listbox" class="search-dropdown" v-show="searchOpen">
           <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
           <div v-if="loading && !results.length" class="search-loading">
             <span class="search-spinner"></span>
@@ -580,6 +589,7 @@ export const FileTree = {
           </div>
           <!-- 结果 -->
           <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
+            role="option" :id="resultOptId(i)" tabindex="-1" :aria-selected="i === activeIndex"
             class="search-item" :class="{ active: i === activeIndex }"
             :title="item.path"
             @click="pickResult(item, i)" @mouseenter="activeIndex = i">

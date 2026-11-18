@@ -355,6 +355,15 @@ def test_p2_fold_taborder_and_uid():
         assert name in m.group(1), name   # §1.9 定向实现：模板绑定名 ∈ setup return
 
 
+def test_p2_combobox_contract():
+    ft = _templates()["FileTree.js"]
+    assert 'role="combobox"' in ft and "aria-activedescendant" in ft
+    assert 'role="option"' in ft and 'tabindex="-1"' in ft
+    assert ft.count("ts-opt-") == 1, "id 必须单源 helper，两侧拼接漂移=静态钉盲区"
+    m = re.search(r"return \{([^}]*)\}", ft[ft.rindex("    return {"):])
+    assert "resultOptId" in m.group(1)
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]
