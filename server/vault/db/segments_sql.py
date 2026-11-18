@@ -81,6 +81,72 @@ _FUZZY_ROW_BUDGET_CAP = 200
 _ASCII_WORD_RE = re.compile(r"^[a-z0-9_]+$")
 
 
+# ── write face (card 9 sink; callers may hold _db_lock — these are LOCK-FREE,
+#    same discipline as log_change/upsert_file: never re-take the lock) ──────
+
+
+def segments_insert(conn: sqlite3.Connection, rows: list[tuple]) -> None:
+    """Bulk-insert segment rows (the 9-column shape of the ``segments``
+    table; the caller produces the tokenized tuples — fs owns tokenizing,
+    db owns the write). FTS stays row-consistent via the segments_fts_*
+    triggers. No commit: callers batch (``index_segments`` commits per
+    file; ``segments_replace_all`` owns its transaction)."""
+    conn.executemany(
+        "INSERT INTO segments (path, mtime, seg_index, heading_path, kind, content, body, meta, code) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+
+
+def segments_delete_path(conn: sqlite3.Connection, path: str) -> None:
+    """Remove all segments for one path (FTS rows follow via the
+    segments_fts_ad trigger). No commit — see :func:`segments_insert`."""
+    conn.execute("DELETE FROM segments WHERE path = ?", (path,))
+
+
+def segments_replace_all(conn: sqlite3.Connection, per_file_rows) -> int:
+    """Full replace of the ``segments`` table in ONE explicit transaction
+    (card 9 sink of the orchestrator's hand-rolled BEGIN/COMMIT/ROLLBACK —
+    behavior-equivalent, lock-free: rebuild callers run outside _db_lock).
+
+    ``per_file_rows`` yields ``(path, rows)`` pairs; ``rows=None`` skips a
+    file that vanished mid-scan (uncounted). Disk I/O inside the generator
+    interleaves with the transaction exactly like the old orchestrator
+    loop. Returns the number of files whose rows were written."""
+    count = 0
+    try:
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM segments")
+        for _path, rows in per_file_rows:
+            if rows is None:
+                continue
+            segments_insert(conn, rows)
+            count += 1
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return count
+
+
+def rebuild_fts(conn: sqlite3.Connection) -> None:
+    """Rebuild the segments FTS index from the segments table (commit
+    cohesive, card 9 sink of indexer._rebuild_fts)."""
+    conn.execute("INSERT INTO segments_fts(segments_fts) VALUES('rebuild')")
+    conn.commit()
+
+
+def fts_docsize_count(conn: sqlite3.Connection) -> int:
+    """Row count of the ``segments_fts_docsize`` shadow table.
+
+    Note: ``count(*) FROM segments_fts`` CANNOT detect FTS desync — on an
+    external-content FTS5 table it scans the content table (segments), so
+    it always equals the segments count. The docsize shadow table holds
+    one row per indexed entry, so its count reflects the actual FTS index
+    state (AGENTS.md gotcha, text moved here with the sink)."""
+    return conn.execute("SELECT count(*) FROM segments_fts_docsize").fetchone()[0]
+
+
 def _is_cjk_char(t: str) -> bool:
     """True if t is a single CJK unified ideograph (U+4E00–U+9FFF)."""
     return len(t) == 1 and "\u4e00" <= t <= "\u9fff"

@@ -75,6 +75,23 @@ def graph_delete_file(conn: sqlite3.Connection, path: str) -> None:
     conn.commit()
 
 
+def graph_delete_edges_from(conn: sqlite3.Connection, src_id: int) -> None:
+    """Clear one entity's OUTGOING edges (idempotent re-extraction: the
+    extractor re-adds live edges after this). No commit — runs inside
+    ``graph_extract_file``'s commit, and that whole path is reachable
+    under _db_lock, so this stays lock-free (card 9)."""
+    conn.execute("DELETE FROM edges WHERE src_id = ?", (src_id,))
+
+
+def graph_clear(conn: sqlite3.Connection) -> None:
+    """Wipe edges + entities (both full-rebuild order matters: edges before
+    entities). No commit — ``graph_rebuild_all`` keeps its per-file commit
+    cadence (真事务化 = separate behavior card, card 9 kept the sink
+    equivalent). Lock-free: rebuild callers run outside _db_lock."""
+    conn.execute("DELETE FROM edges")
+    conn.execute("DELETE FROM entities")
+
+
 def graph_get_backlinks(conn: sqlite3.Connection, path: str) -> list[dict]:
     """Get documents that link TO the given path."""
     cursor = conn.execute(
