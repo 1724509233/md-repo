@@ -370,6 +370,7 @@ def test_p2_combobox_contract():
 def test_p2_meta_and_motion():
     html = (TPL / "index.html").read_text(encoding="utf-8")
     css = (TPL / "style.css").read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)  # 提取 @media 块先剥注释：配平前提=块内无花括号文本
     app = _templates()["app.js"]
     assert 'name="theme-color"' in html
     assert 'rel="preload"' in html and "Inter-400-latin.woff2" in html
@@ -389,6 +390,10 @@ def test_p2_meta_and_motion():
                                     "animation: none")) for b in blocks), \
         "须有单个 reduced-motion 块同时覆盖三无限动画并 animation: none"
     assert "skip-link" in app and 'id="main-content"' in app
+    # I-1 裁决（候选 b）：程序化聚焦防 hash 改写丢深链；绑定名进 return（模板绑定静默失效家族钉）
+    assert '@click.prevent="skipToMain"' in app
+    m = re.search(r"return \{([^}]*)\}", app[app.rindex("    return {"):])
+    assert "skipToMain" in m.group(1)
     assert re.search(r"box-shadow: inset", css)  # inset ring 存在
 
 

@@ -38,7 +38,7 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 
 /* 跳至主要内容（P2②）：屏外常驻，键盘 Tab 首站显形；ring 复用上方全局 :focus-visible 黄铜环 */
 .skip-link {
-  position: fixed; top: -64px; left: 8px; z-index: 200;  /* 高于全部浮层（面板/抽屉 z-40） */
+  position: fixed; top: -64px; left: 8px; z-index: 200;  /* 高于全部浮层（面板/抽屉 z-40、toast z-index:100=toast.js 内联） */
   background: var(--surface); color: var(--ink);
   padding: 8px 14px; border-radius: 8px; font-size: 13px;
 }
@@ -61,8 +61,9 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 /* ============ 焦点环内描（P2②）============ */
 /* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
    滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
-   + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown（FileTree
-   搜索下拉，option/展示更多钮同样裁切）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
+   + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown——实效来自
+   「展示更多」钮（option 走 aria-activedescendant 方案，焦点恒留 input，:focus-visible
+   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
    .rel-scroll 及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
 .tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible {
   box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--brass);

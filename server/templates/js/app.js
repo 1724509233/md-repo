@@ -833,6 +833,13 @@ export function createApp() {
         }).catch(() => { })
       }
 
+      // 跳至主要内容（skip link 程序化聚焦）：不走 hash 导航，防 hash 改写丢当前文档深链；
+      // preventScroll 红线：main 常驻视口，不需也绝不允许程序化滚动
+      function skipToMain() {
+        const el = document.getElementById('main-content')
+        if (el) el.focus({ preventScroll: true })
+      }
+
       return {
         state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
@@ -842,14 +849,14 @@ export function createApp() {
         loadDocs, openDoc, saveDoc, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
-        onEditorInput, acceptConflict,
+        onEditorInput, acceptConflict, skipToMain,
         tocItems, toggleToc, onTocClickItem
       }
     },
     template: `
       <div class="flex h-full">
         <!-- 键盘直达主区（P2②）：屏外常驻，Tab 首站显形（样式 style.css .skip-link） -->
-        <a class="skip-link" href="#main-content">跳至主要内容</a>
+        <a class="skip-link" href="#main-content" @click.prevent="skipToMain">跳至主要内容</a>
         <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
         <aside class="sidebar-shell flex shrink-0">
           <!-- rail（桌面 64px / 移动 48px） -->
@@ -949,7 +956,7 @@ export function createApp() {
         <!-- Main area -->
         <div class="flex-1 flex overflow-hidden relative"
           :class="{ 'ai-open': state.aiOpen }">
-          <main id="main-content" class="relative flex-1 flex flex-col overflow-hidden"
+          <main id="main-content" tabindex="-1" class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"
