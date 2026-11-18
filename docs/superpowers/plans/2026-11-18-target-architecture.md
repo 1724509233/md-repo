@@ -202,8 +202,8 @@ server/
 | A1 | R1 口径：`connect`/PRAGMA 算不算违例？recovery 自持 conn 怎么办？ | ✅ 全口径 72 处入基线；recovery.py:100/:251 为长期基线（冷重建/drill 自持连接的合法例外，注释注明）；PRAGMA 随卡 8 下沉为 db 具名开连函数 |
 | A2 | R3「包」粒度 | ✅ 任意 `__init__` 目录口径，20 条存量入基线；例子换成 `_find_referrers`（refs.py:22、trash.py:38），`_update_references` 例子作废（同包非违例） |
 | A3 | R4 白名单字面矛盾 | ✅ 冻结基线名单只缩不涨，名单外新调用者即红；收缩计划：file_ops 随卡 10、snapshots/tools 随卡 11 |
-| A4 | 卡 10 relatedness 上移后 ledger.db conn 来源 | ✅ `record()/record_folder()` 增可选参 `ledger_conn=None` 由通道侧传入；卡 10 改动面含 ~7 个调用方机械加参 |
+| A4 | 卡 10 relatedness 上移后 ledger.db conn 来源 | ✅ `record()/record_folder()` 增可选参 `ledger_conn=None` 由通道侧传入；卡 10 改动面含 ~7 个调用方机械加参。**补裁终值（2026-11-19，gate2-addendum.md）**：扩至 `consume()` 同款 kw-only 参；`record_folder` 不加参（作废）；必传 4 点=move_docs/console:110/main.py:85/reconcile 接线；重写留 file_ops moved 分支只换 conn 来源 |
 | A5 | 卡 1 拆合 | ⚖️ **两卡**：卡 1a = core 包 + events/logrotate/sync_lock + test_architecture 首片；卡 1b = privacy + model → core。首片钉测在 1a 上线（core 当日成立即钉） |
 | A6 | 棘轮基线存放 | ✅ 外置 `tests/architecture_baseline.json` + `--update-arch-baseline`（conftest 注册 addoption） |
-| A7 | ai 叶子性无规则钉且现已被违 | ✅ R5 增 `ai ⊄ {services, agent, bgagent, routes}`；`ai→orchestration`（search.py:37/:198）入暂存基线，卡 8 了结（`_normalize_tag` 移 `fs/` 成公开函数）；§3 允许方向补 `routes/api/mcp → ai`、`services → ai` |
+| A7 | ai 叶子性无规则钉且现已被违 | ✅ R5 增 `ai ⊄ {services, agent, bgagent, routes}`；`ai→orchestration`（search.py:37/:198）入暂存基线，卡 8 了结（`_normalize_tag` 移 `fs/` 成公开函数）；§3 允许方向补 `routes/api/mcp → ai`、`services → ai`。**补裁终值（2026-11-19，gate2-addendum.md）**：:198 采案 A——删 ai 懒重建，空 segments 显式降级 legacy（案 B 移 db 驳回）；随卡清 `_STAGED_EDGES` 并元测试断言恒空 |
 | A8 | 意外红处置协议 + commit 模板 | ✅ 两级协议与模板按推荐值写入 §5 总则；边界判例归 spec-review-1.md 续记 |
