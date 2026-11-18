@@ -385,7 +385,7 @@ export const MonitorPage = {
             <!-- 单出口：回文档视图；面板不自动重开（重入走 rail【记忆】） -->
             <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" aria-label="返回文档视图" @click="back">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
-            <div class="mp-title">记忆运行时 · 后台监控</div>
+            <h1 class="mp-title">记忆运行时 · 后台监控</h1>
             <div class="mp-meta">更新于 {{ updatedAt || '…' }}</div>
           </div>
 

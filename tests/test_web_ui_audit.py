@@ -451,3 +451,12 @@ def test_p2_key_and_markdown():
     assert 'loading="lazy"' in md and 'decoding="async"' in md
     css = (TPL / "style.css").read_text(encoding="utf-8")
     assert re.search(r"#preview :is\(h1,\s*h2,\s*h3,\s*h4,\s*h5,\s*h6\)\s*\{[^}]*scroll-margin-top", css)
+
+
+def test_p2_review_sweeps():
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    app = _templates()["app.js"]; mp = _templates()["MonitorPage.js"]
+    assert re.search(r"#ai-panel[^{]*\{[^}]*overscroll-behavior", css)
+    assert "e.metaKey" in app and "e.altKey" in app  # 软链委托放行
+    assert re.search(r"\.tree-more\s*\{[^}]*pointer-events:\s*none", css)
+    assert "<h1 class=\"mp-title\">" in mp

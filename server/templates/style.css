@@ -54,6 +54,10 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 
 /* ============ 滚动链 containment（P1-7）============ */
 /* 抽屉/弹层/内部滚动区滚到边界不外链整页（移动防误触发下拉刷新） */
+/* P2⑥ 复核：spec「5 件套仅 1 挂」系审计旧账——P1-7 此组合规则（通用态，非媒体查询）已含
+   #ai-panel / .search-drawer / .rel-sheet 三外壳与内容滚动区全集，零补挂即达标；safe-area
+   env(safe-area-inset-bottom) 同集合实况：三件已在位（各自的移动态全出血规则块内，
+   均带 P1-7 注释），桌面态 #ai-panel 非全出血无需补。 */
 #ai-panel, .search-drawer, .rel-sheet, .console-shell, .panel-shell,
 .sp-results, .notif-list, .toc-list, .c-scroll, .m-scroll, .rel-scroll,
 .search-dropdown { overscroll-behavior: contain; }
@@ -110,8 +114,13 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .tree-drop-target { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 40%, transparent); background: color-mix(in srgb, var(--brass) 10%, transparent); }
 /* 拖拽到根目录（nav 非目录行区域）高亮 */
 .tree-drop-root { background: color-mix(in srgb, var(--brass) 8%, transparent); }
-/* 键盘可见：.tree-more 仅 hover 显现是缺陷（P0-2），Tab 聚焦即显形 */
-.tree-more:focus-visible { opacity: 1; }
+/* 键盘可见 + 幽灵命中（P0-2 / P2⑥）：.tree-more 仅 hover 显现是缺陷（P0-2），Tab 聚焦即显形；
+   opacity-0 态本体仍可点（P2⑥）——基础态 pointer-events:none，hover/focus-visible 恢复 auto。
+   与组件侧 opacity-0 group-hover:opacity-100 + :focus-visible 显现逐态对齐（可见 ⇔ 可点，
+   hover 同源于 .group:hover，两属性同帧翻转无窗口） */
+.tree-more { pointer-events: none; }
+.group:hover .tree-more { pointer-events: auto; }
+.tree-more:focus-visible { opacity: 1; pointer-events: auto; }
 
 /* ============ 搜索框 ============ */
 #search-input { background: var(--surface); border-color: var(--line); color: var(--ink); font-family: 'Inter', sans-serif; }
@@ -1080,7 +1089,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .mp-back { border: 1px solid var(--line); background: transparent; color: var(--ink-soft); font-family: var(--sans); font-size: 11px; font-weight: 500; border-radius: 999px; padding: 4px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s ease, color .15s ease; }
 .mp-back:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
 .mp-back svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.mp-title { font-size: 19px; font-weight: 700; margin-top: 10px; letter-spacing: .01em; }
+.mp-title { font-size: 19px; font-weight: 700; margin: 10px 0 0; letter-spacing: .01em; } /* P2⑥ h1 化：UA 块外边距清零，原 10px 顶部间距保留（计划「margin:0」+ 间距继承合并） */
 .mp-meta { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent); margin-top: 6px; line-height: 1.8; }
 /* 两组 = 页面问的两个问题：状态（健康吗）/ 系统（在干什么）。小写 caps 组标题行（设置页气质，与卡片区分）。
    顺序理由 = 事件驱动访问（看到徽标 / 红点进来 → 先答「健康吗」），状态组保证落在首屏内。 */
