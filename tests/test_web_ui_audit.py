@@ -337,7 +337,15 @@ def test_p2_a11y_text_sweep():
 
 def test_p2_fold_taborder_and_uid():
     css = (TPL / "style.css").read_text(encoding="utf-8")
-    assert css.count("visibility: hidden") >= 5   # 五家族收起态各一处（配合 transition-delay）
+    # 逐族断言（终审 I-1：count>=5 可被存量 .rel-sheet 的 visibility:hidden 蹭数、漏族照绿）
+    # 家族集不含 rcl-tipbox（终审 M-1 勘察翻转：全仓无活体模板，死基座不入家族钉，见下行 not-in 钉）
+    for sel in (".fold:not(.open) > div",
+                ".tool-detail:not(.open) .tool-detail-inner",
+                ".thinking-detail:not(.open) .thinking-text",
+                ".fm-card:not(.open) .fm-body-inner"):
+        i = css.index(sel)
+        assert "visibility: hidden" in css[i:css.index("}", i)], sel
+    assert ".rcl-tipbox:not(.open)" not in css   # 死基座（无模板生成点）不配收起规则
     dr = _templates()["DocRelated.js"]
     assert "getCurrentInstance" in dr and "uid" in dr
     assert ':id="foldId(' in dr and ':aria-controls="foldId(' in dr

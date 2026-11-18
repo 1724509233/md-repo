@@ -391,8 +391,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .thinking-text { min-height: 0; overflow: hidden; padding: 2px 0 6px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--ink-soft); word-break: break-word; }
 /* 收起态清零 vertical padding：grid 0fr 行收缩时 grid item 的 border-box 下限 = padding 盒，
    min-height: 0 压不掉 padding → 2+6=8px 透明盒漏在 thinking-line 下（.tool-detail 无此问题
-   因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁 */
-/* visibility 延迟收起（delay=grid 时长 .2s，动画收尾才隐，P2 §1.4 出 Tab 序）；展开态即刻可见 */
+   因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁。
+   另收起态出 Tab 序（P2 §1.4）：visibility 延迟收起（delay=grid 时长 .2s，动画收尾才隐），
+   展开态即刻可见 */
 .thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; visibility: hidden; transition: visibility 0s .2s; }
 .thinking-detail.open .thinking-text { visibility: visible; transition: visibility 0s 0s; }
 
@@ -929,9 +930,6 @@ pre code.hljs { background: transparent; padding: 0; }
 .rcl-tipbox { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .rcl-tipbox.open { grid-template-rows: 1fr; }
 .rcl-tipbox-in { overflow: hidden; min-height: 0; }
-/* 收起态出 Tab 序（P2 §1.4，纯文本也统一口径）；delay=grid 时长 .2s */
-.rcl-tipbox:not(.open) .rcl-tipbox-in { visibility: hidden; transition: visibility 0s .2s; }
-.rcl-tipbox.open .rcl-tipbox-in { visibility: visible; transition: visibility 0s 0s; }
 .rcl-tipbox-in p { margin: 0; padding: 1px 0 5px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9.5px; line-height: 1.5; color: var(--ink-soft); }
 
 /* 详情面：五段材料按判断顺序（类型+状态+标题+年龄 / 内容 / 来源 / 批次·可逆 / 相似记忆） */
