@@ -604,7 +604,11 @@ def test_p2_visual_round_js():
     od = app[app.index("async function openDoc"):app.index("async function saveDoc")]
     assert "state.docMissing = true" in od     # catch 置位
     assert "state.docMissing = false" in od    # 成功加载复位
-    assert "if (state.docMissing) return" in app[app.index("function setMode"):][:160]
+    assert "if (mode === 'edit' && state.docMissing) return" in app[app.index("function setMode"):][:160]
+    # 审阅轮：setMode 改**单向**锁（锁进编辑、放行回预览）——双向锁 + landOn/landCell 直写
+    # state.previewMode 旁路 = 模式死胡同（进编辑可达、回预览被挡）。旁路入口自带同守卫收口。
+    for fn in ("function landOn", "function landCell"):
+        assert "if (state?.docMissing) return" in ep[ep.index(fn):][:200], fn
     assert "docMissing: { type: Boolean, default: false }" in tb
     assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 桌面 编辑/下载/保存 + 移动菜单同三项
     assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）

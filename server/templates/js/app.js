@@ -248,7 +248,8 @@ function downloadDoc() {
 }
 
 function setMode(mode) {
-  if (state.docMissing) return  // 404 幽灵文档锁进编辑（目检轮 A：编辑后保存 = PUT 重建）
+  // 单向锁（审阅轮）：404 只锁进编辑（保存=PUT 重建幽灵）、放行回预览（双向锁+旁路=模式死胡同）
+  if (mode === 'edit' && state.docMissing) return
   state.previewMode = mode === 'preview'
 }
 
