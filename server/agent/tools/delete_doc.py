@@ -32,7 +32,7 @@ class DeleteDocTool(DocTool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db.conn import get_index_conn
-        from ...vault.orchestration import trash
+        from ...services import trash
 
         fp = ctx.vault_dir / args.path
         if not fp.is_file():

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, Request
 
-from ..vault.orchestration import trash as trash_core
+from ..services import trash as trash_core
 
 
 def _meta(ctx, batch: str) -> dict:

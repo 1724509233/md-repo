@@ -33,7 +33,7 @@ md-sync 的 FastAPI 服务端：LAN 多设备 Markdown 同步、本地 AI 助手
 | `routes/` | Web 路由：6 个 URL 前缀域，每域一模块 | [routes/README.md](routes/README.md) |
 | `config/` | YAML 配置解析包（core / ai / log / notifications / bgagent） | [config/README.md](config/README.md) |
 | `core/` | 共享内核（零上行依赖，`tests/test_architecture.py` 钉死）：events 总线 · privacy 读边界 · sync_lock · logrotate · types（FileEntry/ModelConfig） | — |
-| `services/` | 应用层领域服务：ledger（变更账本唯一写面）· sync（三向分类纯函数）· egress（出域台账） | — |
+| `services/` | 应用层领域服务：ledger（变更账本唯一写面）· sync（三向分类纯函数）· egress（出域台账）· trash（回收站用例，卡 5 迁入） | — |
 | `prompts/` | 提示词：bgagent 各角色 prompt（md）+ agent system prompt（`system.md`） | — |
 | `templates/` | Web UI 静态资源：`index.html` 壳 + `js/` + `style.css`（`/static` 挂载源） | — |
 

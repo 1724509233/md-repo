@@ -243,7 +243,7 @@ def test_seed_deleted_prehashes_from_trash_and_snapshots(vault_dir, db_conn, led
     from server.recovery import seed_deleted_prehashes
     from server.services.sync import derive_deleted_hashes
     from server.vault.db.schema import init_db
-    from server.vault.orchestration.trash import move_to_trash
+    from server.services.trash import move_to_trash
 
     def _sha(b):
         return hashlib.sha256(b).hexdigest()

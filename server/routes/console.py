@@ -130,7 +130,7 @@ def delete(db_conn, vault_dir, body) -> dict:
     # snapshot-side deletions are the bgagent/mcp channel's (direct unlink
     # + 30-day rollback). The pre-delete hash is booked inside move_to_trash
     # (change_log pre_hash) for the sync lane's stale-copy check.
-    from ..vault.orchestration import trash
+    from ..services import trash
 
     rel = _safe_rel_path(body.get("path") or "")
     if rel is None:

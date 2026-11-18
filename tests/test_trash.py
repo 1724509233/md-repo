@@ -19,7 +19,7 @@ from server.vault.watcher import _full_scan, _norm_rel
 from server.vault.db.changes import count_changes_sources, get_changes
 from server.vault.db.file_index import get_all_files
 from server.vault.db.graph_sql import graph_get_backlinks
-from server.vault.orchestration import trash
+from server.services import trash
 from server.vault.orchestration.indexer import (
     ensure_indexed,
     graph_extract_file,
@@ -138,7 +138,7 @@ def test_move_to_trash_double_failure_keeps_batch(vault_dir, db_conn, monkeypatc
     # F12：forward 第 2 个 rename 失败 + 第 1 个文件的 rename-back 也失败
     # → 旧行为 rmtree 销毁 batch 里仅存的唯一副本；新行为保留 batch 并抛错。
     import pathlib
-    from server.vault.orchestration import trash
+    from server.services import trash
 
     (vault_dir / "notes").mkdir(exist_ok=True)
     f1 = vault_dir / "notes" / "one.md"

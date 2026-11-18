@@ -42,7 +42,7 @@ from server.vault.db.schema import init_db
 from server.vault.db.file_index import upsert_file
 from server.vault.db.changes import log_change
 from server.vault.orchestration.indexer import ensure_indexed
-from server.vault.orchestration.trash import list_trash
+from server.services.trash import list_trash
 
 logger = logging.getLogger("md-vault.recovery")
 

@@ -34,11 +34,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ...services import ledger
-from ..db.graph_sql import _find_referrers
-from ..fs.vault_ops import _iter_vault_md
-from .indexer import graph_extract_file
-from .refs import remove_dead_links
+from . import ledger
+from ..vault.db.graph_sql import _find_referrers
+from ..vault.fs.vault_ops import _iter_vault_md
+from ..vault.orchestration.indexer import graph_extract_file
+from ..vault.orchestration.refs import remove_dead_links
 
 TRASH_DIR = ".trash"
 
