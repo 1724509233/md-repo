@@ -1,17 +1,17 @@
 """Snapshot record write face: the ``snapshots`` table mutations,
 lock-holding (card 5).
 
-Split along the lock boundary: this module owns the SQL half of
-``server/services/snapshots.py``'s capture/finalize/discard/gc — each mutation runs
-inside the shared ``_ledger_lock``; the disk half (pre-image blob reads/writes,
-blob deletion) stays with the ``server/services/snapshots.py`` caller, outside the
+Split along the lock boundary: this module owns ALL the SQL (mutations run
+inside the shared ``_ledger_lock``; the read face is lock-free); the disk
+half (pre-image blob reads/writes, blob deletion) and the row → dict
+shaping stay with the ``server/services/snapshots.py`` caller, outside the
 lock.
 
 Concurrency (card 5): the lock is held INTERNALLY by these functions —
 outside ``server/vault`` ``_ledger_lock`` is no longer importable, the named
-functions are the interface. Read helpers (``server/snapshots``'
-live_preimage / by_call / by_run / recent_calls) stay lock-free: the single
-non-reentrant lock must never be held by a reader.
+functions are the interface. Reads (live_preimage / by_call / by_run /
+recent_calls feeds) stay lock-free: the single non-reentrant lock must
+never be held by a reader.
 """
 from __future__ import annotations
 
@@ -111,3 +111,69 @@ def gc_sweep(conn: sqlite3.Connection, cutoff: float) -> list[dict]:
             )
             conn.commit()
     return rows
+
+
+# ── Read face (lock-free; card 6b SQL sink) ────────────────────────────────
+#
+# Reads never take the lock (same discipline as the mutations above); the
+# row → dict shaping stays with server/services/snapshots.py.
+
+
+def get_live_preimage_row(conn: sqlite3.Connection, path: str):
+    """The live (recoverable) pre-image row for one file, or None."""
+    return conn.execute(
+        "SELECT * FROM snapshots WHERE path = ? AND live = 1", (path,)
+    ).fetchone()
+
+
+def get_snapshot_rows_by_call(conn: sqlite3.Connection, call_id: str):
+    """All snapshot rows of one tool call (the rollback batch), path order."""
+    return conn.execute(
+        "SELECT * FROM snapshots WHERE call_id = ? ORDER BY path", (call_id,)
+    ).fetchall()
+
+
+def get_snapshot_rows_by_run(conn: sqlite3.Connection, run_id: str):
+    """All snapshot rows produced by one run (run_id stamp), id order."""
+    return conn.execute(
+        "SELECT * FROM snapshots WHERE run_id = ? ORDER BY id", (run_id,)
+    ).fetchall()
+
+
+def get_recent_call_rows(conn: sqlite3.Connection, limit: int):
+    """Recent call groups (newest first), files folded via GROUP_CONCAT."""
+    return conn.execute(
+        """
+        SELECT call_id, MIN(ts) AS ts, actor, run_id, op,
+               GROUP_CONCAT(path, char(10)) AS files
+        FROM snapshots
+        GROUP BY call_id
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+
+def get_delete_preimage_rows(conn: sqlite3.Connection):
+    """Delete-class snapshot rows carrying a pre-hash — the recovery
+    cold-rebuild seeds change_log delete rows from these (the seeder
+    sorts; no ORDER BY here)."""
+    return conn.execute(
+        "SELECT path, pre_hash, ts, actor FROM snapshots "
+        "WHERE op = 'delete' AND pre_hash != ''"
+    ).fetchall()
+
+
+def get_expired_delete_path_rows(index_conn: sqlite3.Connection, cutoff: float):
+    """Expired non-workbench delete paths from ``change_log`` — the GC
+    expiry-boundary dead-link cleanup pass (spec 2026-11-15 §5).
+    index.db domain: the index handle is passed explicitly. Newest first;
+    LIMIT 1000 bounds the scan."""
+    return index_conn.execute(
+        "SELECT path FROM change_log "
+        "WHERE op = 'delete' AND ts < ? "
+        "AND source NOT IN ('web', 'agent') "
+        "ORDER BY ts DESC LIMIT 1000",
+        (cutoff,),
+    ).fetchall()

@@ -150,6 +150,12 @@ def get_changes_sources(
     ]
 
 
+def count_changes(conn: sqlite3.Connection) -> int:
+    """Total ``change_log`` rows (recovery cold-rebuild emptiness probe,
+    card 6b sink)."""
+    return conn.execute("SELECT count(*) FROM change_log").fetchone()[0]
+
+
 def count_changes_sources(
     conn: sqlite3.Connection,
     since: float = 0.0,

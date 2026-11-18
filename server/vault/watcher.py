@@ -44,7 +44,7 @@ def _norm_rel(path: str, vault: Path) -> str | None:
         return None
 
 
-def _full_scan(
+def full_scan(
     vault: Path,
     db: dict[str, tuple[str, float]] | None = None,
 ) -> dict[str, FileEntry]:
@@ -289,7 +289,7 @@ class SnapshotWatcher:
 
     def start(self) -> None:
         """Start watching. Order: full scan → reconcile → watchdog → worker."""
-        # 1. Query DB state (for the mtime fast-skip in _full_scan).
+        # 1. Query DB state (for the mtime fast-skip in full_scan).
         db_state = None
         if self._db_conn:
             db_state = {
@@ -298,7 +298,7 @@ class SnapshotWatcher:
             }
 
         # 2. Scan disk (single scan, with mtime skip).
-        self._snapshot = _full_scan(self._vault, db=db_state)
+        self._snapshot = full_scan(self._vault, db=db_state)
 
         # 3. DB reconcile (if a conn was provided).
         if self._db_conn:
@@ -453,7 +453,7 @@ class SnapshotWatcher:
     def _reconcile(self) -> None:
         """Full scan to catch events watchdog dropped. Adds discrepancies to dirty."""
         t0 = time.monotonic()
-        disk = _full_scan(self._vault)
+        disk = full_scan(self._vault)
 
         missing_on_disk = 0
         new_on_disk = 0

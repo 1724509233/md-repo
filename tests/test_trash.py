@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from server.vault.watcher import _full_scan, _norm_rel
+from server.vault.watcher import _norm_rel, full_scan
 from server.vault.db.changes import count_changes_sources, get_changes
 from server.vault.db.file_index import get_all_files
 from server.vault.db.graph_sql import graph_get_backlinks
@@ -458,7 +458,7 @@ def test_iter_vault_md_excludes_trash(vault_dir, db_conn):
 
 def test_full_scan_excludes_trash(vault_dir, db_conn):
     _seed_trash(vault_dir, db_conn)
-    snap = _full_scan(vault_dir)
+    snap = full_scan(vault_dir)
     assert not any(p.startswith(".trash/") for p in snap)
     assert "notes/live.md" in snap
 

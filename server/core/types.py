@@ -31,7 +31,7 @@ class FileEntry:
 
     Promoted from ``snapshot_watcher._FileEntry`` to a public dataclass so
     both the watcher and ``reconcile`` can share it. The added ``mtime``
-    field supports the mtime fast-skip in ``_full_scan``.
+    field supports the mtime fast-skip in ``full_scan``.
     """
 
     hash: str

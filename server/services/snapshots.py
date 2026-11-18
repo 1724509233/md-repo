@@ -227,25 +227,19 @@ def discard(conn, vault_dir, snapshot: dict) -> None:
 
 def live_preimage(conn, path: str) -> dict | None:
     """The live (recoverable) pre-image row for one file, or None."""
-    row = conn.execute(
-        "SELECT * FROM snapshots WHERE path = ? AND live = 1", (path,)
-    ).fetchone()
+    row = snapshot_records.get_live_preimage_row(conn, path)
     return dict(row) if row is not None else None
 
 
 def by_call(conn, call_id: str) -> list[dict]:
     """All snapshot rows of one tool call (the rollback batch), path order."""
-    rows = conn.execute(
-        "SELECT * FROM snapshots WHERE call_id = ? ORDER BY path", (call_id,)
-    ).fetchall()
+    rows = snapshot_records.get_snapshot_rows_by_call(conn, call_id)
     return [dict(r) for r in rows]
 
 
 def by_run(conn, run_id: str) -> list[dict]:
     """All snapshot rows produced by one run (run_id stamp), id order."""
-    rows = conn.execute(
-        "SELECT * FROM snapshots WHERE run_id = ? ORDER BY id", (run_id,)
-    ).fetchall()
+    rows = snapshot_records.get_snapshot_rows_by_run(conn, run_id)
     return [dict(r) for r in rows]
 
 
@@ -255,17 +249,7 @@ def recent_calls(conn, limit: int = 50) -> list[dict]:
     Returns ``[{"call_id", "ts", "actor", "run_id", "op", "files": [...]}]``
     — one row per call, files folded in.
     """
-    rows = conn.execute(
-        """
-        SELECT call_id, MIN(ts) AS ts, actor, run_id, op,
-               GROUP_CONCAT(path, char(10)) AS files
-        FROM snapshots
-        GROUP BY call_id
-        ORDER BY ts DESC
-        LIMIT ?
-        """,
-        (limit,),
-    ).fetchall()
+    rows = snapshot_records.get_recent_call_rows(conn, limit)
     return [dict(r) for r in rows]
 
 
@@ -408,13 +392,9 @@ def gc(conn, vault_dir, now: float | None = None) -> int:
         # sources (web/agent) are excluded: their link cleanup is the
         # trash purge's boundary (a not-yet-purged trash batch must keep
         # its referrers' link text intact — see docstring).
-        expired_rows = index_conn.execute(
-            "SELECT path FROM change_log "
-            "WHERE op = 'delete' AND ts < ? "
-            "AND source NOT IN ('web', 'agent') "
-            "ORDER BY ts DESC LIMIT 1000",
-            (cutoff,),
-        ).fetchall()
+        expired_rows = snapshot_records.get_expired_delete_path_rows(
+            index_conn, cutoff
+        )
         cleaned = 0
         seen: set[str] = set()
         for row in expired_rows:

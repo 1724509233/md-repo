@@ -35,12 +35,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from server.ai import rag_search
-from server.vault.watcher import _full_scan
+from server.vault.db import snapshot_records
+from server.vault.watcher import full_scan
 from server.vault.fs.segmenter import _STOPWORDS
 from server.vault.fs.vault_ops import _iter_vault_md
-from server.vault.db.schema import init_db
+from server.vault.db.schema import count_table_rows, init_db
 from server.vault.db.file_index import upsert_file
-from server.vault.db.changes import log_change
+from server.vault.db.changes import count_changes, log_change
 from server.vault.orchestration.indexer import ensure_indexed
 from server.services.trash import list_trash
 
@@ -99,7 +100,7 @@ def _ledger_row_counts(vault_dir: Path) -> dict[str, int] | None:
         return None
     conn = sqlite3.connect(path)
     try:
-        return {t: _count(conn, t) for t in LEDGER_TABLES}
+        return {t: count_table_rows(conn, t) for t in LEDGER_TABLES}
     finally:
         conn.close()
 
@@ -108,13 +109,13 @@ def _rebuild_files_table(conn: sqlite3.Connection, vault_dir: Path) -> None:
     """Re-seed the ``files`` index from the production vault scan.
 
     Mirrors exactly what the production watcher inserts into the file index
-    (``_full_scan`` → ``upsert_file``): every vault .md file excluding
+    (``full_scan`` → ``upsert_file``): every vault .md file excluding
     .sync/ and .obsidian/, including excluded index dirs such as
     suggestions/. It deliberately does NOT emit change_log entries — the
     event stream is an accepted, documented loss on cold recovery (see the
     drill report notes).
     """
-    for path, entry in _full_scan(vault_dir).items():
+    for path, entry in full_scan(vault_dir).items():
         upsert_file(conn, path, entry.hash, entry.mtime)
 
 
@@ -126,7 +127,7 @@ def seed_deleted_prehashes(conn, vault_dir: Path, ledger_conn=None) -> int:
     the sole INSERT surface) so deleted_hashes resurrects with the index.
     Idempotent: runs only when change_log is empty (fresh rebuild / new
     vault); a vault with live history is a no-op. Returns rows seeded."""
-    if conn.execute("SELECT count(*) FROM change_log").fetchone()[0]:
+    if count_changes(conn):
         return 0
     records: list[tuple[float, str, str, str]] = []  # (ts, path, pre_hash, source)
     for meta in list_trash(Path(vault_dir)):
@@ -141,9 +142,7 @@ def seed_deleted_prehashes(conn, vault_dir: Path, ledger_conn=None) -> int:
                 records.append((ts, f["path"], f["hash"],
                                 meta.get("source") or "web"))
     if ledger_conn is not None:
-        for r in ledger_conn.execute(
-                "SELECT path, pre_hash, ts, actor FROM snapshots "
-                "WHERE op = 'delete' AND pre_hash != ''"):
+        for r in snapshot_records.get_delete_preimage_rows(ledger_conn):
             records.append((r["ts"], r["path"], r["pre_hash"], r["actor"] or "watchdog"))
     records.sort(key=lambda x: x[0])
     for ts, path, pre_hash, source in records:
@@ -152,10 +151,6 @@ def seed_deleted_prehashes(conn, vault_dir: Path, ledger_conn=None) -> int:
         logger.warning("recovery: re-seeded %d delete rows into change_log "
                        "(from trash meta + snapshots)", len(records))
     return len(records)
-
-
-def _count(conn: sqlite3.Connection, table: str) -> int:
-    return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
 
 
 def _pick_query(vault_dir: Path) -> tuple[str, str]:
@@ -256,12 +251,12 @@ def run_recovery_drill(vault_dir: Path) -> dict:
 
     # 4. Verify. ``files_expected`` is an independent production scan, so the
     #    comparison is against a second walk of the same semantics.
-    files_expected = len(_full_scan(vault_dir))
-    files_rebuilt = _count(conn, "files")
+    files_expected = len(full_scan(vault_dir))
+    files_rebuilt = count_table_rows(conn, "files")
     fts_ok, fts_sample = _fts_sample(vault_dir)
-    change_log_rows = _count(conn, "change_log")
-    trigger_state_rows = _count(conn, "trigger_state")
-    recall_log_rows = _count(conn, "recall_log")
+    change_log_rows = count_table_rows(conn, "change_log")
+    trigger_state_rows = count_table_rows(conn, "trigger_state")
+    recall_log_rows = count_table_rows(conn, "recall_log")
 
     # Ledger verification: file intact + rows before == rows after (the
     # drill cannot have written a single ledger row).

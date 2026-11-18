@@ -35,6 +35,14 @@ _ACTION_TO_OP = {
 _OP_TO_ACTION = {v: k for k, v in _ACTION_TO_OP.items()}
 
 
+def count_table_rows(conn: sqlite3.Connection, table: str) -> int:
+    """Row count of one table (recovery drill ledger-preservation check,
+    card 6b sink). The table name is interpolated directly into the SQL:
+    callers must pass a constant identifier (the drill's LEDGER_TABLES),
+    never user input."""
+    return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+
 def _ensure_notification_cols(conn: sqlite3.Connection) -> None:
     """Idempotent migration: add missing columns to the notifications table.
 

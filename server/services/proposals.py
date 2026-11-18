@@ -129,9 +129,7 @@ def _row_to_record(row) -> dict:
 
 def record(conn, record_id: int) -> dict | None:
     """Fetch one proposal record by id, or None when absent."""
-    row = conn.execute(
-        "SELECT * FROM proposals WHERE id = ?", (record_id,)
-    ).fetchone()
+    row = proposal_records.get_proposal_row(conn, record_id)
     return _row_to_record(row) if row is not None else None
 
 
@@ -142,20 +140,13 @@ def record_by_relpath(conn, relpath: str) -> dict | None:
     them (v2a: the row is the state; the relpath is a synthetic card
     identifier with no backing file).
     """
-    row = conn.execute(
-        "SELECT * FROM proposals WHERE relpath = ?", (relpath,)
-    ).fetchone()
+    row = proposal_records.get_proposal_row_by_relpath(conn, relpath)
     return _row_to_record(row) if row is not None else None
 
 
 def scan(conn, status: str | None = None) -> list[dict]:
     """All proposal records (id order); optionally filtered by status."""
-    if status is None:
-        rows = conn.execute("SELECT * FROM proposals ORDER BY id").fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM proposals WHERE status = ? ORDER BY id", (status,)
-        ).fetchall()
+    rows = proposal_records.get_proposal_rows(conn, status)
     return [_row_to_record(r) for r in rows]
 
 
@@ -165,10 +156,7 @@ def records_by_run(conn, run_id: str, since_ts: float) -> list[dict]:
     ``since_ts`` is the run's start timestamp; run ids are unique per run,
     the bound guards against clock-skew duplicates of a reused id.
     """
-    rows = conn.execute(
-        "SELECT * FROM proposals WHERE run_id = ? AND created_at >= ? ORDER BY id",
-        (run_id, since_ts),
-    ).fetchall()
+    rows = proposal_records.get_proposal_rows_by_run(conn, run_id, since_ts)
     return [_row_to_record(r) for r in rows]
 
 
@@ -410,14 +398,10 @@ def list_trails(ledger_conn, index_conn, items: list[dict]) -> list[list[dict]]:
     if not items:
         return []
     paths = [it["relpath"] for it in items]
-    marks = ",".join("?" * len(paths))
     tr_map: dict[str, list[dict]] = {}
-    for t in ledger_conn.execute(
-        "SELECT t.id, t.ts, t.actor, t.to_status, p.relpath "
-        "FROM proposal_transitions t JOIN proposals p ON p.id = t.proposal_id "
-        f"WHERE p.relpath IN ({marks}) ORDER BY t.ts",
-        paths,
-    ).fetchall():
+    for t in proposal_records.get_transition_rows_for_relpaths(
+        ledger_conn, paths
+    ):
         tr_map.setdefault(t["relpath"], []).append(
             {"seq": t["id"], "ts": t["ts"], "source": t["actor"],
              "op": t["to_status"], "path": t["relpath"]})
@@ -425,11 +409,7 @@ def list_trails(ledger_conn, index_conn, items: list[dict]) -> list[list[dict]]:
     run_ids = sorted({it["run_id"] for it in items if it.get("run_id")})
     batch_map: dict[str, list[dict]] = {}
     if run_ids:
-        rows = index_conn.execute(
-            "SELECT seq, ts, source, op, path, batch_id FROM change_log "
-            f"WHERE batch_id IN ({','.join('?' * len(run_ids))})",
-            run_ids,
-        ).fetchall()
+        rows = proposal_records.get_change_log_rows_by_batches(index_conn, run_ids)
         for r in rows:
             d = dict(r)
             bid = d.pop("batch_id")
@@ -468,26 +448,19 @@ def trail(ledger_conn, index_conn, relpath: str) -> list[dict]:
     rec = record_by_relpath(ledger_conn, relpath)
     rows: list[dict] = []
     if rec is not None:
-        for t in ledger_conn.execute(
-            "SELECT id, ts, actor, to_status FROM proposal_transitions "
-            "WHERE proposal_id = ? ORDER BY ts",
-            (rec["id"],),
-        ).fetchall():
+        for t in proposal_records.get_transition_rows_for_proposal(
+            ledger_conn, rec["id"]
+        ):
             rows.append({"seq": t["id"], "ts": t["ts"],
                          "source": t["actor"], "op": t["to_status"],
                          "path": relpath})
         if rec["run_id"]:
-            for r in index_conn.execute(
-                "SELECT seq, ts, source, op, path FROM change_log "
-                "WHERE batch_id = ? AND path != ? ORDER BY ts",
-                (rec["run_id"], relpath),
-            ).fetchall():
+            for r in proposal_records.get_change_log_rows_by_batch_excluding_path(
+                index_conn, rec["run_id"], relpath
+            ):
                 rows.append(dict(r))
     else:
-        for r in index_conn.execute(
-            "SELECT seq, ts, source, op, path FROM change_log "
-            "WHERE path = ? ORDER BY ts", (relpath,),
-        ).fetchall():
+        for r in proposal_records.get_change_log_rows_by_path(index_conn, relpath):
             rows.append(dict(r))
     rows.sort(key=lambda d: d["ts"], reverse=True)
     return rows
