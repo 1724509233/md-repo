@@ -232,19 +232,26 @@ def _mcp_log_recall(query: str, tier: str, results: list) -> None:
 
 
 def _mcp_search(vault_dir: Path, query: str, top_k: int = 5,
-                expand: bool = True, recall: str = "strict") -> str:
+                expand: bool = True, recall: str = "strict",
+                privacy_dirs: tuple[str, ...] = ()) -> str:
     """The MCP channel's search_docs body: segments-based search + recall
     ledger (P0 L5). The ledger write is fail-open (telemetry never breaks
     the response); zero-hit searches are ledgered too — the failed-recall
     signal. An FTS syntax error returns the error hint WITHOUT ledgering
-    (the search never ran — same convention as the agent channel)."""
+    (the search never ran — same convention as the agent channel).
+
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): the stdio process's privacy
+    list (PrivacyConfig live view) — model-surface filter, empty = zero
+    change.
+    """
     import html as _html
 
     from server.ai import rag_search
 
     try:
         results = rag_search(str(vault_dir), query, top_k=top_k,
-                             expand=expand, recall=recall)
+                             expand=expand, recall=recall,
+                             privacy_dirs=privacy_dirs)
     except Exception as e:
         if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
             return fts_syntax_error(query)
@@ -354,18 +361,26 @@ def main():
     @mcp.tool()
     async def search_docs(query: str, top_k: int = 5, expand: bool = True, recall: str = "strict") -> str:
         """Search vault documents by keyword using segments-based FTS5 + jieba. Returns XML-structured results with file paths, scores, and segment content. recall: strict (maximal keywords in one section), near (keywords within 5 words in one section), relaxed (keywords may span sections of the same doc), fuzzy (partial/prefix match, OR semantics)."""
-        return _mcp_search(vault_dir, query, top_k=top_k, expand=expand, recall=recall)
+        return _mcp_search(vault_dir, query, top_k=top_k, expand=expand, recall=recall,
+                           privacy_dirs=privacy.dirs)
     
     @mcp.tool()
     async def get_related_docs(path: str, hops: int = 1) -> str:
         """Get documents related to the given document via wikilinks, tags, or frontmatter related field, plus machine-suggested relations the agent discovered (via relatedness)."""
         from server.vault.db.conn import get_ledger_conn
         from server.vault.db.graph_sql import graph_get_related_with_machine
+        # Validate first (spec 2026-11-18 §2.3, closing the path-sanitizing
+        # gap): MCP_POLICY runs L1 schema + L2 boundary + the privacy read
+        # refusal (INVISIBLE_MSG) before anything touches the graph.
+        error = validate_tool_call("get_related_docs", {"path": path}, MCP_POLICY)
+        if error:
+            return error
         fp = vault_dir / path
         if not fp.is_file():
             return related_no_file(path)
         results = graph_get_related_with_machine(
-            db_conn, get_ledger_conn(), vault_dir, path, hops=hops)
+            db_conn, get_ledger_conn(), vault_dir, path, hops=hops,
+            privacy_dirs=privacy.dirs)
         if not results:
             return related_no_links(path)
         # Two-layer output (spec §6.3-②): the user's own links first, the

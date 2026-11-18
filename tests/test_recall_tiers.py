@@ -288,10 +288,12 @@ def _spy_rag_search(monkeypatch):
     calls = []
     real_rag_search = ai_mod.rag_search
 
-    def spy(vault_dir, query, top_k=5, expand=True, recall="strict", include_code=False):
+    def spy(vault_dir, query, top_k=5, expand=True, recall="strict", include_code=False,
+            privacy_dirs=()):  # Task 4 签名迁移机械适配（spy 跟 rag_search 签名）
         calls.append(recall)
         return real_rag_search(vault_dir, query, top_k=top_k, expand=expand,
-                               recall=recall, include_code=include_code)
+                               recall=recall, include_code=include_code,
+                               privacy_dirs=privacy_dirs)
 
     monkeypatch.setattr(ai_mod, "rag_search", spy)
     return calls

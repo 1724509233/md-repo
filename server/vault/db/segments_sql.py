@@ -5,6 +5,7 @@ import re
 import sqlite3
 from collections import defaultdict
 
+from ...privacy import privacy_clause
 from .fts_query import and_expr, exclude_code, near_expr, or_expr, phrase, prefix
 
 
@@ -225,13 +226,18 @@ def _group_rows(rows, expand: bool, top_k: int,
 
 def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, expand: bool, limit: int,
                          paths: list[str] | None = None,
-                         tie_break: bool = False) -> list[dict]:
+                         tie_break: bool = False,
+                         privacy_dirs: tuple[str, ...] = ()) -> list[dict]:
     """Run one segment-level (S1) MATCH query and group the rows.
 
     ``paths`` (optional) constrains the match to the given document paths
     via an ``AND s.path IN (...)`` clause — a hard SQL filter, not a
     post-filter (post-filtering would let the ``LIMIT``/top_k truncation
     squeeze in-set docs out of the result window).
+
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): a hard ``NOT (…LIKE… WHERE``
+    filter on s.path (same truncation argument as ``paths``); empty = no
+    clause at all (byte-identical SQL, §4-1).
 
     ``tie_break`` (v2b②, fuzzy tier only): the Python-side grouping sort
     breaks epsilon ties by relatedness boost (the ledger conn via the
@@ -243,6 +249,10 @@ def _search_single_match(conn: sqlite3.Connection, fts_expr: str, top_k: int, ex
     if paths is not None:
         where += f" AND s.path IN ({','.join('?' * len(paths))})"
         params.extend(paths)
+    clause, clause_params = privacy_clause(privacy_dirs, "s.path")
+    if clause:
+        where += f" AND {clause}"
+        params.extend(clause_params)
     cursor = conn.execute(
         f"""SELECT s.path, s.heading_path, s.kind, s.content,
                    bm25(segments_fts, 1.0, 0.4, 0.1) as score
@@ -265,6 +275,7 @@ def segments_search(
     recall: str = "strict",
     include_code: bool = False,
     paths: list[str] | None = None,
+    privacy_dirs: tuple[str, ...] = (),
 ) -> list[dict]:
     """Tiered FTS5 search over segments (spec: 2026-10-15-tiered-recall-design).
 
@@ -292,6 +303,10 @@ def segments_search(
     would exceed SQLite's default variable limit — not applicable at the
     current vault scale; batch or use a temp table if it ever does.)
 
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): privacy-scoped first-segment
+    dirs excluded by a hard SQL clause on every tier (same truncation
+    rationale as ``paths``); empty = untouched query (§4-1 byte-equivalence).
+
     Returns list of {"path": str, "score": float,
     "segments": [{"heading_path", "kind", "content", "score"}]}, top_k files,
     3 segments each. Raises ValueError for an unknown ``recall`` tier.
@@ -314,7 +329,8 @@ def segments_search(
         if not selected:
             return []
         expr = and_expr([phrase(t) for t in selected])
-        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths)
+        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths,
+                                    privacy_dirs=privacy_dirs)
 
     if recall == "near":
         selected = _select_t3(tokens)
@@ -325,7 +341,8 @@ def segments_search(
             expr = phrase(selected[0])
         else:
             expr = near_expr(selected, NEAR_DISTANCE)
-        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths)
+        return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths,
+                                    privacy_dirs=privacy_dirs)
 
     if recall == "relaxed":
         selected = _select_t3(tokens)
@@ -333,6 +350,7 @@ def segments_search(
             return []
         # Document-level AND (C5): one MATCH per token, intersect on path.
         # A path hits iff every selected token has ≥1 row in it.
+        privacy_sql, privacy_params = privacy_clause(privacy_dirs, "s.path")
         best: dict[str, float] = {}  # path -> best -bm25 over all its token hits
         seg_tokens: dict[str, dict[int, set]] = defaultdict(lambda: defaultdict(set))
         best_seg: dict[str, dict[str, tuple[int, str, str, str, float]]] = defaultdict(dict)
@@ -345,6 +363,9 @@ def segments_search(
             if paths is not None:
                 where += f" AND s.path IN ({','.join('?' * len(paths))})"
                 params.extend(paths)
+            if privacy_sql:
+                where += f" AND {privacy_sql}"
+                params.extend(privacy_params)
             cursor = conn.execute(
                 f"""SELECT f.rowid, s.path, s.heading_path, s.kind, s.content,
                           bm25(segments_fts, 1.0, 0.4, 0.1) as score
@@ -419,6 +440,6 @@ def segments_search(
         expr = exclude_code(expr)
     limit = min(top_k * 10, _FUZZY_ROW_BUDGET_CAP)
     return _search_single_match(conn, expr, top_k, expand, limit, paths,
-                                tie_break=True)
+                                tie_break=True, privacy_dirs=privacy_dirs)
 
 

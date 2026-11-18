@@ -69,8 +69,12 @@ class SearchDocsTool(Tool):
         tier = args.recall
         if tier not in ("strict", "near", "relaxed", "fuzzy"):
             return f'Error: invalid recall tier "{tier}". Use one of: strict, near, relaxed, fuzzy.'
+        # 隐私读边界（spec 2026-11-18 §2.3）：名单由通道注入的 ctx.privacy
+        # 现读（mtime 活视图）；None/空 = () 惰性，SQL 子句整体缺席。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
         try:
-            results = rag_search(str(ctx.vault_dir), args.query, top_k=args.top_k, expand=expand, recall=tier)
+            results = rag_search(str(ctx.vault_dir), args.query, top_k=args.top_k, expand=expand, recall=tier,
+                                 privacy_dirs=privacy_dirs)
             # Auto-escalation: walk the chain forward from the requested tier
             # (strict → near → relaxed); fuzzy is never auto-run.
             while not results and tier in ESCALATION_CHAIN:
@@ -78,7 +82,8 @@ class SearchDocsTool(Tool):
                 if idx + 1 >= len(ESCALATION_CHAIN):
                     break
                 tier = ESCALATION_CHAIN[idx + 1]
-                results = rag_search(str(ctx.vault_dir), args.query, top_k=args.top_k, expand=expand, recall=tier)
+                results = rag_search(str(ctx.vault_dir), args.query, top_k=args.top_k, expand=expand, recall=tier,
+                                     privacy_dirs=privacy_dirs)
         except Exception as e:
             if "syntax error" in str(e).lower() or "fts5" in str(e).lower():
                 return self.fts_syntax_error(args.query)

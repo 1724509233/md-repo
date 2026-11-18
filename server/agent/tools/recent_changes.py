@@ -55,10 +55,30 @@ class RecentChangesTool(Tool):
             source=source_raw,
             limit=args.limit,
         )
+        # 隐私读边界（spec 2026-11-18 §2.3）：path + from_path 双列工具层
+        # 过滤（get_changes 是共享读面，Web 路由不经此处）；空名单原样。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
+        if privacy_dirs:
+            from ...privacy import is_privacy
+
+            changes = [
+                c for c in changes
+                if not is_privacy(privacy_dirs, c["path"])
+                and not (c.get("from_path") and is_privacy(privacy_dirs, c["from_path"]))
+            ]
         if not changes:
-            ctx.last_meta = {"count": 0}
+            ctx.last_meta = {"count": 0, "paths": []}
             return self.changes_empty()
-        ctx.last_meta = {"count": len(changes)}
+        # meta.paths = 露出的 path + from_path 值（egress 采集依赖，spec §3.2：
+        # 计划 Task 4「recent_changes 顺手补 last_meta["paths"]」）；
+        # 隐私行已在上面剔除，这里出现的必然非隐私。
+        surfaced: list[str] = []
+        for c in changes:
+            for key in ("path", "from_path"):
+                v = c.get(key)
+                if isinstance(v, str) and v and v not in surfaced:
+                    surfaced.append(v)
+        ctx.last_meta = {"count": len(changes), "paths": surfaced}
         lines = []
         for c in changes:
             ts_str = time.strftime("%H:%M", time.localtime(c["ts"]))

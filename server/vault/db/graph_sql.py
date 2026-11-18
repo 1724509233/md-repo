@@ -10,6 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from ...privacy import is_privacy
 from ..fs.vault_ops import _iter_vault_md
 
 
@@ -167,8 +168,14 @@ def _record(best: dict, name: str, via: str, relations: int) -> None:
         best[name] = entry
 
 
-def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> list[dict]:
+def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1,
+                      privacy_dirs: tuple[str, ...] = ()) -> list[dict]:
     """Get related documents within N hops (capped at 3), with relevance scores.
+
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): privacy-hit neighbours are
+    NEITHER recorded NOR pushed into the BFS frontier — a privacy middle
+    node can never relay a result (indirect leak blocked); empty =
+    untouched (§4-1).
 
     The BFS frontier holds ``(doc_name, depth)`` where depth is the doc-step
     level from the start doc (start = depth 0). Each hop expands a frontier
@@ -220,6 +227,8 @@ def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> lis
             for neighbor, etype in rows:
                 if neighbor == path:
                     continue
+                if is_privacy(privacy_dirs, neighbor):
+                    continue  # 隐私邻居：不记录、不进前沿（§2.3）
                 if neighbor not in seen:
                     seen.add(neighbor)
                     next_frontier.append((neighbor, depth + 1))
@@ -253,6 +262,8 @@ def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1) -> lis
                 for (neighbor,) in hub_rows:
                     if neighbor == path or neighbor == doc:
                         continue
+                    if is_privacy(privacy_dirs, neighbor):
+                        continue  # 隐私邻居：不记录、不进前沿（§2.3）
                     if neighbor not in seen:
                         seen.add(neighbor)
                         next_frontier.append((neighbor, depth + 1))
@@ -276,6 +287,7 @@ def graph_get_related_with_machine(
     vault_dir: Path,
     path: str,
     hops: int = 1,
+    privacy_dirs: tuple[str, ...] = (),
 ) -> list[dict]:
     """Two-layer related-docs output (v2b②, spec §6 — 裁决 D16).
 
@@ -301,13 +313,17 @@ def graph_get_related_with_machine(
 
     ``ledger_conn`` may be None (no ledger registered) → the machine
     layer is empty (user layer byte-identical to the legacy output).
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): both layers filtered — the
+    user layer via the BFS skip in :func:`graph_get_related`, the machine
+    layer here (privacy-endpoint suggestions are never surfaced); empty
+    = byte-identical (§4-1).
     User rows carry ``layer="user"``; machine rows carry
     ``layer="machine"``, ``type="relatedness"``, the edge ``basis``,
     the edge ``edge_id`` (the console doc face's ignore button, spec
     §6.4) and a 0.0 score (the machine layer has no relevance score —
     its order is the demotion order).
     """
-    user = graph_get_related(conn, path, hops=hops)
+    user = graph_get_related(conn, path, hops=hops, privacy_dirs=privacy_dirs)
     user_pairs = {frozenset((path, r["path"])) for r in user}
 
     machine: list[dict] = []
@@ -316,6 +332,8 @@ def graph_get_related_with_machine(
 
         for e in live_edges(ledger_conn, vault_dir, path=path):
             other = e["target"] if e["source"] == path else e["source"]
+            if is_privacy(privacy_dirs, other):
+                continue  # machine 层隐私端点剔除（§2.3 双层过滤）
             if frozenset((path, other)) in user_pairs:
                 continue  # D20: adopted into content — drained
             machine.append({

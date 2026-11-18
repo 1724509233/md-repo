@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from ...privacy import detect_privacy_refs, is_privacy
 from .tool import DocTool, ToolContext, _check_md_path
 
 
@@ -67,4 +68,11 @@ class EditDocTool(DocTool):
             ledger.record(index_conn, ctx.vault_dir, args.path, "modified",
                           ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
         ctx.last_meta = {"from": len(args.old_string), "to": len(args.new_string)}
+        # 保存引用警告（spec §2.6）：成功路径、非隐私目标、new_string 显式
+        # 引用隐私目录 → 尾部 advisory；错误路径已在上面返回（零 advisory）。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
+        if privacy_dirs and not is_privacy(privacy_dirs, args.path):
+            refs = detect_privacy_refs(args.new_string, privacy_dirs)
+            if refs:
+                result += "\nwarning: content references private paths: " + ", ".join(refs)
         return result

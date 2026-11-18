@@ -6,6 +6,7 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from ..privacy import is_privacy
 from .rerank import ScoredItem, fuse, validate_weights
 
 
@@ -97,10 +98,14 @@ def _get_or_open_conn(vault: Path):
         return None
 
 
-def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]:
+def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5,
+                       privacy_dirs: tuple[str, ...] = ()) -> list[dict]:
     """TF-overlap keyword search (fallback when the FTS index is unavailable).
 
     Scores each file by term frequency overlap with the query.
+    ``privacy_dirs`` (spec 2026-11-18 §2.3, 红线 5): the degraded whole-vault
+    scan filters privacy paths too — the read boundary holds in the
+    degraded state, not just on the indexed path (§5-1 降级态钉).
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     vault = Path(vault_dir)
@@ -113,6 +118,9 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
 
     for md_file in vault.rglob("*.md"):
         if ".sync" in md_file.parts or ".obsidian" in md_file.parts or ".trash" in md_file.parts:
+            continue
+        rel_path = md_file.relative_to(vault).as_posix()
+        if is_privacy(privacy_dirs, rel_path):
             continue
         try:
             content = md_file.read_bytes().decode("utf-8", errors="replace")
@@ -131,7 +139,6 @@ def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5) -> list[dict]
 
         if score > 0:
             snippet = content[:200].replace("\n", " ")
-            rel_path = md_file.relative_to(vault).as_posix()
             results.append({
                 "path": rel_path,
                 "score": score,
@@ -151,6 +158,7 @@ def rag_search(
     include_code: bool = False,
     tags: list[str] | None = None,
     weights: dict | None = None,
+    privacy_dirs: tuple[str, ...] = (),
 ) -> list[dict]:
     """Segments-based search over vault markdown files.
 
@@ -177,6 +185,12 @@ def rag_search(
     v1 pollution). ``weights`` is validated at the entry (invalid →
     ValueError, the route layer answers 400).
 
+    ``privacy_dirs`` (spec 2026-11-18 §2.3): the model-facing channels pass
+    their privacy list — the SQL path gets the ``privacy_clause`` filter,
+    the tag axis is filtered before fusion, and the degraded legacy fallback
+    filters in its scan. Web callers never pass it (default ``()`` = zero
+    change, §4-1).
+
     Returns list of {"path": str, "score": float, "segments": [{"heading_path", "kind", "content", "score"}]}
     """
     from ..vault.db.segments_sql import segments_search
@@ -189,14 +203,16 @@ def rag_search(
 
     conn = _get_or_open_conn(vault)
     if conn is None:
-        return _legacy_rag_search(vault_dir, query, top_k)
+        return _legacy_rag_search(vault_dir, query, top_k,
+                                  privacy_dirs=privacy_dirs)
 
     try:
         cursor = conn.execute("SELECT count(*) FROM segments")
         if cursor.fetchone()[0] == 0:
             rebuild_segments_all(conn, vault)
     except Exception:
-        return _legacy_rag_search(vault_dir, query, top_k)
+        return _legacy_rag_search(vault_dir, query, top_k,
+                                  privacy_dirs=privacy_dirs)
 
     if tags is None:
         tags, rest = _parse_tag_query(query)
@@ -206,7 +222,8 @@ def rag_search(
         rest = query
     if not tags:
         return segments_search(
-            conn, query, top_k=top_k, expand=expand, recall=recall, include_code=include_code
+            conn, query, top_k=top_k, expand=expand, recall=recall,
+            include_code=include_code, privacy_dirs=privacy_dirs,
         )
 
     # Tag axis: the recall tier governs only the FTS part; tag hits are
@@ -218,6 +235,12 @@ def rag_search(
         # return empty instead of falling back to whole-vault FTS (that
         # would re-introduce the v1 pollution, spec 2026-11-13 §2).
         return []
+    if privacy_dirs:
+        # Tag axis (spec §2.3): key-filtered before fusion — privacy docs
+        # never enter the tag axis either (a filtered-empty set returns []
+        # exactly like any other empty tag hit set).
+        tag_hits = {p: n for p, n in tag_hits.items()
+                    if not is_privacy(privacy_dirs, p)}
     if not tag_hits:
         # Empty tag hit set: the tag condition is a hard constraint —
         # ``#nosuchtag 关键词`` returns nothing, never non-tagged docs.
@@ -227,6 +250,7 @@ def rag_search(
         segments_search(
             conn, rest, top_k=top_k, expand=expand, recall=recall,
             include_code=include_code, paths=list(tag_hits),
+            privacy_dirs=privacy_dirs,
         )
         if rest
         else []

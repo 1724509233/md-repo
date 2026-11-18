@@ -70,6 +70,8 @@ class ListFilesTool(Tool):
         return "No markdown files found in the vault."
 
     def _execute(self, args, ctx: ToolContext) -> str:
+        from ...privacy import is_privacy
+
         base = _resolve_dir_case_insensitive(ctx.vault_dir, args.dir)
         files = [
             f.relative_to(ctx.vault_dir).as_posix()
@@ -77,5 +79,10 @@ class ListFilesTool(Tool):
             if ".sync" not in f.parts and ".trash" not in f.parts
             and ".obsidian" not in f.parts and not _index_excluded(f, ctx.vault_dir)
         ]
+        # 隐私读边界（spec 2026-11-18 §2.3）：磁盘扫描循环过滤首段命中；
+        # 空名单原样返回（字节等价）。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
+        if privacy_dirs:
+            files = [p for p in files if not is_privacy(privacy_dirs, p)]
         ctx.last_meta = {"count": len(files)}
         return "\n".join(sorted(files)) if files else self.list_empty(args.dir)

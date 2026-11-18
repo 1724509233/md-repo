@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from ...privacy import detect_privacy_refs, is_privacy
 from .tool import Tool, ToolContext, _check_md_path
 
 
@@ -64,6 +65,14 @@ class WriteDocTool(Tool):
                           "modified" if existed else "created",
                           ctx.write_source, new_hash=digest, batch_id=ctx.run_id)
         ctx.last_meta = {"chars": len(args.content), "overwritten": existed}
-        if existed:
-            return f"Saved: {args.path} ({len(args.content)} chars, overwritten)"
-        return f"Saved: {args.path} ({len(args.content)} chars)"
+        result = (f"Saved: {args.path} ({len(args.content)} chars, overwritten)"
+                  if existed else f"Saved: {args.path} ({len(args.content)} chars)")
+        # 保存引用警告（spec §2.6，advisory 不拦截）：非隐私目标 + 内容显式
+        # 引用隐私目录 → 尾部 advisory（保存语义不变）；隐私区内写入是合法
+        # 动作不警告；ctx.privacy None/空 = 零行为。
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
+        if privacy_dirs and not is_privacy(privacy_dirs, args.path):
+            refs = detect_privacy_refs(args.content, privacy_dirs)
+            if refs:
+                result += "\nwarning: content references private paths: " + ", ".join(refs)
+        return result

@@ -37,8 +37,10 @@ class GetRelatedDocsTool(Tool):
         if not fp.is_file():
             return self.related_no_file(args.path)
 
+        privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
         results = graph_get_related_with_machine(
-            get_index_conn(), get_ledger_conn(), ctx.vault_dir, args.path, hops=1)
+            get_index_conn(), get_ledger_conn(), ctx.vault_dir, args.path, hops=1,
+            privacy_dirs=privacy_dirs)
         if not results:
             # meta.paths = surfaced paths (citation grounding, spec 2026-11-13
             # §5.2 D9); empty on no links.
