@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..egress import EgressTarget
 from ..model import ModelConfig
 from ..privacy import PrivacyConfig
 from .policy import ChannelPolicy
@@ -50,6 +51,10 @@ class AgentSpec:
     # carries it so every validate_tool_call in the loop sees the same live
     # view. None = channel not wired (lazy, behavior unchanged).
     privacy: PrivacyConfig | None = None
+    # Egress audit target (spec 2026-11-18 §3.2): built by the CHANNEL code
+    # (trusted stamp, redline 3). None = no audit — LoopRuntime collects
+    # nothing and the egress_log table stays empty (local model / unwired).
+    egress: EgressTarget | None = None
 
     def policy(self) -> ChannelPolicy:
         """Channel permission policy derived from this spec (check inputs).

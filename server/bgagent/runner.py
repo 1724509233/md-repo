@@ -21,6 +21,7 @@ from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
 from ..privacy import PrivacyConfig
+from ..egress import EgressTarget, parse_endpoint, should_record
 from .notify import NotificationHook, RunReport
 from .readback import ReadbackSystemReminder
 
@@ -306,6 +307,17 @@ async def _consume(agent: Agent, message: str, stats: _RunStats, alias: str = ""
     return "final", error_msg
 
 
+def _bgagent_egress_target(cfg: BackgroundAgentConfig,
+                           run_id: str) -> EgressTarget | None:
+    """The batch's egress audit target (spec 2026-11-18 §3.2/§3.3): endpoint
+    and model come from the config — trusted stamp (redline 3), never from
+    model-visible data. A pure loopback endpoint (local Ollama) returns None:
+    nothing leaves the machine, the table stays empty (zero behavior delta)."""
+    target = EgressTarget("bgagent", cfg.alias, run_id,
+                          parse_endpoint(cfg.model.base_url), cfg.model.model_id)
+    return target if should_record(target) else None
+
+
 async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
                    hooks: list[NotificationHook] | None = None,
                    runtime_cls: type[Runtime] = LoopRuntime,
@@ -385,6 +397,11 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         verbs=cfg.verbs,
         # Privacy read boundary (spec 2026-11-18 §2.1): shared live view.
         privacy=privacy,
+        # Egress audit (spec §3.2/§3.3): a non-loopback model endpoint means
+        # documents leave the machine — audit one row per touched doc at run
+        # end (LoopRuntime finally). Local endpoints (Ollama) attach nothing:
+        # the table stays empty, behavior byte-identical.
+        egress=_bgagent_egress_target(cfg, run_id),
     )
     agent = Agent(spec, runtime=runtime_cls())
 

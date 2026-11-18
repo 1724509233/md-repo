@@ -15,6 +15,7 @@ from ..agent.prompts import SYSTEM_PROMPT, sse
 from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
+from ..egress import EgressTarget, parse_endpoint, should_record
 from ..vault.db.sessions import get_auto_approve, set_auto_approve
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
@@ -71,6 +72,14 @@ def _build_agent_spec(ctx) -> AgentSpec:
     None (unset) = all tools in registry order (behavior unchanged).
     """
     tools = [TOOL_REGISTRY[n] for n in ctx.ai_config.tools] if ctx.ai_config.tools else list(TOOL_REGISTRY.values())
+    # Egress audit (spec 2026-11-18 §3.2/§3.3): interactive channel —
+    # run_id is '' (a chat turn, not a batch), actor/channel "agent".
+    # The endpoint comes from the server config (trusted stamp). Local
+    # endpoints attach nothing (the table stays empty, zero delta).
+    _egress = EgressTarget("agent", "agent", "",
+                           parse_endpoint(ctx.ai_config.base_url),
+                           ctx.ai_config.model)
+    egress = _egress if should_record(_egress) else None
     return AgentSpec(
         system_prompt=SYSTEM_PROMPT,
         model=ModelConfig(
@@ -86,6 +95,7 @@ def _build_agent_spec(ctx) -> AgentSpec:
         max_rounds=ctx.ai_config.max_rounds,
         vault_dir=ctx.vault_dir,
         read_doc_max_chars=ctx.ai_config.read_doc_max_chars,
+        egress=egress,
     )
 
 

@@ -18,6 +18,8 @@ from typing import AsyncIterator
 
 from openai import APIError, AsyncOpenAI
 
+from ..egress import flush_touches
+from ..vault.db.conn import get_ledger_conn
 from .events import Event
 from .execute import execute_tool
 from .tools import TOOL_REGISTRY
@@ -34,6 +36,13 @@ logger = logging.getLogger("md-vault.agent")
 # whitelist is the single exit point and is fail-closed: any future UI/telemetry
 # field added to a message is excluded from the request by default.
 LLM_FIELDS = {"role", "content", "tool_calls", "tool_call_id"}
+
+# egress via mapping (spec 2026-11-18 §3.2): the ONLY tools whose touched
+# documents are audited, with the recorded via. list_files / write / edit are
+# deliberately absent (no document content enters or leaves the context —
+# writes are booked by the change ledger instead).
+_EGRESS_VIA = {"read_doc": "read", "search_docs": "search",
+               "get_related_docs": "related", "recent_changes": "recent"}
 
 # [[target]] / [[target|alias]] — same token convention as the client's
 # wikilinkToMd (server/templates/js/utils/vaultLinks.js); ``[[notes/a#标题]]``
@@ -144,246 +153,267 @@ class LoopRuntime(Runtime):
             run_id=spec.run_id,
             verbs=spec.verbs,
             session_id=agent.session_id,
+            # T3 leftover wiring: the shared privacy live view flows to the
+            # tool layer (read-side refusal) AND to the egress flush below
+            # (§3.4 double insurance).
+            privacy=spec.privacy,
         )
 
-        for _round in range(spec.max_rounds):
-            yield Event("round", {"n": _round + 1})
-            # History guard: an assistant tool_call must be answered (tool
-            # message present) before the next model call. Keeps the
-            # persisted / resubmitted history API-valid, so a tool call that
-            # was already delivered + executed can never be re-taken as a new
-            # one on retry — its tool_result in history is the guard
-            # (bug b621b5b4: the proxy's mid-stream unrecoverable-tool-call
-            # abort).
-            _ensure_tool_results(agent)
-            # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
-            if _round >= spec.max_rounds - 3:
-                raw_messages = agent.messages + [
-                    {"role": "system",
-                     "content": "You are approaching the round limit. Summarize your progress and provide a final answer."}
+        # egress 采集（spec 2026-11-18 §3.2）：path → via，首触优先；
+        # finally 收口一次（run 的每个出口），fail-open。
+        touched: dict[str, str] = {}
+        try:
+            for _round in range(spec.max_rounds):
+                yield Event("round", {"n": _round + 1})
+                # History guard: an assistant tool_call must be answered (tool
+                # message present) before the next model call. Keeps the
+                # persisted / resubmitted history API-valid, so a tool call that
+                # was already delivered + executed can never be re-taken as a new
+                # one on retry — its tool_result in history is the guard
+                # (bug b621b5b4: the proxy's mid-stream unrecoverable-tool-call
+                # abort).
+                _ensure_tool_results(agent)
+                # In the last 3 rounds, inject a temporary reminder (not persisted to messages)
+                if _round >= spec.max_rounds - 3:
+                    raw_messages = agent.messages + [
+                        {"role": "system",
+                         "content": "You are approaching the round limit. Summarize your progress and provide a final answer."}
+                    ]
+                else:
+                    raw_messages = agent.messages
+
+                # LLM boundary whitelist projection (spec 2026-11-13 §5.2 D21): only
+                # the 4 LLM fields cross into the request. ``id``/``ts``/``citations``
+                # are UI/telemetry fields on assistant messages and must NEVER reach
+                # the model — the SDK serializes message dicts verbatim, so a bare
+                # agent.messages pass would leak them. Project the FINAL list (after
+                # reminder injection) so history and reminder are both filtered.
+                call_messages = [
+                    {k: v for k, v in m.items() if k in LLM_FIELDS}
+                    for m in raw_messages
                 ]
-            else:
-                raw_messages = agent.messages
 
-            # LLM boundary whitelist projection (spec 2026-11-13 §5.2 D21): only
-            # the 4 LLM fields cross into the request. ``id``/``ts``/``citations``
-            # are UI/telemetry fields on assistant messages and must NEVER reach
-            # the model — the SDK serializes message dicts verbatim, so a bare
-            # agent.messages pass would leak them. Project the FINAL list (after
-            # reminder injection) so history and reminder are both filtered.
-            call_messages = [
-                {k: v for k, v in m.items() if k in LLM_FIELDS}
-                for m in raw_messages
-            ]
+                create_kwargs = dict(
+                    model=model.model_id,
+                    messages=call_messages,
+                    tools=[t.to_openai_tool() for t in spec.tools] if spec.tools else None,
+                    stream=True,
+                    stream_options={"include_usage": True},
+                )
+                if model.max_tokens is not None:
+                    create_kwargs["max_tokens"] = model.max_tokens
+                if model.temperature is not None:
+                    create_kwargs["temperature"] = model.temperature
+                try:
+                    stream = await client.chat.completions.create(**create_kwargs)
+                except APIError as e:
+                    # Unrecoverable request failure (connection / timeout /
+                    # provider error): nothing was delivered this round, so the
+                    # history is untouched. Clean terminal — no retry (a retry
+                    # would re-request an output whose tool calls may already
+                    # have been delivered + executed); the consumer records
+                    # status=error.
+                    logger.exception("model request failed at round %d: %s", _round + 1, e)
+                    yield Event("error", {"error": f"{type(e).__name__}: {e}"})
+                    yield Event("done", {"reason": "error"})
+                    return
 
-            create_kwargs = dict(
-                model=model.model_id,
-                messages=call_messages,
-                tools=[t.to_openai_tool() for t in spec.tools] if spec.tools else None,
-                stream=True,
-                stream_options={"include_usage": True},
-            )
-            if model.max_tokens is not None:
-                create_kwargs["max_tokens"] = model.max_tokens
-            if model.temperature is not None:
-                create_kwargs["temperature"] = model.temperature
-            try:
-                stream = await client.chat.completions.create(**create_kwargs)
-            except APIError as e:
-                # Unrecoverable request failure (connection / timeout /
-                # provider error): nothing was delivered this round, so the
-                # history is untouched. Clean terminal — no retry (a retry
-                # would re-request an output whose tool calls may already
-                # have been delivered + executed); the consumer records
-                # status=error.
-                logger.exception("model request failed at round %d: %s", _round + 1, e)
-                yield Event("error", {"error": f"{type(e).__name__}: {e}"})
-                yield Event("done", {"reason": "error"})
-                return
+                content = ""
+                tool_calls = {}
+                usage = None
 
-            content = ""
-            tool_calls = {}
-            usage = None
+                try:
+                    async for chunk in stream:
+                        if getattr(chunk, "usage", None) is not None:
+                            usage = chunk.usage
+                        if not chunk.choices:
+                            continue
+                        delta = chunk.choices[0].delta
 
-            try:
-                async for chunk in stream:
-                    if getattr(chunk, "usage", None) is not None:
-                        usage = chunk.usage
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
+                        # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
+                        # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
+                        # 不进 content / 消息历史（思考是草稿，不是回答正文）。
+                        # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
+                        # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
+                        # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
+                        for _key in ("reasoning_content", "reasoning", "thinking"):
+                            _val = getattr(delta, _key, None)
+                            if isinstance(_val, str) and _val:
+                                yield Event("reasoning", {"text": _val})
+                                break
 
-                    # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
-                    # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
-                    # 不进 content / 消息历史（思考是草稿，不是回答正文）。
-                    # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
-                    # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
-                    # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
-                    for _key in ("reasoning_content", "reasoning", "thinking"):
-                        _val = getattr(delta, _key, None)
-                        if isinstance(_val, str) and _val:
-                            yield Event("reasoning", {"text": _val})
-                            break
+                        if delta.content:
+                            content += delta.content
+                            yield Event("token", {"text": delta.content})
 
-                    if delta.content:
-                        content += delta.content
-                        yield Event("token", {"text": delta.content})
-
-                    if delta.tool_calls:
-                        for tc in delta.tool_calls:
-                            acc = tool_calls.setdefault(
-                                tc.index, {"id": None, "name": None, "arguments": ""}
-                            )
-                            if tc.id:
-                                acc["id"] = tc.id
-                            if tc.function and tc.function.name:
-                                acc["name"] = tc.function.name
-                            if tc.function and tc.function.arguments:
-                                acc["arguments"] += tc.function.arguments
-            except APIError as e:
-                # Unrecoverable mid-stream failure (e.g. the proxy's
-                # "unrecoverable tool call" abort — the endpoint re-delivers a
-                # tool call that was already streamed in the interrupted first
-                # attempt and refuses to continue). The partial round
-                # accumulation is discarded: the assistant message is appended
-                # only after a full stream, so the history never holds a
-                # half-delivered tool call. Clean terminal — no retry (a retry
-                # would re-request an output whose tool calls were already
-                # delivered + executed); the consumer records status=error.
-                logger.exception("model stream failed at round %d: %s", _round + 1, e)
-                yield Event("error", {"error": f"{type(e).__name__}: {e}"})
-                yield Event("done", {"reason": "error"})
-                return
+                        if delta.tool_calls:
+                            for tc in delta.tool_calls:
+                                acc = tool_calls.setdefault(
+                                    tc.index, {"id": None, "name": None, "arguments": ""}
+                                )
+                                if tc.id:
+                                    acc["id"] = tc.id
+                                if tc.function and tc.function.name:
+                                    acc["name"] = tc.function.name
+                                if tc.function and tc.function.arguments:
+                                    acc["arguments"] += tc.function.arguments
+                except APIError as e:
+                    # Unrecoverable mid-stream failure (e.g. the proxy's
+                    # "unrecoverable tool call" abort — the endpoint re-delivers a
+                    # tool call that was already streamed in the interrupted first
+                    # attempt and refuses to continue). The partial round
+                    # accumulation is discarded: the assistant message is appended
+                    # only after a full stream, so the history never holds a
+                    # half-delivered tool call. Clean terminal — no retry (a retry
+                    # would re-request an output whose tool calls were already
+                    # delivered + executed); the consumer records status=error.
+                    logger.exception("model stream failed at round %d: %s", _round + 1, e)
+                    yield Event("error", {"error": f"{type(e).__name__}: {e}"})
+                    yield Event("done", {"reason": "error"})
+                    return
 
 
-            # Emit token usage from the API response (prompt_tokens = current context size)
-            if usage is not None:
-                prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-                if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
-                    current_tokens = prompt_tokens + completion_tokens
-                    # 增量键 prompt/completion（bgagent runner 口径用）；
-                    # used/total/percent 保留 —— Web UI AIChatPanel 只读这三个键
-                    yield Event("token_usage", {
-                        "used": current_tokens,
-                        "total": model.context_window,
-                        "percent": round(current_tokens / model.context_window * 100, 1) if model.context_window else 0,
-                        "prompt": prompt_tokens,
-                        "completion": completion_tokens,
+                # Emit token usage from the API response (prompt_tokens = current context size)
+                if usage is not None:
+                    prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
+                        current_tokens = prompt_tokens + completion_tokens
+                        # 增量键 prompt/completion（bgagent runner 口径用）；
+                        # used/total/percent 保留 —— Web UI AIChatPanel 只读这三个键
+                        yield Event("token_usage", {
+                            "used": current_tokens,
+                            "total": model.context_window,
+                            "percent": round(current_tokens / model.context_window * 100, 1) if model.context_window else 0,
+                            "prompt": prompt_tokens,
+                            "completion": completion_tokens,
+                        })
+
+                if not tool_calls:
+                    # Final answer: append the assistant message with its UI/telemetry
+                    # fields (spec 2026-11-13 §5.2 D21/D22). ``id`` (uuid4 hex 12) is
+                    # the feedback key (identity — NOT the ``ts`` measurement, which is
+                    # display metadata only). ``citations`` is the done-time validation
+                    # snapshot, persisted with the message into the sessions blob; the
+                    # feedback endpoint reads this snapshot and never recomputes it.
+                    # ts/citations are UI/telemetry fields — the LLM boundary projects
+                    # them out (LLM_FIELDS); never pass agent.messages bare to the LLM.
+                    message_id = uuid.uuid4().hex[:12]
+                    citations = _compute_citations(
+                        content, spec.vault_dir, agent.evidence_paths)
+                    agent.messages.append({
+                        "role": "assistant",
+                        "content": content,
+                        "id": message_id,
+                        "ts": time.time(),
+                        "citations": citations,
                     })
+                    yield Event("done", {
+                        "reason": "final",
+                        "message_id": message_id,
+                        "citations": citations,
+                    })
+                    return
 
-            if not tool_calls:
-                # Final answer: append the assistant message with its UI/telemetry
-                # fields (spec 2026-11-13 §5.2 D21/D22). ``id`` (uuid4 hex 12) is
-                # the feedback key (identity — NOT the ``ts`` measurement, which is
-                # display metadata only). ``citations`` is the done-time validation
-                # snapshot, persisted with the message into the sessions blob; the
-                # feedback endpoint reads this snapshot and never recomputes it.
-                # ts/citations are UI/telemetry fields — the LLM boundary projects
-                # them out (LLM_FIELDS); never pass agent.messages bare to the LLM.
-                message_id = uuid.uuid4().hex[:12]
-                citations = _compute_citations(
-                    content, spec.vault_dir, agent.evidence_paths)
                 agent.messages.append({
                     "role": "assistant",
-                    "content": content,
-                    "id": message_id,
-                    "ts": time.time(),
-                    "citations": citations,
+                    "content": content or None,
+                    "tool_calls": [
+                        {"id": tc["id"], "type": "function",
+                         "function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                        for tc in tool_calls.values()
+                    ],
                 })
-                yield Event("done", {
-                    "reason": "final",
-                    "message_id": message_id,
-                    "citations": citations,
-                })
-                return
 
-            agent.messages.append({
-                "role": "assistant",
-                "content": content or None,
-                "tool_calls": [
-                    {"id": tc["id"], "type": "function",
-                     "function": {"name": tc["name"], "arguments": tc["arguments"]}}
-                    for tc in tool_calls.values()
-                ],
-            })
-
-            for tc in tool_calls.values():
-                try:
-                    args = json.loads(tc["arguments"])
-                except (json.JSONDecodeError, TypeError):
-                    err_msg = "Error: malformed tool arguments"
-                    yield self._tool_error(agent, tc, err_msg)
-                    continue
-
-                # Dispatch via the registry (canonical tool instances: permission,
-                # precheck, on_success) — same semantics as the old WRITE_TOOLS set.
-                tool = TOOL_REGISTRY.get(tc["name"])
-                yield Event("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
-                logger.info("tool_call %s args=%s", tc["name"], json.dumps(args, ensure_ascii=False))
-
-                error = validate_tool_call(tc["name"], args, spec.policy())
-                if error:
-                    logger.warning("tool_call %s rejected: %s", tc["name"], error)
-                    yield self._tool_error(agent, tc, error)
-                    continue
-
-                # Tool-declared pre-check (e.g. existence before a confirm prompt)
-                if tool is not None:
-                    pre = tool.precheck(args, ctx)
-                    if pre:
-                        yield self._tool_error(agent, tc, pre)
+                for tc in tool_calls.values():
+                    try:
+                        args = json.loads(tc["arguments"])
+                    except (json.JSONDecodeError, TypeError):
+                        err_msg = "Error: malformed tool arguments"
+                        yield self._tool_error(agent, tc, err_msg)
                         continue
 
-                if tool is not None and tool.permission == "ask" and not spec.auto_approve:
-                    entry = {"event": asyncio.Event(), "approved": None}
-                    agent.pending_confirms[tc["id"]] = entry
-                    yield Event("confirm_request", {
-                        "id": tc["id"], "name": tc["name"], "args": args,
-                    })
-                    logger.info("waiting for user confirmation on %s", tc["id"])
-                    await entry["event"].wait()
-                    logger.info("user confirmed/rejected %s, approved=%s", tc["id"], entry["approved"])
-                    del agent.pending_confirms[tc["id"]]
-                    if not entry["approved"]:
-                        result = "User rejected this operation."
-                        logger.warning("tool_call %s rejected by user", tc["name"])
-                        agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
-                        yield Event("tool_result", {"id": tc["id"], "result": result, "rejected": True})
+                    # Dispatch via the registry (canonical tool instances: permission,
+                    # precheck, on_success) — same semantics as the old WRITE_TOOLS set.
+                    tool = TOOL_REGISTRY.get(tc["name"])
+                    yield Event("tool_call", {"id": tc["id"], "name": tc["name"], "args": args})
+                    logger.info("tool_call %s args=%s", tc["name"], json.dumps(args, ensure_ascii=False))
+
+                    error = validate_tool_call(tc["name"], args, spec.policy())
+                    if error:
+                        logger.warning("tool_call %s rejected: %s", tc["name"], error)
+                        yield self._tool_error(agent, tc, error)
                         continue
 
-                # Clear the UI side-channel so a non-contributing tool yields None.
-                ctx.last_meta = None
-                result = execute_tool(tc["name"], args, ctx)
-                meta = ctx.last_meta
-                # Citation grounding set (spec 2026-11-13 §5.2 D9): a successful
-                # retrieval tool (search_docs / read_doc / get_related_docs) stamps
-                # the paths it surfaced in ``ctx.last_meta["paths"]``; add them to
-                # the session evidence set so the answer's citations of those docs
-                # read grounded. Error results carry no meta (the tool returned
-                # before stamping), so nothing is added on failure.
-                if meta is not None:
-                    for p in meta.get("paths", []):
-                        agent.evidence_paths.add(p)
-                logger.debug("tool_result %s => %s", tc["name"], result[:200])
-                # Tool-level failure: the tool executed but returned an "Error:…"
-                # string (e.g. file not found in _execute). Flag it so the UI renders
-                # the error (⚠ + red) like the validate/precheck path — otherwise it
-                # lands on the done branch and reads as a successful ✓.
-                payload = {"id": tc["id"], "result": result}
-                if result.startswith("Error"):
-                    payload["error"] = True
-                if meta is not None:
-                    payload["meta"] = meta
-                yield Event("tool_result", payload)
-                agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                    # Tool-declared pre-check (e.g. existence before a confirm prompt)
+                    if tool is not None:
+                        pre = tool.precheck(args, ctx)
+                        if pre:
+                            yield self._tool_error(agent, tc, pre)
+                            continue
 
-                # Tool-declared post-success hook (e.g. read tracking)
-                if tool is not None and not result.startswith("Error"):
-                    tool.on_success(args, result, ctx)
+                    if tool is not None and tool.permission == "ask" and not spec.auto_approve:
+                        entry = {"event": asyncio.Event(), "approved": None}
+                        agent.pending_confirms[tc["id"]] = entry
+                        yield Event("confirm_request", {
+                            "id": tc["id"], "name": tc["name"], "args": args,
+                        })
+                        logger.info("waiting for user confirmation on %s", tc["id"])
+                        await entry["event"].wait()
+                        logger.info("user confirmed/rejected %s, approved=%s", tc["id"], entry["approved"])
+                        del agent.pending_confirms[tc["id"]]
+                        if not entry["approved"]:
+                            result = "User rejected this operation."
+                            logger.warning("tool_call %s rejected by user", tc["name"])
+                            agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                            yield Event("tool_result", {"id": tc["id"], "result": result, "rejected": True})
+                            continue
 
-        # Round budget exhausted: close the stream so listeners get a terminal event.
-        yield Event("done", {"reason": "round_limit"})
+                    # Clear the UI side-channel so a non-contributing tool yields None.
+                    ctx.last_meta = None
+                    result = execute_tool(tc["name"], args, ctx)
+                    meta = ctx.last_meta
+                    # Citation grounding set (spec 2026-11-13 §5.2 D9): a successful
+                    # retrieval tool (search_docs / read_doc / get_related_docs) stamps
+                    # the paths it surfaced in ``ctx.last_meta["paths"]``; add them to
+                    # the session evidence set so the answer's citations of those docs
+                    # read grounded. Error results carry no meta (the tool returned
+                    # before stamping), so nothing is added on failure.
+                    if meta is not None:
+                        via = _EGRESS_VIA.get(tc["name"])
+                        for p in meta.get("paths", []):
+                            agent.evidence_paths.add(p)
+                            # egress collection (spec §3.2): first touch wins the
+                            # via; tools outside _EGRESS_VIA never enter touched.
+                            if via is not None and p not in touched:
+                                touched[p] = via
+                    logger.debug("tool_result %s => %s", tc["name"], result[:200])
+                    # Tool-level failure: the tool executed but returned an "Error:…"
+                    # string (e.g. file not found in _execute). Flag it so the UI renders
+                    # the error (⚠ + red) like the validate/precheck path — otherwise it
+                    # lands on the done branch and reads as a successful ✓.
+                    payload = {"id": tc["id"], "result": result}
+                    if result.startswith("Error"):
+                        payload["error"] = True
+                    if meta is not None:
+                        payload["meta"] = meta
+                    yield Event("tool_result", payload)
+                    agent.messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+                    # Tool-declared post-success hook (e.g. read tracking)
+                    if tool is not None and not result.startswith("Error"):
+                        tool.on_success(args, result, ctx)
+
+            # Round budget exhausted: close the stream so listeners get a terminal event.
+            yield Event("done", {"reason": "round_limit"})
+
+        finally:
+            # egress 审计收口（spec §3.2）：final / APIError×2 / round_limit /
+            # 消费者弃流 —— 每个出口恰好一次 flush；表有行 ⇔ 文档真进了模型上下文。
+            # flush_touches 自带 fail-open + privacy 双保险（§3.4）。
+            if spec.egress is not None:
+                privacy = ctx.privacy.dirs if ctx.privacy is not None else ()
+                flush_touches(get_ledger_conn(), privacy, spec.egress, touched)
 
     @staticmethod
     def _tool_error(agent, tc: dict, msg: str) -> Event:

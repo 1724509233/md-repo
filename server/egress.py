@@ -171,3 +171,31 @@ def flush_touches(
             )
     except Exception:
         logger.exception("egress flush failed (fail-open, run continues)")
+
+
+# ------------------------------------------------------------- startup broadcast
+
+
+def log_model_endpoints(ai_config=None, bg_agents=()) -> list[str]:
+    """Startup broadcast (spec 2026-11-18 §3.5, redline 7): one classified
+    line per EFFECTIVE model endpoint — main AI + every background agent —
+    tagged cloud/local. 出域必须可知: a fact-basis break must be a visible
+    log event, never a silent fact.
+
+    The api_key NEVER appears (only host[:port] + model id). Duck-typed
+    inputs (``ai_config.base_url/.model``, ``bg_agent.alias/.model.base_url/
+    .model.model_id``) so the helper stays config-module-agnostic. Returns
+    the lines — the caller logs them, tests assert on them."""
+    lines: list[str] = []
+
+    def _fmt(scope: str, base_url, model_id) -> str:
+        host = parse_endpoint(base_url)
+        cloud = should_record(EgressTarget("", "", "", host, ""))
+        return (f"model endpoint: {host} [{'cloud' if cloud else 'local'}] "
+                f"{scope} model={model_id}")
+
+    if ai_config is not None:
+        lines.append(_fmt("main AI", ai_config.base_url, ai_config.model))
+    for a in bg_agents:
+        lines.append(_fmt(f"bgagent {a.alias}", a.model.base_url, a.model.model_id))
+    return lines
