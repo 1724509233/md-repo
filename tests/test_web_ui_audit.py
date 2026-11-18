@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 import pathlib
 import shutil
+import subprocess
 
 import pytest
 
@@ -406,3 +407,32 @@ def test_landing_integration_pins():
     assert m and m.group(1).lstrip().startswith("clearBlockSel()")
     m2 = re.search(r"watch\(\(\) => props\.mode, async \(mode\) => \{(.+?)\n    \}\)", ep, re.S)
     assert m2 and m2.group(1).lstrip().startswith("clearBlockSel()")
+
+
+def test_p2_intl_format_module():
+    f = (TPL / "js/utils/format.js").read_text(encoding="utf-8")
+    assert "Intl.DateTimeFormat" in f and "en-GB" in f and "formatToParts" in f
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = ("import(%r).then(m=>{"
+          "const ts=Math.floor(new Date('2026-11-18T07:30:00+08:00').getTime()/1000)-86400*23;"
+          "const now=new Date('2026-11-18T09:00:00+08:00').getTime();"
+          # ≥2 天前 → null；本地日界 MM-DD（UTC 口径会错成 10-25）
+          "if(m.fmtRel(ts,now)!==null)process.exit(1);"
+          "if(m.fmtMD(ts)!=='10-26')process.exit(2);"
+          "if(m.fmtHM(ts)!=='07:30')process.exit(3);"
+          "if(m.fmtRel(ts+86400*22,now)!=='昨天 07:30')process.exit(4);"
+          "if(m.fmtRel(null,now)!=='')process.exit(5);"
+          "process.exit(0)})") % (TPL / "js/utils/format.js").as_uri()
+    subprocess.run([node, "--input-type=module", "-e", js], check=True,
+                   timeout=30, env={**dict(__import__("os").environ), "TZ": "Asia/Shanghai"})
+
+
+def test_p2_intl_wiring():
+    t = _templates()
+    for comp in ("MonitorPage.js", "TrashPanel.js", "MemoryConsole.js"):
+        assert "../utils/format.js" in t[comp], comp
+    assert "toISOString().slice" not in t["MonitorPage.js"]
+    mp = t["MonitorPage.js"]
+    assert "String(iso).match" in mp  # fmtMerged/fmtDay 字符串抽取未被 Date 化

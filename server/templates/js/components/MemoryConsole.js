@@ -21,6 +21,7 @@
 const { ref, computed, watch, inject, nextTick } = Vue
 import { api } from '../api.js'
 import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
+import { fmtHM, fmtMD } from '../utils/format.js'
 
 /* 类型 chip 图标（单色线条，stroke: currentColor；未知/存量退役类型回退时钟） */
 export const TYPE_ICONS = {
@@ -120,14 +121,17 @@ export const MemoryConsole = {
     )
     const reports = computed(() => state.memoryReports || [])
     const reportsLen = computed(() => reports.value.length)
+    // 本地日键 = 本地零点毫秒（日历日分组/比较机制，非显示格式化；显示串一律走 format.js）
+    const dayStart = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime() }
+    const prevDay = d => { const x = new Date(d); x.setDate(x.getDate() - 1); return x }
     // 报告单行（仅当有报告时渲染）：alias chip + title（无 # 标题回退 alias）+ 日期相对标签（今天/昨天/MM-DD）
     const reportCards = computed(() => {
-      const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-      const shortOf = k => k === dayKey(now) ? '今天' : k === dayKey(yest) ? '昨天' : k.slice(5)
+      const t0 = dayStart(new Date()), y0 = dayStart(prevDay(new Date()))
+      const shortOf = d => { const k = dayStart(d); return k === t0 ? '今天' : k === y0 ? '昨天' : fmtMD(d.getTime() / 1000) }
       return reports.value.map(r => {
         const m = String(r.date || '').match(/(\d{4})-(\d{2})-(\d{2})/)
         const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
-        return { ...r, dateShort: d ? shortOf(dayKey(d)) : (r.date || '—'), fresh: reportFreshSet.value.has(r.relpath) }
+        return { ...r, dateShort: d ? shortOf(d) : (r.date || '—'), fresh: reportFreshSet.value.has(r.relpath) }
       })
     })
 
@@ -170,8 +174,6 @@ export const MemoryConsole = {
     //     时间轴分组 今天 / 昨天 / MM-DD，无时间数据归「更早」；倒序取前 FEED_CAP 条，
     //     尾注 f-more 计数指向监控页「采纳提案 / 异常清单」）───
     const FEED_CAP = 8
-    const pad2 = n => String(n).padStart(2, '0')
-    const dayKey = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
     /* 卡时间 = 具体时刻（HH:mm 位）：created 字段只有日期，
        具体 ts 取自 trail 行（path 须为提案文件本身，滤掉共享行）或 merged_at；统一返回毫秒 */
     const trailTs = (p, rel, pick) => {
@@ -179,7 +181,6 @@ export const MemoryConsole = {
       if (!ts.length) return null
       return pick === 'last' ? Math.max(...ts) : Math.min(...ts)
     }
-    const fmtHM = ts => { const d = new Date(ts); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) }
     const feedGroups = computed(() => {
       const st = state.memoryStatus
       const awaiting = ((st && st.proposals && st.proposals.awaiting_review) || []).map(it => {
@@ -209,21 +210,20 @@ export const MemoryConsole = {
           kind: 'adopted', key: 'd-' + p.relpath, relpath: p.relpath, type: p.type,
           title: p.title, status: 'adopted', created: p.created || null, ts: trailTs(p, p.relpath, 'first')
         }))
-      /* 日期 → 组 key（t / y / MM-DD / x = 无日期数据「更早」）+ 标签 */
-      const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-      const keyOf = d => d ? (dayKey(d) === dayKey(now) ? 't' : dayKey(d) === dayKey(yest) ? 'y' : dayKey(d)) : 'x'
-      const labelOf = k => k === 't' ? '今天 · ' + pad2(now.getMonth() + 1) + '-' + pad2(now.getDate())
-        : k === 'y' ? '昨天 · ' + pad2(yest.getMonth() + 1) + '-' + pad2(yest.getDate())
-        : k === 'x' ? '更早' : k.slice(5)
+      /* 日期 → 组 key（'t' / 'y' / 本地零点毫秒串 / 'x' = 无日期数据「更早」）+ 标签。
+         日历日比较 = 本地零点毫秒；显示串（MM-DD）走 format.js。 */
+      const today = new Date(), yest = prevDay(today)
+      const t0 = dayStart(today), y0 = dayStart(yest)
+      const keyOf = d => d ? (dayStart(d) === t0 ? 't' : dayStart(d) === y0 ? 'y' : String(dayStart(d))) : 'x'
+      const labelOf = k => k === 't' ? '今天 · ' + fmtMD(t0 / 1000)
+        : k === 'y' ? '昨天 · ' + fmtMD(y0 / 1000)
+        : k === 'x' ? '更早' : fmtMD(Number(k) / 1000)
       const parseDay = s => { const m = String(s || '').match(/\d{4}-\d{2}-\d{2}/); return m ? new Date(Number(m[0].slice(0, 4)), Number(m[0].slice(5, 7)) - 1, Number(m[0].slice(8, 10))) : null }
       const dOf = it => it.ts ? new Date(it.ts) : parseDay(it.created)   // 分组键：具体时刻的日期，无时刻回退 created 日期
       /* 组内序 = 设计稿示例（待审卡 → 在途卡 → 终态卡）；awaiting 最旧在前（v3 审查队列口径）、
          终态倒序；组间按日期倒序（今天 > 昨天 > 旧日期 > 更早） */
       const sortVal = x => x.kind === 'awaiting' ? 0 : x.kind === 'adopted' ? 1 : 2
-      const rank = k => k === 'x' ? 0
-        : k === 't' ? Number(dayKey(now).replace(/-/g, ''))
-        : k === 'y' ? Number(dayKey(yest).replace(/-/g, ''))
-        : Number(k.replace(/-/g, ''))
+      const rank = k => k === 'x' ? 0 : k === 't' ? t0 : k === 'y' ? y0 : Number(k)
       const groups = []
       const gmap = new Map()
       const push = (k, item) => {
@@ -242,9 +242,9 @@ export const MemoryConsole = {
       }
       // f-time（设计稿 HH:mm 位）：具体时刻（提交点 / 终态转换点 / merged_at）；无时刻回退创建日相对标签
       for (const g of groups) for (const it of g.items) {
-        if (it.ts) { it.time = fmtHM(it.ts); continue }
+        if (it.ts) { it.time = fmtHM(it.ts / 1000); continue }
         const d = parseDay(it.created)
-        it.time = d ? keyOf(d) === 't' ? '今天' : keyOf(d) === 'y' ? '昨天' : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+        it.time = d ? keyOf(d) === 't' ? '今天' : keyOf(d) === 'y' ? '昨天' : fmtMD(d.getTime() / 1000)
           : (it.kind === 'awaiting' ? (formatAge(it.age) || '—') : '—')
       }
       // 倒序截断 FEED_CAP：超出部分并入 f-more 计数（指向监控页 ⑥采纳提案 / ②异常清单）

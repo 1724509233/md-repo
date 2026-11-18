@@ -6,8 +6,7 @@
  */
 const { ref, computed, inject, watch, nextTick, onBeforeUnmount } = Vue
 import { initMenuNav } from '../utils/menuNav.js'
-
-const pad2 = n => String(n).padStart(2, '0')
+import { fmtHM, fmtMD, fmtRel } from '../utils/format.js'
 
 /* deleted_at = UTC ISO（YYYY-MM-DDTHH:MM:SSZ）→ 本地 Date（非法 → null） */
 function parseISO(s) {
@@ -16,16 +15,13 @@ function parseISO(s) {
   return isNaN(d.getTime()) ? null : d
 }
 
-/* batch 头时间：今天 HH:mm / 昨天 HH:mm / MM-DD HH:mm（同 MemoryConsole feed 的日期口径） */
+/* batch 头时间：相对时间（'Nm 前'/'Nh 前'/今天 HH:mm/昨天 HH:mm，今天昨天按本地日历日），
+   ≥2 天前 → MM-DD HH:mm（共享 format.js） */
 function fmtBatchTime(iso) {
   const d = parseISO(iso)
   if (!d) return ''
-  const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes())
-  const key = x => x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate())
-  const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-  if (key(d) === key(now)) return '今天 ' + hm
-  if (key(d) === key(yest)) return '昨天 ' + hm
-  return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm
+  const ts = d.getTime() / 1000
+  return fmtRel(ts) ?? (fmtMD(ts) + ' ' + fmtHM(ts))
 }
 
 /* 字节 → 人读大小（B / KB / MB） */

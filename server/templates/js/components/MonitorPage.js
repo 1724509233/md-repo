@@ -15,6 +15,7 @@
 const { ref, computed, watch, nextTick, inject } = Vue
 import { api } from '../api.js'
 import { showToast } from '../utils/toast.js'
+import { fmtHM, fmtMD, fmtRel } from '../utils/format.js'
 import { TYPE_ICONS, TYPE_ICON_DEFAULT } from './MemoryConsole.js'
 
 /* 九态格序 = 设计稿批准顺序（产品现有 by_status 口径，3×3）；
@@ -34,12 +35,10 @@ const NINE_TILES = [
 /* 执行器循环周期 30min：lamp 亮 = last_op_ts 在 30 分钟内（循环在跑），其余 = 待机 */
 const EXECUTOR_WINDOW_S = 30 * 60
 
-function pad2(n) { return String(n).padStart(2, '0') }
-/* epoch 秒 → MM-DD HH:mm（0/空 → ''，副注不渲染） */
+/* epoch 秒 → MM-DD HH:mm（0/空 → ''，副注不渲染；共享 format.js，本地时区） */
 function fmtDT(ts) {
   if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+  return fmtMD(ts) + ' ' + fmtHM(ts)
 }
 /* 日期串（YYYY-MM-DD[THH:MM] 或 datetime 化的 "YYYY-MM-DD HH:MM:SS"）→ MM-DD（提案 created / merged_at 前缀） */
 function fmtDay(iso) {
@@ -53,14 +52,11 @@ function fmtMerged(s) {
   const m = String(s).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/)
   return m ? m[2] + '-' + m[3] + ' ' + m[4] + ':' + m[5] : String(s)
 }
-/* 上次运行：epoch 秒 → 「26m 前 / 3h 前 / 昨天 10:00」（同 MemoryConsole.relRun 口径） */
+/* 上次运行：epoch 秒 → 「26m 前 / 3h 前 / 昨天 10:00 / MM-DD」（共享 format.js；
+ * 「昨天」按本地日历日判定，替代旧 UTC 日界——清晨时段不再错显前一天） */
 function relRun(ts) {
   if (!ts) return '尚未运行'
-  const diff = Date.now() / 1000 - ts
-  if (diff < 3600) return Math.max(1, Math.floor(diff / 60)) + 'm 前'
-  if (diff < 86400) return Math.floor(diff / 3600) + 'h 前'
-  if (diff < 86400 * 2) return '昨天 ' + new Date(ts * 1000).toTimeString().slice(0, 5)
-  return new Date(ts * 1000).toISOString().slice(0, 10)
+  return fmtRel(ts) ?? fmtMD(ts)
 }
 
 /* ⑦ 回滚块 Tailwind 工具串（style.css 零改动；token 沿用监控页既有：--ink-soft / --brass / --st-error / --line，
@@ -94,8 +90,7 @@ export const MonitorPage = {
       () => state.memoryStatus,
       (st) => {
         if (st && (st.agents || st.recall || st.executor || st.proposals)) {
-          const d = new Date()
-          updatedAt.value = pad2(d.getHours()) + ':' + pad2(d.getMinutes())
+          updatedAt.value = fmtHM(Date.now() / 1000)
         }
       },
       { immediate: true }
