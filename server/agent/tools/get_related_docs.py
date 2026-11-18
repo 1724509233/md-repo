@@ -30,7 +30,6 @@ class GetRelatedDocsTool(Tool):
                 f"Tip: use search_docs to find related content by keyword.")
 
     def _execute(self, args, ctx: ToolContext) -> str:
-        from ...vault.db.conn import get_index_conn, get_ledger_conn
         from ...vault.db.graph_sql import graph_get_related_with_machine
 
         fp = ctx.vault_dir / args.path
@@ -39,7 +38,7 @@ class GetRelatedDocsTool(Tool):
 
         privacy_dirs = ctx.privacy.dirs if ctx.privacy is not None else ()
         results = graph_get_related_with_machine(
-            get_index_conn(), get_ledger_conn(), ctx.vault_dir, args.path, hops=1,
+            ctx.db_conn, ctx.ledger_conn, ctx.vault_dir, args.path, hops=1,
             privacy_dirs=privacy_dirs)
         if not results:
             # meta.paths = surfaced paths (citation grounding, spec 2026-11-13

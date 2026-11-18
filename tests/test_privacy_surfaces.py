@@ -169,8 +169,8 @@ def test_get_related_docs_tool_privacy(vault_dir, db_conn, ledger_conn, tmp_path
     """工具层：ctx.privacy 带名单 → 结果串无隐私路径；None → 有（等价）。"""
     _write(vault_dir, "notes/a.md", "a\n")
     _mk_edge(db_conn, "notes/a.md", "日记/secret.md")
-    ctx_plain = ToolContext(vault_dir=vault_dir)
-    ctx_priv = ToolContext(vault_dir=vault_dir, privacy=_pcfg(tmp_path, "[日记]"))
+    ctx_plain = ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn)
+    ctx_priv = ToolContext(vault_dir=vault_dir, privacy=_pcfg(tmp_path, "[日记]"), db_conn=db_conn, ledger_conn=ledger_conn)
     out_plain = GetRelatedDocsTool().call({"path": "notes/a.md"}, ctx_plain)
     assert "日记/secret.md" in out_plain
     out_priv = GetRelatedDocsTool().call({"path": "notes/a.md"}, ctx_priv)
@@ -207,14 +207,14 @@ def test_recent_changes_tool_privacy_and_meta(vault_dir, db_conn, tmp_path):
     _mk_change(db_conn, "notes/b.md", from_path="日记/old.md")  # from 隐私 → 剔
     _mk_change(db_conn, "notes/c.md")                   # 正常
 
-    ctx_priv = ToolContext(vault_dir=vault_dir, privacy=_pcfg(tmp_path, "[日记]"))
+    ctx_priv = ToolContext(vault_dir=vault_dir, privacy=_pcfg(tmp_path, "[日记]"), db_conn=db_conn)
     out = RecentChangesTool().call({}, ctx_priv)
     assert "日记" not in out
     assert "notes/c.md" in out
     assert ctx_priv.last_meta is not None
     assert ctx_priv.last_meta["paths"] == ["notes/c.md"]
 
-    ctx_plain = ToolContext(vault_dir=vault_dir)
+    ctx_plain = ToolContext(vault_dir=vault_dir, db_conn=db_conn)
     out2 = RecentChangesTool().call({}, ctx_plain)
     assert "日记/a.md" in out2 and "was: 日记/old.md" in out2
     paths = ctx_plain.last_meta["paths"]

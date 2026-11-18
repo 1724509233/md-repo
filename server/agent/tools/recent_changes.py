@@ -32,10 +32,9 @@ class RecentChangesTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db.changes import get_changes
-        from ...vault.db.conn import get_index_conn
         from ..validate import parse_since
 
-        conn = get_index_conn()
+        conn = ctx.db_conn
         if not conn:
             return "Error: database not available"
         since_raw = args.since

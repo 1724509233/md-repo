@@ -86,7 +86,7 @@ def test_get_related_docs_no_links(tmp_path: Path):
     (vault / "isolated.md").write_bytes(b"# Isolated\n\nNo links here.")
 
     register_db_conn(conn, None)
-    result = execute_tool("get_related_docs", {"path": "isolated.md"}, ToolContext(vault_dir=vault))
+    result = execute_tool("get_related_docs", {"path": "isolated.md"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "[[wikilinks]]" in result
     conn.close()
 
@@ -110,7 +110,7 @@ def test_recent_changes_empty(tmp_path: Path):
     conn = init_db(vault / ".sync" / "index.db")
 
     register_db_conn(conn, None)
-    result = execute_tool("recent_changes", {"since": "1m"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"since": "1m"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "Check the path/source filters" in result
     conn.close()
 

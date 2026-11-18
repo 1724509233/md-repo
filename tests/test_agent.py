@@ -115,7 +115,7 @@ def test_tool_permission_declarations():
     assert ask.isdisjoint(allow)
 
 
-def test_execute_get_related_docs(vault_dir, db_conn):
+def test_execute_get_related_docs(vault_dir, db_conn, ledger_conn):
     """get_related_docs returns linked documents."""
     from server.vault import init_graph
     from server.vault.orchestration.indexer import graph_extract_file
@@ -128,7 +128,7 @@ def test_execute_get_related_docs(vault_dir, db_conn):
     graph_extract_file(db_conn, vault_dir, "a.md")
     graph_extract_file(db_conn, vault_dir, "b.md")
 
-    result = execute_tool("get_related_docs", {"path": "a.md"}, ToolContext(vault_dir=vault_dir))
+    result = execute_tool("get_related_docs", {"path": "a.md"}, ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
     assert "b.md" in result
 
 
@@ -820,7 +820,7 @@ def test_execute_recent_changes(tmp_path: Path):
     (vault / "notes" / "b.md").write_bytes(b"world")
     apply_change(conn, vault, "notes/b.md", "created", source="mcp")
 
-    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "web" in result
     assert "agent" in result
     assert "mcp" in result
@@ -846,14 +846,14 @@ def test_execute_recent_changes_filter(tmp_path: Path):
 
     # Filter by path
     result = execute_tool(
-        "recent_changes", {"path": "notes/a.md"}, ToolContext(vault_dir=vault)
+        "recent_changes", {"path": "notes/a.md"}, ToolContext(vault_dir=vault, db_conn=conn)
     )
     assert "notes/a.md" in result
     assert "notes/b.md" not in result
 
     # Filter by source
     result = execute_tool(
-        "recent_changes", {"source": "agent"}, ToolContext(vault_dir=vault)
+        "recent_changes", {"source": "agent"}, ToolContext(vault_dir=vault, db_conn=conn)
     )
     assert "notes/b.md" in result
     assert "notes/a.md" not in result
@@ -868,7 +868,7 @@ def test_execute_recent_changes_empty(tmp_path: Path):
     conn = init_db(vault / ".sync" / "index.db")
     register_db_conn(conn, None)
 
-    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "No recent changes" in result
 
 
@@ -907,14 +907,14 @@ def test_execute_recent_changes_dir_prefix(tmp_path: Path):
     apply_change(conn, vault, "test3/d.md", "created", source="web")
 
     # Directory prefix: all of test2/* returned, test3 NOT returned
-    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "test2/a.md" in result
     assert "test2/b.md" in result
     assert "test2/c.md" in result
     assert "test3" not in result
 
     # Exact file path still works
-    result = execute_tool("recent_changes", {"path": "test2/a.md"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"path": "test2/a.md"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "test2/a.md" in result
     assert "test2/b.md" not in result
 
@@ -936,7 +936,7 @@ def test_execute_recent_changes_prefix_boundary(tmp_path: Path):
     # Folder-level row for "test" (a sibling prefix of "test2")
     log_change(conn, "test", "deleted", source="web")
 
-    result = execute_tool("recent_changes", {"path": "test"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"path": "test"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "test2/a.md" not in result
 
 
@@ -966,11 +966,11 @@ def test_execute_recent_changes_prefix_metachars(tmp_path: Path):
     apply_change(conn, vault, "100X/y.md", "created", source="web")
 
     # "_" in path must be literal: test2 prefix returns test2/a_b.md
-    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"path": "test2"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "test2/a_b.md" in result
 
     # "%" in path must be literal: 100% prefix returns 100%/x.md but NOT 100X/y.md
-    result = execute_tool("recent_changes", {"path": "100%"}, ToolContext(vault_dir=vault))
+    result = execute_tool("recent_changes", {"path": "100%"}, ToolContext(vault_dir=vault, db_conn=conn))
     assert "100%/x.md" in result
     assert "100X/y.md" not in result
 

@@ -43,12 +43,13 @@ def _write(vault_dir, relpath: str, content: bytes = b"# doc\n") -> None:
     fp.write_bytes(content)
 
 
-def _tool_output(vault_dir, path: str) -> str:
+def _tool_output(vault_dir, path: str, db_conn=None, ledger_conn=None) -> str:
     from server.agent import ToolContext
     from server.agent.tools.get_related_docs import GetRelatedDocsArgs, GetRelatedDocsTool
 
     return GetRelatedDocsTool()._execute(
-        GetRelatedDocsArgs(path=path), ToolContext(vault_dir=vault_dir))
+        GetRelatedDocsArgs(path=path),
+        ToolContext(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn))
 
 
 def _index_doc(vault_dir, conn, relpath: str, content: bytes) -> None:
@@ -195,7 +196,8 @@ def test_get_related_docs_two_layer_order_derived_last(vault_dir, db_conn, ledge
     assert out[2]["score"] == 0.0
 
     # Tool output: two-layer format, same order.
-    text = _tool_output(vault_dir, "notes/a.md")
+    text = _tool_output(vault_dir, "notes/a.md", db_conn=db_conn,
+                     ledger_conn=ledger_conn)
     assert "Your links:" in text
     assert "Machine suggestions (via relatedness" in text
     assert (text.index("notes/c.md") < text.index("notes/b.md")
@@ -529,7 +531,8 @@ def test_dedup_adopted_pair_drained(vault_dir, db_conn, ledger_conn):
         "notes/a.md", "notes/b.md", 0)
 
     # Tool output: B once, in the user layer.
-    text = _tool_output(vault_dir, "notes/a.md")
+    text = _tool_output(vault_dir, "notes/a.md", db_conn=db_conn,
+                     ledger_conn=ledger_conn)
     assert text.count("notes/b.md") == 1
     assert "Machine suggestions" not in text
 

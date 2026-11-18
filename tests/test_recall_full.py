@@ -530,7 +530,7 @@ def test_search_docs_ledgers_on_demand(db_conn, vault_dir, monkeypatch):
     calls = _mock_rag_search(monkeypatch, results)
 
     tool = SearchDocsTool()
-    ctx = ToolContext(vault_dir=vault_dir, write_source="agent")
+    ctx = ToolContext(vault_dir=vault_dir, write_source="agent", db_conn=db_conn)
     out = tool.call({"query": "hello"}, ctx)
     assert "<results" in out
 
@@ -551,7 +551,7 @@ def test_search_docs_ledgers_synthetic_for_bg_alias(db_conn, vault_dir, monkeypa
          "segments": [{"heading_path": "", "kind": "text", "content": "x", "score": 0.8}]},
     ])
     tool = SearchDocsTool()
-    ctx = ToolContext(vault_dir=vault_dir, write_source="somealias")
+    ctx = ToolContext(vault_dir=vault_dir, write_source="somealias", db_conn=db_conn)
     out = tool.call({"query": "hello"}, ctx)
     assert "<results" in out
     row = db_conn.execute("SELECT * FROM recall_log").fetchone()
@@ -565,7 +565,7 @@ def test_search_docs_zero_hit_ledgered_at_settled_tier(db_conn, vault_dir, monke
     _mock_rag_search(monkeypatch, [])  # empty at every tier
 
     tool = SearchDocsTool()
-    ctx = ToolContext(vault_dir=vault_dir, write_source="agent")
+    ctx = ToolContext(vault_dir=vault_dir, write_source="agent", db_conn=db_conn)
     out = tool.call({"query": "nope"}, ctx)
     assert out == SearchDocsTool.search_no_match("nope")
 
@@ -588,7 +588,7 @@ def test_search_docs_telemetry_failure_never_breaks_result(db_conn, vault_dir,
     monkeypatch.setattr(recall_db, "log_query", boom)
 
     tool = SearchDocsTool()
-    ctx = ToolContext(vault_dir=vault_dir, write_source="agent")
+    ctx = ToolContext(vault_dir=vault_dir, write_source="agent", db_conn=db_conn)
     out = tool.call({"query": "hello"}, ctx)
     assert "<results" in out  # tool result unaffected
 
@@ -702,7 +702,7 @@ def test_recall_stats_tool_formulas(db_conn, vault_dir):
     db_conn.commit()
 
     tool = RecallStatsTool()
-    ctx = ToolContext(vault_dir=vault_dir)
+    ctx = ToolContext(vault_dir=vault_dir, db_conn=db_conn)
     out = tool.call({}, ctx)
 
     assert "Recall health (30d, vs prev 30d)" in out
@@ -723,7 +723,7 @@ def test_recall_stats_tool_trend_delta(db_conn, vault_dir):
     db_conn.commit()
 
     tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
     assert "zero-hit 40% (web 40%; prev 100% ↓60pt)" in out
 
 
@@ -738,7 +738,7 @@ def test_recall_stats_tool_repeat_failure_signal_and_boundary(db_conn, vault_dir
     db_conn.commit()
 
     tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
 
     assert ('- repeat failures (>3x): "部署记录" web×4 '
             "→ suspected content gap") in out
@@ -758,7 +758,7 @@ def test_recall_stats_tool_exposed_not_consumed_boundary(db_conn, vault_dir):
     db_conn.commit()
 
     tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
 
     assert "exposed-not-consumed: notes/a.md (11 hits, 0 clicks)" in out
     assert "notes/b.md" not in out  # 恰在阈值 → 静默
@@ -773,7 +773,7 @@ def test_recall_stats_tool_demand_coverage_signal(db_conn, vault_dir):
     db_conn.commit()
 
     tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
 
     assert ("- demand-coverage: notes/spec.md (human_w 4.0, "
             "on_demand_w 0.0) → task gap") in out
@@ -794,7 +794,7 @@ def test_recall_stats_tool_leakage_signal_and_boundary(db_conn, vault_dir):
 
     tool = RecallStatsTool()
     assert "leakage" not in tool.call(
-        {}, ToolContext(vault_dir=vault_dir))  # 边界：0 泄漏 → 静默
+        {}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))  # 边界：0 泄漏 → 静默
 
     db_conn.execute(
         "INSERT INTO recall_clicks (ts, path, via, query, session_id) "
@@ -804,7 +804,7 @@ def test_recall_stats_tool_leakage_signal_and_boundary(db_conn, vault_dir):
         "VALUES (?, 'notes/c.md', 'ai', 'q1', 's1')", (now,))
     db_conn.commit()
 
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
     assert ("- leakage: 2 ai-cited docs not in session recall set "
             "(notes/b.md, notes/c.md) → recall gap") in out
 
@@ -837,7 +837,7 @@ def test_low_score_hits_same_set_as_arming_scan(db_conn):
 
 def test_recall_stats_tool_empty_window(db_conn, vault_dir):
     tool = RecallStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
     assert out == RecallStatsTool.no_data()
 
 
@@ -889,7 +889,7 @@ def test_recall_feedback_stats_formulas(db_conn, vault_dir):
     db_conn.commit()
 
     tool = RecallFeedbackStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
 
     assert "Answer quality (30d)" in out
     assert ("useful 67% (2/3) | grounded 70% (7/10) "
@@ -907,7 +907,7 @@ def test_recall_feedback_stats_empty_window(db_conn, vault_dir):
     from server.agent.tools.recall_feedback_stats import RecallFeedbackStatsTool
 
     tool = RecallFeedbackStatsTool()
-    out = tool.call({}, ToolContext(vault_dir=vault_dir))
+    out = tool.call({}, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
     assert out == RecallFeedbackStatsTool.no_data()
 
 

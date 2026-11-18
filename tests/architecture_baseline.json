@@ -8,12 +8,6 @@
   "R4_lazy_conn": [
     "server/agent/reminders.py:81:get_index_conn",
     "server/agent/runtime.py:419:get_ledger_conn",
-    "server/agent/tools/get_related_docs.py:42:get_index_conn",
-    "server/agent/tools/get_related_docs.py:42:get_ledger_conn",
-    "server/agent/tools/recall_feedback_stats.py:49:get_index_conn",
-    "server/agent/tools/recall_stats.py:114:get_index_conn",
-    "server/agent/tools/recent_changes.py:38:get_index_conn",
-    "server/agent/tools/search_docs.py:36:get_index_conn",
     "server/bgagent/readback.py:116:get_ledger_conn",
     "server/bgagent/readback.py:163:get_index_conn",
     "server/bgagent/readback.py:59:get_ledger_conn",

@@ -1734,7 +1734,7 @@ def test_e2e_frontmatter_tag_related(vault_dir, db_conn):
 
     tool = GetRelatedDocsTool()
     args = GetRelatedDocsArgs(path="notes/a.md")
-    out = tool._execute(args, ToolContext(vault_dir=vault_dir))
+    out = tool._execute(args, ToolContext(vault_dir=vault_dir, db_conn=db_conn))
 
     assert "notes/b.md" in out
     assert "score 0.50" in out

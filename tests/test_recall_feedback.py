@@ -314,7 +314,7 @@ def test_get_related_docs_meta_paths(vault_dir: Path, db_conn):
     graph_extract_file(db_conn, vault_dir, "a.md")
     graph_extract_file(db_conn, vault_dir, "b.md")
 
-    ctx = ToolContext(vault_dir=vault_dir)
+    ctx = ToolContext(vault_dir=vault_dir, db_conn=db_conn)
     result = execute_tool("get_related_docs", {"path": "a.md"}, ctx)
     assert "b.md" in result
     assert ctx.last_meta is not None
@@ -329,7 +329,7 @@ def test_get_related_docs_meta_paths_empty(vault_dir: Path, db_conn):
     init_graph(db_conn)
     (vault_dir / "lonely.md").write_bytes(b"# Lonely\n\nNo links at all.")
 
-    ctx = ToolContext(vault_dir=vault_dir)
+    ctx = ToolContext(vault_dir=vault_dir, db_conn=db_conn)
     result = execute_tool("get_related_docs", {"path": "lonely.md"}, ctx)
     assert "No related documents" in result
     assert ctx.last_meta == {"count": 0, "paths": []}

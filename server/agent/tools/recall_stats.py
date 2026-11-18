@@ -109,9 +109,8 @@ class RecallStatsTool(Tool):
 
     def _execute(self, args, ctx: ToolContext) -> str:
         from ...vault.db import recall as recall_db
-        from ...vault.db.conn import get_index_conn
 
-        conn = get_index_conn()
+        conn = ctx.db_conn
         if conn is None:
             return "Error: database not available"
         now = time.time()
