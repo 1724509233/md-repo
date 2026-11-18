@@ -84,7 +84,7 @@ relatedness(id PK AUTOINC, source, target, basis, actor,
 | 函数 | 说明 |
 | --- | --- |
 | `log_change(conn, path, action, from_path="", ts=None, source="unknown", new_hash="", batch_id="")` | 追加事件；action 新旧命名均可，入口归一化到 4-op 词汇 |
-| `get_changes(conn, since=0.0, path=None, source=None, limit=50) -> list[dict]` | 读事件；dict 同时携带新旧两套键（`action`/`from_path` 与 `seq`/`source`/`new_hash`） |
+| `get_changes(conn, since=0.0, path=None, source=None, limit=50, privacy_dirs=()) -> list[dict]` | 读事件；`privacy_dirs` 在 SQL 层（LIMIT 前）过滤 path+old_path 双列，模型面调用方传、Web 路由不传（守恒）；dict 同时携带新旧两套键（`action`/`from_path` 与 `seq`/`source`/`new_hash`） |
 | `get_changes_sources(conn, since=0.0, ops=..., exclude_sources=None, limit=500, since_seq=0) -> list[dict]` | arming 扫描专用过滤；`since_seq` 走单调 seq 游标（与上次扫描同 ts 的事件——同钟滴——不丢）；纯读无锁 |
 | `count_changes_sources(conn, since=0.0, ops=..., exclude_sources=None) -> int` | 同上过滤的计数 |
 | `clear_changes(conn) -> None` | 清空事件流（当前仅 test 面使用） |

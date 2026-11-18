@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 import time
 
+from ...privacy import privacy_clause
 from .schema import _ACTION_TO_OP, _OP_TO_ACTION
 
 
@@ -43,6 +44,7 @@ def get_changes(
     path: str | None = None,
     source: str | None = None,
     limit: int = 50,
+    privacy_dirs: tuple[str, ...] = (),
 ) -> list[dict]:
     """Return change events with ts > since, ordered by seq DESC.
 
@@ -50,6 +52,13 @@ def get_changes(
     prefix (``path LIKE 'test2/%'``), so the single param can address either
     the file itself or everything underneath it.  ``%`` and ``_`` in the user
     path are escaped before the LIKE so they are treated as literal characters.
+
+    ``privacy_dirs`` (spec §2.3, review P2b): model-surface callers pass the
+    live privacy list and the rows get excluded in SQL over BOTH the ``path``
+    and ``old_path`` (from_path) columns — *before* the LIMIT, so privacy
+    rows can never eat the limit window a post-filter would leave short.
+    Empty dirs (the default — every Web/reminder/executor caller) → no
+    clause at all (byte-equivalent conservation).
 
     Each dict carries both backward-compatible keys (``action``, ``from_path``)
     and new keys (``seq``, ``source``, ``op``, ``new_hash``).
@@ -66,6 +75,13 @@ def get_changes(
     if source is not None:
         sql += " AND source = ?"
         params.append(source)
+    if privacy_dirs:
+        # 双列过滤（path + old_path）：move 行的 from_path 同样不得把隐私
+        # 路径名喂给模型。AND 连接两个 NOT(...) 子句 = 任一列命中即剔。
+        for col in ("path", "old_path"):
+            clause, clause_params = privacy_clause(privacy_dirs, col)
+            sql += f" AND {clause}"
+            params.extend(clause_params)
     sql += " ORDER BY seq DESC LIMIT ?"
     params.append(limit)
     cursor = conn.execute(sql, params)

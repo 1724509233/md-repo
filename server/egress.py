@@ -63,33 +63,21 @@ def parse_endpoint(base_url: str | None) -> str:
 def _is_loopback_host(host: str) -> bool:
     """Loopback classification for an endpoint host (may carry a port).
 
-    Defers to Task 1's shared ``server.config.is_loopback`` (spec §4.2: one
-    definition site). While that task has not landed the delayed import
-    falls back to the same loopback set (``localhost`` / ``::1`` /
-    ``127.0.0.0/8``); once it lands this fallback is inert and the shared
-    predicate rules — do not grow a second truth here.
+    单一来源 = ``server.config.core.is_loopback``（spec §4.2：回环分类只此
+    一处真值）。曾经的本地回退集合是第二处真值（评审 P2d 已删）：import
+    失败就让它直接抛——沉默回退到一份可能漂移的分类表，正是「第二处真值」
+    要消灭的。
     """
-    try:
-        from server.config.core import is_loopback
-    except ImportError:
-        pass
-    else:
-        h = (host or "").strip()
-        # is_loopback takes a bare host; an endpoint host may carry a port
-        # (and IPv6 brackets).
-        if h.startswith("[") and "]" in h:
-            h = h[1:h.index("]")]
-        elif h.count(":") == 1:
-            h = h.split(":", 1)[0]
-        return is_loopback(h)
-    h = (host or "").strip().lower()
-    if not h:
-        return False
-    if h.startswith("[") and "]" in h:  # [::1]:11434
+    from server.config.core import is_loopback
+
+    h = (host or "").strip()
+    # is_loopback takes a bare host; an endpoint host may carry a port
+    # (and IPv6 brackets).
+    if h.startswith("[") and "]" in h:
         h = h[1:h.index("]")]
-    elif h.count(":") == 1:  # host:port → host (bare IPv6 keeps >1 colon)
+    elif h.count(":") == 1:
         h = h.split(":", 1)[0]
-    return h in ("localhost", "::1") or h.startswith("127.")
+    return is_loopback(h)
 
 
 # ------------------------------------------------------------------ target

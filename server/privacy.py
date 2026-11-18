@@ -127,9 +127,19 @@ class PrivacyConfig:
     read the same config.yaml and re-read it when its mtime changes, so a
     config edit applies to the next query without restarting either process
     (the §2.7 zero-derived-state promise rests on this live view). Absent
-    privacy section → ``()`` (lazy mechanism). Malformed privacy.dirs
-    raises ValueError at the read (fail-loud: a broken privacy list must
-    never silently degrade to "nothing is private").
+    privacy section in an OTHERWISE VALID config → ``()`` (user cleared it
+    explicitly; lazily-off otherwise). Malformed privacy.dirs raises
+    ValueError at the read (fail-loud: a broken privacy list must never
+    silently degrade to "nothing is private").
+
+    Transient-read fail-safe (review P1): an unreadable file (OSError — the
+    file vanished mid-edit), an EMPTY/non-dict parse, or a valid YAML dict
+    MISSING the ``server`` section (a torn/truncated write — the real
+    config always carries a server section, and ``load_server_config``
+    refuses without one) means "config in flight", NOT "privacy is off":
+    keep the last-known dirs and do NOT cache the mtime, so the next access
+    retries. The window between "config half-written" and "config complete"
+    must never read as an empty privacy list.
     """
 
     def __init__(self, config_path: str | Path) -> None:
@@ -142,17 +152,32 @@ class PrivacyConfig:
         try:
             mtime_ns = self._path.stat().st_mtime_ns
         except OSError:
-            self._mtime_ns, self._dirs = None, ()
+            # 文件暂时不可见（编辑工具原子替换/清理瞬态）：保留上次名单，
+            # 且不动 mtime 缓存——文件回来后下次访问立即重试。
             return self._dirs
         if mtime_ns != self._mtime_ns:
-            self._mtime_ns = mtime_ns
-            self._dirs = self._load()
+            loaded = self._load()
+            if loaded is not None:
+                self._mtime_ns = mtime_ns
+                self._dirs = loaded
+            # loaded is None = 瞬态（读失败/截断写）：保留旧值、不缓存该
+            # mtime，下次访问重试。
         return self._dirs
 
-    def _load(self) -> tuple[str, ...]:
-        with open(self._path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        privacy = data.get("privacy") if isinstance(data, dict) else None
+    def _load(self) -> tuple[str, ...] | None:
+        """Read + validate. ``None`` = transient (keep last dirs, retry on
+        the next access); a tuple = authoritative result (cache the mtime).
+        """
+        try:
+            with open(self._path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except OSError:
+            return None
+        if not isinstance(data, dict) or not data.get("server"):
+            # 空文件 / 非 mapping / 缺 server 节：截断写瞬态——一份真实
+            # config 必有 server 节（load_server_config 缺之即拒）。
+            return None
+        privacy = data.get("privacy")
         raw = privacy.get("dirs") if isinstance(privacy, dict) else None
         return parse_privacy_dirs(raw)
 

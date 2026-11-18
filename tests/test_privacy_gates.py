@@ -31,7 +31,8 @@ def _policy(vault_dir: Path, tmp_path: Path, dirs_yaml: str = "[日记]") -> Cha
     """ChannelPolicy wired to a real PrivacyConfig (mtime loader), dirs per
     the YAML fragment (ASCII list e.g. "[diary]" for case pins)."""
     cfg = tmp_path / "config.yaml"
-    cfg.write_text(f"privacy:\n  dirs: {dirs_yaml}\n", encoding="utf-8")
+    cfg.write_text(f"server:\n  host: localhost\nprivacy:\n  dirs: {dirs_yaml}\n",
+                   encoding="utf-8")
     return ChannelPolicy(vault_dir, privacy=PrivacyConfig(cfg))
 
 

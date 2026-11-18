@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import re
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,7 +36,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def _pcfg(tmp_path: Path, dirs_yaml: str, name: str = "config.yaml") -> PrivacyConfig:
     cfg = tmp_path / name
-    cfg.write_text(f"privacy:\n  dirs: {dirs_yaml}\n", encoding="utf-8")
+    cfg.write_text(f"server:\n  host: localhost\nprivacy:\n  dirs: {dirs_yaml}\n",
+                   encoding="utf-8")
     return PrivacyConfig(cfg)
 
 
@@ -76,6 +78,22 @@ def test_api_docs_annotation_and_conservation(vault_dir, db_conn, ledger_conn,
     assert p_plain["dirs"] == p_priv["dirs"]
     assert "日记" in p_priv["dirs"]  # 目录照常可见（灰显由 UI 决定）
     assert any(f["path"] == "日记/a.md" for f in p_priv["files"])
+
+
+def test_api_docs_changes_conservation(vault_dir, db_conn, ledger_conn,
+                                       tmp_path):
+    """P2b 守恒钉：/api/docs/changes 路由**不传** privacy_dirs——配了名单，
+    隐私行的变更记录在 Web 变更流里照常出现（过滤只收口在模型面）。"""
+    db_conn.execute(
+        "INSERT INTO change_log (ts, source, op, path, old_path) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (time.time(), "web", "update", "日记/a.md", ""))
+    db_conn.commit()
+
+    c = _client(vault_dir, db_conn, ledger_conn,
+                _pcfg(tmp_path, "[日记]", "cfg-changes.yaml"))
+    rows = c.get("/api/docs/changes").json()
+    assert any(r["path"] == "日记/a.md" for r in rows)
 
 
 # ── PUT /api/docs/{path} save-time advisory ────────────────────────────────

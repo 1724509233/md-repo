@@ -410,10 +410,16 @@ class LoopRuntime(Runtime):
         finally:
             # egress 审计收口（spec §3.2）：final / APIError×2 / round_limit /
             # 消费者弃流 —— 每个出口恰好一次 flush；表有行 ⇔ 文档真进了模型上下文。
-            # flush_touches 自带 fail-open + privacy 双保险（§3.4）。
+            # flush_touches 自带 fail-open + privacy 双保险（§3.4）。取连也
+            # 在 try 内（评审 P2c）：get_ledger_conn 失败同样只留日志——
+            # 审计不得从 finally 逃出咬掉被审计的 run。
             if spec.egress is not None:
                 privacy = ctx.privacy.dirs if ctx.privacy is not None else ()
-                flush_touches(get_ledger_conn(), privacy, spec.egress, touched)
+                try:
+                    flush_touches(get_ledger_conn(), privacy, spec.egress, touched)
+                except Exception:
+                    logger.exception(
+                        "egress flush failed (fail-open, run continues)")
 
     @staticmethod
     def _tool_error(agent, tc: dict, msg: str) -> Event:

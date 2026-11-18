@@ -271,7 +271,8 @@ def test_flush_double_insurance_skips_privacy(vault_dir, ledger_conn,
     from server.privacy import PrivacyConfig
 
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("privacy:\n  dirs: [日记]\n", encoding="utf-8")
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
     streams = [
         _astream([_chunk(tool_calls=[
             _tc(0, id="c1", name="search_docs", arguments='{"query": "q"}')])]),
@@ -285,6 +286,33 @@ def test_flush_double_insurance_skips_privacy(vault_dir, ledger_conn,
                   runtime=LoopRuntime())
     _events_of(agent)
     assert [r[0] for r in _rows(ledger_conn)] == ["notes/y.md"]
+
+
+def test_flush_survives_ledger_conn_failure(vault_dir, ledger_conn, monkeypatch,
+                                            caplog):
+    """P2c：finally 里 get_ledger_conn() 抛错也只留日志——审计不得咬被审计
+    的 run（fail-open，§3.2）：取连失败若留在 try 外，异常会从 finally 逃
+    出、掀掉整个事件流。"""
+    (vault_dir / "notes" / "x.md").write_bytes(b"x\n")
+    streams = [
+        _astream([_chunk(tool_calls=[
+            _tc(0, id="c1", name="read_doc",
+                arguments='{"path": "notes/x.md"}')])]),
+        _astream([_chunk(content="done")]),
+    ]
+    _install_fake_client(monkeypatch, streams)
+    monkeypatch.setattr("server.agent.runtime.execute_tool",
+                        _stamp_exec(read_doc=["notes/x.md"]))
+
+    def boom():
+        raise RuntimeError("ledger db locked")
+
+    monkeypatch.setattr("server.agent.runtime.get_ledger_conn", boom)
+    agent = Agent(_spec(vault_dir, egress=CLOUD), runtime=LoopRuntime())
+    events = _events_of(agent)  # 不得抛
+    assert [e for e in events if e.type == "done"][-1].data["reason"] == "final"
+    assert _rows(ledger_conn) == []
+    assert "egress flush failed" in caplog.text
 
 
 # ── channel target construction (bgagent / interactive) ────────────────────

@@ -99,6 +99,7 @@ privacy:
 2. 提案记录 `source_refs` 可能出现隐私**路径名**：agent 无法读隐私文件但**能命名其路径**（如经①的 wikilink 得知）——`entity_index` 渲染面已收口（§2.3），relatedness 端点已拦；剩余面（提案记录本体、trail、通知深链）为路径级元数据，日志/记录不回溯清洗。
 3. 同步链路本轮不动（设备≈人，与 API 鉴权同包另行决策）。
 4. `privacy.dirs` 只支持首段目录；嵌套目录粒度（`projects/secret/`）为后续扩展（`is_privacy` 接受多段前缀即可，接口已留）。
+5. 已合并进机器区（entities.md source 行、relatedness 边）的内容在目录被划入隐私后**不回溯清洗**（新提案已拦，存量人审处理）。
 
 ## 3. egress 审计
 

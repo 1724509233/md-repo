@@ -132,6 +132,14 @@ def load_server_config(config_path: str) -> ServerConfig:
     if isinstance(privacy_raw, dict):
         privacy_dirs = parse_privacy_dirs(privacy_raw.get("dirs"))
 
+    # lan_exposure 严格 bool（评审 P2a）：bool() 会把 "false"（非空字符串）
+    # 吞成 True——写错的显式拒绝必须炸在加载时，不得静默变成误开/没开。
+    lan_raw = server.get("lan_exposure", False)
+    if not isinstance(lan_raw, bool):
+        raise ValueError(
+            f"server.lan_exposure must be a bool (true/false), "
+            f"got {lan_raw!r} ({type(lan_raw).__name__})")
+
     return ServerConfig(
         host=server["host"],
         port=int(server["port"]),
@@ -139,6 +147,6 @@ def load_server_config(config_path: str) -> ServerConfig:
         ai=ai_cfg,
         log=LogConfig.from_raw(server, str(path)),
         mcp_write_token=mcp_write_token,
-        lan_exposure=bool(server.get("lan_exposure", False)),
+        lan_exposure=lan_raw,
         privacy_dirs=privacy_dirs,
     )

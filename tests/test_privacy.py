@@ -105,12 +105,14 @@ def test_privacy_clause_sql_live_case_and_first_segment():
 
 def test_privacy_config_mtime_reload(tmp_path: Path):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("privacy:\n  dirs: [日记]\n", encoding="utf-8")
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
     os.utime(cfg, ns=(1_000_000_000, 1_000_000_000))
     pc = PrivacyConfig(cfg)
     assert pc.dirs == ("日记",)
     # 配置变更无需重启即对下一句查询生效（mtime 失效重读）
-    cfg.write_text("privacy:\n  dirs: [finance, 笔记]\n", encoding="utf-8")
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [finance, 笔记]\n",
+                   encoding="utf-8")
     os.utime(cfg, ns=(2_000_000_000, 2_000_000_000))
     assert pc.dirs == ("finance", "笔记")
 
@@ -123,6 +125,72 @@ def test_privacy_config_absent_section(tmp_path: Path):
 
 def test_privacy_config_missing_file(tmp_path: Path):
     assert PrivacyConfig(tmp_path / "nope.yaml").dirs == ()
+
+
+# ── PrivacyConfig fail-safe：配置瞬态不静默降级（评审 P1）──────────────────
+
+def test_privacy_config_privacy_section_removed_clears(tmp_path: Path):
+    """合法 config（含 server 节）删 privacy 节 = 用户显式清空 → () 且正常
+    缓存（同 mtime 不再重读）。"""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
+    os.utime(cfg, ns=(1_000_000_000, 1_000_000_000))
+    pc = PrivacyConfig(cfg)
+    assert pc.dirs == ("日记",)
+    cfg.write_text("server:\n  host: localhost\n", encoding="utf-8")
+    os.utime(cfg, ns=(2_000_000_000, 2_000_000_000))
+    assert pc.dirs == ()
+    # 正常缓存钉：mtime 未再变 → 不再触发读取
+    calls: list[int] = []
+    real = pc._load
+
+    def _counting():
+        calls.append(1)
+        return real()
+
+    pc._load = _counting
+    assert pc.dirs == ()
+    assert calls == []
+
+
+def test_privacy_config_truncated_write_keeps_previous(tmp_path: Path):
+    """截断写瞬态（空文件 / 缺 server 节）：保留上次 dirs 且不缓存该 mtime
+    （下次访问重试），完整写完后恢复正常。"""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
+    os.utime(cfg, ns=(1_000_000_000, 1_000_000_000))
+    pc = PrivacyConfig(cfg)
+    assert pc.dirs == ("日记",)
+    # ① 空文件（safe_load → None，falsy 形态）
+    cfg.write_text("", encoding="utf-8")
+    os.utime(cfg, ns=(2_000_000_000, 2_000_000_000))
+    assert pc.dirs == ("日记",)
+    # ② 缺 server 节（截断写形态：privacy 节先落了盘也不能当真值）
+    cfg.write_text("privacy:\n  dirs: [finance]\n", encoding="utf-8")
+    os.utime(cfg, ns=(3_000_000_000, 3_000_000_000))
+    assert pc.dirs == ("日记",)
+    # ③ 完整写完 → 恢复（瞬态 mtime 未缓存，本访问即重试成功）
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [finance]\n",
+                   encoding="utf-8")
+    os.utime(cfg, ns=(4_000_000_000, 4_000_000_000))
+    assert pc.dirs == ("finance",)
+
+
+def test_privacy_config_file_vanishes_keeps_previous(tmp_path: Path):
+    """文件消失（OSError 瞬态）：保留上次名单，不静默降为「无隐私」。"""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
+    pc = PrivacyConfig(cfg)
+    assert pc.dirs == ("日记",)
+    cfg.unlink()
+    assert pc.dirs == ("日记",)
+    # 文件回来 → 立即恢复新值（未缓存瞬态，下次访问重试）
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [finance]\n",
+                   encoding="utf-8")
+    assert pc.dirs == ("finance",)
 
 
 # ── detect_privacy_refs: explicit-reference advisory (§2.6) ───────────────

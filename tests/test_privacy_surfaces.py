@@ -51,7 +51,8 @@ def _write(vault: Path, rel: str, content: str) -> None:
 
 def _pcfg(tmp_path: Path, dirs_yaml: str) -> PrivacyConfig:
     cfg = tmp_path / "config.yaml"
-    cfg.write_text(f"privacy:\n  dirs: {dirs_yaml}\n", encoding="utf-8")
+    cfg.write_text(f"server:\n  host: localhost\nprivacy:\n  dirs: {dirs_yaml}\n",
+                   encoding="utf-8")
     return PrivacyConfig(cfg)
 
 
@@ -193,7 +194,11 @@ def _mk_change(conn, path: str, from_path: str = "", op: str = "update") -> None
 
 
 def test_recent_changes_tool_privacy_and_meta(vault_dir, db_conn, tmp_path):
-    """path + from_path 双列过滤 + 成功时 last_meta["paths"]（path+from_path）。"""
+    """path + from_path 双列过滤 + 成功时 last_meta["paths"]（path+from_path）。
+
+    评审 P2b：过滤在 SQL 层（get_changes(privacy_dirs=…)），工具层不再
+    post-filter——直接测 get_changes 的钉见下方 SQL 层用例；本用例继续钉
+    工具端到端行为（名单生效 + meta 干净）与守恒（None → 原样）。"""
     _mk_change(db_conn, "日记/a.md")                    # path 隐私 → 剔
     _mk_change(db_conn, "notes/b.md", from_path="日记/old.md")  # from 隐私 → 剔
     _mk_change(db_conn, "notes/c.md")                   # 正常
@@ -210,6 +215,46 @@ def test_recent_changes_tool_privacy_and_meta(vault_dir, db_conn, tmp_path):
     assert "日记/a.md" in out2 and "was: 日记/old.md" in out2
     paths = ctx_plain.last_meta["paths"]
     assert "日记/a.md" in paths and "notes/b.md" in paths and "日记/old.md" in paths
+
+
+def test_get_changes_privacy_sql_layer(db_conn):
+    """P2b SQL 层钉：get_changes(privacy_dirs=…) 对 path + old_path 双列
+    privacy_clause 过滤；空名单零变化（web/reminder 等既有调用方守恒）。"""
+    from server.vault.db.changes import get_changes
+
+    _mk_change(db_conn, "日记/a.md")                          # path 隐私 → 剔
+    _mk_change(db_conn, "notes/b.md", from_path="日记/old.md")  # old 隐私 → 剔
+    _mk_change(db_conn, "notes/c.md")                          # 正常
+    rows = get_changes(db_conn, privacy_dirs=("日记",))
+    assert {r["path"] for r in rows} == {"notes/c.md"}
+    # 守恒：空名单原样全量
+    assert len(get_changes(db_conn, privacy_dirs=())) == 3
+    assert len(get_changes(db_conn)) == 3
+
+
+def test_get_changes_privacy_limit_after_filter(db_conn):
+    """「隐私行吃 limit 窗口」钉：LIMIT 在过滤后生效——隐私行再多，非隐私
+    行仍占满 limit（post-filter 实现做不到：limit 先截断、过滤后剩空）。"""
+    from server.vault.db.changes import get_changes
+
+    _mk_change(db_conn, "notes/p1.md")
+    _mk_change(db_conn, "notes/p2.md")
+    for _ in range(4):
+        _mk_change(db_conn, "日记/x.md")
+    rows = get_changes(db_conn, limit=2, privacy_dirs=("日记",))
+    assert len(rows) == 2  # post-filter 版会得 0（窗口被隐私行吃光）
+    assert [r["path"] for r in rows] == ["notes/p2.md", "notes/p1.md"]  # seq DESC
+    # 对照：不传名单，limit=2 的窗口确实全被隐私行占据（它们最新）
+    rows = get_changes(db_conn, limit=2)
+    assert [r["path"] for r in rows] == ["日记/x.md", "日记/x.md"]
+
+
+def test_recent_changes_tool_delegates_filter_to_sql() -> None:
+    """接线钉（P2b 收口回归 spec §2.3「change_log SQL」）：工具层把名单
+    交给 get_changes（privacy_dirs= 参），自身不再 import/调用 is_privacy。"""
+    src = inspect.getsource(RecentChangesTool._execute)
+    assert "privacy_dirs=" in src
+    assert "is_privacy" not in src
 
 
 # ── MCP get_related_docs: validate first (wiring pins) ────────────────────

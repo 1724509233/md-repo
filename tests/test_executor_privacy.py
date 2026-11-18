@@ -190,7 +190,8 @@ def _bg_cfg(tmp_path, alias="a"):
 def _write_privacy_cfg(tmp_path, dirs: list[str]):
     cfg = tmp_path / "config_priv.yaml"
     body = "".join(f"  - {d}\n" for d in dirs)
-    cfg.write_text(f"privacy:\n  dirs:\n{body}", encoding="utf-8")
+    cfg.write_text(f"server:\n  host: localhost\nprivacy:\n  dirs:\n{body}",
+                   encoding="utf-8")
     return cfg
 
 

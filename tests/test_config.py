@@ -454,6 +454,23 @@ def test_server_config_lan_exposure_true(tmp_path: Path) -> None:
     assert cfg.lan_exposure is True
 
 
+def test_server_config_lan_exposure_explicit_false(tmp_path: Path) -> None:
+    """显式 ``lan_exposure: false``（YAML 原生 bool）→ False。"""
+    cfg = load_server_config(str(_server_cfg_file(tmp_path,
+        "  lan_exposure: false\n")))
+    assert cfg.lan_exposure is False
+
+
+@pytest.mark.parametrize("raw", ['"false"', '"no"', "1", "0", "~", "[true]"])
+def test_server_config_lan_exposure_rejects_non_bool(tmp_path: Path,
+                                                      raw: str) -> None:
+    """评审 P2a：非 bool 值不得被 ``bool()`` 静默吞掉（"false" 是真值陷阱）
+    ——配置写错必须炸在加载时，而不是炸成「没开」或「误开」。"""
+    with pytest.raises(ValueError, match=r"lan_exposure.*true.*false"):
+        load_server_config(str(_server_cfg_file(tmp_path,
+            f"  lan_exposure: {raw}\n")))
+
+
 def test_server_config_nonloopback_host_loads_ungated(tmp_path: Path) -> None:
     """MCP-mis-kill pin (spec §1 闸门落点钉死): the loader performs NO LAN
     gate judgement — a legacy ``host: 0.0.0.0`` config with no flag must

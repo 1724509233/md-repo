@@ -115,6 +115,22 @@ def test_should_record_loopback_only_false():
         assert should_record(_target(cloud)) is True, cloud
 
 
+def test_loopback_single_source_no_local_fallback_set():
+    """P2d 接线钉：回环分类单一来源（server.config.core.is_loopback），
+    本地回退集合死代码已删—— ImportError 直接上抛，不得回退成第二处真值。"""
+    import inspect
+
+    from server import egress
+
+    src = inspect.getsource(egress._is_loopback_host)
+    assert "from server.config.core import is_loopback" in src
+    assert "is_loopback(" in src
+    # 回退集合的指纹（字面回环名）不得再出现在分类函数里
+    assert '"localhost"' not in src and "'localhost'" not in src
+    assert '"::1"' not in src and "'::1'" not in src
+    assert "127." not in src
+
+
 # ---------------------------------------------------------------- flush_touches
 
 
