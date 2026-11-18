@@ -51,16 +51,3 @@ def test_folder_delete_books_ledger_row(db_conn, vault_dir):
     row = db_conn.execute(
         "SELECT count(*) FROM files WHERE path = 'empt'").fetchone()
     assert row[0] == 0
-
-
-def test_root_shim_does_not_reexport_mutators():
-    """Hard-forcing invariant (change ledger, AGENTS.md "Change ledger"):
-    the deprecated root shim must NOT re-export the row mutators — the only
-    external importer of apply_change / apply_folder_change is
-    server/services/ledger.py. (The old test pinned the same invariant against the
-    service facade, which card 5 deleted; the full 38-name shim surface is
-    pinned by tests/test_vault_shim.py.)"""
-    import server.vault as vault
-
-    assert not hasattr(vault, "apply_change")
-    assert not hasattr(vault, "apply_folder_change")
