@@ -649,7 +649,7 @@ def test_rollback_move_reverses_refs_and_relatedness(vault_dir, db_conn, ledger_
                             new_path="notes/b.md")
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
-                  from_path="notes/a.md")
+                  from_path="notes/a.md", ledger_conn=ledger_conn)
     snap_mod.finalize(ledger_conn, snap,
                       snap_mod.hash_bytes((vault_dir / "notes" / "b.md").read_bytes()))
     assert b"[[notes/b.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()
@@ -687,7 +687,7 @@ def test_rollback_move_refs_reversal_survives_nonempty_edges(vault_dir, db_conn,
                             new_path="notes/b.md")
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
-                  from_path="notes/a.md")
+                  from_path="notes/a.md", ledger_conn=ledger_conn)
     snap_mod.finalize(ledger_conn, snap,
                       snap_mod.hash_bytes((vault_dir / "notes" / "b.md").read_bytes()))
     assert db_conn.execute("SELECT count(*) FROM edges").fetchone()[0] > 0
@@ -715,5 +715,5 @@ def test_move_refs_rewrite_survives_nonempty_edges(vault_dir, db_conn, ledger_co
 
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", "agent",
-                  from_path="notes/a.md")
+                  from_path="notes/a.md", ledger_conn=ledger_conn)
     assert b"[[notes/b.md]]" in (vault_dir / "notes" / "referrer.md").read_bytes()

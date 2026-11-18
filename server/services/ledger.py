@@ -104,16 +104,21 @@ def record(
     from_path: str = "",
     new_hash: str = "",
     batch_id: str = "",
+    ledger_conn=None,
     **passthrough,
 ) -> None:
     """Synchronous writer-side entry: book the row now, mark skip so the
-    consumer books nothing for this path."""
+    consumer books nothing for this path.
+
+    ``ledger_conn`` (A4, card 10c) is forwarded verbatim to apply_change;
+    the moved-branch relatedness rewrite needs it. Default None = rewrite
+    skipped — bit-identical to the old unregistered-handle lazy path."""
     rel_path = resolve_disk_case(vault_dir, rel_path)
     _mark(rel_path, source, batch_id, skip=True)
     apply_change(
         conn, vault_dir, rel_path, action,
         source=source, from_path=from_path, new_hash=new_hash,
-        batch_id=batch_id, **passthrough,
+        batch_id=batch_id, ledger_conn=ledger_conn, **passthrough,
     )
 
 
@@ -138,6 +143,8 @@ def consume(
     rel_path: str,
     action: str,
     from_path: str = "",
+    *,
+    ledger_conn=None,
 ) -> tuple[str, str, bool]:
     """One watcher file event → the ledger (the writer-side convention).
 
@@ -145,7 +152,9 @@ def consume(
     the attributed source/batch_id — the SOLE regular entry to the ledger.
     ``skip`` marks (record() paths: the writer booked the row synchronously)
     book nothing here — no row, no files-table work. Returns the popped
-    ``(source, batch_id, skip)``.
+    ``(source, batch_id, skip)``. ``ledger_conn`` (A4, card 10c) feeds the
+    moved-branch relatedness rewrite; default None = rewrite skipped,
+    identical to the old unregistered-handle lazy path.
     """
     source, batch_id, skip = _pop(rel_path)
     if skip:
@@ -153,5 +162,6 @@ def consume(
     kwargs = {"source": source, "batch_id": batch_id}
     if from_path:
         kwargs["from_path"] = from_path
-    apply_change(conn, vault_dir, rel_path, action, **kwargs)
+    apply_change(conn, vault_dir, rel_path, action,
+                 ledger_conn=ledger_conn, **kwargs)
     return source, batch_id, skip

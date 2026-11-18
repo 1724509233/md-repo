@@ -319,11 +319,15 @@ def test_propose_after_delete_failed(vault_dir, db_conn, ledger_conn):
 
 # ── 9/10/14. move: D19 in-place rewrite ──────────────────────────────────
 
-def _move_a_to_b(vault_dir, db_conn) -> None:
-    """Rename on disk + drive the production moved branch (apply_change)."""
+def _move_a_to_b(vault_dir, db_conn, ledger_conn=None) -> None:
+    """Rename on disk + drive the production moved branch (apply_change).
+
+    ``ledger_conn`` (A4, card 10c): the rewrite conn now travels as a
+    parameter — pass it when the test asserts on relatedness rewriting."""
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     apply_change(db_conn, vault_dir, "notes/b.md", "moved",
-                 from_path="notes/a.md", source="test")
+                 from_path="notes/a.md", source="test",
+                 ledger_conn=ledger_conn)
 
 
 def test_move_rewrites_paths_preserves_verdicts(vault_dir, db_conn, ledger_conn):
@@ -339,7 +343,7 @@ def test_move_rewrites_paths_preserves_verdicts(vault_dir, db_conn, ledger_conn)
                             "consolidator", run_id="r1")
     assert rel.mark_ignored(ledger_conn, eid_d)
 
-    _move_a_to_b(vault_dir, db_conn)
+    _move_a_to_b(vault_dir, db_conn, ledger_conn)
 
     rows = {(r["source"], r["target"]): dict(r) for r in ledger_conn.execute(
         "SELECT * FROM relatedness").fetchall()}
@@ -385,7 +389,7 @@ def test_card10_pin_record_move_rewrites_edge(vault_dir, db_conn, ledger_conn):
 
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
-                  from_path="notes/a.md")
+                  from_path="notes/a.md", ledger_conn=ledger_conn)
 
     rows = {(r["source"], r["target"]) for r in ledger_conn.execute(
         "SELECT source, target FROM relatedness").fetchall()}
@@ -402,7 +406,7 @@ def test_card10_pin_record_move_preserves_ignored(vault_dir, db_conn, ledger_con
 
     (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
-                  from_path="notes/a.md")
+                  from_path="notes/a.md", ledger_conn=ledger_conn)
 
     rows = [(r["source"], r["target"], r["ignored"]) for r in ledger_conn.execute(
         "SELECT source, target, ignored FROM relatedness").fetchall()]
@@ -423,7 +427,7 @@ def test_card10_pin_consumer_move_rewrites_edge(vault_dir, db_conn, ledger_conn)
 
     (vault_dir / "notes" / "s.md").rename(vault_dir / "notes" / "t.md")
     simulate_consumer(db_conn, vault_dir, "notes/t.md", "moved",
-                      from_path="notes/s.md")
+                      from_path="notes/s.md", ledger_conn=ledger_conn)
 
     rows = {(r["source"], r["target"]) for r in ledger_conn.execute(
         "SELECT source, target FROM relatedness").fetchall()}
@@ -439,7 +443,7 @@ def test_move_duplicate_pair_rewrite_noop(vault_dir, db_conn, ledger_conn):
     rel.upsert_edge(ledger_conn, "notes/b.md", "notes/c.md", "dest", "t")
     eid = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/c.md", "old", "t")
 
-    _move_a_to_b(vault_dir, db_conn)
+    _move_a_to_b(vault_dir, db_conn, ledger_conn)
 
     # The destination pair keeps its own row; the old row stays at A (now
     # dead — A no longer exists) and is never deleted.
@@ -466,7 +470,7 @@ def test_move_recall_clicks_keep_old_path(vault_dir, db_conn, ledger_conn):
         (1000.0, "notes/a.md", "web", "human", "search"))
     db_conn.commit()
 
-    _move_a_to_b(vault_dir, db_conn)
+    _move_a_to_b(vault_dir, db_conn, ledger_conn)
 
     rows = db_conn.execute(
         "SELECT path FROM recall_clicks").fetchall()
@@ -483,7 +487,7 @@ def test_proposal_source_refs_history_after_move(vault_dir, db_conn, ledger_conn
     summary = run_executor(vault_dir, ledger_conn)
     assert summary["merged"] == 1
 
-    _move_a_to_b(vault_dir, db_conn)
+    _move_a_to_b(vault_dir, db_conn, ledger_conn)
 
     # History copy: the proposal record keeps the path at propose time.
     p = proposals.record(ledger_conn, rec["id"])

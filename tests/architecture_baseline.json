@@ -42,8 +42,7 @@
     "server/services/snapshots.py:530:get_index_conn",
     "server/services/snapshots.py:547:get_index_conn",
     "server/services/snapshots.py:548:get_ledger_conn",
-    "server/vault/db/segments_sql.py:227:get_ledger_conn",
-    "server/vault/orchestration/file_ops.py:195:get_ledger_conn"
+    "server/vault/db/segments_sql.py:227:get_ledger_conn"
   ],
   "R6_identity_assignment": [],
   "R3_private_cross_dir": [

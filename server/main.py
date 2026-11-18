@@ -82,7 +82,8 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
         ledger.consume(conn, vault_dir, path, "modified")
 
     def on_moved(old: str, new: str) -> None:
-        ledger.consume(conn, vault_dir, new, "moved", from_path=old)
+        ledger.consume(conn, vault_dir, new, "moved", from_path=old,
+                       ledger_conn=ledger_conn)
 
     def on_deleted(path: str) -> None:
         ledger.consume(conn, vault_dir, path, "deleted")
@@ -94,6 +95,9 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
         on_file_modified=on_modified,
         on_file_moved=on_moved,
         on_file_deleted=on_deleted,
+        # A4 wiring (card 10c): startup reconcile's offline-move path rewrites
+        # relatedness too — the handle travels, never lazied (5th route).
+        ledger_conn=ledger_conn,
     )
     watcher.start()
     await asyncio.sleep(0)  # let the task start

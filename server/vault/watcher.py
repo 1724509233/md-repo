@@ -272,9 +272,14 @@ class SnapshotWatcher:
         on_file_deleted=None,
         debounce: float = 1.5,
         reconcile_interval: float = 30.0,
+        ledger_conn=None,
     ) -> None:
         self._vault = vault_dir
         self._db_conn = db_conn
+        # A4 wiring (card 10c): the startup reconcile below calls
+        # file_ops.reconcile directly (no watcher callbacks) — the offline
+        # move path needs the ledger handle passed through, not lazied.
+        self._ledger_conn = ledger_conn
         self._cb_created = on_file_created
         self._cb_modified = on_file_modified
         self._cb_moved = on_file_moved
@@ -302,7 +307,8 @@ class SnapshotWatcher:
         # 3. DB reconcile (if a conn was provided).
         if self._db_conn:
             from .orchestration.file_ops import reconcile
-            reconcile(self._snapshot, self._db_conn, self._vault)
+            reconcile(self._snapshot, self._db_conn, self._vault,
+                      ledger_conn=self._ledger_conn)
         # 4. Start watchdog + worker.
         # Pass self as the notifier: handler calls .notify() on SnapshotWatcher,
         # which forwards to the worker once it exists.

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 from ..db.changes import log_change
 from ..db.file_index import delete_file, get_all_files, get_file_hash, upsert_file
+from ..db.relatedness import rewrite_paths
 from ..db.schema import ACTION_TO_OP, index_write
 from ..file_entry import FileEntry
 from ..fs.link_parser import invalidate_wikilink_filename
@@ -53,6 +54,7 @@ def apply_change(
     batch_id: str = "",
     remove_links: bool = True,
     pre_hash: str = "",
+    ledger_conn: sqlite3.Connection | None = None,
 ) -> None:
     """Centralized change application: upsert/delete + log_change + FTS + graph.
 
@@ -89,6 +91,12 @@ def apply_change(
     stored on the change_log row (spec 2026-11-15 §2 — the sync lane derives
     its stale-copy pre-hash map from these rows, unbounded); '' on all
     other ops.
+
+    ``ledger_conn`` (A4, card 10c) is the ledger.db handle used by the
+    moved branch's relatedness rewrite — supplied by the channel (the four
+    production move paths), default None = rewrite skipped (unit-test
+    mode, identical to the old unregistered-handle lazy path). The conn
+    SOURCE moved to the channel; the rewrite CALL stays in this branch.
     """
     with index_write():
         if action in ("created", "modified", "create", "update", "restore"):
@@ -184,17 +192,13 @@ def apply_change(
             # filtering after the move). Single point covering all four move
             # sources (agent move_docs / web manage_docs / client sync /
             # external move_detect — every move lands through this branch).
-            # The ledger conn is the module handle pair (lazy, same pattern
-            # as the agent tools); None = no ledger registered (unit-test
+            # The ledger conn arrives from the channel (A4, card 10c: the
+            # production move paths pass it through record()/consume()/
+            # reconcile); None = this caller has no ledger (unit-test
             # mode) → nothing to rewrite. Telemetry tables (recall_*) keep
             # the old path on purpose (index.db point-in-time telemetry).
-            if from_path:
-                from ..db.conn import get_ledger_conn
-                from ..db.relatedness import rewrite_paths
-
-                ledger_conn = get_ledger_conn()
-                if ledger_conn is not None:
-                    rewrite_paths(ledger_conn, from_path, path)
+            if from_path and ledger_conn is not None:
+                rewrite_paths(ledger_conn, from_path, path)
 
     # Event wakeup (after the change_log row is committed by log_change).
     # Publisher-side filter (registered at startup) drops self/excluded
@@ -229,11 +233,15 @@ def reconcile(
     disk: dict[str, FileEntry],
     conn: sqlite3.Connection,
     vault_dir: Path,
+    ledger_conn: sqlite3.Connection | None = None,
 ) -> dict:
     """Compare disk state against the DB and apply all offline changes.
 
     Pure DB-layer operation: does NOT scan the filesystem.
-    The caller (SnapshotWatcher) provides the disk state.
+    The caller (SnapshotWatcher) provides the disk state. ``ledger_conn``
+    (A4 wiring, card 10c) feeds the moved branch's relatedness rewrite —
+    the startup offline-move path (the 5th production route, found by the
+    gate-2 addendum); None = skip (legacy callers/tests).
 
     Move detection uses the shared two-level cascade
     (``move_detect.pair_moves``, same rule as snapshot_watcher): hash
@@ -277,7 +285,7 @@ def reconcile(
     # batch suppression is needed for multi-file loops.
     for old, new in moved:
         apply_change(conn, vault_dir, new, "moved", source=SOURCE, from_path=old,
-                     new_hash=disk[new].hash)
+                     new_hash=disk[new].hash, ledger_conn=ledger_conn)
 
     for p in true_created:
         apply_change(conn, vault_dir, p, "created", source=SOURCE,

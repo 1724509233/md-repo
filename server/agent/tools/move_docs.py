@@ -116,7 +116,7 @@ class MoveDocsTool(DocTool):
                     ledger.record(index_conn, ctx.vault_dir, to_path, "moved",
                                   ctx.write_source, from_path=from_path,
                                   new_hash=digest, update_refs=False,
-                                  batch_id=ctx.run_id)
+                                  batch_id=ctx.run_id, ledger_conn=conn)
         except OSError:
             if conn is not None:
                 for _, _, snap in pairs:

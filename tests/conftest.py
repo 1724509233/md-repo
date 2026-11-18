@@ -25,7 +25,7 @@ from server.vault.db.schema import init_ledger_db
 
 
 def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
-                      from_path: str = ""):
+                      from_path: str = "", *, ledger_conn=None):
     """Drive the production watcher-consumer path
     (``consume`` in server/services/ledger.py — the same one server/main.py's four
     _on_* callbacks call) once for ``path``. Returns the popped
@@ -36,9 +36,11 @@ def simulate_consumer(conn, vault_dir, path: str, action: str = "modified",
     assert on the ledger rows must drive this consumer path explicitly.
     ``action`` must be the watcher event that would have fired ("created"
     for a first write, "modified" for a rewrite, "deleted", "moved" with
-    from_path).
+    from_path). move 路径要驱动 relatedness 改写时显式传 ``ledger_conn``
+    （A4, card 10c — 与生产 on_moved 同构）。
     """
-    return consume(conn, vault_dir, path, action, from_path=from_path)
+    return consume(conn, vault_dir, path, action, from_path=from_path,
+                   ledger_conn=ledger_conn)
 
 
 SAMPLE_CONTENT = b"# Test note\n\nSample content.\n"

@@ -60,7 +60,7 @@ def create_folder(db_conn, vault_dir, body) -> dict:
     return {"ok": True, "path": rel.as_posix()}
 
 
-def move(db_conn, vault_dir, body) -> dict:
+def move(db_conn, vault_dir, body, ledger_conn=None) -> dict:
     src_rel = _safe_rel_path(body.get("from_path") or "")
     dst_rel = _safe_rel_path(body.get("to_path") or "")
     if src_rel is None or dst_rel is None:
@@ -115,6 +115,10 @@ def move(db_conn, vault_dir, body) -> dict:
             "web",
             from_path=old,
             update_refs=False,
+            # A4 (card 10c): per-file moved rows are the actual relatedness
+            # rewrite channel for a folder rename (the folder row itself has
+            # no relatedness path — record_folder deliberately takes no conn).
+            ledger_conn=ledger_conn,
         )
     # All renames (and their ledger rows) succeeded → land the prepared
     # rewrites; referrers that are themselves in the move batch are
@@ -285,7 +289,7 @@ def register(app, ctx) -> None:
         if action == "create_folder":
             return create_folder(ctx.db_conn, ctx.vault_dir, body)
         if action in ("rename", "move"):
-            return move(ctx.db_conn, ctx.vault_dir, body)
+            return move(ctx.db_conn, ctx.vault_dir, body, ledger_conn=ctx.ledger_conn)
         if action == "delete":
             return delete(ctx.db_conn, ctx.vault_dir, body)
         raise HTTPException(status_code=400, detail=f"unknown action: {action}")
