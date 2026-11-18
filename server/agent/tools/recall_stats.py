@@ -46,136 +46,8 @@ class RecallStatsTool(Tool):
         return ("No recall data in window. Telemetry started recently, or no "
                 "searches have been made yet.")
 
-    # ── window metrics (one dict per window; prev = trend baseline) ──────
-
-    def _window_metrics(self, conn, since: float, until: float,
-                        half_life_days: float) -> dict:
-        """All §1.5 formulas over (since, until]: query counts by source,
-        zero-hit rate (overall + per source), low-score rate, exposed docs,
-        consumed share, CTR@5, and the per-doc aggregates the signals need."""
-        q_rows = conn.execute(
-            "SELECT source, hits FROM recall_queries WHERE ts > ? AND ts <= ?",
-            (since, until),
-        ).fetchall()
-        n_queries = len(q_rows)
-        n_failed = sum(1 for r in q_rows if r["hits"] == 0)
-        by_source: dict[str, dict] = {}
-        for r in q_rows:
-            s = by_source.setdefault(r["source"] or "", {"q": 0, "f": 0})
-            s["q"] += 1
-            if r["hits"] == 0:
-                s["f"] += 1
-
-        n_log = conn.execute(
-            "SELECT count(*) FROM recall_log WHERE ts > ? AND ts <= ?",
-            (since, until),
-        ).fetchone()[0]
-        # Same predicate as scan_recall_arming (score < 0.2, non-synthetic)
-        # — the wakeup signal and its read face share one predicate.
-        n_low = conn.execute(
-            "SELECT count(*) FROM recall_log "
-            "WHERE ts > ? AND ts <= ? AND score < 0.2 AND traffic != 'synthetic'",
-            (since, until),
-        ).fetchone()[0]
-
-        # Exposed docs (≥1 hit) and consumed docs (≥1 click), per window.
-        hit_paths = {r["path"] for r in conn.execute(
-            "SELECT DISTINCT path FROM recall_log WHERE ts > ? AND ts <= ?",
-            (since, until),
-        ).fetchall()}
-        click_paths = {r["path"] for r in conn.execute(
-            "SELECT DISTINCT path FROM recall_clicks WHERE ts > ? AND ts <= ?",
-            (since, until),
-        ).fetchall()}
-        exposed = len(hit_paths)
-        consumed = len(hit_paths & click_paths)
-
-        # CTR@5 (§4.5): clicks landing in the source search's top-5 /
-        # all attributed (ranked) clicks.
-        ranked = conn.execute(
-            "SELECT count(*) FROM recall_clicks "
-            "WHERE ts > ? AND ts <= ? AND rank IS NOT NULL",
-            (since, until),
-        ).fetchone()[0]
-        top5 = conn.execute(
-            "SELECT count(*) FROM recall_clicks "
-            "WHERE ts > ? AND ts <= ? AND rank IS NOT NULL AND rank <= 5",
-            (since, until),
-        ).fetchone()[0]
-
-        # Per-doc hits + decayed tier weights (demand-coverage signal).
-        now = time.time()
-        doc_rows = conn.execute(
-            "SELECT path, traffic, ts FROM recall_log "
-            "WHERE ts > ? AND ts <= ? ORDER BY ts DESC",
-            (since, until),
-        ).fetchall()
-        docs: dict[str, dict] = {}
-        for r in doc_rows:
-            d = docs.get(r["path"])
-            if d is None:
-                d = docs[r["path"]] = {"hits": 0, "human_w": 0.0,
-                                       "on_demand_w": 0.0}
-            d["hits"] += 1
-            decay = 0.5 ** (((now - r["ts"]) / 86400) / half_life_days)
-            if r["traffic"] == "human":
-                d["human_w"] += decay
-            elif r["traffic"] == "on_demand":
-                d["on_demand_w"] += decay
-        click_counts = {r["path"]: r["c"] for r in conn.execute(
-            "SELECT path, count(*) AS c FROM recall_clicks "
-            "WHERE ts > ? AND ts <= ? GROUP BY path",
-            (since, until),
-        ).fetchall()}
-
-        # Failed queries: per normalized query, per source (repeat failures)
-        # + evidence rows (newest first).
-        failed_rows = conn.execute(
-            "SELECT ts, source, query, recall FROM recall_queries "
-            "WHERE hits = 0 AND ts > ? AND ts <= ? ORDER BY ts DESC",
-            (since, until),
-        ).fetchall()
-        fail_by_query: dict[str, dict] = {}
-        for r in failed_rows:
-            q = (r["query"] or "").strip().lower()
-            entry = fail_by_query.setdefault(
-                q, {"count": 0, "sources": {}, "evidence": []})
-            entry["count"] += 1
-            src = r["source"] or ""
-            entry["sources"][src] = entry["sources"].get(src, 0) + 1
-            if len(entry["evidence"]) < 5:
-                entry["evidence"].append(r)
-
-        # Leakage (§4.5): via=ai clicks whose path is NOT in that session's
-        # recall_log path set — the agent cited a doc the search never
-        # recalled (recall-gap signal).
-        from ...vault.db import recall as recall_db
-        ai_clicks = conn.execute(
-            "SELECT path, session_id, query FROM recall_clicks "
-            "WHERE ts > ? AND ts <= ? AND via = 'ai' AND session_id IS NOT NULL",
-            (since, until),
-        ).fetchall()
-        leaked: dict[str, int] = {}
-        for r in ai_clicks:
-            recalled = recall_db._session_recall_paths(
-                conn, r["session_id"], r["query"])
-            if r["path"] not in recalled:
-                leaked[r["path"]] = leaked.get(r["path"], 0) + 1
-
-        return {
-            "n_queries": n_queries, "n_failed": n_failed,
-            "by_source": by_source,
-            "zero_hit_rate": (n_failed / n_queries) if n_queries else None,
-            "n_log": n_log,
-            "low_score_rate": (n_low / n_log) if n_log else None,
-            "exposed": exposed,
-            "consumed_rate": (consumed / exposed) if exposed else None,
-            "ctr5": (top5 / ranked) if ranked else None,
-            "docs": docs,
-            "click_counts": click_counts,
-            "fail_by_query": fail_by_query,
-            "leaked": leaked,
-        }
+    # ── window metrics: the whole aggregate lives in the db layer (card 8);
+    #    this tool keeps rendering + signals + last_meta only ──────────────
 
     # ── rendering ─────────────────────────────────────────────────────────
 
@@ -244,10 +116,10 @@ class RecallStatsTool(Tool):
             return "Error: database not available"
         now = time.time()
         window = args.days * 86400
-        cur = self._window_metrics(conn, now - window, now,
-                                   args.half_life_days)
-        prev = self._window_metrics(conn, now - 2 * window, now - window,
-                                    args.half_life_days)
+        cur = recall_db.window_metrics(conn, now - window, now,
+                                       args.half_life_days)
+        prev = recall_db.window_metrics(conn, now - 2 * window, now - window,
+                                        args.half_life_days)
         if cur["n_queries"] == 0 and cur["n_log"] == 0 and not cur["docs"]:
             return self.no_data()
         ctx.last_meta = {"count": cur["exposed"]}
