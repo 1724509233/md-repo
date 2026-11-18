@@ -560,6 +560,27 @@ _LEDGER_DDL: tuple[str, ...] = (
     """,
     "CREATE INDEX IF NOT EXISTS %sidx_relatedness_pair ON relatedness(source, target)",
     "CREATE INDEX IF NOT EXISTS %sidx_relatedness_actor ON relatedness(actor)",
+    # Egress audit ledger (security redline 7, spec 2026-11-18 §3.1): one
+    # row per document that actually entered a model context on a
+    # non-loopback endpoint, per run (authoritative — ledger.db, not the
+    # rebuildable index cache; a 2026-11-18 addition to the four-table set,
+    # same lock domain). Write face: server/vault/db/egress_sql.py.
+    """
+    CREATE TABLE IF NOT EXISTS %segress_log (
+        id            INTEGER PRIMARY KEY,
+        ts            REAL NOT NULL,
+        channel       TEXT NOT NULL,      -- 'agent' | 'bgagent'
+        actor         TEXT NOT NULL,      -- 'agent' | bgagent alias (proposals.actor 同语义: channel-injected, not forgeable)
+        run_id        TEXT NOT NULL DEFAULT '',   -- bgagent batch; interactive always ''
+        endpoint_host TEXT NOT NULL,      -- host[:port] of base_url; never key/path/query
+        model         TEXT NOT NULL DEFAULT '',
+        path          TEXT NOT NULL,      -- vault-relative, one row per document
+        via           TEXT NOT NULL       -- 'read' | 'search' | 'related' | 'recent' (first touch)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS %sidx_egress_path ON egress_log(path)",
+    "CREATE INDEX IF NOT EXISTS %sidx_egress_ts ON egress_log(ts)",
+    "CREATE INDEX IF NOT EXISTS %sidx_egress_run ON egress_log(run_id)",
 )
 
 
