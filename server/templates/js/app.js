@@ -848,6 +848,8 @@ export function createApp() {
     },
     template: `
       <div class="flex h-full">
+        <!-- 键盘直达主区（P2②）：屏外常驻，Tab 首站显形（样式 style.css .skip-link） -->
+        <a class="skip-link" href="#main-content">跳至主要内容</a>
         <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
         <aside class="sidebar-shell flex shrink-0">
           <!-- rail（桌面 64px / 移动 48px） -->
@@ -947,7 +949,7 @@ export function createApp() {
         <!-- Main area -->
         <div class="flex-1 flex overflow-hidden relative"
           :class="{ 'ai-open': state.aiOpen }">
-          <main class="relative flex-1 flex flex-col overflow-hidden"
+          <main id="main-content" class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
               :more-menu-open="state.moreMenuOpen"

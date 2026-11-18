@@ -4,6 +4,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <!-- theme-color 为 style.css :root --paper 的字面量抄本（meta 无法引用 CSS 变量，改 token 须同步此处） -->
+  <meta name="theme-color" content="#F4EFE6">
+  <!-- Inter 400 latin 主字体面预载（首屏正文）；latin-ext 后到，不参与首屏，不预载 -->
+  <link rel="preload" href="/static/vendor/fonts/Inter-400-latin.woff2" as="font" type="font/woff2" crossorigin>
   <title>md-vault · AI 工作台</title>
   <script src="/static/vendor/js/tailwind.js"></script>
   <script>

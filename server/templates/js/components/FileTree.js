@@ -616,7 +616,7 @@ export const FileTree = {
           </div>
         </div>
       </div>
-      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
+      <nav class="tree-scroll flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
         :class="{ 'tree-drop-root': dropTarget === ROOT_TARGET }"
         @dragover="onNavDragOver($event)"
         @drop="onNavDrop($event)"

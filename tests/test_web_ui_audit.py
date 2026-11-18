@@ -367,6 +367,31 @@ def test_p2_combobox_contract():
     assert "resultOptId" in m.group(1)
 
 
+def test_p2_meta_and_motion():
+    html = (TPL / "index.html").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    app = _templates()["app.js"]
+    assert 'name="theme-color"' in html
+    assert 'rel="preload"' in html and "Inter-400-latin.woff2" in html
+    assert re.search(r":root\s*\{[^}]*color-scheme:\s*light", css)
+    assert "-webkit-tap-highlight-color: transparent" in css
+    assert re.search(r"touch-action:\s*manipulation", css)
+    # reduced-motion：存在一个 @media 降级块同时含三选择器与 animation: none
+    # （原计划的双段 index() 切片写法会误吞后随块，改为括号配平逐块提取；断言语义不放松）
+    blocks = []
+    for m in re.finditer(r"@media \(prefers-reduced-motion: reduce\)\s*\{", css):
+        depth, i = 1, m.end()
+        while depth and i < len(css):
+            depth += (css[i] == "{") - (css[i] == "}")
+            i += 1
+        blocks.append(css[m.end():i - 1])
+    assert any(all(s in b for s in (".stream-cursor::after", ".thinking-dots .dot",
+                                    "animation: none")) for b in blocks), \
+        "须有单个 reduced-motion 块同时覆盖三无限动画并 animation: none"
+    assert "skip-link" in app and 'id="main-content"' in app
+    assert re.search(r"box-shadow: inset", css)  # inset ring 存在
+
+
 def test_landing_integration_pins():
     # 终审 minor→补钉：映射/清理是「改坏了测试不响」的最高危静默面（Review Focus 4）
     ep = _templates()["EditorPane.js"]

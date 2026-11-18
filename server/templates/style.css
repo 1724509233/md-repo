@@ -1,5 +1,6 @@
 /* ============ 纸墨风「书房」tokens ============ */
 :root {
+  color-scheme: light;      /* 表单控件/滚动条 UA 配色钉死浅色（本壳无深色变体） */
   --paper: #F4EFE6;   /* 底色，暖纸白 */
   --ink: #211D18;     /* 主文字，深墨 */
   --ink-soft: #6E655A;/* 次要文字，灰墨 */
@@ -13,6 +14,13 @@ html, body { background: var(--paper); color: var(--ink); }
    overflow-hidden 只挡用户滚、不挡浏览器 scrollIntoView 程序化滚 → 顶部被遮不可恢复；
    100% 随键盘收缩，滚动量归零。桌面 100%≡100vh 行为不变。验收捕获，Edge 复现） */
 html, body, #app { height: 100%; }
+
+/* ============ 移动触控（P2②）============ */
+html { -webkit-tap-highlight-color: transparent; }
+/* 去双击缩放 300ms 延迟；单指平移/惯性滚动保留。既有拖拽把手
+   （#ai-sheet-handle/#search-sheet-handle/.rel-sheet-handle）为 touch-action:none 的 div，
+   ID 特异度更高且不在本选择器集内，互不冲突 */
+button, a, input, [role="button"] { touch-action: manipulation; }
 
 /* ============ 字体与排版 ============ */
 body { font-family: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif; font-size: 16px; line-height: 1.75; }
@@ -28,6 +36,14 @@ body { font-family: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif; f
 :focus-visible { outline: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--brass); border-radius: 6px; }
 input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px color-mix(in srgb, var(--brass) 55%, transparent); }
 
+/* 跳至主要内容（P2②）：屏外常驻，键盘 Tab 首站显形；ring 复用上方全局 :focus-visible 黄铜环 */
+.skip-link {
+  position: fixed; top: -64px; left: 8px; z-index: 200;  /* 高于全部浮层（面板/抽屉 z-40） */
+  background: var(--surface); color: var(--ink);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px;
+}
+.skip-link:focus { top: 8px; left: 8px; }
+
 /* ============ Scrollbars ============ */
 *{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--ink-soft) 35%, transparent) transparent}
 *::-webkit-scrollbar{width:5px;height:5px}
@@ -41,6 +57,16 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #ai-panel, .search-drawer, .rel-sheet, .console-shell, .panel-shell,
 .sp-results, .notif-list, .toc-list, .c-scroll, .m-scroll, .rel-scroll,
 .search-dropdown { overscroll-behavior: contain; }
+
+/* ============ 焦点环内描（P2②）============ */
+/* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
+   滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
+   + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown（FileTree
+   搜索下拉，option/展示更多钮同样裁切）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
+   .rel-scroll 及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
+.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible {
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--brass);
+}
 
 /* ============ 侧边栏 logo ============ */
 .logo-mark {
@@ -1207,10 +1233,12 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .mm-cnt{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:2px;letter-spacing:0}
   .mm-t-fq td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 }
-/* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标 / .l2-refresh） */
+/* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标 / .l2-refresh；
+   P2② 并入三无限动画：流式光标 blink / 思考圆点 dotPulse / 搜索 spinner spin） */
 @media (prefers-reduced-motion: reduce) {
   .lamp.on { animation: none; }
   .fold, .mc-h .car, .rcl-l2btn .car, .l2-refresh { transition: none; }
+  .stream-cursor::after, .thinking-dots .dot, .search-spinner { animation: none; }
 }
 
 /* ============ 记忆控制台 v5 L0 主态（定稿 design/console-v5-prune.html 场景 01 · 面板 · 纯审查队列）
