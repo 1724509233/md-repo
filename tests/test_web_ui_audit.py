@@ -360,6 +360,9 @@ def test_p2_combobox_contract():
     assert 'role="combobox"' in ft and "aria-activedescendant" in ft
     assert 'role="option"' in ft and 'tabindex="-1"' in ft
     assert ft.count("ts-opt-") == 1, "id 必须单源 helper，两侧拼接漂移=静态钉盲区"
+    # 审阅修：search.js catch 置空 results 不重置 activeIndex + 空列表 ArrowUp 钳到 0
+    # → 绑定必须带长度守卫，否则 aria-activedescendant 指向不存在的 option id
+    assert ':aria-activedescendant="activeIndex >= 0 && activeIndex < shapedResults.length ? resultOptId(activeIndex) : undefined"' in ft
     m = re.search(r"return \{([^}]*)\}", ft[ft.rindex("    return {"):])
     assert "resultOptId" in m.group(1)
 
