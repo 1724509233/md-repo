@@ -1,5 +1,6 @@
 /* ============ 纸墨风「书房」tokens ============ */
 :root {
+  color-scheme: light;      /* 表单控件/滚动条 UA 配色钉死浅色（本壳无深色变体） */
   --paper: #F4EFE6;   /* 底色，暖纸白 */
   --ink: #211D18;     /* 主文字，深墨 */
   --ink-soft: #6E655A;/* 次要文字，灰墨 */
@@ -13,6 +14,13 @@ html, body { background: var(--paper); color: var(--ink); }
    overflow-hidden 只挡用户滚、不挡浏览器 scrollIntoView 程序化滚 → 顶部被遮不可恢复；
    100% 随键盘收缩，滚动量归零。桌面 100%≡100vh 行为不变。验收捕获，Edge 复现） */
 html, body, #app { height: 100%; }
+
+/* ============ 移动触控（P2②）============ */
+html { -webkit-tap-highlight-color: transparent; }
+/* 去双击缩放 300ms 延迟；单指平移/惯性滚动保留。既有拖拽把手
+   （#ai-sheet-handle/#search-sheet-handle/.rel-sheet-handle）为 touch-action:none 的 div，
+   ID 特异度更高且不在本选择器集内，互不冲突 */
+button, a, input, [role="button"] { touch-action: manipulation; }
 
 /* ============ 字体与排版 ============ */
 body { font-family: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif; font-size: 16px; line-height: 1.75; }
@@ -28,6 +36,14 @@ body { font-family: 'Source Serif 4', 'PingFang SC', 'Microsoft YaHei', serif; f
 :focus-visible { outline: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--brass); border-radius: 6px; }
 input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper), 0 0 0 4px color-mix(in srgb, var(--brass) 55%, transparent); }
 
+/* 跳至主要内容（P2②）：屏外常驻，键盘 Tab 首站显形；ring 复用上方全局 :focus-visible 黄铜环 */
+.skip-link {
+  position: fixed; top: -64px; left: 8px; z-index: 200;  /* 高于全部浮层（面板/抽屉 z-40、toast z-index:100=toast.js 内联） */
+  background: var(--surface); color: var(--ink);
+  padding: 8px 14px; border-radius: 8px; font-size: 13px;
+}
+.skip-link:focus { top: 8px; left: 8px; }
+
 /* ============ Scrollbars ============ */
 *{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--ink-soft) 35%, transparent) transparent}
 *::-webkit-scrollbar{width:5px;height:5px}
@@ -38,9 +54,32 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 
 /* ============ 滚动链 containment（P1-7）============ */
 /* 抽屉/弹层/内部滚动区滚到边界不外链整页（移动防误触发下拉刷新） */
+/* P2⑥ 复核：spec「5 件套仅 1 挂」系审计旧账——P1-7 此组合规则（通用态，非媒体查询）已含
+   #ai-panel / .search-drawer / .rel-sheet 三外壳与内容滚动区全集，零补挂即达标；safe-area
+   env(safe-area-inset-bottom) 同集合实况：三件已在位（各自的移动态全出血规则块内，
+   均带 P1-7 注释），桌面态 #ai-panel 非全出血无需补。 */
 #ai-panel, .search-drawer, .rel-sheet, .console-shell, .panel-shell,
 .sp-results, .notif-list, .toc-list, .c-scroll, .m-scroll, .rel-scroll,
 .search-dropdown { overscroll-behavior: contain; }
+
+/* ============ UI 铬件文本禁选（P2 目检轮）============ */
+/* 按钮（全站，含已 button 化的 .search-item 等）/rail 标签/文件树行/当前文件名 点拖出选区、
+   方向键令原生 caret 现形闪烁——铬件文字非抄录对象。正文 #preview 与编辑区 #editor 不受影响；
+   user-select 是继承属性 → 表单控件显式复位（Chrome/WebKit 祖先 none 会传染 input，
+   树行内改名框首当其冲） */
+button, .tree-row, .tree-file, .rlabel, #current-file { -webkit-user-select: none; user-select: none; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+
+/* ============ 焦点环内描（P2②）============ */
+/* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
+   滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
+   + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown——实效来自
+   「展示更多」钮（option 走 aria-activedescendant 方案，焦点恒留 input，:focus-visible
+   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
+   .rel-scroll 及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
+.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible {
+  box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--brass);
+}
 
 /* ============ 侧边栏 logo ============ */
 .logo-mark {
@@ -83,13 +122,18 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .tree-drop-target { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brass) 40%, transparent); background: color-mix(in srgb, var(--brass) 10%, transparent); }
 /* 拖拽到根目录（nav 非目录行区域）高亮 */
 .tree-drop-root { background: color-mix(in srgb, var(--brass) 8%, transparent); }
-/* 键盘可见：.tree-more 仅 hover 显现是缺陷（P0-2），Tab 聚焦即显形 */
-.tree-more:focus-visible { opacity: 1; }
+/* 键盘可见 + 幽灵命中（P0-2 / P2⑥）：.tree-more 仅 hover 显现是缺陷（P0-2），Tab 聚焦即显形；
+   opacity-0 态本体仍可点（P2⑥）——基础态 pointer-events:none，hover/focus-visible 恢复 auto。
+   与组件侧 opacity-0 group-hover:opacity-100 + :focus-visible 显现逐态对齐（可见 ⇔ 可点，
+   hover 同源于 .group:hover，两属性同帧翻转无窗口） */
+.tree-more { pointer-events: none; }
+.group:hover .tree-more { pointer-events: auto; }
+.tree-more:focus-visible { opacity: 1; pointer-events: auto; }
 
 /* ============ 搜索框 ============ */
 #search-input { background: var(--surface); border-color: var(--line); color: var(--ink); font-family: 'Inter', sans-serif; }
 #search-input::placeholder { color: var(--ink-soft); opacity: .7; }
-#search-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
+#search-input:focus-visible { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
 
 /* ============ 顶栏（轻盈：少描边、多留白）============ */
 #current-file { font-family: 'Source Serif 4', serif; font-size: 15px; color: var(--ink); }
@@ -186,7 +230,7 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .toc-btn-open { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
 .toc-btn-open:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
 /* 预览跳转落点：scrollIntoView block:start 的 16px 上边距（TOC 与深链共用） */
-#preview :is(h1, h2, h3) { scroll-margin-top: 16px; }
+#preview :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 16px; }
 @media (prefers-reduced-motion: reduce) {
   .toc-dd { animation: none; }
 }
@@ -201,10 +245,11 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 #preview { font-family: 'Source Serif 4', serif; font-size: 16px; line-height: 1.75; color: var(--ink); position: relative; /* ✎ 定位锚（spec 2026-11-17） */ }
 /* sticky 选中块（spec 2026-11-17）：outline 不改布局 */
 .md-sel-block { outline: 2px solid var(--brass); outline-offset: 2px; border-radius: 4px; }
-/* 块落位 ✎：隐藏态 pointer-events:none，class 切 opacity（display 切换会杀淡变） */
-#block-edit-btn { position: absolute; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-soft); font-size: 14px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .15s ease; }
-#block-edit-btn.on { opacity: 1; pointer-events: auto; }
-@media (prefers-reduced-motion: reduce) { #block-edit-btn { transition: none; } }
+/* 块落位 ✎：隐藏态 pointer-events:none + visibility:hidden（opacity:0 仍可聚焦=焦点黑洞，P2 目检轮），
+   class 切 opacity（display 切换会杀淡变；visibility 以合并过渡延迟收起，淡出不丢） */
+#block-edit-btn { position: absolute; z-index: 5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink-soft); font-size: 14px; cursor: pointer; opacity: 0; pointer-events: none; visibility: hidden; transition: opacity .15s ease, visibility 0s .15s; }
+#block-edit-btn.on { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .15s ease, visibility 0s 0s; }
+@media (prefers-reduced-motion: reduce) { #block-edit-btn, #block-edit-btn.on { transition: none; } }
 #preview h1 { font-size: 28px; font-weight: 700; line-height: 1.3; margin: 2rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid color-mix(in srgb, var(--brass) 45%, transparent); }
 #preview h2 { font-size: 20px; font-weight: 600; line-height: 1.4; margin: 1.5rem 0 .75rem; }
 #preview h3 { font-size: 17px; font-weight: 600; line-height: 1.4; margin: 1.25rem 0 .5rem; }
@@ -362,6 +407,10 @@ pre code.hljs { background: transparent; padding: 0; }
 .tool-detail { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .2s ease; }
 .tool-detail.open { grid-template-rows: 1fr; }
 .tool-detail-inner { overflow: hidden; min-height: 0; }
+/* 0fr 行内 0 高内容仍可聚焦（P2 §1.4 出 Tab 序）：收起态 visibility 延迟收起（delay=grid 时长，
+   动画收尾才隐，无跳变）；展开态 delay 0s 即刻可见 */
+.tool-detail:not(.open) .tool-detail-inner { visibility: hidden; transition: visibility 0s .2s; }
+.tool-detail.open .tool-detail-inner { visibility: visible; transition: visibility 0s 0s; }
 .tool-pre { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border-radius: 4px; padding: 8px; margin-top: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; font-size: 11px; max-height: 150px; overflow-y: auto; color: var(--ink); }
 .tool-result-pre { max-height: 200px; border-left: 2px solid var(--brass); padding-left: 8px; }
 .tool-result-label { margin-top: 6px; font-weight: 600; color: var(--ink-soft); font-size: 11px; font-family: 'Inter', sans-serif; }
@@ -387,8 +436,11 @@ pre code.hljs { background: transparent; padding: 0; }
 .thinking-text { min-height: 0; overflow: hidden; padding: 2px 0 6px; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--ink-soft); word-break: break-word; }
 /* 收起态清零 vertical padding：grid 0fr 行收缩时 grid item 的 border-box 下限 = padding 盒，
    min-height: 0 压不掉 padding → 2+6=8px 透明盒漏在 thinking-line 下（.tool-detail 无此问题
-   因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁 */
-.thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; }
+   因其 inner 层无 padding）。展开动画起点 8px 为透明 padding 区，无可见闪烁。
+   另收起态出 Tab 序（P2 §1.4）：visibility 延迟收起（delay=grid 时长 .2s，动画收尾才隐），
+   展开态即刻可见 */
+.thinking-detail:not(.open) .thinking-text { padding-top: 0; padding-bottom: 0; visibility: hidden; transition: visibility 0s .2s; }
+.thinking-detail.open .thinking-text { visibility: visible; transition: visibility 0s 0s; }
 
 /* ============ Confirm buttons（黄铜强调）============ */
 .confirm-btns { display: flex; gap: 8px; margin-top: 6px; margin-bottom: 4px; }
@@ -450,7 +502,7 @@ pre code.hljs { background: transparent; padding: 0; }
 .ai-token-fill { height: 100%; border-radius: 0 2px 2px 0; transition: width .3s ease; }
 #ai-input { background: var(--surface); border-color: var(--line); color: var(--ink); min-height: 2.5rem; max-height: 40%; overflow-y: auto; transition: height .1s ease; }
 #ai-input::placeholder { color: var(--ink-soft); opacity: .7; }
-#ai-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
+#ai-input:focus-visible { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
 #ai-send { background: var(--brass); color: var(--paper); }
 #ai-send:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
 #ai-stop { background: #b91c1c; color: var(--paper); }
@@ -610,6 +662,7 @@ pre code.hljs { background: transparent; padding: 0; }
 .notif-badge {
   position: absolute; top: -6px; right: -6px;
   min-width: 16px; height: 16px; padding: 0 2px;
+  font-variant-numeric: tabular-nums;
   display: flex; align-items: center; justify-content: center;
   border-radius: 9999px;
   background: var(--brass); color: #fff;
@@ -646,6 +699,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .fm-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .22s ease; }
 .fm-card.open .fm-body { grid-template-rows: 1fr; }
 .fm-body-inner { overflow: hidden; min-height: 0; }
+/* 收起态出 Tab 序（P2 §1.4；开态标记在 .fm-card 父级）；delay=grid 时长 .22s */
+.fm-card:not(.open) .fm-body-inner { visibility: hidden; transition: visibility 0s .22s; }
+.fm-card.open .fm-body-inner { visibility: visible; transition: visibility 0s 0s; }
 @media (prefers-reduced-motion: reduce) { .fm-body { transition: none; } }
 
 /* 通用小件 */
@@ -727,7 +783,7 @@ pre code.hljs { background: transparent; padding: 0; }
 @keyframes panelInFade { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .panel-shell > .panel-face { animation: none; }
-  .panel-shell, .search-drawer { transition: none; } /* 移动 overlay/抽屉直切（spec §3.5） */
+  .panel-shell, .panel-shell.open, .search-drawer, .search-drawer.open { transition: none; } /* 移动 overlay/抽屉直切（spec §3.5）；两态都杀：.open 自带合并 transition 特异度高于基础态，只杀基础态则 RM 下滑入 + visibility 孤儿延迟复活 */
 }
 
 /* 面板头：48px，surface 底（B 变体 .p-head） */
@@ -760,7 +816,7 @@ pre code.hljs { background: transparent; padding: 0; }
   transition: border-color .15s, box-shadow .15s;
 }
 .sp-q-input::placeholder { color: var(--ink-soft); opacity: .7; }
-.sp-q-input:focus { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
+.sp-q-input:focus-visible { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
 .sp-q-clear { position: absolute; right: 24px; top: 50%; transform: translateY(-30%); width: 22px; height: 22px; border: none; background: transparent; color: var(--ink-soft); cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .sp-q-clear:hover { color: var(--ink); }
 .sp-q-clear svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
@@ -807,22 +863,23 @@ pre code.hljs { background: transparent; padding: 0; }
   .panel-shell {
     width: 260px !important; position: fixed; left: 0px; top: 0; bottom: 0; z-index: 40;
     background: var(--paper); border-right: 1px solid var(--line);
-    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transform: translateX(-102%); visibility: hidden;
+    transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s; /* 滑出收尾才隐；开态 delay 0s 即刻可见（.rel-sheet 同款合并写法） */
   }
-  .panel-shell.open { transform: translateX(0); }
+  .panel-shell.open { transform: translateX(0); visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
 
   /* 搜索抽屉：80vh 底部抽屉（同 #ai-panel 移动抽屉：圆角 24、backdrop、拖拽手柄） */
   .search-drawer {
     top: auto; bottom: 0; height: 80vh; width: 100%;
-    transform: translateY(100%);
+    transform: translateY(100%); visibility: hidden; /* P2 目检轮：滑出屏外仍 Tab 可达；delay=.38s 滑出收尾才隐，开态 delay 0s 即刻可见（.rel-sheet 同款） */
     background: var(--surface);
     border-top: 2px solid var(--brass);
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
-    transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s;
     padding-bottom: env(safe-area-inset-bottom); /* P1-7 */
   }
-  .search-drawer.open { transform: none; }
+  .search-drawer.open { transform: none; visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
   #search-sheet-handle { display: flex; align-items: center; justify-content: center; height: 40px; cursor: grab; touch-action: none; flex-shrink: 0; }
   #search-sheet-handle::before { content: ''; width: 44px; height: 5px; border-radius: 9999px; background: var(--line); transition: background .15s; }
   #search-sheet-handle:active::before { background: var(--brass); }
@@ -833,14 +890,16 @@ pre code.hljs { background: transparent; padding: 0; }
 }
 
 /* ============ 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html，spec 2026-10-21 §7）============ */
-/* 容器：关闭态 width 0（不占位、不可点）；.open 300px。开合为瞬时宽切换 + 面入场 opacity+transform，
-   宽度无过渡 → 主区一次性布局，不做逐帧回流；面切换仅 8px 位移 + 淡入 */
+/* 容器：关闭态 width 0（不占位、不可点、visibility 出 Tab 序）；.open 300px。开合为瞬时宽切换 + 面入场 opacity+transform，
+   宽度无过渡 → 主区一次性布局，不做逐帧回流；面切换仅 8px 位移 + 淡入。
+   P2 目检轮：width:0+overflow:hidden 子树（含 rsn-ta）仍 Tab 可达 → 关闭态 visibility:hidden；
+   桌面瞬时族无过渡、零孤儿延迟；移动滑入形态在下方 ≤860 块并入 transform 过渡（delay .38s） */
 .console-shell {
   flex-shrink: 0; width: 0; position: relative; overflow: hidden;
   background: var(--paper); border-right: 1px solid var(--line);
-  opacity: 0; pointer-events: none;
+  opacity: 0; pointer-events: none; visibility: hidden;
 }
-.console-shell.open { width: 300px; opacity: 1; pointer-events: auto; }
+.console-shell.open { width: 300px; opacity: 1; pointer-events: auto; visibility: visible; }
 #memory-console-shell > .c-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); }
 #memory-console-shell > .c-face.out { opacity: 0; pointer-events: none; }
 @keyframes cFaceIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: translateX(0); } }
@@ -953,7 +1012,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .d-md li { margin: 3px 0; }
 /* 来源 refs（可跳转原文） */
 .src-list { display: flex; flex-direction: column; gap: 5px; }
-.src-link { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink); text-decoration: none; border-bottom: 1px dashed color-mix(in srgb, var(--brass) 40%, var(--line)); display: inline-flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease, border-color .15s ease; }
+.src-link { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink); text-decoration: none; border: 0; border-bottom: 1px dashed color-mix(in srgb, var(--brass) 40%, var(--line)); background: none; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: color .15s ease, border-color .15s ease; }
 .src-link svg { width: 10px; height: 10px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; color: var(--brass); }
 .src-link:hover { color: var(--brass); border-color: var(--brass); }
 /* 批次 / 可逆性 */
@@ -980,7 +1039,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .rsn-hint { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10.5px; color: var(--ink-soft); display: flex; align-items: center; gap: 6px; margin: 8px 0 7px; }
 .rsn-hint .req { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9px; color: #fff; background: #ef4444; border-radius: 4px; padding: 0 4px; }
 .rsn-ta { width: 100%; min-height: 64px; resize: vertical; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; line-height: 1.65; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
-.rsn-ta:focus { outline: none; border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brass) 12%, transparent); }
+.rsn-ta:focus-visible { outline: none; border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brass) 12%, transparent); }
 .rsn-sub { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; font-weight: 600; margin-top: 8px; width: 100%; border-radius: 8px; padding: 8px 0; background: #ef4444; color: #fff; border: none; cursor: pointer; opacity: .45; }
 .rsn-sub.ok { opacity: 1; }
 /* 确认之后：状态翻转 + 执行器落地 + change_log 轨迹 */
@@ -1007,16 +1066,16 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .console-shell {
     position: fixed; left: 0; right: 0; top: 0; bottom: 0;
     width: 100% !important; z-index: 45; border-right: none;
-    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1);
+    transform: translateX(-102%); transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s .38s; /* visibility:hidden 承桌面基础态；滑出收尾才隐 */
   }
-  .console-shell.open { transform: translateX(0); }
+  .console-shell.open { transform: translateX(0); visibility: visible; transition: transform .38s cubic-bezier(.32,.72,0,1), visibility 0s 0s; }
 }
 @media (min-width: 861px) {
   #memory-console-backdrop { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   #memory-console-shell > .c-face.anim { animation: none; }
-  .console-shell { transition: none; }
+  .console-shell, .console-shell.open { transition: none; }
   .spill.awaiting::before { animation: none; }
   .done { animation: none; }
 }
@@ -1042,7 +1101,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .mp-back { border: 1px solid var(--line); background: transparent; color: var(--ink-soft); font-family: var(--sans); font-size: 11px; font-weight: 500; border-radius: 999px; padding: 4px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: border-color .15s ease, color .15s ease; }
 .mp-back:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
 .mp-back svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.mp-title { font-size: 19px; font-weight: 700; margin-top: 10px; letter-spacing: .01em; }
+.mp-title { font-size: 19px; font-weight: 700; margin: 10px 0 0; letter-spacing: .01em; } /* P2⑥ h1 化：UA 块外边距清零，原 10px 顶部间距保留（计划「margin:0」+ 间距继承合并） */
 .mp-meta { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent); margin-top: 6px; line-height: 1.8; }
 /* 两组 = 页面问的两个问题：状态（健康吗）/ 系统（在干什么）。小写 caps 组标题行（设置页气质，与卡片区分）。
    顺序理由 = 事件驱动访问（看到徽标 / 红点进来 → 先答「健康吗」），状态组保证落在首屏内。 */
@@ -1075,6 +1134,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s var(--ease); }
 .fold.open { grid-template-rows: 1fr; }
 .fold > div { overflow: hidden; min-height: 0; }
+/* 收起态出 Tab 序（P2 §1.4：DocRelated 按钮行 / L2 深钻钮在 0fr 裁剪下仍可聚焦）；
+   visibility 延迟收起（delay=grid 时长 .25s，动画收尾才隐），展开态即刻可见 */
+.fold:not(.open) > div { visibility: hidden; transition: visibility 0s .25s; }
+.fold.open > div { visibility: visible; transition: visibility 0s 0s; }
 .l2-pad { padding-top: 12px; }
 .l2-sub { font-family: var(--sans); font-size: 10px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-soft); margin: 14px 0 6px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .l2-sub:first-child { margin-top: 0; }
@@ -1192,10 +1255,18 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .mm-cnt{display:block;font-size:9px;color:color-mix(in srgb,var(--ink-soft) 70%,transparent);margin-top:2px;letter-spacing:0}
   .mm-t-fq td:nth-child(1){white-space:normal;overflow-wrap:anywhere;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 }
-/* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标 / .l2-refresh） */
+/* 动效降级（本分节新增件：.lamp.on 脉冲 / .fold L2 展开 / .rcl-l2btn 车标 / .l2-refresh；
+   P2② 并入三无限动画：流式光标 blink / 思考圆点 dotPulse / 搜索 spinner spin） */
 @media (prefers-reduced-motion: reduce) {
   .lamp.on { animation: none; }
   .fold, .mc-h .car, .rcl-l2btn .car, .l2-refresh { transition: none; }
+  .stream-cursor::after, .thinking-dots .dot, .search-spinner { animation: none; }
+  /* 终审 Minor：四族收起态内容层的 visibility 延迟收起（.2/.22/.25s，挂 grid 动画收尾）在
+     grid 停摆后成孤儿延迟——收起瞬间内容仍可见可聚焦 0.2s+。镜像 :not(.open) 形保特异度
+     （:not 参数计数；裸后代形会被收起态规则压住），同特异度 + 块内源码在后 → 真正撤延迟，
+     收起即隐。展开态规则（transition: visibility 0s 0s）本即时，不动 */
+  .fold:not(.open) > div, .tool-detail:not(.open) .tool-detail-inner,
+  .thinking-detail:not(.open) .thinking-text, .fm-card:not(.open) .fm-body-inner { transition: none; }
 }
 
 /* ============ 记忆控制台 v5 L0 主态（定稿 design/console-v5-prune.html 场景 01 · 面板 · 纯审查队列）
@@ -1620,7 +1691,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 动效降级（本分节新增件：面入场 / 抽屉滑入 / backdrop / 整节退场） */
 @media (prefers-reduced-motion: reduce) {
   .rel-side .rel-face.anim { animation: none; }
-  .rel-sheet, .rel-sheet-backdrop { transition: none; }
+  .rel-sheet, .rel-sheet.open, .rel-sheet-backdrop { transition: none; } /* 两态都杀：.open 自带合并 transition 特异度高于基础态，只杀基础态则 RM 下滑入 + visibility 孤儿延迟复活（同 .panel-shell/.console-shell） */
   .rel-sheet-handle::before { transition: none; }
   .c-sec.leaving { transition: none; }
 }

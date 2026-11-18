@@ -21,19 +21,20 @@
 const { ref, computed, watch, inject, nextTick } = Vue
 import { api } from '../api.js'
 import { renderMarkdown, postProcessPreview } from '../utils/markdown.js'
+import { fmtHM, fmtMD } from '../utils/format.js'
 
 /* 类型 chip 图标（单色线条，stroke: currentColor；未知/存量退役类型回退时钟） */
 export const TYPE_ICONS = {
-  entity_index: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
-  relatedness: '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>',
-  summary: '<svg viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>',
-  errata: '<svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
-  reminder: '<svg viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>'
+  entity_index: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
+  relatedness: '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.5 12h9"/></svg>',
+  summary: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M8 5h11M8 12h11M8 19h11"/><path d="M3.5 5l1 1 2-2M3.5 12l1 1 2-2M3.5 19l1 1 2-2"/></svg>',
+  errata: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>',
+  reminder: '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 9a6 6 0 1 1 12 0c0 5 2 6 2 6H4s2-1 2-6"/><path d="M10 19a2 2 0 0 0 4 0"/></svg>'
 }
-export const TYPE_ICON_DEFAULT = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
+export const TYPE_ICON_DEFAULT = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'
 
 /* 折叠节 chevron（设计稿 .d-sec summary 口径：展开旋 90°） */
-const CAR = '<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>'
+const CAR = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>'
 
 export const MemoryConsole = {
   name: 'MemoryConsole',
@@ -120,14 +121,17 @@ export const MemoryConsole = {
     )
     const reports = computed(() => state.memoryReports || [])
     const reportsLen = computed(() => reports.value.length)
+    // 本地日键 = 本地零点毫秒（日历日分组/比较机制，非显示格式化；显示串一律走 format.js）
+    const dayStart = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x.getTime() }
+    const prevDay = d => { const x = new Date(d); x.setDate(x.getDate() - 1); return x }
     // 报告单行（仅当有报告时渲染）：alias chip + title（无 # 标题回退 alias）+ 日期相对标签（今天/昨天/MM-DD）
     const reportCards = computed(() => {
-      const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-      const shortOf = k => k === dayKey(now) ? '今天' : k === dayKey(yest) ? '昨天' : k.slice(5)
+      const t0 = dayStart(new Date()), y0 = dayStart(prevDay(new Date()))
+      const shortOf = d => { const k = dayStart(d); return k === t0 ? '今天' : k === y0 ? '昨天' : fmtMD(d.getTime() / 1000) }
       return reports.value.map(r => {
         const m = String(r.date || '').match(/(\d{4})-(\d{2})-(\d{2})/)
         const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
-        return { ...r, dateShort: d ? shortOf(dayKey(d)) : (r.date || '—'), fresh: reportFreshSet.value.has(r.relpath) }
+        return { ...r, dateShort: d ? shortOf(d) : (r.date || '—'), fresh: reportFreshSet.value.has(r.relpath) }
       })
     })
 
@@ -170,8 +174,6 @@ export const MemoryConsole = {
     //     时间轴分组 今天 / 昨天 / MM-DD，无时间数据归「更早」；倒序取前 FEED_CAP 条，
     //     尾注 f-more 计数指向监控页「采纳提案 / 异常清单」）───
     const FEED_CAP = 8
-    const pad2 = n => String(n).padStart(2, '0')
-    const dayKey = d => d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
     /* 卡时间 = 具体时刻（HH:mm 位）：created 字段只有日期，
        具体 ts 取自 trail 行（path 须为提案文件本身，滤掉共享行）或 merged_at；统一返回毫秒 */
     const trailTs = (p, rel, pick) => {
@@ -179,7 +181,6 @@ export const MemoryConsole = {
       if (!ts.length) return null
       return pick === 'last' ? Math.max(...ts) : Math.min(...ts)
     }
-    const fmtHM = ts => { const d = new Date(ts); return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) }
     const feedGroups = computed(() => {
       const st = state.memoryStatus
       const awaiting = ((st && st.proposals && st.proposals.awaiting_review) || []).map(it => {
@@ -209,21 +210,20 @@ export const MemoryConsole = {
           kind: 'adopted', key: 'd-' + p.relpath, relpath: p.relpath, type: p.type,
           title: p.title, status: 'adopted', created: p.created || null, ts: trailTs(p, p.relpath, 'first')
         }))
-      /* 日期 → 组 key（t / y / MM-DD / x = 无日期数据「更早」）+ 标签 */
-      const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-      const keyOf = d => d ? (dayKey(d) === dayKey(now) ? 't' : dayKey(d) === dayKey(yest) ? 'y' : dayKey(d)) : 'x'
-      const labelOf = k => k === 't' ? '今天 · ' + pad2(now.getMonth() + 1) + '-' + pad2(now.getDate())
-        : k === 'y' ? '昨天 · ' + pad2(yest.getMonth() + 1) + '-' + pad2(yest.getDate())
-        : k === 'x' ? '更早' : k.slice(5)
+      /* 日期 → 组 key（'t' / 'y' / 本地零点毫秒串 / 'x' = 无日期数据「更早」）+ 标签。
+         日历日比较 = 本地零点毫秒；显示串（MM-DD）走 format.js。 */
+      const today = new Date(), yest = prevDay(today)
+      const t0 = dayStart(today), y0 = dayStart(yest)
+      const keyOf = d => d ? (dayStart(d) === t0 ? 't' : dayStart(d) === y0 ? 'y' : String(dayStart(d))) : 'x'
+      const labelOf = k => k === 't' ? '今天 · ' + fmtMD(t0 / 1000)
+        : k === 'y' ? '昨天 · ' + fmtMD(y0 / 1000)
+        : k === 'x' ? '更早' : fmtMD(Number(k) / 1000)
       const parseDay = s => { const m = String(s || '').match(/\d{4}-\d{2}-\d{2}/); return m ? new Date(Number(m[0].slice(0, 4)), Number(m[0].slice(5, 7)) - 1, Number(m[0].slice(8, 10))) : null }
       const dOf = it => it.ts ? new Date(it.ts) : parseDay(it.created)   // 分组键：具体时刻的日期，无时刻回退 created 日期
       /* 组内序 = 设计稿示例（待审卡 → 在途卡 → 终态卡）；awaiting 最旧在前（v3 审查队列口径）、
          终态倒序；组间按日期倒序（今天 > 昨天 > 旧日期 > 更早） */
       const sortVal = x => x.kind === 'awaiting' ? 0 : x.kind === 'adopted' ? 1 : 2
-      const rank = k => k === 'x' ? 0
-        : k === 't' ? Number(dayKey(now).replace(/-/g, ''))
-        : k === 'y' ? Number(dayKey(yest).replace(/-/g, ''))
-        : Number(k.replace(/-/g, ''))
+      const rank = k => k === 'x' ? 0 : k === 't' ? t0 : k === 'y' ? y0 : Number(k)
       const groups = []
       const gmap = new Map()
       const push = (k, item) => {
@@ -242,9 +242,9 @@ export const MemoryConsole = {
       }
       // f-time（设计稿 HH:mm 位）：具体时刻（提交点 / 终态转换点 / merged_at）；无时刻回退创建日相对标签
       for (const g of groups) for (const it of g.items) {
-        if (it.ts) { it.time = fmtHM(it.ts); continue }
+        if (it.ts) { it.time = fmtHM(it.ts / 1000); continue }
         const d = parseDay(it.created)
-        it.time = d ? keyOf(d) === 't' ? '今天' : keyOf(d) === 'y' ? '昨天' : pad2(d.getMonth() + 1) + '-' + pad2(d.getDate())
+        it.time = d ? keyOf(d) === 't' ? '今天' : keyOf(d) === 'y' ? '昨天' : fmtMD(d.getTime() / 1000)
           : (it.kind === 'awaiting' ? (formatAge(it.age) || '—') : '—')
       }
       // 倒序截断 FEED_CAP：超出部分并入 f-more 计数（指向监控页 ⑥采纳提案 / ②异常清单）
@@ -619,16 +619,16 @@ export const MemoryConsole = {
     <!-- L0 主态：纯状态行 + 流水（:key 变化 → 面入场动画重放：opacity + 8px 位移） -->
     <div v-if="!detail && !report" :key="'queue'" data-face="queue" class="c-face anim">
       <div class="p-head">
-        <span class="picon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+        <span class="picon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
         <span class="ptitle">记忆</span>
         <span class="pcount" v-if="l0.awaiting + l0.adopted + l0.failed > 0">{{ l0.awaiting + l0.adopted + l0.failed }}</span>
-        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <!-- L0 行动数 = 纯状态行（整行不可点）；行尾「后台 →」= 唯一 L0→L1 入口；
            failed > 0 → 失败数告警红 + 入口小红点（0 时不渲染 dot） -->
       <div class="l0bar">
         <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span v-if="degraded > 0" class="l0-deg" :class="{ fresh: degradedFresh }" title="运行期内快照捕捉降级计数（进程内，重启归零）">{{ degraded }} 快照降级</span></span>
-        <button class="l0-go" type="button" title="后台监控页 L1（面板收起，监控页接管主区域）" @click="openMonitor"><span v-if="l0.failed > 0" class="dot" aria-hidden="true"></span>后台<svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+        <button class="l0-go" type="button" title="后台监控页 L1（面板收起，监控页接管主区域）" @click="openMonitor"><span v-if="l0.failed > 0" class="dot" aria-hidden="true"></span>后台<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
       <div class="c-scroll">
         <div class="feed">
@@ -665,7 +665,7 @@ export const MemoryConsole = {
             <div v-if="feedGroups.more > 0" class="f-more">{{ feedGroups.more }} 条更老 —— 见「后台 →」· 采纳提案</div>
           </template>
           <div v-else class="q-empty">
-            <div class="ring"><svg viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/><path d="M4 13h5l1.5 2.5h3L15 13h5"/></svg></div>
+            <div class="ring"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 13l3-8h10l3 8v6H4z"/><path d="M4 13h5l1.5 2.5h3L15 13h5"/></svg></div>
             <div class="t1">无待审提案</div>
             <div class="t2">系统运行正常 · 后台活动见「后台 →」</div>
           </div>
@@ -676,7 +676,7 @@ export const MemoryConsole = {
         <div v-if="reportsLen" class="rpt-sec">
           <div class="c-sec-h rpt-h"><span>报告</span><span class="cnt" :class="{ hot: reportsLen > 0 }">{{ reportsLen }}</span><span class="rpt-ln">只读 · 建议不执行</span></div>
           <button v-for="r in reportCards" :key="r.relpath" class="f-card rpt-card" :class="{ fresh: r.fresh }" type="button" :title="r.relpath" @click="pickReport(r)">
-            <div class="f-row1"><span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ r.alias }}</span><span class="f-title">{{ r.title || r.alias }}</span><span class="f-date">{{ r.dateShort }}</span></div>
+            <div class="f-row1"><span class="tchip"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ r.alias }}</span><span class="f-title">{{ r.title || r.alias }}</span><span class="f-date">{{ r.dateShort }}</span></div>
           </button>
         </div>
       </div>
@@ -686,9 +686,9 @@ export const MemoryConsole = {
          回退出口 = 返回队列；深链 state.memoryReport 直达，mp-deep 黄铜下划线 sweep 同详情面口径） -->
     <div v-else-if="report" :key="'report-' + report" data-face="report" class="c-face anim">
       <div class="p-head">
-        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="backReport"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="backReport"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">报告</span>
-        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="c-scroll" @click="onReportCopyClick">
         <div v-if="reportContent === null && !reportError" class="q-empty" style="padding-top: 40px">
@@ -698,7 +698,7 @@ export const MemoryConsole = {
         <template v-else>
           <div class="d-head">
             <div class="d-chips">
-              <span class="tchip"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ (reportItem && reportItem.alias) || '—' }}</span>
+              <span class="tchip"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12h6M9 16h6"/></svg>{{ (reportItem && reportItem.alias) || '—' }}</span>
               <span class="spill"><span style="font-size:9.5px">只读</span></span>
             </div>
             <div class="d-title">{{ (reportItem && (reportItem.title || reportItem.alias)) || '报告' }}</div>
@@ -717,10 +717,10 @@ export const MemoryConsole = {
     <!-- 详情面：五段材料按判断顺序 + 粘性动作行 + 确认之后子视图 -->
     <div v-else-if="detail" :key="'detail-' + detail" data-face="detail" class="c-face anim">
       <div class="p-head">
-        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <button class="ibtn" title="返回队列" aria-label="返回队列" @click="back"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">终审</span>
         <span class="pcount" v-if="queueIndex > 0">{{ queueIndex }}/{{ queueCount }}</span>
-        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
+        <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
       <div class="c-scroll">
         <div v-if="!detailItem" class="q-empty" style="padding-top: 40px">
@@ -761,9 +761,9 @@ export const MemoryConsole = {
             <summary><span class="car" v-html="CAR"></span>来源<span class="ln">{{ detailItem.source_refs.length }}</span></summary>
             <div class="body">
               <div class="src-list">
-                <a v-for="r in detailItem.source_refs" :key="r" class="src-link" :title="r" href="javascript:void(0)" @click="openSrc(r)">
-                  <svg viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>{{ r }}
-                </a>
+                <button v-for="r in detailItem.source_refs" :key="r" type="button" class="src-link" :title="r" @click="openSrc(r)">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14 5h5v5M19 5l-8 8"/><path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>{{ r }}
+                </button>
               </div>
             </div>
           </details>
@@ -810,13 +810,13 @@ export const MemoryConsole = {
 
           <!-- 操作失败提示（400 等；服务端文案直接展示） -->
           <div v-if="actionError" class="m-err" role="alert">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
             <span>{{ actionError }}</span>
           </div>
 
           <!-- 确认之后：状态翻转 + 执行器落地 + change_log 轨迹 -->
           <div v-if="doneView" class="done">
-            <div class="done-k"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>{{ doneLabel }}</div>
+            <div class="done-k"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9.5"/></svg>{{ doneLabel }}</div>
             <div v-if="landedFile && (pillStatus || detailItem.status) === 'merged'" class="done-file" :title="landedFile">{{ landedFile }}</div>
             <div class="done-meta">{{ doneMeta }}</div>
             <div class="log-trail">
@@ -829,14 +829,14 @@ export const MemoryConsole = {
           <!-- 拒绝理由（必填；输入非空前提交禁用） -->
           <div v-if="rsnOpen && !doneView" class="rsn">
             <div class="rsn-hint"><span class="req">必填</span>拒绝理由将写入 reject_reason，是信任升级的数据源</div>
-            <textarea v-model="rejectReason" class="rsn-ta" placeholder="例：两篇文档近期已人工合并过，此提案过期"></textarea>
+            <textarea v-model="rejectReason" class="rsn-ta" aria-label="拒绝理由" placeholder="例：两篇文档近期已人工合并过，此提案过期"></textarea>
             <button class="rsn-sub" :class="{ ok: reasonOk }" :disabled="!reasonOk || acting" @click="reject">确认驳回</button>
           </div>
 
           <!-- 动作行（sticky 底） -->
           <div v-if="canAct" class="act-row">
             <button class="btn btn-adopt" :disabled="acting" @click="adopt">
-              <svg viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>{{ acting ? '提交中…' : '审查通过 · 采纳' }}
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg>{{ acting ? '提交中…' : '审查通过 · 采纳' }}
             </button>
             <button class="btn btn-rej" :disabled="acting" @click="toggleRsn">驳回</button>
           </div>

@@ -34,7 +34,12 @@ export const AIChatPanel = {
     const toolNames = toolShortNames
     const appState = inject('state', null)   // 软链解析：files 供 renderer.link 用（baseDir 恒 null，AI 回复无「当前文档目录」语义）
 
-    const messages = ref([])       // [{ role, blocks: [], streaming, rendered }]
+    // 消息稳定键 nonce（§4.1）：客户端单调递增，addMsg 打戳、永不重估——
+    // 服务端 message_id 仅终帧 done 携带（流式行无 id），role+内容前缀在空流起始互撞且
+    // done 时键变 → 整行 remount。列表变异点全集 = push（addMsg）+ 整体 reset（sessionId watch），
+    // 无 splice/重排 → setup 级计数即可证唯一（列表与计数器同生命周期重建，无碰撞窗口）。
+    let msgSeq = 0
+    const messages = ref([])       // [{ id, role, blocks: [], streaming, rendered }]
     const inputText = ref('')
     const status = ref('ready')    // 'ready' | 'thinking'
     const aiMode = ref('当前文档')
@@ -130,7 +135,7 @@ export const AIChatPanel = {
       // blocksLen 是 blocks.length 的镜像追踪点：块增长（首轮文本块/多轮工具块）写入一次 → 1 次 re-render，
       // 让流式分支 v-if 可追踪到新块（原始数组 .length 读不响应式）；token 级写入永不触碰它
       // uiTick：块内展开/折叠（block.expanded 是原始对象属性，变更本身不可追踪）的 re-render 触发器
-      const msg = shallowReactive({ role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
+      const msg = shallowReactive({ id: ++msgSeq, role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
       if (text) { msg.blocks.push({ type: 'text', text }); msg.blocksLen = 1 }
       messages.value.push(msg)
       scrollToBottom(true) // 新消息入场强制贴底（用户刚发送/回复起点，期望可见）
@@ -511,13 +516,13 @@ export const AIChatPanel = {
            token 条整行并入头部底缘 2px hairline（恒在，宽度=用量，数字进 tooltip） -->
       <div class="ai-head">
         <div class="ai-brand">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>
+          <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>
         </div>
         <div class="ai-id">
           <div class="ai-line1">
             <span class="ai-title">AI 助手</span>
             <span v-if="docPath" class="ai-doc" :title="docPath">
-              <svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+              <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
               <span class="ai-doc-path">{{ docPath }}</span>
             </span>
           </div>
@@ -528,12 +533,12 @@ export const AIChatPanel = {
         </div>
         <div class="ai-acts">
           <button id="btn-new-session" class="ai-ibtn" title="新会话" aria-label="新会话" @click="newSession">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M12 7v6"/><path d="M9 10h6"/></svg>
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M12 7v6"/><path d="M9 10h6"/></svg>
           </button>
           <button id="auto-approve-toggle" class="ai-ibtn" role="switch" :aria-checked="autoApprove"
             :class="{ 'is-on': autoApprove }"
             title="自动批准：开启后本会话写操作不再逐条确认" aria-label="自动批准" @click="toggleAutoApprove">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
           </button>
           <button class="ai-ibtn" @click="$emit('close')" aria-label="关闭">
             <span v-html="ICONS_LOCAL.x"></span>
@@ -548,7 +553,9 @@ export const AIChatPanel = {
 
       <!-- 消息列表 -->
       <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4" role="log">
-        <div v-for="(msg, mi) in messages" :key="mi"
+        <!-- :key="msg.id"（§4.1）：客户端单调 nonce（addMsg 打戳），流式行 remount 炸反馈行/滚动锚的根治。
+             blocks 内层 :key="bi" 不动：blocks 为消息内 append-only（push + blocksLen 镜像），无重排——YAGNI -->
+        <div v-for="msg in messages" :key="msg.id"
           class="msg-in flex" :class="{ 'justify-end': msg.role === 'user' }">
           <!-- 用户消息 -->
           <div v-if="msg.role === 'user'"
@@ -574,7 +581,7 @@ export const AIChatPanel = {
               <!-- 工具块 -->
               <div v-else-if="block.type === 'tool'" class="tool-entry">
                 <div class="tool-line" :data-tool-id="block.id" @click="toggleBlock(msg, block)">
-                  <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24">
                     <path d="M9 5l7 7-7 7"/>
                   </svg>
                   <span class="ts-icon" v-html="toolNames[block.name] ? toolNames[block.name].icon : ''"></span>
@@ -617,8 +624,8 @@ export const AIChatPanel = {
               <!-- 思考块：流式中恒展开实时显示；该轮首个 content/tool 块到达时自动收起；done 后保留折叠态、可点击展开 -->
               <div v-else-if="block.type === 'thinking'" class="thinking-entry">
                 <div class="thinking-line" @click="toggleBlock(msg, block)">
-                  <svg class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
-                  <span class="ts-icon"><svg class="icon icon-xs" viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
+                  <svg aria-hidden="true" class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
+                  <span class="ts-icon"><svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg></span>
                   <span class="thinking-label">思考</span>
                   <span v-if="msg.streaming && bi === msg.blocksLen - 1" class="thinking-dots"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span>
                   <span v-else class="thinking-len">{{ block.text.length }} 字</span>
@@ -639,9 +646,9 @@ export const AIChatPanel = {
               <span v-if="msg.citations && msg.citations.length" class="cite-summary"
                 :class="{ 'cite-warn': citationWarn(msg) }">{{ citationSummary(msg) }}</span>
               <button class="fb-btn" :class="{ 'is-on': msg.verdict === 'useful' }" title="有用" aria-label="有用"
-                :aria-pressed="msg.verdict === 'useful'" @click="toggleFeedback(msg, 'useful')"><svg class="icon" viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
+                :aria-pressed="msg.verdict === 'useful'" @click="toggleFeedback(msg, 'useful')"><svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></button>
               <button class="fb-btn" :class="{ 'is-on': msg.verdict === 'not_useful' }" title="没用" aria-label="没用"
-                :aria-pressed="msg.verdict === 'not_useful'" @click="toggleFeedback(msg, 'not_useful')"><svg class="icon" viewBox="0 0 24 24"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>
+                :aria-pressed="msg.verdict === 'not_useful'" @click="toggleFeedback(msg, 'not_useful')"><svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/></svg></button>
             </div>
           </div>
         </div>
@@ -652,15 +659,15 @@ export const AIChatPanel = {
         <div class="flex items-end gap-2 border border-border rounded-xl p-3">
           <textarea id="ai-input" ref="inputEl" v-model="inputText" rows="1"
             class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
-            placeholder="输入消息，Enter 发送..."
+            placeholder="输入消息，Enter 发送…"
             @keydown="onKeydown"></textarea>
           <button id="ai-send" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             :class="{ hidden: status === 'thinking' }" @click="sendChat" aria-label="发送">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
           </button>
           <button id="ai-stop" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
             :class="{ hidden: status !== 'thinking' }" @click="stopChat" aria-label="中止">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
+            <svg aria-hidden="true" class="icon icon-sm" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1.5"/></svg>
           </button>
         </div>
       </div>

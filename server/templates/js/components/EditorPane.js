@@ -8,7 +8,8 @@ export const EditorPane = {
   name: 'EditorPane',
   props: {
     content: { type: String, default: '' },
-    mode: { type: String, default: 'preview' } // 'edit' | 'preview'
+    mode: { type: String, default: 'preview' }, // 'edit' | 'preview'
+    docMissing: { type: Boolean, default: false }  // 404 幽灵文档（目检轮 A）：textarea 禁用双保险
   },
   emits: ['input', 'save', 'download'],
   setup(props, { emit }) {
@@ -201,6 +202,7 @@ export const EditorPane = {
 
     // 块级落位（§4.1 流程 1:1）：切源码模式 → 行号→字符偏移 → setSelectionRange → 滚动至 L1 → 焦点
     function landOn(l1, l2) {
+      if (state?.docMissing) return  // 404 直写 previewMode 旁路同锁（审阅轮；单向 setMode 管不住此路）
       if (l1 > l2) [l1, l2] = [l2, l1]
       state.previewMode = false // ② 切源码模式（既有整文档 textarea）
       nextTick(() => {
@@ -225,6 +227,7 @@ export const EditorPane = {
     // 仅处理顶层表格：映射写在 renderer.table 的 div.overflow-x-auto 包装上（<table> 是其子，不直接带 data-src-line）。
     // 嵌套表格（列表/引用内）包装不带 data-src-line → 父块整体覆盖落位（§5.1 v1 不单独处理）→ 此处静默。
     function landCell(td) {
+      if (state?.docMissing) return  // 同 landOn：404 旁路守卫（审阅轮）
       const table = td.closest('table'); if (!table) return // §2.3：无表格 → 静默
       const wrap = table.parentElement
       if (!wrap || wrap.dataset.srcLine == null) return // 无映射 / 嵌套表格 → 静默
@@ -452,8 +455,9 @@ export const EditorPane = {
     <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
       <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
+        :disabled="docMissing"
         class="w-full flex-1 border-0 bg-transparent resize-none focus:outline-none"
-        placeholder="从左侧选择一个文档..."
+        placeholder="从左侧选择一个文档…"
         @input="onInput"></textarea>
       <div id="preview" ref="previewEl" v-show="mode === 'preview'"
         class="w-full flex-1" @click="onPreviewClick" @pointerdown="onPreviewPointerDown" @pointerup="onPreviewPointerUp"

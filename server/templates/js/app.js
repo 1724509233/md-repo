@@ -3,6 +3,7 @@ const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
 import { showToast } from './utils/toast.js'
+import { guardSwitch, createAttemptBox } from './utils/docNav.js'
 import { docHash, parseHash } from './utils/vaultLinks.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
@@ -37,6 +38,7 @@ const state = reactive({
   tocOpen: false,       // 本文目录浮层（P4-3）
   conflict: null,       // { toolName, path } | null
   docContent: '',        // 当前文档内容
+  docMissing: false,     // 当前文档加载失败（404，目检轮 A）：锁编辑/保存/下载——保存 = PUT 重建幽灵文档
   notifOpen: false,
   notifications: [],
   unreadCount: 0,
@@ -104,13 +106,23 @@ async function loadDocs() {
   return !!data
 }
 
+// openDoc 续接令牌（spec §5.5）：模块级单盒，每次 openDoc 进入 bump；
+// 守卫 retry 捕获发起时 token，过期即 no-op（防挂起的「重试」复活旧切换目标）
+const navAttempt = createAttemptBox()
+
 async function openDoc(path, heading, fromLink) {
   // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
   if (state.monitoring) exitMonitorPage()
-  // 自动保存未保存的编辑
-  if (state.dirty && state.currentPath) {
-    await saveDoc()
-  }
+  // 丢保存守卫（P2 簇⑤，spec §5）：dirty 时先存，存败 → 中止切换（三态原样 +
+  // hash 回写当前文档），toast「重试」在 token 未过期时自动续接本次切换（含 heading/fromLink）；
+  // 其间任何新 openDoc 都 bump token 作废待发续接（决策核在 docNav.js，node 可直测）
+  const captured = navAttempt.bump()
+  if (await guardSwitch({
+    dirty: state.dirty, currentPath: state.currentPath, saveDoc, captured, attemptBox: navAttempt,
+    resume: () => openDoc(path, heading, fromLink),
+    replaceHash: p => history.replaceState(null, '', docHash(p, { edit: !state.previewMode })),
+    toast: showToast, message: '保存失败，未离开当前文档',
+  }) === 'held') return 'held'
   state.currentPath = path
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -121,8 +133,9 @@ async function openDoc(path, heading, fromLink) {
   try {
     text = await api.getDoc(path)
   } catch (e) {
+    state.docMissing = true  // 404 → 锁编辑/保存/下载（目检轮 A；「加载失败」文案只读展示）
     state.docContent = '加载失败: ' + e.message
-    return
+    return 'proceed'  // 导航未被守卫中止（加载失败是另一回事）——hashchange 侧据此照落 previewMode
   }
 
   // page-turn 动画（桌面端淡出→替换→淡入）
@@ -131,6 +144,7 @@ async function openDoc(path, heading, fromLink) {
   }
 
   state.docContent = text
+  state.docMissing = false  // 成功加载复位（目检轮 A；外部删除分支 :222 一带维持现行为不动）
 
   // 移动端：选中文件后关闭文件面板 overlay（spec §3.5）
   if (window.innerWidth < 1024) {
@@ -167,16 +181,28 @@ async function openDoc(path, heading, fromLink) {
     const pv = editorPaneRef.value ? editorPaneRef.value.previewEl : null
     if (pv) pv.scrollIntoView({ behavior: 'auto', block: 'start' })
   }
+  return 'proceed'
 }
 
 async function saveDoc() {
-  if (!state.currentPath) return
+  // spec §5.1：返回成败布尔，**自身不再 toast**——提示策略归调用方
+  // （切换守卫 = docNav.guardSwitch 挂「未离开当前文档」+重试；手动保存 = saveWithRetry）
+  if (!state.currentPath) return false
   try {
     await api.saveDoc(state.currentPath, state.docContent)
     state.dirty = false
+    return true
   } catch (e) {
-    showToast('保存失败: ' + e.message)
+    return false
   }
+}
+
+// 手动保存（spec §5.9）：失败挂「保存失败，编辑内容已保留」+ 重试（无续接目标——
+// 本就没有被中止的切换）；再败由 saveWithRetry 自递归重挂同按钮
+async function saveWithRetry() {
+  if (!state.currentPath || state.docMissing) return  // M-1 未开文档直退 + A：404 文档保存=PUT 重建幽灵
+  if (await saveDoc()) return
+  showToast('保存失败，编辑内容已保留', 'error', { label: '重试', onClick: saveWithRetry })
 }
 
 // 当前文档受变更影响时的状态同步（pollChanges 与 manage 共用）
@@ -212,7 +238,7 @@ async function _applyChangeToCurrentDoc(changes) {
 }
 
 function downloadDoc() {
-  if (!state.currentPath) return
+  if (!state.currentPath || state.docMissing) return  // 404 文档下载的会是「加载失败」文案（目检轮 A）
   const blob = new Blob([state.docContent], { type: 'text/markdown' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
@@ -222,6 +248,8 @@ function downloadDoc() {
 }
 
 function setMode(mode) {
+  // 单向锁（审阅轮）：404 只锁进编辑（保存=PUT 重建幽灵）、放行回预览（双向锁+旁路=模式死胡同）
+  if (mode === 'edit' && state.docMissing) return
   state.previewMode = mode === 'preview'
 }
 
@@ -683,8 +711,13 @@ export function createApp() {
       window.addEventListener('hashchange', () => {
         const h = parseHash(location.hash)
         if (!h) return
-        if (h.path !== state.currentPath) openDoc(h.path)
-        if (!state.monitoring) state.previewMode = h.mode !== 'edit'
+        if (h.path !== state.currentPath) {
+          // I-3：守卫中止（held）时文档没切，previewMode 绝不能跟随被中止目标的 hash 落位——
+          // 等 openDoc 出结果再决定（mode-only 同路径变更不经此路，保持下方同步应用）
+          openDoc(h.path).then(r => { if (r !== 'held') state.previewMode = h.mode !== 'edit' })
+        } else if (!state.monitoring) {
+          state.previewMode = h.mode !== 'edit'
+        }
       })
 
       onMounted(() => {
@@ -716,7 +749,9 @@ export function createApp() {
           else if (state.relOpen) state.relOpen = false
           else if (state.tocOpen) toggleToc()
           else if (state.aiOpen) toggleAI(false)
-          else if (state.memoryOpen) state.memoryOpen = false
+          // 关台同 @close 集合（目检轮 B）：只清 open 会让详情面/报告（含 rsn-ta）
+          // 保持挂载——面板关了残面犹在，下次开台直落旧详情
+          else if (state.memoryOpen) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null }
           else if (state.monitoring) exitMonitorPage()
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
@@ -738,22 +773,37 @@ export function createApp() {
         // MemoryConsole 监控页不接跳转。活链带 data-vault-path（死链/歧义无该属性 → 选择器不命中，本就不可点）。
         // 点击落账（spec 2026-11-13 §4.4）：openDoc 之前发出、不 await（fire-and-forget，恒 204）；
         // filetree 点击无 md-softlink 不经过此处（D5 不落账）；未遂点击（openDoc 404）不补记（D8）。
+        // 修饰键（P2⑥ / I-1，见函数体内注）：alt 不落账先放行；meta/ctrl 先落账后自开新标签；均不进站内切换。
         document.addEventListener('click', (e) => {
           const a = e.target && e.target.closest ? e.target.closest('a.md-softlink[data-vault-path]') : null
           if (!a) return
           const inAi = !!a.closest('#ai-messages')
           if (!inAi && !a.closest('#preview')) return
-          e.preventDefault()
+          const path = a.getAttribute('data-vault-path')
+          // I-1 收口（终审 2026-11-18）：alt=下载语义，对 #doc/ 片段链即下载当前页——非访问意图，
+          // 不落账直接放行（spec D8「点击=打开成功才落」字面口径；meta/ctrl 新标签仍是真实访问，照常落账）
+          if (e.altKey) return
           if (inAi) {
             api.recallClick({
-              path: a.getAttribute('data-vault-path'),
+              path,
               via: 'ai',
               query: aiChatRef.value ? aiChatRef.value.lastSearchQuery() : '',
               session_id: state.sessionId
             })
           } else {
-            api.recallClick({ path: a.getAttribute('data-vault-path'), via: 'preview' })
+            api.recallClick({ path, via: 'preview' })
           }
+          // 修饰键（P2⑥ + 目检轮 C）：meta/ctrl 先落账（真实访问意图），再**自开新标签**——
+          // 同页 fragment 链接（#doc/…）修饰键点击 Chrome 并不开新标签，「语义交回浏览器」不成立；
+          // preventDefault + window.open('_blank','noopener') 跨浏览器一致（用户手势内，弹窗拦截不咬）
+          if (e.metaKey || e.ctrlKey) {
+            e.preventDefault()
+            const href = a.getAttribute('href')
+            if (href) window.open(href, '_blank', 'noopener')
+            return
+          }
+          e.preventDefault()
+          // 调用式保持原样（bug 83e7241f 回归钉逐字匹配 fromLink=true 实参）
           openDoc(a.getAttribute('data-vault-path'), a.getAttribute('data-vault-anchor'), true)
         })
 
@@ -833,21 +883,30 @@ export function createApp() {
         }).catch(() => { })
       }
 
+      // 跳至主要内容（skip link 程序化聚焦）：不走 hash 导航，防 hash 改写丢当前文档深链；
+      // preventScroll 红线：main 常驻视口，不需也绝不允许程序化滚动
+      function skipToMain() {
+        const el = document.getElementById('main-content')
+        if (el) el.focus({ preventScroll: true })
+      }
+
       return {
         state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
-        loadDocs, openDoc, saveDoc, downloadDoc, setMode,
+        loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
-        onEditorInput, acceptConflict,
+        onEditorInput, acceptConflict, skipToMain,
         tocItems, toggleToc, onTocClickItem
       }
     },
     template: `
       <div class="flex h-full">
+        <!-- 键盘直达主区（P2②）：屏外常驻，Tab 首站显形（样式 style.css .skip-link） -->
+        <a class="skip-link" href="#main-content" @click.prevent="skipToMain">跳至主要内容</a>
         <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
         <aside class="sidebar-shell flex shrink-0">
           <!-- rail（桌面 64px / 移动 48px） -->
@@ -868,7 +927,7 @@ export function createApp() {
               class="rbtn" :class="{ on: state.memoryOpen }"
               :title="'记忆控制台' + (badgeParts.total > 0 ? ' · 待审 ' + badgeParts.awaiting + ' · 失败 ' + badgeParts.failed : '')"
               aria-label="记忆控制台页" @click="onMemoryRailClick">
-              <span class="ricon"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
+              <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
               <span class="rlabel">记忆</span>
               <span v-if="badgeParts.total > 0" class="badge">{{ badgeParts.total > 99 ? '99+' : badgeParts.total }}</span>
             </button>
@@ -883,7 +942,7 @@ export function createApp() {
                 <span class="pacts">
                   <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
                     @click="fileTreeRef && fileTreeRef.collapseAll()">
-                    <svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
                   </button>
                 </span>
               </div>
@@ -916,17 +975,17 @@ export function createApp() {
 
         <!-- 移动端（≤860px）记忆控制台 overlay backdrop（≥861px 由 style.css ID 规则隐藏） -->
         <div id="memory-console-backdrop"
-          class="fixed inset-0 bg-black/30 z-40"
+          class="fixed inset-0 bg-black/30 z-40" aria-hidden="true"
           :class="{ hidden: !state.memoryOpen }"
           @click="state.memoryOpen = false"></div>
 
         <!-- 移动端文件面板 overlay backdrop（<1024px，spec §3.5） -->
-        <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+        <div class="file-overlay-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.filePanelOpen }"
           @click="state.filePanelOpen = false"></div>
 
         <!-- 移动端搜索抽屉 backdrop（<1024px，spec §3.5） -->
-        <div id="search-drawer-backdrop" class="search-drawer-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden"
+        <div id="search-drawer-backdrop" class="search-drawer-backdrop fixed inset-0 bg-black/30 z-30 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.searchDrawerOpen }"
           @click="state.searchDrawerOpen = false"></div>
 
@@ -947,13 +1006,14 @@ export function createApp() {
         <!-- Main area -->
         <div class="flex-1 flex overflow-hidden relative"
           :class="{ 'ai-open': state.aiOpen }">
-          <main class="relative flex-1 flex flex-col overflow-hidden"
+          <main id="main-content" tabindex="-1" class="relative flex-1 flex flex-col overflow-hidden"
             :class="{ 'ai-open': state.aiOpen }">
             <TopBar :current-path="state.currentPath" :mode="state.previewMode ? 'preview' : 'edit'"
+              :doc-missing="state.docMissing"
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen" :ai-open="state.aiOpen"
-              @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
+              @set-mode="setMode" @save="saveWithRetry" @download="downloadDoc"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"
               @open-doc-face="openDocFace"
@@ -971,7 +1031,8 @@ export function createApp() {
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
                   @accept="acceptConflict" @dismiss="state.conflict = null" />
                 <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
-                  @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
+                  :doc-missing="state.docMissing"
+                  @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
               </div>
               <aside class="rel-side" :class="{ open: state.relOpen }">
                 <DocRelated v-if="state.relOpen" :path="state.currentPath"
@@ -1014,7 +1075,7 @@ export function createApp() {
           <button id="ai-btn" class="hidden lg:flex absolute top-1/2 -translate-y-1/2 items-center justify-center z-40"
             :class="{ 'ai-open': state.aiOpen }"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
+            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
             </svg>
@@ -1023,7 +1084,7 @@ export function createApp() {
           <!-- AI 面板切换按钮（移动端：圆形，固定右下角） -->
           <button id="ai-btn-mobile" class="lg:hidden fixed right-4 flex items-center justify-center z-40"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
+            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
             </svg>
@@ -1035,7 +1096,7 @@ export function createApp() {
           <!-- 关联 bottom sheet（spec §6.4 候选① 移动 ≤860px：80vh 底部抽屉，.search-drawer 规格 1:1；
                四路关闭 = 关闭钮 / backdrop / 手柄点击 / 顶栏「更多」→「关联」再点一次；
                ≥861px 由 style.css ID 规则隐藏，侧栏承载） -->
-          <div id="rel-sheet-backdrop" class="rel-sheet-backdrop"
+          <div id="rel-sheet-backdrop" class="rel-sheet-backdrop" aria-hidden="true"
             :class="{ show: state.relSheetOpen }"
             @click="state.relSheetOpen = false"></div>
           <div id="rel-sheet" class="rel-sheet" :class="{ open: state.relSheetOpen }">

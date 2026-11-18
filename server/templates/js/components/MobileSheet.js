@@ -111,7 +111,7 @@ export const MobileSheet = {
   },
   template: `
     <!-- 移动端 backdrop -->
-    <div ref="backdropEl" class="fixed inset-0 bg-black/30 lg:hidden"
+    <div ref="backdropEl" class="fixed inset-0 bg-black/30 lg:hidden" aria-hidden="true"
       @touchmove.prevent
       :class="{ hidden: !open }" @click="$emit('close')" style="z-index: 1;"></div>
 

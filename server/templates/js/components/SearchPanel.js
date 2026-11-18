@@ -232,8 +232,8 @@ export const SearchPanel = {
         <span class="pcount" v-if="docCount > 0">{{ docCount }} 个文档</span>
         <span class="pacts">
           <!-- ② 权重控件入口（absolute popover，开/关两态面板头不跳位） -->
-          <button class="sp-sort-btn" :class="{ on: showSort }" title="排序权重" aria-label="排序权重" @click="showSort = !showSort">
-            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>
+          <button class="sp-sort-btn" :class="{ on: showSort }" :aria-expanded="showSort" title="排序权重" aria-label="排序权重" @click="showSort = !showSort">
+            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>
             排序
           </button>
         </span>
@@ -241,25 +241,25 @@ export const SearchPanel = {
           <div class="sp-sort-title">排序权重</div>
           <div class="sp-seg" role="group" aria-label="排序预设">
             <button v-for="p in W_PRESETS" :key="p.value" class="sp-seg-btn"
-              :class="{ on: presetActive(p) }" @click="applyWeight(p.value)">{{ p.label }}</button>
+              :class="{ on: presetActive(p) }" :aria-pressed="presetActive(p)" @click="applyWeight(p.value)">{{ p.label }}</button>
           </div>
           <div class="sp-wrow">
             <span class="sp-wlabel">tag 权重</span>
             <span class="sp-wval">{{ wTag.toFixed(1) }}</span>
           </div>
-          <input type="range" class="sp-wrange" min="0.1" max="3" step="0.1"
+          <input type="range" class="sp-wrange" min="0.1" max="3" step="0.1" aria-label="tag 权重"
             :value="wTag" title="越大，#tag 命中排越前" @input="onWeightInput($event)">
           <button class="sp-wreset" @click="applyWeight(W_DEFAULT)">恢复默认</button>
         </div>
       </div>
       <!-- 输入区 -->
       <div class="sp-input">
-        <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <svg aria-hidden="true" class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input ref="inputEl" v-model="searchQuery" type="text"
           class="sp-q-input"
           placeholder="搜索文档… #tag 按标签搜" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
-          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>
       <!-- ① tag 选择器行（输入区与 meta 行之间；/api/tags 失败/空 → 整行隐藏） -->
@@ -290,7 +290,7 @@ export const SearchPanel = {
         <!-- 空态（relaxed → fuzzy 回退后仍零结果 = 内容不在库里） -->
         <div v-else-if="!loading && !results.length && fuzzyDone" class="sp-empty">
           <div class="sp-empty-ring">
-            <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
           </div>
           <div class="sp-empty-t1">无匹配</div>
           <div class="sp-empty-t2">换个关键词试试</div>
@@ -318,7 +318,7 @@ export const SearchPanel = {
           </div>
           <div v-else-if="!moreLoading && !fuzzyDone && results.length > 0" class="sp-more-wrap">
             <button class="search-more" @click="search.showMore()">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
               展示更多

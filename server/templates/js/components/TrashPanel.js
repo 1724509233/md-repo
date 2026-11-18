@@ -6,8 +6,7 @@
  */
 const { ref, computed, inject, watch, nextTick, onBeforeUnmount } = Vue
 import { initMenuNav } from '../utils/menuNav.js'
-
-const pad2 = n => String(n).padStart(2, '0')
+import { fmtHM, fmtMD, fmtRel } from '../utils/format.js'
 
 /* deleted_at = UTC ISO（YYYY-MM-DDTHH:MM:SSZ）→ 本地 Date（非法 → null） */
 function parseISO(s) {
@@ -16,16 +15,13 @@ function parseISO(s) {
   return isNaN(d.getTime()) ? null : d
 }
 
-/* batch 头时间：今天 HH:mm / 昨天 HH:mm / MM-DD HH:mm（同 MemoryConsole feed 的日期口径） */
+/* batch 头时间：相对时间（'Nm 前'/'Nh 前'/今天 HH:mm/昨天 HH:mm，今天昨天按本地日历日），
+   ≥2 天前 → MM-DD HH:mm（共享 format.js） */
 function fmtBatchTime(iso) {
   const d = parseISO(iso)
   if (!d) return ''
-  const hm = pad2(d.getHours()) + ':' + pad2(d.getMinutes())
-  const key = x => x.getFullYear() + '-' + pad2(x.getMonth() + 1) + '-' + pad2(x.getDate())
-  const now = new Date(), yest = new Date(); yest.setDate(yest.getDate() - 1)
-  if (key(d) === key(now)) return '今天 ' + hm
-  if (key(d) === key(yest)) return '昨天 ' + hm
-  return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + hm
+  const ts = d.getTime() / 1000
+  return fmtRel(ts) ?? (fmtMD(ts) + ' ' + fmtHM(ts))
 }
 
 /* 字节 → 人读大小（B / KB / MB） */
@@ -150,7 +146,7 @@ export const TrashPanel = {
       <div class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 py-2 space-y-2 text-[13px]">
         <!-- 空态（同 .q-empty 规格） -->
         <div v-if="!items.length" class="q-empty">
-          <div class="ring"><svg viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
+          <div class="ring"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
           <div class="t1">回收站是空的</div>
         </div>
 
@@ -167,7 +163,7 @@ export const TrashPanel = {
               <span class="ml-auto shrink-0">{{ b.files.length }} 个文件</span>
               <button class="tree-more shrink-0 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
                 @click="openMenu($event, 'batch', b.batch, null)" aria-label="批次操作">
-                <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
               </button>
             </div>
             <!-- 文件行：文件名 + 原路径（小字截断）+ 大小 + ⋯（恢复/彻底删除） -->
@@ -178,7 +174,7 @@ export const TrashPanel = {
               <span class="shrink-0 text-[11px] text-muted tabular-nums">{{ fmtSize(f.size) }}</span>
               <button class="tree-more shrink-0 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
                 @click="openMenu($event, 'file', b.batch, f.path)" aria-label="文件操作">
-                <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+                <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
               </button>
             </div>
           </div>
@@ -187,7 +183,7 @@ export const TrashPanel = {
 
       <!-- 操作菜单浮层：Teleport 到 body —— 同 FileTree 口径（面板子树内会被 .panel-shell 困住） -->
       <Teleport to="body">
-        <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+        <div v-if="menu" class="fixed inset-0 z-40" aria-hidden="true" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
         <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
           <button v-if="menu.kind === 'batch'" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"

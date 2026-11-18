@@ -83,7 +83,7 @@ const TreeNode = {
             @dragend="treeOps.onDragEnd()"
             @dragover="treeOps.onDragOver($event, childPath(name))"
             @drop="treeOps.onDrop($event, childPath(name))">
-            <svg class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
+            <svg aria-hidden="true" class="chev w-3.5 h-3.5 text-muted transition-transform" :class="{ 'rotate-90': isExpanded(childPath(name)) }"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
@@ -96,7 +96,7 @@ const TreeNode = {
             <span class="tree-count ml-auto">{{ child.count }}</span>
             <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
               @click.stop.prevent="treeOps.openMenu($event, childPath(name), true)" aria-label="操作">
-              <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+              <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
             </button>
           </div>
           <div class="tree-children ml-2 pl-1.5 border-l border-border">
@@ -127,7 +127,7 @@ const TreeNode = {
           <span v-else class="font-medium flex-1 truncate">{{ f.name }}</span>
           <button class="tree-more ml-1 opacity-0 group-hover:opacity-100 w-5 h-5 flex items-center justify-center rounded text-muted hover:text-text"
             @click.stop.prevent="treeOps.openMenu($event, f.path, false)" aria-label="操作">
-            <svg class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+            <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
           </button>
         </a>
       </div>
@@ -459,6 +459,10 @@ export const FileTree = {
     const shapedResults = computed(() => shapeSegments(results.value))
     const shownRowCount = computed(() => countRows(results.value))
 
+    // combobox 微契约（spec §1.7）：option id 单源 helper —— input 的 aria-activedescendant
+    // 与每行的 :id 都只经它拼接（字面量全文件恰一处，两侧漂移即被静态钉打回）
+    const resultOptId = i => `ts-opt-${i}`
+
     // 300ms 尾随防抖；query 变化即重置状态，回到 relaxed
     watch(searchQuery, (q) => search.setInput(q))
 
@@ -547,7 +551,7 @@ export const FileTree = {
 
     return {
       searchQuery, tree, toggleDir, selectFile,
-      results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown,
+      results, loading, activeIndex, searchOpen, shapedResults, pickResult, onKeydown, resultOptId,
       ICONS, menu, menuEl, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
@@ -559,15 +563,20 @@ export const FileTree = {
   template: `
     <div id="file-tree" class="file-tree h-full flex flex-col min-h-0">
       <div class="sp-input">
-        <svg class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <svg aria-hidden="true" class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input id="search-input" v-model="searchQuery" type="text" class="sp-q-input"
+          role="combobox" aria-controls="tree-search-results"
+          :aria-expanded="searchOpen && shapedResults.length > 0"
+          :aria-activedescendant="activeIndex >= 0 && activeIndex < shapedResults.length ? resultOptId(activeIndex) : undefined"
           placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
-          <svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
 
-        <!-- RAG 搜索下拉框 -->
-        <div class="search-dropdown" v-show="searchOpen">
+        <!-- RAG 搜索下拉框：listbox 容器（combobox 微契约，spec §1.7）。
+             状态行（加载/无匹配/展示更多/已耗尽）留在 listbox 内但为无 role 的普通节点——
+             不进 role=option（假 option 会被 aria-activedescendant 导航邻域误认作可选项） -->
+        <div id="tree-search-results" role="listbox" class="search-dropdown" v-show="searchOpen">
           <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
           <div v-if="loading && !results.length" class="search-loading">
             <span class="search-spinner"></span>
@@ -580,6 +589,7 @@ export const FileTree = {
           </div>
           <!-- 结果 -->
           <button v-for="(item, i) in shapedResults" :key="item.path + '-' + i"
+            role="option" :id="resultOptId(i)" tabindex="-1" :aria-selected="i === activeIndex"
             class="search-item" :class="{ active: i === activeIndex }"
             :title="item.path"
             @click="pickResult(item, i)" @mouseenter="activeIndex = i">
@@ -595,7 +605,7 @@ export const FileTree = {
           </div>
           <div v-else-if="!moreLoading && !fuzzyDone && results.length > 0" class="search-more-wrap">
             <button class="search-more" @click="showMore">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
               </svg>
               展示更多
@@ -606,7 +616,7 @@ export const FileTree = {
           </div>
         </div>
       </div>
-      <nav class="flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
+      <nav class="tree-scroll flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
         :class="{ 'tree-drop-root': dropTarget === ROOT_TARGET }"
         @dragover="onNavDragOver($event)"
         @drop="onNavDrop($event)"
@@ -631,7 +641,7 @@ export const FileTree = {
            .panel-shell 困住（≤1023px 时其 transform 成为 fixed 包含块 + 层叠上下文，
            overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
       <Teleport to="body">
-        <div v-if="menu" class="fixed inset-0 z-40" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+        <div v-if="menu" class="fixed inset-0 z-40" aria-hidden="true" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
         <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
           <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
