@@ -433,6 +433,21 @@ def test_p2_intl_wiring():
     t = _templates()
     for comp in ("MonitorPage.js", "TrashPanel.js", "MemoryConsole.js"):
         assert "../utils/format.js" in t[comp], comp
+        assert "pad2" not in t[comp], comp  # T5 M1：本地日期拷贝（dayKey/pad2）须删净
     assert "toISOString().slice" not in t["MonitorPage.js"]
     mp = t["MonitorPage.js"]
     assert "String(iso).match" in mp  # fmtMerged/fmtDay 字符串抽取未被 Date 化
+    # T5 M1：pad2 单一实现归零——format.js 也不得重新引入同名 helper
+    f = (TPL / "js/utils/format.js").read_text(encoding="utf-8")
+    assert "pad2" not in f
+
+
+def test_p2_key_and_markdown():
+    t = _templates(); md = (TPL / "js/utils/markdown.js").read_text(encoding="utf-8")
+    ac = t["AIChatPanel.js"]
+    assert ':key="msg.id"' in ac and 'key="mi"' not in ac
+    assert re.search(r"msgSeq", ac) and "addMsg" in ac
+    assert "escapeHtml(langLabel)" in md
+    assert 'loading="lazy"' in md and 'decoding="async"' in md
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"#preview :is\(h1,\s*h2,\s*h3,\s*h4,\s*h5,\s*h6\)\s*\{[^}]*scroll-margin-top", css)

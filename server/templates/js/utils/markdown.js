@@ -165,12 +165,23 @@ export function setupMarkdown() {
 
   const renderer = new marked.Renderer()
 
-  // 代码块：带语言标签 + 复制按钮（marked v4: 第二参数是完整 infostring）
+  // 代码块：带语言标签 + 复制按钮（marked v4: 第二参数是完整 infostring）。
+  // infostring 是用户可控输入（围栏 ``` 后的字符串）→ 进 HTML 前最小 escape（§4.2）：
+  // 标签文本一处、class 属性值一处（attribute 上下文同属「进 HTML 前」；转义后合法语言名不变）。
   renderer.code = function (code, infostring) {
     const lang = (infostring || '').trim().split(/\s+/)[0]
     const langLabel = lang || 'text'
-    const cls = lang ? ` class="language-${lang}"` : ''
-    return `<div class="code-block"><div class="code-block-header"><span>${langLabel}</span><button class="code-copy-btn" type="button">复制</button></div><pre><code${cls}>${code}</code></pre></div>`
+    const cls = lang ? ` class="language-${escapeHtml(lang)}"` : ''
+    return `<div class="code-block"><div class="code-block-header"><span>${escapeHtml(langLabel)}</span><button class="code-copy-btn" type="button">复制</button></div><pre><code${cls}>${code}</code></pre></div>`
+  }
+
+  // 图片：懒加载 + 异步解码（§4.3，loading/decoding 在 DOMPurify 默认放行表内，无需 ADD_ATTR）。
+  // 替代 marked v4 内置 image（其不转义 href/alt）：src/alt/title 一律 escapeHtml，
+  // 安全兜底仍走 DOMPurify。img 渲染在 <p> 内、非 #preview 顶层元素 → 不触碰
+  // writeSrcLineMapping 的顶层 token↔元素对齐（§9.2 配对无影响）。
+  renderer.image = function (href, title, text) {
+    const t = title ? ` title="${escapeHtml(title)}"` : ''
+    return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${t} loading="lazy" decoding="async">`
   }
 
   // 表格：包裹 overflow-x-auto（marked v4: header/body 已是完整行 HTML）

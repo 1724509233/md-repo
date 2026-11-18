@@ -34,7 +34,12 @@ export const AIChatPanel = {
     const toolNames = toolShortNames
     const appState = inject('state', null)   // 软链解析：files 供 renderer.link 用（baseDir 恒 null，AI 回复无「当前文档目录」语义）
 
-    const messages = ref([])       // [{ role, blocks: [], streaming, rendered }]
+    // 消息稳定键 nonce（§4.1）：客户端单调递增，addMsg 打戳、永不重估——
+    // 服务端 message_id 仅终帧 done 携带（流式行无 id），role+内容前缀在空流起始互撞且
+    // done 时键变 → 整行 remount。列表变异点全集 = push（addMsg）+ 整体 reset（sessionId watch），
+    // 无 splice/重排 → setup 级计数即可证唯一（列表与计数器同生命周期重建，无碰撞窗口）。
+    let msgSeq = 0
+    const messages = ref([])       // [{ id, role, blocks: [], streaming, rendered }]
     const inputText = ref('')
     const status = ref('ready')    // 'ready' | 'thinking'
     const aiMode = ref('当前文档')
@@ -130,7 +135,7 @@ export const AIChatPanel = {
       // blocksLen 是 blocks.length 的镜像追踪点：块增长（首轮文本块/多轮工具块）写入一次 → 1 次 re-render，
       // 让流式分支 v-if 可追踪到新块（原始数组 .length 读不响应式）；token 级写入永不触碰它
       // uiTick：块内展开/折叠（block.expanded 是原始对象属性，变更本身不可追踪）的 re-render 触发器
-      const msg = shallowReactive({ role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
+      const msg = shallowReactive({ id: ++msgSeq, role, blocks: [], streaming: false, rendered: false, blocksLen: 0, uiTick: 0 })
       if (text) { msg.blocks.push({ type: 'text', text }); msg.blocksLen = 1 }
       messages.value.push(msg)
       scrollToBottom(true) // 新消息入场强制贴底（用户刚发送/回复起点，期望可见）
@@ -548,7 +553,9 @@ export const AIChatPanel = {
 
       <!-- 消息列表 -->
       <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4" role="log">
-        <div v-for="(msg, mi) in messages" :key="mi"
+        <!-- :key="msg.id"（§4.1）：客户端单调 nonce（addMsg 打戳），流式行 remount 炸反馈行/滚动锚的根治。
+             blocks 内层 :key="bi" 不动：blocks 为消息内 append-only（push + blocksLen 镜像），无重排——YAGNI -->
+        <div v-for="msg in messages" :key="msg.id"
           class="msg-in flex" :class="{ 'justify-end': msg.role === 'user' }">
           <!-- 用户消息 -->
           <div v-if="msg.role === 'user'"

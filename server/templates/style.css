@@ -213,7 +213,7 @@ input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--paper)
 .toc-btn-open { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
 .toc-btn-open:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
 /* 预览跳转落点：scrollIntoView block:start 的 16px 上边距（TOC 与深链共用） */
-#preview :is(h1, h2, h3) { scroll-margin-top: 16px; }
+#preview :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: 16px; }
 @media (prefers-reduced-motion: reduce) {
   .toc-dd { animation: none; }
 }
