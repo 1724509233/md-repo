@@ -3,6 +3,7 @@ const { reactive, provide, ref, computed, watch, nextTick, onMounted } = Vue
 
 import { api } from './api.js'
 import { showToast } from './utils/toast.js'
+import { guardSwitch, createAttemptBox } from './utils/docNav.js'
 import { docHash, parseHash } from './utils/vaultLinks.js'
 import { setupMarkdown, renderMarkdown } from './utils/markdown.js'
 import { buildToc, scrollToHeading, startScrollspy, stopScrollspy, computeActiveHeading, ensureVisible, flashHeading } from './utils/toc.js'
@@ -104,13 +105,23 @@ async function loadDocs() {
   return !!data
 }
 
+// openDoc 续接令牌（spec §5.5）：模块级单盒，每次 openDoc 进入 bump；
+// 守卫 retry 捕获发起时 token，过期即 no-op（防挂起的「重试」复活旧切换目标）
+const navAttempt = createAttemptBox()
+
 async function openDoc(path, heading, fromLink) {
   // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
   if (state.monitoring) exitMonitorPage()
-  // 自动保存未保存的编辑
-  if (state.dirty && state.currentPath) {
-    await saveDoc()
-  }
+  // 丢保存守卫（P2 簇⑤，spec §5）：dirty 时先存，存败 → 中止切换（三态原样 +
+  // hash 回写当前文档），toast「重试」在 token 未过期时自动续接本次切换（含 heading/fromLink）；
+  // 其间任何新 openDoc 都 bump token 作废待发续接（决策核在 docNav.js，node 可直测）
+  const captured = navAttempt.bump()
+  if (await guardSwitch({
+    dirty: state.dirty, currentPath: state.currentPath, saveDoc, captured, attemptBox: navAttempt,
+    resume: () => openDoc(path, heading, fromLink),
+    replaceHash: p => history.replaceState(null, '', docHash(p, { edit: !state.previewMode })),
+    toast: showToast, message: '保存失败，未离开当前文档',
+  }) === 'held') return
   state.currentPath = path
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -170,13 +181,23 @@ async function openDoc(path, heading, fromLink) {
 }
 
 async function saveDoc() {
-  if (!state.currentPath) return
+  // spec §5.1：返回成败布尔，**自身不再 toast**——提示策略归调用方
+  // （切换守卫 = docNav.guardSwitch 挂「未离开当前文档」+重试；手动保存 = saveWithRetry）
+  if (!state.currentPath) return false
   try {
     await api.saveDoc(state.currentPath, state.docContent)
     state.dirty = false
+    return true
   } catch (e) {
-    showToast('保存失败: ' + e.message)
+    return false
   }
+}
+
+// 手动保存（spec §5.9）：失败挂「保存失败，编辑内容已保留」+ 重试（无续接目标——
+// 本就没有被中止的切换）；再败由 saveWithRetry 自递归重挂同按钮
+async function saveWithRetry() {
+  if (await saveDoc()) return
+  showToast('保存失败，编辑内容已保留', 'error', { label: '重试', onClick: saveWithRetry })
 }
 
 // 当前文档受变更影响时的状态同步（pollChanges 与 manage 共用）
@@ -854,7 +875,7 @@ export function createApp() {
         onRailClick, onTreeSelect, onSearchPick,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
-        loadDocs, openDoc, saveDoc, downloadDoc, setMode,
+        loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
         onEditorInput, acceptConflict, skipToMain,
@@ -970,7 +991,7 @@ export function createApp() {
               :more-menu-open="state.moreMenuOpen"
               :notif-open="state.notifOpen" :unread-count="state.unreadCount" :notifications="state.notifications"
               :toc-open="state.tocOpen" :toc-items="tocItems" :rel-open="state.relOpen" :ai-open="state.aiOpen"
-              @set-mode="setMode" @save="saveDoc" @download="downloadDoc"
+              @set-mode="setMode" @save="saveWithRetry" @download="downloadDoc"
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"
               @open-doc-face="openDocFace"
@@ -988,7 +1009,7 @@ export function createApp() {
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
                   @accept="acceptConflict" @dismiss="state.conflict = null" />
                 <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
-                  @input="onEditorInput" @save="saveDoc" @download="downloadDoc" />
+                  @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
               </div>
               <aside class="rel-side" :class="{ open: state.relOpen }">
                 <DocRelated v-if="state.relOpen" :path="state.currentPath"

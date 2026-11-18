@@ -472,3 +472,48 @@ def test_p2_softlink_alt_click_not_logged():
     assert "if (e.metaKey || e.ctrlKey) return" in body
     assert body.index("if (e.altKey) return") < body.index("api.recallClick")
     assert body.index("if (e.metaKey || e.ctrlKey) return") > body.index("api.recallClick")
+
+
+def test_p2_toast_action_api():
+    toast = (TPL / "js/utils/toast.js").read_text(encoding="utf-8")
+    assert "export function showToast(message, kind = 'error', action = null)" in toast
+    assert re.search(r"action \? 12000|12000", toast)
+    assert "pointer-events" in toast and "stopPropagation" in toast
+    assert "el.appendChild" in toast and "button" in toast  # 原生 button 进 toast
+
+
+def test_p2_docnav_guard():
+    src = (TPL / "js/utils/docNav.js").read_text(encoding="utf-8")
+    assert "export async function guardSwitch" in src
+    assert "guardSwitch" in _templates()["app.js"]
+    node = shutil.which("node")
+    if not node: pytest.skip("node missing")
+    js = (
+        "import(%r).then(async m=>{"
+        "const log=[];const mkDeps=cap=>({replaceHash:p=>log.push('hash:'+p),"
+        "toast:(msg,k,a)=>{if(a)cap.a=a;log.push('toast:'+k+(a?'|'+a.label:''))},"
+        "resume:()=>log.push('resume')});"
+        # 1) 非 dirty → proceed，无任何副作用
+        "let box=m.createAttemptBox(),cap={};"
+        "if(await m.guardSwitch({dirty:false,currentPath:'a',saveDoc:async()=>false,captured:box.bump(),attemptBox:box,message:'x',...mkDeps(cap)})!=='proceed')process.exit(1);"
+        # 2) dirty+存败 → held + hash 回写 + error|重试
+        "box=m.createAttemptBox();cap={};"
+        "let g=await m.guardSwitch({dirty:true,currentPath:'b.md',saveDoc:async()=>false,captured:box.bump(),attemptBox:box,message:'x',...mkDeps(cap)});"
+        "if(g!=='held'||!log.includes('hash:b.md')||!log.includes('toast:error|重试'))process.exit(2);"
+        # 3) retry 再败 → 第二个 error|重试；4) retry 再成 → toast:success + resume
+        "let n=0;const flaky=async()=>{n++;return n>=2};"
+        "box=m.createAttemptBox();cap={};"
+        "g=await m.guardSwitch({dirty:true,currentPath:'c.md',saveDoc:flaky,captured:box.bump(),attemptBox:box,message:'x',...mkDeps(cap)});"
+        "if(g!=='held')process.exit(3);"
+        "await cap.a.onClick();await cap.a.onClick();"
+        "if(log.filter(x=>x==='toast:error|重试').length!==2)process.exit(4);"
+        "if(!log.includes('resume')||!log.includes('toast:success'))process.exit(5);"
+        # 5) token 过期 → onClick no-op：不 resume、不再 toast
+        "box=m.createAttemptBox();cap={};n=0;"
+        "const captured=box.bump();"
+        "g=await m.guardSwitch({dirty:true,currentPath:'d.md',saveDoc:flaky,captured,attemptBox:box,message:'x',...mkDeps(cap)});"
+        "box.bump();const before=log.length;"
+        "await cap.a.onClick();"
+        "if(log.length!==before)process.exit(6);"
+        "process.exit(0)})") % (TPL / "js/utils/docNav.js").as_uri()
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
