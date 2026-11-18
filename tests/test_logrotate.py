@@ -1,11 +1,11 @@
-"""Tests for server.logrotate cleanup of old log files."""
+"""Tests for server.core.logrotate cleanup of old log files."""
 from __future__ import annotations
 
 import os
 import time
 from pathlib import Path
 
-from server.logrotate import clean_old_logs
+from server.core.logrotate import clean_old_logs
 
 
 def _touch_with_age_days(path: Path, days: float) -> None:

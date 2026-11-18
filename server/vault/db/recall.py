@@ -20,7 +20,7 @@ import sqlite3
 import time
 
 from .schema import _db_lock
-from ... import events
+from ...core import events
 
 TRAFFIC_CLASSES = ("human", "on_demand", "synthetic")
 

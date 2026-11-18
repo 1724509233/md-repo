@@ -28,7 +28,7 @@ from .indexer import (
     index_segments,
 )
 from .refs import remove_dead_links, _update_references
-from ... import events
+from ...core import events
 
 
 def _is_index_excluded(path: str) -> bool:

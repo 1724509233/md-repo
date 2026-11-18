@@ -9,7 +9,8 @@ from pathlib import Path
 
 import uvicorn
 
-from . import events, ledger
+from . import ledger
+from .core import events
 from .api import create_app
 from .bgagent import start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
@@ -21,7 +22,7 @@ from .privacy import PrivacyConfig
 from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.indexer import ensure_indexed
-from .logrotate import start_logrotate
+from .core.logrotate import start_logrotate
 from .snapshot_watcher import SnapshotWatcher
 
 # Logging is configured in main() with console + file handlers.

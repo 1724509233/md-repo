@@ -1,4 +1,4 @@
-"""File-lock semantics of server.sync_lock (bug 4738f8f2).
+"""File-lock semantics of server.core.sync_lock (bug 4738f8f2).
 
 The sync lock was in-memory only — two server processes on the same
 vault (dev 9888 + feature-test 9889) could sync concurrently. It is now
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-import server.sync_lock as sync_lock_mod
-from server.sync_lock import SyncLock
+import server.core.sync_lock as sync_lock_mod
+from server.core.sync_lock import SyncLock
 
 
 @pytest.fixture

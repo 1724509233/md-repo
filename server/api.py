@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .routes import WebContext, register_all
-from .sync_lock import SyncLock
+from .core.sync_lock import SyncLock
 
 
 class CachedStatic(StaticFiles):

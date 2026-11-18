@@ -12,7 +12,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from server import events, ledger
+from server import ledger
+from server.core import events
 from server.bgagent import scheduler
 from server.config import BackgroundAgentConfig, NotificationsConfig
 from server.main import build_runtime

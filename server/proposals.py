@@ -50,7 +50,7 @@ import json
 import time
 from datetime import datetime
 
-from . import events
+from .core import events
 from .vault.db import proposal_records
 
 PROPOSALS_DIR = "suggestions"

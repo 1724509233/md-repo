@@ -429,7 +429,7 @@ async def _poll(pred, timeout=5.0):
 
 def test_executor_loop_event_wake(ledger_conn, vault_dir):
     """proposal event wakes the executor far before the 300s backstop."""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _executor_loop
 
     calls = []
@@ -462,7 +462,7 @@ def test_executor_loop_event_wake(ledger_conn, vault_dir):
 
 def test_executor_loop_backstop_no_event(ledger_conn, vault_dir):
     """No event at all → the backstop tick still runs the scan (0.3s here)."""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _executor_loop
 
     events.set_bus(None)  # degraded: plain sleep loop
@@ -492,7 +492,7 @@ def test_executor_loop_backstop_no_event(ledger_conn, vault_dir):
 def test_executor_loop_spurious_event_noop(ledger_conn, vault_dir):
     """A stale/foreign proposal event (e.g. merged — advance no longer
     publishes those) must be tolerated: wake → scan → no-op."""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _executor_loop
 
     calls = []
@@ -525,7 +525,7 @@ def test_executor_loop_spurious_event_noop(ledger_conn, vault_dir):
 def test_executor_loop_records_run_on_work(db_conn, vault_dir, ledger_conn):
     """工作周期（merged 非零）→ trigger_state 记 executor 行（last_run_ts>0）——
     执行器批次进 /api/memory/status agents 列表（G5 缺口）。"""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _executor_loop
 
     events.set_bus(None)  # degraded: plain sleep loop
@@ -557,7 +557,7 @@ def test_executor_loop_records_run_on_work(db_conn, vault_dir, ledger_conn):
 def test_executor_loop_noop_records_nothing(db_conn, vault_dir, ledger_conn):
     """无 adopted/overdue 提案 → scan no-op → 执行器不落 trigger_state 行
     （no-op 静默，不留痕、不刷计数）。"""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _executor_loop
 
     events.set_bus(None)
@@ -619,7 +619,7 @@ def test_armed_crash_notifies_error_report(db_conn, vault_dir, tmp_path):
 def test_armed_loop_event_wake(db_conn, vault_dir, tmp_path):
     """change event + enough non-self-excluded rows → run_fn well before
     the 300s backstop; the scan itself is unchanged."""
-    from server import events
+    from server.core import events
     from server.bgagent.scheduler import _armed_loop
 
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=2)

@@ -1,4 +1,4 @@
-"""Unit tests for the in-process event bus (server/events.py).
+"""Unit tests for the in-process event bus (server/core/events.py).
 
 Repo convention: no pytest-asyncio mode — async scenarios run via
 asyncio.run() inside sync tests (same pattern as tests/test_trigger.py).
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from server import events
+from server.core import events
 from server.bgagent.scheduler import self_exclusion
 from server.config import BackgroundAgentConfig
 from server.vault.db import recall as recall_db

@@ -7,6 +7,16 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--update-arch-baseline",
+        action="store_true",
+        default=False,
+        help="Rewrite tests/architecture_baseline.json with the current "
+             "architecture violation sets, then pass.",
+    )
+
 from server.api import create_app
 from server.ledger import consume
 from server.vault import init_db, upsert_file

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..sync_lock import SyncLock
+from ..core.sync_lock import SyncLock
 
 
 @dataclass
