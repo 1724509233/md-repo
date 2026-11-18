@@ -18,7 +18,7 @@ from ..db.changes import log_change
 from ..db.file_index import delete_file, get_all_files, get_file_hash, upsert_file
 from ..db.relatedness import rewrite_paths
 from ..db.schema import ACTION_TO_OP, index_write
-from ..file_entry import FileEntry
+from ...core.types import FileEntry
 from ..fs.link_parser import invalidate_wikilink_filename
 from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
 from .move_detect import pair_moves

@@ -35,7 +35,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Mapping
 
-from ..file_entry import FileEntry
+from ...core.types import FileEntry
 
 
 def _dir_distance(old_path: str, new_path: str) -> int:

@@ -7,7 +7,7 @@ nearest-neighbor assignment for non-1:1 filename groups.
 """
 from __future__ import annotations
 
-from server.vault.file_entry import FileEntry
+from server.core.types import FileEntry
 from server.vault.orchestration.move_detect import pair_moves
 
 

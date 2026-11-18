@@ -183,7 +183,7 @@ class TestPairMoves:
 
     def test_simple_move(self):
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         h = "abc123"
         gone = {"old/a.md": FileEntry(h, 10, 0.0)}
         new = {"new/a.md": FileEntry(h, 10, 0.0)}
@@ -195,7 +195,7 @@ class TestPairMoves:
     def test_same_name_different_hash(self):
         """Same filename, different content, 1:1 → move (Phase 2: move after edit)."""
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         gone = {"dirA/notes.md": FileEntry("hash_a", 10, 0.0)}
         new = {"dirB/notes.md": FileEntry("hash_b", 20, 0.0)}
         moves, deletes, creates = _pair_moves(gone, new)
@@ -205,7 +205,7 @@ class TestPairMoves:
 
     def test_1_to_1_same_hash(self):
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         h = "same_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
         new = {"b/x.md": FileEntry(h, 5, 0.0)}
@@ -216,7 +216,7 @@ class TestPairMoves:
         """Two gone, one new with same hash → Phase 2 nearest-neighbor pairs
         the closest gone; the other degrades to delete."""
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         h = "dup_hash"
         gone = {
             "a/x.md": FileEntry(h, 5, 0.0),
@@ -233,7 +233,7 @@ class TestPairMoves:
         """One gone, two new with same hash → move + copy: the closest new is
         paired as a move, the other stays a create."""
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         h = "dup_hash"
         gone = {"a/x.md": FileEntry(h, 5, 0.0)}
         new = {
@@ -248,7 +248,7 @@ class TestPairMoves:
 
     def test_multiple_independent_moves(self):
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         gone = {
             "a/1.md": FileEntry("h1", 1, 0.0),
             "a/2.md": FileEntry("h2", 2, 0.0),
@@ -264,7 +264,7 @@ class TestPairMoves:
 
     def test_mixed_move_and_delete_and_create(self):
         from server.vault.watcher import _pair_moves
-        from server.vault.file_entry import FileEntry
+        from server.core.types import FileEntry
         gone = {
             "a/move.md": FileEntry("h_move", 10, 0.0),
             "a/del.md": FileEntry("h_del", 20, 0.0),
