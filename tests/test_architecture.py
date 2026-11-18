@@ -5,6 +5,9 @@ import nodes and call nodes only — docstrings/comments never register, which
 is why baseline entries may contain plain identifier literals and this file
 is exempt from the repo's text-scan self-hit convention
 (test_ledger_import_discipline.py). tests/** are not scanned (server tree only).
+Dynamic imports (``importlib`` / ``__import__``) are OUT of the AST-only
+aperture — server/ measures zero of them (Gate-2 ④); introducing one means
+extending the detectors, not relaxing this note.
 
 Violations are pinned in the external baseline
 ``tests/architecture_baseline.json`` (rule key -> sorted list of violation
@@ -275,12 +278,27 @@ def _r5_core_violations() -> list[str]:
     return sorted(out)
 
 
+def _edges_for(src_dir: str) -> tuple[str, ...]:
+    """Forbidden + staged target roots for a source directory.
+
+    Gate-2 M8: PREFIX match, sub-package safe — a future
+    ``server/services/sub/x.py`` inherits its parent group's edges (the
+    old exact-dir lookup let any nested package escape R5 edges entirely;
+    it was the only non-sub-package-safe key in the seven detectors).
+    """
+    out: list[str] = []
+    for table in (_FORBIDDEN_EDGES, _STAGED_EDGES):
+        for src, edges in table.items():
+            if src_dir == src or src_dir.startswith(src + "/"):
+                out.extend(edges)
+    return tuple(dict.fromkeys(out))
+
+
 def _r5_edge_violations() -> list[str]:
     out = []
     for rel, py in _iter_server_py():
         src_dir = PurePosixPath(rel).parent.as_posix()
-        forbidden = _FORBIDDEN_EDGES.get(src_dir, ()) + \
-            _STAGED_EDGES.get(src_dir, ())
+        forbidden = _edges_for(src_dir)
         if not forbidden:
             continue
         pkg = _package_of(PurePosixPath(rel))
@@ -326,12 +344,23 @@ def _load_baseline() -> dict[str, list[str]]:
 
 def _write_baseline(rule: str, violations: list[str]) -> None:
     baseline = _load_baseline()
+    old = set(baseline.get(rule, []))
+    new = set(violations)
     baseline[rule] = violations
     BASELINE_PATH.write_text(
         json.dumps(baseline, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    print(f"updated {BASELINE_PATH.name}: {rule} = {len(violations)}")
+    # Gate-2 M11b: make a baseline wash loud — per-rule ± counts and the
+    # entry list, so a drive-by --update-arch-baseline cannot hide in
+    # terminal noise.
+    gone, added = sorted(old - new), sorted(new - old)
+    print(f"updated {BASELINE_PATH.name}: {rule}: {len(old)} -> {len(new)} "
+          f"(−{len(gone)} +{len(added)})")
+    for g in gone:
+        print(f"  − {g}")
+    for a in added:
+        print(f"  + {a}")
 
 
 def _check_ratchet(rule: str, current: list[str],
@@ -372,6 +401,14 @@ def test_interface_layer_sql(request: pytest.FixtureRequest) -> None:
     assert set(current) <= set(_r1_violations()), \
         "R2 violations must always be a subset of R1"
     _check_ratchet(R2_INTERFACE_SQL, current, request)
+    # Gate-2 M11a: the live-vs-live assertion above is structurally
+    # tautological (R2's file set never intersects R1's db/ exclusion);
+    # the meaningful one is pinned-vs-pinned, and it runs after a flag
+    # rewrite too.
+    pinned = _load_baseline()
+    assert set(pinned.get(R2_INTERFACE_SQL, [])) <= set(
+        pinned.get(R1_SQL, [])
+    ), "pinned R2 must stay a subset of pinned R1"
 
 
 def test_no_private_cross_dir_imports(
@@ -431,3 +468,18 @@ def test_detector_bare_import_server_flagged_for_core() -> None:
 def test_detector_regular_module_pkg_unchanged() -> None:
     pkg = _package_of(PurePosixPath("server/core/types.py"))
     assert pkg == "server.core"
+
+
+def test_detector_r5_edges_subpackage_safe() -> None:
+    """Gate-2 M8: a hypothetical sub-package inherits its group's edges.
+
+    ``server/services/sub/x.py`` importing ``server.routes`` must be RED —
+    under the old exact-dir lookup the nested dir matched no key and the
+    whole sub-package escaped R5 edges.
+    """
+    assert "server.routes" in _edges_for("server/services/sub/deeper")
+    assert "server.agent" in _edges_for("server/services")  # sanity: base
+    assert "server.vault.orchestration" in _edges_for("server/vault/db/x")
+    assert "server.vault.orchestration" in _edges_for("server/ai/sub")  # staged
+    assert _edges_for("server") == ()          # root is no source group
+    assert _edges_for("server/templates") == ()  # untracked dir: no edges
