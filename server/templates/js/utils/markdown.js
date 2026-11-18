@@ -545,7 +545,7 @@ function buildFrontmatterCard(entries) {
     `<span class="v1-title">元数据</span>` +
     `<span class="fm-count v1-count">${entries.length} 项</span>` +
     `<span class="v1-summary">${summary}</span>` +
-    `<svg aria-hidden="true" class="fm-chev v1-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>` +
+    `<svg aria-hidden="true" class="fm-chev v1-chev" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>` +
     `</button>` +
     `<div class="fm-body"><div class="fm-body-inner"><div class="v1-grid">${cells}</div></div></div>` +
     `</div>`

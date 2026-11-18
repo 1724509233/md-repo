@@ -1249,6 +1249,12 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .lamp.on { animation: none; }
   .fold, .mc-h .car, .rcl-l2btn .car, .l2-refresh { transition: none; }
   .stream-cursor::after, .thinking-dots .dot, .search-spinner { animation: none; }
+  /* 终审 Minor：四族收起态内容层的 visibility 延迟收起（.2/.22/.25s，挂 grid 动画收尾）在
+     grid 停摆后成孤儿延迟——收起瞬间内容仍可见可聚焦 0.2s+。镜像 :not(.open) 形保特异度
+     （:not 参数计数；裸后代形会被收起态规则压住），同特异度 + 块内源码在后 → 真正撤延迟，
+     收起即隐。展开态规则（transition: visibility 0s 0s）本即时，不动 */
+  .fold:not(.open) > div, .tool-detail:not(.open) .tool-detail-inner,
+  .thinking-detail:not(.open) .thinking-text, .fm-card:not(.open) .fm-body-inner { transition: none; }
 }
 
 /* ============ 记忆控制台 v5 L0 主态（定稿 design/console-v5-prune.html 场景 01 · 面板 · 纯审查队列）

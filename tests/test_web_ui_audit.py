@@ -340,12 +340,22 @@ def test_p2_fold_taborder_and_uid():
     css = (TPL / "style.css").read_text(encoding="utf-8")
     # 逐族断言（终审 I-1：count>=5 可被存量 .rel-sheet 的 visibility:hidden 蹭数、漏族照绿）
     # 家族集不含 rcl-tipbox（终审 M-1 勘察翻转：全仓无活体模板，死基座不入家族钉，见下行 not-in 钉）
-    for sel in (".fold:not(.open) > div",
-                ".tool-detail:not(.open) .tool-detail-inner",
-                ".thinking-detail:not(.open) .thinking-text",
-                ".fm-card:not(.open) .fm-body-inner"):
+    FAM = (".fold:not(.open) > div",
+           ".tool-detail:not(.open) .tool-detail-inner",
+           ".thinking-detail:not(.open) .thinking-text",
+           ".fm-card:not(.open) .fm-body-inner")
+    for sel in FAM:
         i = css.index(sel)
         assert "visibility: hidden" in css[i:css.index("}", i)], sel
+    # 终审 Minor：动效降级块内同族选择器 transition: none——grid 动画停摆后若仍留
+    # .2/.22/.25s 的 visibility 延迟收起，收起瞬间要等延迟才隐 = 可聚焦窗口残留。
+    # 选择器必须镜像 :not(.open) 形：:not 参数计特异度（0,2,x），裸后代形（.fold > div）
+    # 特异度更低、被收起态规则整个压住（media 只改生效条件不加特异度，终审原稿会写出死代码）；
+    # 同特异度 + media 块源码在后 → 真正撤掉 visibility 延迟
+    rm = css[css.index("@media (prefers-reduced-motion: reduce)", css.index(FAM[0])):]
+    rm = rm[:rm.index("\n}")]
+    for sel in FAM:
+        assert re.search(re.escape(sel) + r"[^{]*\{[^}]*transition:\s*none", rm), sel
     assert ".rcl-tipbox:not(.open)" not in css   # 死基座（无模板生成点）不配收起规则
     dr = _templates()["DocRelated.js"]
     assert "getCurrentInstance" in dr and "uid" in dr
