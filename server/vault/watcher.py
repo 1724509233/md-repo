@@ -272,17 +272,9 @@ class SnapshotWatcher:
         on_file_deleted=None,
         debounce: float = 1.5,
         reconcile_interval: float = 30.0,
-        ledger_conn=None,
     ) -> None:
         self._vault = vault_dir
         self._db_conn = db_conn
-        # A4 wiring (card 10c) traveled to the assembly point (card 14b):
-        # the startup reconcile now runs in main.py's build_runtime, which
-        # hands its own ledger handle to file_ops.reconcile (the 5th
-        # production route comment lives there). The parameter is kept for
-        # constructor compatibility — the watcher itself never touches the
-        # ledger.
-        self._ledger_conn = ledger_conn
         self._cb_created = on_file_created
         self._cb_modified = on_file_modified
         self._cb_moved = on_file_moved
