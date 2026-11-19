@@ -644,3 +644,62 @@ def test_p2_visual_round_js():
     assert "if (e.metaKey || e.ctrlKey) {" in dl
     assert "window.open(href, '_blank', 'noopener')" in dl
     assert dl.index("api.recallClick") < dl.index("window.open")
+
+
+def test_chat_restore_module():
+    # 会话历史恢复映射（spec 2026-11-19 §2.3）：独立 ESM 模块，零 import 零依赖
+    # （node 无 Vue 环境，行为测试直接 import——照 test_p2_intl_format_module 模式）
+    f = (TPL / "js/utils/chatRestore.js").read_text(encoding="utf-8")
+    assert "export function mapHistory" in f
+    assert not re.search(r"^\s*import\b", f, re.M), "chatRestore.js 必须零 import"
+    assert not re.search(r"\brequire\s*\(", f), "chatRestore.js 必须零依赖"
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const raw=[
+    {role:'user',content:'[当前打开: a.md]'},
+    {role:'user',content:'hello'},
+    {role:'assistant',content:null,tool_calls:[{id:'t1',type:'function',function:{name:'read_doc',arguments:'{\"path\":\"a.md\"}'}}]},
+    {role:'tool',tool_call_id:'t1',content:'Doc contents'},
+    {role:'assistant',content:'first',tool_calls:[{id:'t2',type:'function',function:{name:'search_docs',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t2',content:'Error: boom'},
+    {role:'assistant',content:'done',id:'abc',ts:1,citations:[{path:'a.md',exists:true,grounded:true}]},
+    {role:'user',content:'again'},
+    {role:'assistant',content:'',tool_calls:[{id:'t3',type:'function',function:{name:'write_doc',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t3',content:'User rejected this operation.'},
+    {role:'assistant',content:null,tool_calls:[{id:'t4',type:'function',function:{name:'delete_doc',arguments:'{}'}}]}
+  ];
+  const o=m.mapHistory(raw);
+  // 用例1 提醒行丢弃 + 用例2 user 文本气泡（user 描述符不带 messageId/citations）
+  if(o.length!==4)process.exit(2);
+  if(o[0].role!=='user'||o[0].blocks.length!==1||o[0].blocks[0].type!=='text'||o[0].blocks[0].text!=='hello')process.exit(3);
+  if('messageId' in o[0]||'citations' in o[0])process.exit(3);
+  // 用例3 多轮归并：3 个 assistant + 2 个 tool → 一条描述符，块按流序交错
+  const a=o[1];
+  if(a.role!=='assistant'||a.blocks.length!==4)process.exit(4);
+  const b=a.blocks;
+  if(b[0].type!=='tool'||b[0].id!=='t1'||b[0].name!=='read_doc'||b[0].status!=='done'||b[0].result!=='Doc contents'||b[0].expanded!==false||b[0].args.path!=='a.md')process.exit(5);
+  if(b[1].type!=='text'||b[1].text!=='first')process.exit(6);
+  if(b[2].type!=='tool'||b[2].status!=='error'||b[2].result!=='Error: boom')process.exit(7);
+  if(b[3].type!=='text'||b[3].text!=='done')process.exit(8);
+  if(a.messageId!=='abc')process.exit(9);
+  if(!a.citations||a.citations.length!==1||a.citations[0].path!=='a.md')process.exit(10);
+  if(o[2].role!=='user'||o[2].blocks[0].text!=='again')process.exit(11);
+  // 用例4 rejected 逐字 / 用例5 孤儿 tool_call→error（result 保持 null）/
+  // 用例7 非末轮不出现 messageId+citations / 用例6 content 空串不产 text 块
+  const c=o[3];
+  if(c.blocks.length!==2)process.exit(12);
+  if(c.blocks[0].status!=='rejected')process.exit(13);
+  if(c.blocks[1].status!=='error'||c.blocks[1].result!==null)process.exit(14);
+  if('messageId' in c||'citations' in c)process.exit(15);
+  // 用例6 空 content 且无 tool_calls → 不产出空 turn 描述符
+  if(m.mapHistory([{role:'user',content:'q'},{role:'assistant',content:''}]).length!==1)process.exit(16);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/chatRestore.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    # exit code 逐个区分用例（1=import 失败）；用例号见上方 JS 注释
+    assert r.returncode == 0, f"chatRestore case {r.returncode} failed:\n{r.stderr}"
