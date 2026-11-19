@@ -276,9 +276,12 @@ class SnapshotWatcher:
     ) -> None:
         self._vault = vault_dir
         self._db_conn = db_conn
-        # A4 wiring (card 10c): the startup reconcile below calls
-        # file_ops.reconcile directly (no watcher callbacks) — the offline
-        # move path needs the ledger handle passed through, not lazied.
+        # A4 wiring (card 10c) traveled to the assembly point (card 14b):
+        # the startup reconcile now runs in main.py's build_runtime, which
+        # hands its own ledger handle to file_ops.reconcile (the 5th
+        # production route comment lives there). The parameter is kept for
+        # constructor compatibility — the watcher itself never touches the
+        # ledger.
         self._ledger_conn = ledger_conn
         self._cb_created = on_file_created
         self._cb_modified = on_file_modified
@@ -293,8 +296,16 @@ class SnapshotWatcher:
         self._observer: Observer | None = None
         self._worker: _Worker | None = None
 
-    def start(self) -> None:
-        """Start watching. Order: full scan → reconcile → watchdog → worker."""
+    def scan(self) -> dict[str, FileEntry]:
+        """Query DB state, scan the disk (mtime fast-skip), fill the snapshot.
+
+        First half of the old ``start()`` (card 14b split). The startup
+        reconcile is NO LONGER implicit here: the assembly point
+        (``main.build_runtime``) feeds the returned snapshot to
+        ``file_ops.reconcile`` and then calls ``observe()`` — preserving the
+        historical order (db query → scan → reconcile → observer+worker)
+        while keeping the vault root free of orchestration imports (R5).
+        """
         # 1. Query DB state (for the mtime fast-skip in full_scan).
         db_state = None
         if self._db_conn:
@@ -303,13 +314,14 @@ class SnapshotWatcher:
 
         # 2. Scan disk (single scan, with mtime skip).
         self._snapshot = full_scan(self._vault, db=db_state)
+        return self._snapshot
 
-        # 3. DB reconcile (if a conn was provided).
-        if self._db_conn:
-            from .orchestration.file_ops import reconcile
-            reconcile(self._snapshot, self._db_conn, self._vault,
-                      ledger_conn=self._ledger_conn)
-        # 4. Start watchdog + worker.
+    def observe(self) -> None:
+        """Start watchdog + worker (the second half of the old start()).
+
+        Call after ``scan()`` — the worker's first loop processes dirty
+        entries accumulated during scanning.
+        """
         # Pass self as the notifier: handler calls .notify() on SnapshotWatcher,
         # which forwards to the worker once it exists.
         handler = _RawHandler(self._vault, self)
@@ -318,7 +330,7 @@ class SnapshotWatcher:
         self._observer.daemon = True
         self._observer.start()
 
-        # Start worker (first loop processes dirty from steps above)
+        # Start worker (first loop processes dirty from the scan above)
         self._worker = _Worker(self)
         self._worker.start()
         logger.info("SnapshotWatcher started on %s", self._vault)

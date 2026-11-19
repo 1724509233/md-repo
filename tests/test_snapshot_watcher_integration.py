@@ -188,7 +188,8 @@ def run_advanced(watcher, events) -> None:
         debounce=1.0,
         reconcile_interval=60.0,
     )
-    watcher2.start()
+    watcher2.scan()
+    watcher2.observe()
     time.sleep(1)
 
     (VAULT / "exc_a.md").write_bytes(b"# A\n")
@@ -208,7 +209,8 @@ def main() -> None:
     VAULT.mkdir(parents=True)
 
     watcher, events = make_watcher()
-    watcher.start()
+    watcher.scan()
+    watcher.observe()
     time.sleep(1)
 
     if mode in ("basic", "all"):

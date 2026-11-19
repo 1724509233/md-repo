@@ -115,7 +115,7 @@ server/vault/          ← PEP 420 namespace 包（根 shim 已于卡 12 退役�
 ```
 server/services/ledger.py ────────► file_ops.apply_change / apply_folder_change
                                （唯一外部 importer：consume/record/record_folder）
-server/vault/watcher.py ──────────► file_ops.reconcile     （启动对账，source="reconcile"）
+server/main.py（build_runtime 装配，卡 14b）──► file_ops.reconcile     （启动对账 source="reconcile"；watcher 不再隐式调，scan→reconcile→observe 显式序）
 server/main.py / mcp_server.py / services/recovery.py ───► indexer.ensure_indexed （启动索引检查；recovery 演练镜像生产启动路径）
 server/ai.py（rag_search）────────► db.segments_sql.segments_search（搜索工具入口）
 

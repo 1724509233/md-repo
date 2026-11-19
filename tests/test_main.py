@@ -1,10 +1,12 @@
-"""Tests for startup reconcile via SnapshotWatcher.start().
+"""Tests for startup reconcile via the scan→reconcile→observe assembly.
 
 These previously tested the removed ``_self_heal`` / ``_startup_reconcile``
-functions; they now exercise the replacement path: a ``SnapshotWatcher`` created
-with ``db_conn=conn`` runs ``reconcile`` inside ``start()`` and writes reconcile
-records to the change_log. The same reconcile scenarios are covered (rename →
-move, delete → cleanup, ambiguous match → no move, consistent → noop).
+functions, then the implicit reconcile inside ``SnapshotWatcher.start()``
+(card 14b split the assembly out: main.build_runtime runs
+``reconcile(watcher.scan(), conn, vault, ledger_conn=…)`` before
+``watcher.observe()``; these tests mirror that order). The same reconcile
+scenarios are covered (rename → move, delete → cleanup, ambiguous match →
+no move, consistent → noop).
 """
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ from pathlib import Path
 
 from server.vault.db.file_index import upsert_file
 from server.vault.db.schema import init_db
+from server.vault.orchestration.file_ops import reconcile
 from server.vault.watcher import SnapshotWatcher
 
 
@@ -47,7 +50,8 @@ def test_reconcile_migrates_renamed_file(tmp_path):
 
     watcher = SnapshotWatcher(vault, db_conn=conn)
     try:
-        watcher.start()
+        reconcile(watcher.scan(), conn, vault, ledger_conn=None)
+        watcher.observe()
     finally:
         watcher.stop()
 
@@ -72,7 +76,8 @@ def test_reconcile_cleans_deleted_file(tmp_path):
 
     watcher = SnapshotWatcher(vault, db_conn=conn)
     try:
-        watcher.start()
+        reconcile(watcher.scan(), conn, vault, ledger_conn=None)
+        watcher.observe()
     finally:
         watcher.stop()
 
@@ -97,7 +102,8 @@ def test_reconcile_ambiguous_match_no_move(tmp_path):
 
     watcher = SnapshotWatcher(vault, db_conn=conn)
     try:
-        watcher.start()
+        reconcile(watcher.scan(), conn, vault, ledger_conn=None)
+        watcher.observe()
     finally:
         watcher.stop()
 
@@ -121,7 +127,8 @@ def test_reconcile_noop_when_consistent(tmp_path):
 
     watcher = SnapshotWatcher(vault, db_conn=conn)
     try:
-        watcher.start()
+        reconcile(watcher.scan(), conn, vault, ledger_conn=None)
+        watcher.observe()
     finally:
         watcher.stop()
 

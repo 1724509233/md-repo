@@ -21,6 +21,7 @@ from .services.egress import log_model_endpoints
 from .core.privacy import PrivacyConfig
 from .vault.db.migrate_ledger import migrate_ledger
 from .vault.db.schema import init_db, init_ledger_db
+from .vault.orchestration.file_ops import reconcile
 from .vault.orchestration.indexer import ensure_indexed
 from .core.logrotate import start_logrotate
 from .vault.watcher import SnapshotWatcher
@@ -95,11 +96,13 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
         on_file_modified=on_modified,
         on_file_moved=on_moved,
         on_file_deleted=on_deleted,
-        # A4 wiring (card 10c): startup reconcile's offline-move path rewrites
-        # relatedness too — the handle travels, never lazied (5th route).
-        ledger_conn=ledger_conn,
     )
-    watcher.start()
+    # Assembly order is beat-for-beat the old watcher.start() (card 14b
+    # split, user-approved): scan → reconcile → observe. A4 wiring (card
+    # 10c): startup reconcile's offline-move path rewrites relatedness too
+    # — the handle travels, never lazied (5th production route).
+    reconcile(watcher.scan(), conn, vault_dir, ledger_conn=ledger_conn)
+    watcher.observe()
     await asyncio.sleep(0)  # let the task start
 
     bg_tasks: list[asyncio.Task] = []
