@@ -137,6 +137,8 @@ server/
 5. **斩包级环**：`vault/orchestration/** ⊄ services`、`vault/orchestration ⊄ routes`；`services ⊄ agent、bgagent、routes`（实测当前 services 六模块零上行 import，此规则今天就能钉死）；`vault/db/** ⊄ orchestration、services、agent、bgagent、routes`（`db/notifications.py:19` 的 docstring 已有「不 import bgagent 形状」的口头纪律，此规则把它钉死）；`ai ⊄ services、agent、bgagent、routes`（A7 已裁；`ai→orchestration` 两处懒取 search.py:37/:198 入暂存基线，卡 8 了结）；`core ⊄ vault、services、routes、agent、bgagent、ai`（trash 移入 services 后全部成立）。**对账注（2026-11-18）**：services 六模块对 agent/bgagent/routes 实测零上行（亲验）；recovery 的 `from server.ai import rag_search`（recovery.py:37）与 `snapshot_watcher`（目标址 `vault/watcher.py`，services→vault 允许）在层序调整后均合法，规则 5 上线当天即可零违例钉死。
 6. **身份不从参数来（红线 3 的结构化）**：`ToolContext.write_source/run_id/session_id` 只许通道入口装配点赋值——钉法：`agent/tools/**` 源码禁止对 `ctx.write_source|ctx.run_id|ctx.session_id` 赋值（现在没有，钉住防未来）。
 
+**R5 禁表扩源（2026-11-19，卡 13c 用户裁决）**：`_FORBIDDEN_EDGES` 增第 5 源 `server/config ⊄ {services, agent, agent.tools, routes, bgagent}`——工具白名单校验倒置给注册表主人（`agent.tools` 公开校验器，装配点 load 后立即聚合校验，启动 fail-fast 与报错文案逐字保持，行为调整经用户批准）、词表常量下沉 core（卡 13b），config 只存 raw；上线当天四 import 形态复核零违例。config→ai 现场实测 0 条、不在用户终值清单内（未来若出现须改禁表强制评审）。
+
 ## 4. 强制机制选型
 
 | | pytest AST/源码扫描测试 | import-linter |
@@ -207,3 +209,5 @@ server/
 | A6 | 棘轮基线存放 | ✅ 外置 `tests/architecture_baseline.json` + `--update-arch-baseline`（conftest 注册 addoption） |
 | A7 | ai 叶子性无规则钉且现已被违 | ✅ R5 增 `ai ⊄ {services, agent, bgagent, routes}`；`ai→orchestration`（search.py:37/:198）入暂存基线，卡 8 了结（`_normalize_tag` 移 `fs/` 成公开函数）；§3 允许方向补 `routes/api/mcp → ai`、`services → ai`。**补裁终值（2026-11-19，gate2-addendum.md）**：:198 采案 A——删 ai 懒重建，空 segments 显式降级 legacy（案 B 移 db 驳回）；随卡清 `_STAGED_EDGES` 并元测试断言恒空 |
 | A8 | 意外红处置协议 + commit 模板 | ✅ 两级协议与模板按推荐值写入 §5 总则；边界判例归 spec-review-1.md 续记 |
+| 卡 13 | 用户裁决（2026-11-19，backlog 人判项执行） | ✅ **校验倒置到注册表主人**：`ai.tools`/`background_agents.tools` 白名单校验（shape+membership，报错文案逐字）归 `agent.tools` 公开校验器，config 只存 raw，装配点（main/mcp/功能哨兵）load 后立即聚合校验——启动 fail-fast 语义保持（校验时点从 load 挪到装配，经用户显式批准）；族一常量 `PROPOSALS_DIR`/`VALID_TYPES` 下沉 `core/constants.py`（proposals 保留公开 re-export，M2 判例）；R5 增第 5 源 `config`（禁 services/agent/agent.tools/routes/bgagent，零违例钉死） |
+| 卡 13 后记 | 族三处置 | ✅ watcher→orchestration（`vault/watcher.py:22/:309` 两处）经用户裁决**转卡 14 消除**（pair_moves 下沉 core + 启动 reconcile 挪 main 装配），不在 §3 写豁免；R5 watcher 源待卡 14 零违例后钉 |

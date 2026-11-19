@@ -97,6 +97,16 @@ _FORBIDDEN_EDGES: dict[str, tuple[str, ...]] = {
                   # forbidden (A7 closed — _normalize_tag → fs/tags.py,
                   # lazy rebuild deleted per 案 A).
                   "server.vault.orchestration"),
+    # card 13c (user ruling, backlog 人判项): config = pinned bottom-layer
+    # pure loader. Tool-whitelist validation flipped to the registry owner
+    # (agent.tools validators, assembly points call them right after load)
+    # and vocabulary constants moved to core — config stores raw only, so
+    # these upward edges are forbidden with ZERO violations on pin day
+    # (four import forms re-grepped: TOP/lazy/absolute/relative). config→ai
+    # measured zero edges on the day; NOT in the user's final list — a
+    # future config→ai edge must force a review by editing this tuple.
+    "server/config": ("server.services", "server.agent", "server.agent.tools",
+                      "server.routes", "server.bgagent"),
 }
 # Staged edges: permanently empty since card 8b (M9). The mechanism stays
 # (R5 edges read both tables) but the table must never hold entries again —
@@ -518,6 +528,24 @@ def test_detector_r5_edges_subpackage_safe() -> None:
     assert "server.vault.orchestration" in _edges_for("server/ai/sub")  # hard-forbidden since card 8b
     assert _edges_for("server") == ()          # root is no source group
     assert _edges_for("server/templates") == ()  # untracked dir: no edges
+
+
+def test_detector_r5_config_source_synthetic_injection() -> None:
+    """card 13c: config joined R5 as the 5th pinned source — config→services
+    must be RED (synthetic injection of the exact pre-card-13 line), and the
+    group is sub-package safe like every other source."""
+    for tgt in ("server.services", "server.agent", "server.agent.tools",
+                "server.routes", "server.bgagent"):
+        assert tgt in _edges_for("server/config")
+        assert tgt in _edges_for("server/config/sub")  # prefix-safe
+    node = ast.parse("from ..services.proposals import PROPOSALS_DIR").body[0]
+    targets = _import_targets(node, "server.config")
+    assert targets  # sanity: the node resolves
+    forbidden = _edges_for("server/config")
+    hit = [t for t in targets
+           for f in forbidden
+           if t == f or t.startswith(f + ".")]
+    assert hit, "config→services synthetic import escaped R5 edges"
 
 
 def test_detector_staged_edges_permanently_empty() -> None:
