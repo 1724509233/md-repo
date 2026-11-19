@@ -139,6 +139,8 @@ server/
 
 **R5 禁表扩源（2026-11-19，卡 13c 用户裁决）**：`_FORBIDDEN_EDGES` 增第 5 源 `server/config ⊄ {services, agent, agent.tools, routes, bgagent}`——工具白名单校验倒置给注册表主人（`agent.tools` 公开校验器，装配点 load 后立即聚合校验，启动 fail-fast 与报错文案逐字保持，行为调整经用户批准）、词表常量下沉 core（卡 13b），config 只存 raw；上线当天四 import 形态复核零违例。config→ai 现场实测 0 条、不在用户终值清单内（未来若出现须改禁表强制评审）。
 
+**R5 禁表扩源（2026-11-19，卡 14c 用户裁决「族三消除非豁免」）**：`_FORBIDDEN_EDGES` 增第 6 源 **vault 根级模块**（watcher）：`watcher.py ⊄ {vault.orchestration, services, agent, agent.tools, routes, bgagent}`，零违例上线（两条上行边已随 14a/14b 消除：`pair_moves` 整模块下沉 `core/move_pairing.py` + 启动 reconcile 挪 `main.build_runtime` 显式装配 scan→reconcile→observe）。禁表键为**文件级**（`.py` 后缀精确匹配、无前缀继承）——目录键 `server/vault` 会把 `server.vault.orchestration` 禁到 orchestration 包自身的包内 import 上（全体误报）。watcher→ai 现场实测 0 条、不在终值清单（仿卡 13 ai 先例，改表强制评审）。
+
 ## 4. 强制机制选型
 
 | | pytest AST/源码扫描测试 | import-linter |
@@ -211,3 +213,4 @@ server/
 | A8 | 意外红处置协议 + commit 模板 | ✅ 两级协议与模板按推荐值写入 §5 总则；边界判例归 spec-review-1.md 续记 |
 | 卡 13 | 用户裁决（2026-11-19，backlog 人判项执行） | ✅ **校验倒置到注册表主人**：`ai.tools`/`background_agents.tools` 白名单校验（shape+membership，报错文案逐字）归 `agent.tools` 公开校验器，config 只存 raw，装配点（main/mcp/功能哨兵）load 后立即聚合校验——启动 fail-fast 语义保持（校验时点从 load 挪到装配，经用户显式批准）；族一常量 `PROPOSALS_DIR`/`VALID_TYPES` 下沉 `core/constants.py`（proposals 保留公开 re-export，M2 判例）；R5 增第 5 源 `config`（禁 services/agent/agent.tools/routes/bgagent，零违例钉死） |
 | 卡 13 后记 | 族三处置 | ✅ watcher→orchestration（`vault/watcher.py:22/:309` 两处）经用户裁决**转卡 14 消除**（pair_moves 下沉 core + 启动 reconcile 挪 main 装配），不在 §3 写豁免；R5 watcher 源待卡 14 零违例后钉 |
+| 卡 14 | 用户裁决（2026-11-19，族三「消除非豁免」执行） | ✅ 两条 watcher→orchestration 上行边消除：`pair_moves` 整模块下沉 `core/move_pairing.py`（纯叶子 stdlib+core.types；旧模块删净，watcher 薄包装+8 包装测试留原址）；`SnapshotWatcher.start()` 拆 `scan()`/`observe()`，启动 reconcile 挪 `main.build_runtime` 显式装配（scan→reconcile→observe 与现序逐拍等同，行为调整经用户批准）；R5 第 6 源 vault 根级零违例钉死（文件级键，理由见 §3 扩源注）。**§2.3 watcher 行历史原文不动**（冻结史料的「不能进 core」论据已被本卡改造满足，不再回写） |

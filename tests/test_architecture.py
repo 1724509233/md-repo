@@ -107,6 +107,20 @@ _FORBIDDEN_EDGES: dict[str, tuple[str, ...]] = {
     # future config→ai edge must force a review by editing this tuple.
     "server/config": ("server.services", "server.agent", "server.agent.tools",
                       "server.routes", "server.bgagent"),
+    # card 14c (族三 user ruling 「消除非豁免」): vault ROOT-level module
+    # (watcher) pinned as the 6th source — 14a/14b removed the two edges
+    # (pair_moves → core.move_pairing; startup reconcile → main assembly).
+    # FILE-LEVEL key (``.py`` suffix, exact match, NO prefix inheritance):
+    # a directory key "server/vault" would hand "server.vault.orchestration"
+    # down to the orchestration package itself — intra-package imports
+    # (``from .file_ops import X``) resolve under that very root and every
+    # one would false-positive. watcher→ai measured ZERO edges on the day;
+    # NOT in the user's final list (card 13 ai precedent) — a future
+    # watcher→ai edge must force a review by editing this tuple.
+    "server/vault/watcher.py": (
+        "server.vault.orchestration", "server.services", "server.agent",
+        "server.agent.tools", "server.routes", "server.bgagent",
+    ),
 }
 # Staged edges: permanently empty since card 8b (M9). The mechanism stays
 # (R5 edges read both tables) but the table must never hold entries again —
@@ -311,18 +325,28 @@ def _r5_core_violations() -> list[str]:
     return sorted(out)
 
 
-def _edges_for(src_dir: str) -> tuple[str, ...]:
-    """Forbidden + staged target roots for a source directory.
+def _edges_for(src_dir: str, src_file: str | None = None) -> tuple[str, ...]:
+    """Forbidden + staged target roots for a source.
 
-    Gate-2 M8: PREFIX match, sub-package safe — a future
-    ``server/services/sub/x.py`` inherits its parent group's edges (the
-    old exact-dir lookup let any nested package escape R5 edges entirely;
-    it was the only non-sub-package-safe key in the seven detectors).
+    Two key kinds (card 14c):
+
+    * Directory key (``server/services``) — PREFIX match, sub-package safe:
+      a future ``server/services/sub/x.py`` inherits its parent group's
+      edges (gate-2 M8: the old exact-dir lookup let any nested package
+      escape R5 edges entirely; it was the only non-sub-package-safe key
+      in the seven detectors).
+    * File key (``server/vault/watcher.py`` — ``.py`` suffix) — EXACT file
+      match only, no inheritance. Used for the vault-root source: a
+      directory key there would forbid targets matching sub-packages' own
+      roots (orchestration intra-package imports would all flag).
     """
     out: list[str] = []
     for table in (_FORBIDDEN_EDGES, _STAGED_EDGES):
         for src, edges in table.items():
-            if src_dir == src or src_dir.startswith(src + "/"):
+            if src.endswith(".py"):
+                if src_file == src:
+                    out.extend(edges)
+            elif src_dir == src or src_dir.startswith(src + "/"):
                 out.extend(edges)
     return tuple(dict.fromkeys(out))
 
@@ -331,7 +355,7 @@ def _r5_edge_violations() -> list[str]:
     out = []
     for rel, py in _iter_server_py():
         src_dir = PurePosixPath(rel).parent.as_posix()
-        forbidden = _edges_for(src_dir)
+        forbidden = _edges_for(src_dir, rel)
         if not forbidden:
             continue
         pkg = _package_of(PurePosixPath(rel))
@@ -546,6 +570,28 @@ def test_detector_r5_config_source_synthetic_injection() -> None:
            for f in forbidden
            if t == f or t.startswith(f + ".")]
     assert hit, "config→services synthetic import escaped R5 edges"
+
+
+def test_detector_r5_vaultroot_source_synthetic_injection() -> None:
+    """card 14c: vault root (watcher) is the 6th pinned source — the exact
+    pre-card-14b lazy line injected INTO watcher's package must be RED, and
+    the file-level key must stay inert everywhere else (no inheritance,
+    else orchestration's intra-package imports would false-positive)."""
+    root_edges = _edges_for("server/vault", "server/vault/watcher.py")
+    for tgt in ("server.vault.orchestration", "server.services",
+                "server.agent", "server.agent.tools", "server.routes",
+                "server.bgagent"):
+        assert tgt in root_edges
+    # inert: sibling root file and the sub-packages themselves
+    assert _edges_for("server/vault", "server/vault/some_future.py") == ()
+    assert "server.vault.orchestration" not in _edges_for(
+        "server/vault/orchestration", "server/vault/orchestration/file_ops.py")
+    node = ast.parse(
+        "from .orchestration.file_ops import reconcile").body[0]
+    targets = _import_targets(node, "server.vault")
+    hit = [t for t in targets for f in root_edges
+           if t == f or t.startswith(f + ".")]
+    assert hit, "watcher→orchestration synthetic import escaped R5 edges"
 
 
 def test_detector_staged_edges_permanently_empty() -> None:
