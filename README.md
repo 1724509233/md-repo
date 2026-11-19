@@ -35,9 +35,52 @@ flowchart TB
     client -- "HTTP（轮询同步）" --> api
 ```
 
-- **服务端**：FastAPI 应用，`/` 提供 Web 工作台，`/api/*` 暴露 REST + SSE，watchdog 监听 vault 文件事件驱动变更账本记账。
+- **服务端**：FastAPI 应用，`/` 提供 Web 工作台，`/api/*` 暴露 REST + SSE；`SnapshotWatcher` 监听 vault 文件事件驱动变更账本记账（启动走装配三连 `scan() → reconcile() → observe()`）。
 - **Web UI**：浏览器直接访问工作台，文件树/编辑器/AI 助手/记忆控制台/监控页。
 - **Python Client**：轮询 `/api/sync`，增量拉取/推送，处理冲突。
+- **MCP Server / 后台 agent**：与 Web 走同一套领域服务（services/），身份（actor/run_id/write_source）由通道入口注入。
+
+### 服务端分层（依赖规则，非目录）
+
+2026-11 分层重构终态：四层是 **pytest AST 钉死的依赖方向**（`tests/test_architecture.py` + `tests/architecture_baseline.json` 棘轮基线），不是物理目录——仅 `server/core/` 与 `server/services/` 为新建包，其余原地。
+
+```mermaid
+flowchart TB
+    subgraph L1["接口 / 装配层"]
+        routes["routes/ ×8 域<br/>R2 零 SQL"]
+        apy["api.py<br/>wiring only"]
+        mpy["main.py<br/>装配三连 scan→reconcile→observe"]
+        mcp["mcp_server.py<br/>stdio · 写 token 门"]
+    end
+    subgraph L2["应用层"]
+        svc["services/<br/>ledger 唯一写面"]
+        agt["agent/ + tools/"]
+        bgt["bgagent/"]
+        orc["vault/orchestration/"]
+        ais["ai/"]
+    end
+    subgraph L3["基础设施层"]
+        dbs["vault/db/<br/>R1 SQL 唯一驻地"]
+        fss["vault/fs/"]
+        wat["vault/watcher.py"]
+        cfg["config/<br/>纯 loader"]
+    end
+    core["server/core/ — 真 sink（imports = ∅）"]
+    L1 --> L2 --> L3 --> core
+```
+
+六条规则（棘轮只缩不涨）：
+
+| 规则 | 内容 | 终值 |
+|------|------|------|
+| R1 | SQL 唯一驻地 = `vault/db/`（例外仅 recovery drill） | 2（例外） |
+| R2 | routes 零 SQL，已清零模块**永久禁入** | 0 |
+| R3 | 私有符号不跨目录边界（基线棘轮） | 15 |
+| R4 | 惰性 conn 白名单（只许缩） | 11 处 / 5 文件 |
+| R5 | 禁表 + 层序，**六源钉死**（db · ai · orchestration · services · config · watcher.py，每源带合成注入元测试，零豁免） | 0 |
+| R6 | 身份只从通道入口注入，永不来自模型/请求参数 | 0 |
+
+> 冻结 spec：`docs/superpowers/plans/2026-11-18-target-architecture.md`；决策记录 ADR-0005（vault 根 shim 退役）/ ADR-0006（consume 显式透传 + ai 懒重建删除）已归档 vault。
 
 ## 快速开始
 
@@ -146,7 +189,7 @@ bgagent 与 agent 通过 `propose` 工具产出提案（5 类动词：entity_ind
 
 ## API 端点
 
-按 6 域分组（路由顺序由 `tests/test_routes_order.py` 钉住，每域模块经 `register(app, ctx)` 注册到 `WebContext`）。
+按 8 域分组（console / notifications / sync / recall / egress / memory / agent / trash；路由顺序由 `tests/test_routes_order.py` 钉住，每域模块经 `register(app, ctx)` 注册到 `WebContext`）。
 
 ### console（前缀 `/`、`/api/docs`、`/api/graph`）
 
@@ -283,17 +326,17 @@ MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码�
 
 ```
 ├── server/
-│   ├── main.py               # 入口：config → 双账本(index.db+ledger.db) → app → build_runtime() → uvicorn
-│   ├── api.py                # create_app 工厂（WebContext + /static 挂载 + routes 注册）
-│   ├── services/             # 应用层领域服务：ledger.py（变更账本，唯一写入面）· sync.py（compare_files 无 IO 纯函数）· egress.py（出域台账写面）· trash.py（回收站用例，卡 5 迁入）· snapshots.py（可逆层快照，回滚入口）· proposals.py（提案状态机，DB 为状态源）· recovery.py（恢复演练，只动 index.db）（后三件卡 6 迁入）
-│   ├── ai.py                 # RAG 搜索（rag_search）+ LLM 流式（chat_stream）
-│   ├── mcp_server.py         # MCP stdio server（6 工具，接入 OpenCode 等）
-│   ├── config/               # YAML 配置解析包（core/ai/log/notifications/bgagent）
-│   ├── core/                 # 共享内核（零上行依赖，test_architecture 钉死）：events 总线 · privacy · sync_lock · logrotate · types（FileEntry/ModelConfig）
-│   ├── vault/                # 索引子系统：db/（SQLite+FTS5+图谱+账本表）· fs/（切块+链接解析+vault_ops）· orchestration/（indexer+refs+移动检测+file_ops）· watcher.py（SnapshotWatcher）
-│   ├── agent/                # LLM agent：tools/（15 工具，一模块一工具）· runtime · session · policy · prompts · reminders
-│   ├── bgagent/              # 后台 agent：scheduler（cron+事件arming）· runner · notify · executor（确定性框架角色）
-│   ├── routes/               # 路由 6 域（console/notifications/sync/recall/memory/agent），每域 register(app, ctx)
+│   ├── main.py               # 入口：config → 双账本(index.db+ledger.db) → app → build_runtime() → 白名单校验器 → watcher scan→reconcile→observe → uvicorn
+│   ├── api.py                # create_app 工厂（WebContext + /static 挂载 + routes 注册）——纯 wiring
+│   ├── services/             # 应用层领域服务：ledger.py（变更账本，唯一写入面）· sync.py（compare_files 无 IO 纯函数）· egress.py（出域台账写面）· trash.py（回收站用例）· snapshots.py（可逆层快照，回滚入口）· proposals.py（提案状态机，DB 为状态源）· recovery.py（恢复演练，只动 index.db）
+│   ├── ai/                   # 检索与对话包：search.py（rag_search，空索引显式降级 legacy）· chat.py（chat_stream）· rerank.py
+│   ├── mcp_server.py         # MCP stdio server（6 工具 + 写 token 门；R6 身份注入点之一）
+│   ├── config/               # YAML 配置解析包——纯 loader、只存 raw（工具白名单校验倒置在 agent 侧，装配点 fail-fast）
+│   ├── core/                 # 真 sink（imports=∅）：events 总线 · privacy · sync_lock · logrotate · types（FileEntry/ModelConfig）· constants（PROPOSALS_DIR 等）· move_pairing（移动配对纯函数）
+│   ├── vault/                # 索引子系统（namespace 包，根 shim 已物理退役+反复活钉）：db/（SQLite+FTS5+图谱+账本表，R1 SQL 唯一驻地）· fs/（切块+链接解析+vault_ops）· orchestration/（indexer+refs+file_ops）· watcher.py（事件泵，scan()/observe() 两段）
+│   ├── agent/                # LLM agent：tools/（15 工具，一模块一工具 + 白名单校验器）· policy（validate_tool_call 单入口）· runtime · session · prompts · reminders
+│   ├── bgagent/              # 后台 agent：scheduler（cron+事件arming）· runner · notify · readback · executor（确定性框架角色）
+│   ├── routes/               # 路由 8 域（console/notifications/sync/recall/egress/memory/agent/trash），每域 register(app, ctx)；R2 零 SQL
 │   ├── prompts/              # bgagent 角色提示词（碎片整理/矛盾批注/执行器/召回诊断/历史回顾 + agent system prompt）
 │   └── templates/            # Web UI 静态资源：index.html（壳）+ js/（app/api/components/utils）+ style.css
 ├── client/
@@ -301,8 +344,8 @@ MCP server 是 OpenCode 启动时拉起的长驻进程，改完配置或代码�
 │   ├── config.py             # ClientConfig（server_url/vault_dir/device_name/poll_interval）
 │   ├── state.py              # .sync/state.json（last_sync + files hash 表）
 │   └── sync.py               # scan_local_files → POST /api/sync → to_pull/to_push/conflicts/to_delete
-├── tests/                    # pytest 套件
-└── docs/                     # 实施计划（superpowers/plans）+ 提案通道 HTML 总览
+├── tests/                    # pytest 套件（含 test_architecture.py 六规则 AST 钉测 + architecture_baseline.json 棘轮基线）
+└── docs/                     # 实施计划（superpowers/plans，含冻结 spec 2026-11-18-target-architecture.md）+ 提案通道 HTML 总览
 ```
 
 ## 测试
