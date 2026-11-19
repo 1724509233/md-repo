@@ -20,6 +20,7 @@ def _find_config() -> Path:
 
 from server.agent.policy import WriteGate, _extract_paths
 from server.agent.tools import TOOL_REGISTRY
+from server.core.constants import PROPOSALS_DIR
 from server.agent.tools.read_doc import ReadDocTool
 from server.agent.tools.edit_doc import EditDocTool
 from server.agent.tools.search_docs import SearchDocsTool
@@ -84,7 +85,7 @@ class McpExternalGate(WriteGate):
         if tool is None or tool.permission != "ask":
             return None  # reads are not gated
         for _label, p in _extract_paths(args):
-            if p.split("/", 1)[0] != "suggestions":
+            if p.split("/", 1)[0] != PROPOSALS_DIR:
                 return (
                     "Error: the main memory area is read-only for external agents — "
                     "this write was NOT performed. To propose a change, use the "

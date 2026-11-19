@@ -14,6 +14,7 @@
  */
 
 // 系统目录兜底（前端 files 清单已由 get_all_files 过滤；建索引时再排除一次，防外部注入）
+// 'suggestions' 与后端 server/core/constants.py 的 PROPOSALS_DIR 同值（卡 15 后端已常量化；JS 面无共享常量，留字面——改词表须双侧同步）
 const EXCLUDED_TOP = new Set(['.sync', '.obsidian', '.reports', 'index', 'suggestions', '.trash'])
 
 // wikilink 转换后写入 markdown href 的标记前缀：'#' 片段 URL（DOMPurify 保留、marked 合法），

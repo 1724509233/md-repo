@@ -25,12 +25,15 @@ import sqlite3
 import time
 from datetime import datetime
 
+from ...core.constants import PROPOSALS_DIR
 from .schema import _ledger_lock
 
-# The synthetic card addressing directory (must match
-# server.proposals.PROPOSALS_DIR — that module cannot be imported here, see
-# the module docstring).
-CARDS_DIR = "suggestions"
+# The synthetic card addressing directory — single source of truth is
+# ``server/core/constants.PROPOSALS_DIR`` (card 15 consolidation): importing
+# core from db is a live edge (4 modules already do; card 13b moved the
+# vocabulary to core). What stays forbidden is importing
+# ``server/services/proposals.py`` (cycle — see the module docstring); it
+# publicly re-exports the same constant.
 
 
 def create(
@@ -63,7 +66,7 @@ def create(
         )
         record_id = cur.lastrowid
         date = datetime.fromtimestamp(now).strftime("%Y-%m-%d")
-        relpath = f"{CARDS_DIR}/{date}_{type}_p{record_id}.md"
+        relpath = f"{PROPOSALS_DIR}/{date}_{type}_p{record_id}.md"
         conn.execute(
             "UPDATE proposals SET relpath = ? WHERE id = ?", (relpath, record_id)
         )

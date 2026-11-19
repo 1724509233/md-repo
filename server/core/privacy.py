@@ -26,6 +26,8 @@ from pathlib import Path
 
 import yaml
 
+from .constants import PROPOSALS_DIR
+
 # Unified model-facing refusal wording (§2.2): every read refusal says the
 # same thing, so the refusal surface behaves as one constant.
 INVISIBLE_MSG = "Path is invisible to agents"
@@ -43,7 +45,7 @@ DOC_PRIVACY_NOTICE = (
 # First segments that must never be privacy-scoped (§2.1): system dirs with
 # their own exclusion semantics — folding them into the privacy filter
 # would create behavioral ambiguity.
-_RESERVED_FIRST = {".sync", ".trash", "suggestions"}
+_RESERVED_FIRST = {".sync", ".trash", PROPOSALS_DIR}
 
 
 def parse_privacy_dirs(raw: object) -> tuple[str, ...]:

@@ -6,11 +6,15 @@ import re
 from collections.abc import Iterator
 from pathlib import Path, PurePath
 
+from ...core.constants import PROPOSALS_DIR
+
 # Vault top-level directories excluded from segmentation/graph indexing and
 # the document tree (memory-runtime v1): pending-review material is not
 # memory, and the entity index is a rebuildable derivative. Only the top
 # level is matched — deeper dirs named the same are user content.
-EXCLUDED_INDEX_DIRS = frozenset({"suggestions", "index"})
+# "index" stays a literal on card 15: it has no constant source anywhere
+# (the machine zone name is not carried in a constant by any consumer).
+EXCLUDED_INDEX_DIRS = frozenset({PROPOSALS_DIR, "index"})
 
 
 def safe_rel_path(raw: str) -> Path | None:

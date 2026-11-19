@@ -25,6 +25,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from ..core.constants import PROPOSALS_DIR
 from ..core.privacy import INVISIBLE_MSG, PrivacyConfig, is_privacy
 from .tools import TOOL_ARGS, TOOL_REGISTRY
 
@@ -113,7 +114,10 @@ class SuggestionsGate(WriteGate):
     to miss.
     """
 
-    name = "suggestions"
+    # Purely diagnostic identifier — sole consumer is the registration-order
+    # pin (tests/test_privacy_gates); no log/console/UI surface. Bound to the
+    # zone constant (card 15).
+    name = PROPOSALS_DIR
 
     _TERRITORY_ERROR = (
         "Error: suggestions/ is the proposal channel — proposals cannot be "
@@ -129,7 +133,7 @@ class SuggestionsGate(WriteGate):
         if tool is None or tool.permission != "ask":
             return None
         for _label, p in _extract_paths(args):
-            if _first_segment(p) == "suggestions":
+            if _first_segment(p) == PROPOSALS_DIR:
                 return self._TERRITORY_ERROR
         return None
 
