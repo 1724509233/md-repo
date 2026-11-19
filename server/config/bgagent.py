@@ -8,8 +8,8 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
+from ..core.constants import PROPOSALS_DIR
 from ..core.types import ModelConfig
-from ..services.proposals import PROPOSALS_DIR
 
 logger = logging.getLogger("md-vault.config")
 
@@ -218,9 +218,10 @@ def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
     """Parse + validate the optional proposal-verb whitelist (v2).
 
     Shape: a non-empty list of proposal types, each of which must be in
-    ``proposals.VALID_TYPES``. Absent/None → None (unrestricted, backward
-    compatible). The proposals import is deferred (same cycle-avoidance as
-    :func:`_parse_tools`).
+    ``core.constants.VALID_TYPES`` (publicly re-exported as
+    ``proposals.VALID_TYPES`` — card 13 族一 moved the vocabulary to core,
+    so this bottom-layer membership check is legal without an upward
+    import). Absent/None → None (unrestricted, backward compatible).
     """
     if verbs_raw is None:
         return None
@@ -232,7 +233,7 @@ def _parse_verbs(verbs_raw, index: int, alias: str) -> tuple[str, ...] | None:
         raise ValueError(
             f"background_agents[{index}] ({alias}): verbs must be a list of "
             f"non-empty strings")
-    from ..services.proposals import VALID_TYPES
+    from ..core.constants import VALID_TYPES
     bad = [v for v in verbs_raw if v not in VALID_TYPES]
     if bad:
         raise ValueError(

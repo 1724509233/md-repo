@@ -51,11 +51,11 @@ import time
 from datetime import datetime
 
 from ..core import events
+from ..core.constants import (  # noqa: F401  public re-export: consumers import these names from HERE (card 13 族一: the literals moved to core)
+    PROPOSALS_DIR,
+    VALID_TYPES,
+)
 from ..vault.db import proposal_records
-
-PROPOSALS_DIR = "suggestions"
-
-VALID_TYPES = frozenset({"entity_index", "relatedness", "summary", "errata", "reminder"})
 
 # Spec §四: regenerable machine-zone writes = auto; LLM-unique output and
 # human-facing additions = review. errata materialization is a human gate
