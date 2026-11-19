@@ -190,12 +190,16 @@ def _parse_escalation(esc_raw, index: int, alias: str) -> dict | None:
 
 
 def _parse_tools(tools_raw, index: int, alias: str) -> tuple[str, ...] | None:
-    """Parse + validate the optional tool whitelist.
+    """Parse the optional tool whitelist — shape only.
 
-    Shape: a non-empty list of tool names, each of which must exist in the
-    agent tool registry. Absent/None → None (all tools, backward compatible).
-    The registry import is deferred to avoid an import cycle (runner pulls in
-    both ``config`` and ``agent.tools``).
+    Shape: a non-empty list of tool names. Absent/None → None (exempt —
+    the executor role has no LLM tool surface; the "tools is required"
+    legal-layer rule stays below in the loader).
+
+    Membership (registry names) is NOT checked here: config may not import
+    the registry upward (R5 pinned ``server/config`` source, card 13). The
+    registry owner validates — ``agent.tools.validate_tool_whitelists``
+    runs at every assembly point right after loading (fail-fast preserved).
     """
     if tools_raw is None:
         return None
@@ -207,12 +211,6 @@ def _parse_tools(tools_raw, index: int, alias: str) -> tuple[str, ...] | None:
         raise ValueError(
             f"background_agents[{index}] ({alias}): tools must be a list of "
             f"non-empty strings")
-    from ..agent.tools import TOOL_REGISTRY
-    bad = [t for t in tools_raw if t not in TOOL_REGISTRY]
-    if bad:
-        raise ValueError(
-            f"background_agents[{index}] ({alias}): tools contains unknown "
-            f"tool name(s): {bad} (valid: {sorted(TOOL_REGISTRY)})")
     return tuple(tools_raw)
 
 

@@ -293,6 +293,11 @@ def main():
 
     config_path = _find_config()
     config = load_server_config(str(config_path))
+    # Tool-whitelist validation (card 13): same aggregate the main server
+    # calls — stdio loads no background_agents, ai.tools only. Fail-fast
+    # before any runtime objects (privacy/db/mcp registry) are built.
+    from server.agent.tools import validate_tool_whitelists
+    validate_tool_whitelists(config)
     vault_dir = config.vault_dir
 
     # Privacy read boundary (spec 2026-11-18 §2.1/§2.2): one PrivacyConfig

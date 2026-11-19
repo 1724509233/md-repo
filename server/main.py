@@ -147,6 +147,12 @@ def main(argv: list[str] | None = None) -> None:
     notifications_cfg = load_notifications(config_path)
 
     bg_agents = load_background_agents(config_path, vault_dir)
+    # Tool-whitelist validation (card 13): the registry owner owns the
+    # membership rule — the assembly point hands the loaded raw to
+    # agent.tools right away, before any runtime objects are built
+    # (startup fail-fast and messages identical to the old load-time check).
+    from .agent.tools import validate_tool_whitelists
+    validate_tool_whitelists(config, bg_agents)
     if bg_agents:
         logging.getLogger("md-vault.bgagent").info(
             "background agents: %s", [a.alias for a in bg_agents])

@@ -9,7 +9,6 @@ import yaml
 
 from .ai import AIConfig
 from .log import LogConfig
-from ..agent.tools import TOOL_REGISTRY
 from ..core.privacy import parse_privacy_dirs
 
 
@@ -55,14 +54,19 @@ def lan_gate_check(host: str, lan_exposure: bool) -> None:
 
 
 def _parse_ai_tools(tools_raw) -> list[str] | None:
-    """Parse + validate the ``ai.tools`` whitelist (main agent tool surface).
+    """Parse the ``ai.tools`` whitelist (main agent tool surface) — shape only.
 
-    Shape: a list of tool names, each of which must exist in the agent tool
-    registry. Absent/None → None (all tools, backward compatible — the
-    default has always been the full registry). Unknown names or an
-    explicitly empty list raise ValueError at load (fail-fast, mirrors the
-    bgagent tools precedent in ``bgagent._parse_tools`` — no fail-open
-    default; an empty whitelist must not silently grant every tool).
+    Shape: a list of tool names. Absent/None → None (all tools, backward
+    compatible — the default has always been the full registry). Explicitly
+    empty or malformed lists raise ValueError at load (fail-fast — no
+    fail-open default; an empty whitelist must not silently grant every
+    tool).
+
+    Membership (each name must exist in the agent tool registry) is NOT
+    checked here: config may not import the registry upward (R5 pinned
+    ``server/config`` source, card 13). The registry owner validates —
+    ``agent.tools.validate_tool_whitelists`` runs at every assembly point
+    right after ``load_server_config`` (startup fail-fast preserved).
     """
     if tools_raw is None:
         return None
@@ -75,11 +79,6 @@ def _parse_ai_tools(tools_raw) -> list[str] | None:
     if not all(isinstance(t, str) and t for t in tools_raw):
         raise ValueError(
             f"ai.tools must be a list of non-empty strings")
-    bad = [t for t in tools_raw if t not in TOOL_REGISTRY]
-    if bad:
-        raise ValueError(
-            f"ai.tools contains unknown tool name(s): {bad} "
-            f"(valid: {sorted(TOOL_REGISTRY)})")
     return tools_raw
 
 

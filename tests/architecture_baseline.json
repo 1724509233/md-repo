@@ -11,7 +11,7 @@
     "server/mcp_server.py:122:get_ledger_conn",
     "server/mcp_server.py:161:get_ledger_conn",
     "server/mcp_server.py:226:get_index_conn",
-    "server/mcp_server.py:386:get_ledger_conn",
+    "server/mcp_server.py:391:get_ledger_conn",
     "server/services/snapshots.py:386:get_index_conn",
     "server/services/snapshots.py:530:get_index_conn",
     "server/services/snapshots.py:547:get_index_conn",

@@ -389,12 +389,16 @@ def test_ai_tools_subset_accepted(tmp_path: Path):
 
 
 def test_ai_tools_unknown_name_fails_fast(tmp_path: Path):
-    """Unknown tool name → ValueError at load (fail-fast), with the bad
-    name plus at least one valid name so the typo is fixable."""
+    """Unknown tool name → ValueError from the registry-owner validator
+    (card 13: membership lives in agent.tools, run by the assembly point
+    right after load — startup fail-fast preserved), with the bad name plus
+    at least one valid name so the typo is fixable."""
     cfg_file = _ai_cfg_file(tmp_path,
         "  tools: [\"read_doc\", \"nope_tool\"]\n")
+    cfg = load_server_config(str(cfg_file))
+    from server.agent.tools import validate_tool_whitelists
     with pytest.raises(ValueError) as exc:
-        load_server_config(str(cfg_file))
+        validate_tool_whitelists(cfg)
     msg = str(exc.value)
     assert "nope_tool" in msg
     from server.agent.tools import TOOL_REGISTRY

@@ -53,10 +53,94 @@ TOOL_ARGS: dict[str, type[BaseModel]] = {name: t.args_model for name, t in TOOL_
 
 TOOLS = [t.to_openai_tool() for t in _ALL_TOOLS]
 
+
+# ── Tool-whitelist validators (card 13: the registry owner owns validation) ──
+# Single source of truth for whitelist MEMBERSHIP (the shape checks remain
+# verbatim in server/config's loaders, which store raw and may no longer
+# import this package upward — R5 pinned ``server/config`` as a forbidden
+# source). Assembly points (server/main.py, server/mcp_server.py, the
+# functional sentinel) call validate_tool_whitelists right after
+# load_server_config/load_background_agents: startup fail-fast and every
+# message stay byte-identical to the pre-card-13 load-time behavior.
+# These functions never import server.config (R5) — plain values in,
+# ValueError out.
+
+def validate_ai_tools_whitelist(tools) -> None:
+    """Validate the ``ai.tools`` whitelist (main agent tool surface).
+
+    None → all tools (backward compatible). Shape checks mirror
+    ``config.core._parse_ai_tools`` verbatim (the loader raises first at
+    load); the membership check lives HERE only. Unknown names or an
+    explicitly empty list raise ValueError (fail-open default is
+    forbidden — an empty whitelist must not silently grant every tool).
+    """
+    if tools is None:
+        return
+    if not isinstance(tools, list):
+        raise ValueError(
+            f"ai.tools must be a list of tool names, got {type(tools).__name__}")
+    if not tools:
+        raise ValueError(
+            "ai.tools must not be empty (omit the key to enable all tools)")
+    if not all(isinstance(t, str) and t for t in tools):
+        raise ValueError(
+            f"ai.tools must be a list of non-empty strings")
+    bad = [t for t in tools if t not in TOOL_REGISTRY]
+    if bad:
+        raise ValueError(
+            f"ai.tools contains unknown tool name(s): {bad} "
+            f"(valid: {sorted(TOOL_REGISTRY)})")
+
+
+def validate_bgagent_tools_whitelist(index: int, alias: str, tools) -> None:
+    """Validate one ``background_agents[i].tools`` whitelist.
+
+    None → exempt (the executor role has no LLM tool surface; the
+    "tools is required" legal-layer rule stays in the loader). Shape
+    checks mirror ``config.bgagent._parse_tools`` verbatim; the
+    membership check lives HERE only.
+    """
+    if tools is None:
+        return
+    if not isinstance(tools, (list, tuple)) or not tools:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools must be a non-empty "
+            f"list of tool names")
+    if not all(isinstance(t, str) and t for t in tools):
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools must be a list of "
+            f"non-empty strings")
+    bad = [t for t in tools if t not in TOOL_REGISTRY]
+    if bad:
+        raise ValueError(
+            f"background_agents[{index}] ({alias}): tools contains unknown "
+            f"tool name(s): {bad} (valid: {sorted(TOOL_REGISTRY)})")
+
+
+def validate_tool_whitelists(server_cfg=None, bg_agents=None) -> None:
+    """Aggregate assembly-point entry (card 13): called by every
+    ``load_server_config`` caller immediately after loading, before any
+    runtime objects are built.
+
+    ``server_cfg`` — a loaded ServerConfig or None (duck-typed: only
+    ``.ai.tools`` is read; this module never imports server.config).
+    ``bg_agents`` — loaded BackgroundAgentConfig list or None (each item
+    duck-typed via ``.alias`` / ``.tools``; enumeration reproduces the
+    loader's ``[index]`` positions).
+    """
+    ai = getattr(server_cfg, "ai", None) if server_cfg is not None else None
+    validate_ai_tools_whitelist(getattr(ai, "tools", None) if ai is not None else None)
+    for i, cfg in enumerate(bg_agents or ()):
+        validate_bgagent_tools_whitelist(
+            i, getattr(cfg, "alias", "?"), getattr(cfg, "tools", None))
+
 __all__ = [
     "TOOL_REGISTRY",
     "TOOL_ARGS",
     "TOOLS",
+    "validate_ai_tools_whitelist",
+    "validate_bgagent_tools_whitelist",
+    "validate_tool_whitelists",
     "ReadDocArgs",
     "SearchDocsArgs",
     "ListFilesArgs",

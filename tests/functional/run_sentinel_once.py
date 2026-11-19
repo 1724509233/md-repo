@@ -62,6 +62,10 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     agents = load_background_agents(str(config_path), vault)
+    # Tool-whitelist validation (card 13): mirror server/main.py's assembly
+    # point — the registry owner validates before any runtime objects.
+    from server.agent.tools import validate_tool_whitelists
+    validate_tool_whitelists(bg_agents=agents)
     cfg = next((a for a in agents if a.alias == args.alias), None)
     if cfg is None:
         print(f"error: agent alias {args.alias!r} not in config", file=sys.stderr)

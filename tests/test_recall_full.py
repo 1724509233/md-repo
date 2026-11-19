@@ -964,10 +964,14 @@ def test_config_tools_valid_names(tmp_path):
 
 def test_config_tools_unknown_name_raises(tmp_path):
     from server.config import load_background_agents
+    from server.agent.tools import validate_tool_whitelists
 
+    # card 13: membership is the registry owner's rule — load stores raw,
+    # the assembly-point validator raises (startup fail-fast preserved).
     cfg_file = _bg_config_file(tmp_path, "    tools:\n      - nope_tool\n")
+    agents = load_background_agents(str(cfg_file), tmp_path)
     with pytest.raises(ValueError, match="unknown tool name"):
-        load_background_agents(str(cfg_file), tmp_path)
+        validate_tool_whitelists(bg_agents=agents)
 
 
 def test_config_tools_empty_list_raises(tmp_path):
