@@ -17,7 +17,8 @@ from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
 from ..services.egress import EgressTarget, parse_endpoint, should_record
 from ..core.privacy import DOC_PRIVACY_NOTICE, is_privacy
-from ..vault.db.sessions import get_auto_approve, set_auto_approve
+from ..vault.db.sessions import (delete_session, get_auto_approve, load_session,
+                                 list_session_summaries, set_auto_approve)
 from ..vault.fs.vault_ops import safe_rel_path as _safe_rel_path
 
 logger = logging.getLogger("md-vault.api")
@@ -387,3 +388,56 @@ def register(app, ctx) -> None:
                               if click_paths else None),
         )
         return {"ok": True, "verdict": verdict}
+
+    @app.get("/api/agent/sessions")
+    async def agent_sessions_list() -> dict:
+        """Session summaries for the AI panel history view (spec §1.2).
+
+        T1 的 list_session_summaries 投影（last_active DESC，空行除外）。
+        No DB → 空列表（spec §3 表：列表面无库是空历史，不是错误）。
+        """
+        if ctx.db_conn is None:
+            return {"sessions": []}
+        return {"sessions": list_session_summaries(ctx.db_conn)}
+
+    @app.get("/api/agent/sessions/{sid}")
+    async def agent_session_detail(sid: str) -> dict:
+        """Full-fidelity restore payload (spec §1.2).
+
+        ``messages`` is the persisted LLM-shape list verbatim (reminder
+        rows, assistant.tool_calls, tool results, terminal assistant
+        id/ts/citations) — the recovery pipeline's single source. ``sid`` is
+        a plain DB key: no path semantics, so no _safe_rel_path.
+        """
+        if ctx.db_conn is None:
+            raise HTTPException(status_code=503, detail="no database")
+        saved = load_session(ctx.db_conn, sid)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return {"session_id": sid, "messages": saved["messages"],
+                "token_count": saved["token_count"],
+                "last_active": saved["last_active"]}
+
+    @app.delete("/api/agent/sessions/{sid}")
+    async def agent_session_delete(sid: str) -> dict:
+        """Delete a session: row + manager state + cached Agent (spec §1.2).
+
+        Order is load-bearing: lock check FIRST (stream in flight → 409 —
+        the chat finally-block save would resurrect the row), then the DB
+        delete (missing row → 404), then the in-memory purge:
+        SessionManager.remove pops _messages/_last_active/_locks, and the
+        route-owned caches go too — a surviving Agent still holds the old
+        ``_messages`` and would re-persist the deleted conversation on its
+        next turn (the no-resurrect pin, Review Focus 2).
+        """
+        if ctx.db_conn is None:
+            raise HTTPException(status_code=503, detail="no database")
+        if session_mgr.get_lock(sid).locked():
+            raise HTTPException(status_code=409,
+                                detail="session busy (stream in flight)")
+        if not delete_session(ctx.db_conn, sid):
+            raise HTTPException(status_code=404, detail="session not found")
+        session_mgr.remove(sid)
+        agent_cache.pop(sid, None)
+        _agent_last_active.pop(sid, None)
+        return {"ok": True}
