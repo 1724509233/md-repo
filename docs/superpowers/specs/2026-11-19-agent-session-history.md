@@ -19,7 +19,7 @@
   - **title = 首条非提醒 user 消息摘要**（跳过 `[当前打开:` 前缀——`DocPathUserReminder` 持久化后同 role 同形，不跳过标题就全是路径）。取首条不取末条：末条随对话漂移且常是上下文碎片；首条=话题锚（ChatGPT 同款，沉睡会话续聊置顶配首条标题是标准可辨行为）。截 40 字符 + `…`。**兜底链**：无 user 消息（仅工具会话）→ `工具会话 · N 条`；全无 → `（无标题）`。前缀字面量与 `DocPathUserReminder._PREFIX`（reminders.py:65）三处同源（后端标题过滤/前端恢复过滤/reminder 本体），钉：pytest 断言字面量一致。
   - blob 全读在个人量级（数十会话 × 数百 KB）可接受；日后过大再改 SQL `json_extract`，YAGNI 不预支。
 - 新增 `delete_session(conn, session_id) -> bool`（rowcount>0）。
-- 现有 `get_recent_sessions`（sessions.py:90）无调用方且返回全量 blob——**删除**，被 1.1 取代（连带 test_db.py:347 用例改写、db/README.md 行更新、`test_vault_root_shim_retired.py:22` 名单同步）。
+- 现有 `get_recent_sessions`（sessions.py:90）无调用方且返回全量 blob——**删除**，被 1.1 取代（连带 test_db.py:347 用例改写、db/README.md 行更新；`test_vault_root_shim_retired.py:22` 是墓碑名单——断言的正是这些名字不得复活为 `server.vault` 属性，函数删除后该断言依然真，无需改动）。
 
 ### 1.2 路由（agent 域，注意 `test_routes_order` 钉）
 
