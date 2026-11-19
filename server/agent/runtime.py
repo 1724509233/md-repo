@@ -281,17 +281,44 @@ class LoopRuntime(Runtime):
                 if usage is not None:
                     prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     completion_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    # 隐式前缀缓存命中遥测（待办 f1374245）：OpenAI 形态
+                    # usage.prompt_tokens_details.cached_tokens（对象/dict 两形态都处理；
+                    # SDK extra 字段可能落在 usage.model_extra），回退 DeepSeek 形态
+                    # usage.prompt_cache_hit_tokens。整段 fail-open：遥测不得咬正常流；
+                    # 非 int 形态（含测试 MagicMock 的自动属性）不采信。
+                    cached = None
+                    try:
+                        details = getattr(usage, "prompt_tokens_details", None)
+                        if details is None:
+                            details = (getattr(usage, "model_extra", None) or {}).get("prompt_tokens_details")
+                        if isinstance(details, dict):
+                            cached = details.get("cached_tokens")
+                        elif details is not None:
+                            cached = getattr(details, "cached_tokens", None)
+                        if cached is None:
+                            cached = getattr(usage, "prompt_cache_hit_tokens", None)
+                        if cached is None:
+                            cached = (getattr(usage, "model_extra", None) or {}).get("prompt_cache_hit_tokens")
+                        if cached is not None and not isinstance(cached, int):
+                            cached = None
+                    except Exception:
+                        cached = None
                     if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int):
                         current_tokens = prompt_tokens + completion_tokens
                         # 增量键 prompt/completion（bgagent runner 口径用）；
                         # used/total/percent 保留 —— Web UI AIChatPanel 只读这三个键
-                        yield Event("token_usage", {
+                        payload = {
                             "used": current_tokens,
                             "total": model.context_window,
                             "percent": round(current_tokens / model.context_window * 100, 1) if model.context_window else 0,
                             "prompt": prompt_tokens,
                             "completion": completion_tokens,
-                        })
+                        }
+                        if cached is not None:
+                            payload["cached"] = cached
+                            logger.info("llm usage prompt=%d completion=%d cached=%s",
+                                        prompt_tokens, completion_tokens, cached)
+                        yield Event("token_usage", payload)
 
                 if not tool_calls:
                     # Final answer: append the assistant message with its UI/telemetry

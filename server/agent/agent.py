@@ -92,8 +92,7 @@ class Agent:
         ctx["privacy_doc"] = privacy_doc
         for r in self._spec.user_reminders:
             content = r.render(self, ctx)
-            if content is not None:
-                self._messages = r.strip(self._messages)
+            if content is not None and content != r.last_injected(self._messages):
                 self._messages.append({"role": "user", "content": content})
         self._messages.append({"role": "user", "content": message})
         async for event in self._runtime.run(self):

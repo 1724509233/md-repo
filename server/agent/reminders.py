@@ -3,7 +3,10 @@
 - :class:`SystemReminder` — rendered at agent/session initialization into the
   second system prompt, wrapped in ``<system-reminder>...</system-reminder>``.
 - :class:`UserReminder` — rendered at chat initialization (and on change) into
-  a user message; ``strip()`` removes previously injected messages first.
+  a user message; append-only: a reminder is skipped when its rendered content
+  equals ``last_injected()`` and appended only on change — previously injected
+  messages are never removed or rewritten, so the conversation prefix stays
+  stable and implicit prefix caches can hit.
 
 Custom reminders subclass either base and are declared in the AgentSpec.
 """
@@ -27,9 +30,10 @@ class SystemReminder(ABC):
 class UserReminder(ABC):
     """Injected as a user message at chat initialization / on change."""
 
-    def strip(self, messages: list[dict]) -> list[dict]:
-        """Remove previously injected messages. Default: no-op."""
-        return messages
+    def last_injected(self, messages: list[dict]) -> str | None:
+        """Content of the most recently injected instance of this reminder,
+        or None. Default: never injected (no dedup)."""
+        return None
 
     @abstractmethod
     def render(self, agent, ctx: dict) -> str | None:
@@ -51,24 +55,28 @@ class TimeSystemReminder(SystemReminder):
 class DocPathUserReminder(UserReminder):
     """``[当前打开: path]`` user message.
 
-    Re-injected on every chat call that carries a ``doc_path``; appends a
-    change warning when the doc was modified since the agent last read it.
+    Injected when the open doc changes (变化时追加、不变跳过 — append-only,
+    保前缀缓存): :meth:`last_injected` recognizes the previously injected
+    instance by prefix, and a re-render with identical content is skipped.
+    Carries a change warning when the doc was modified since the agent last
+    read it (that flips the content, so the updated reminder is appended).
     """
 
     _PREFIX = "[当前打开:"
 
-    def strip(self, messages: list[dict]) -> list[dict]:
-        return [
-            m for m in messages
-            if not (m.get("role") == "user" and str(m.get("content", "")).startswith(self._PREFIX))
-        ]
+    def last_injected(self, messages: list[dict]) -> str | None:
+        for m in reversed(messages):
+            if m.get("role") == "user" and str(m.get("content", "")).startswith(self._PREFIX):
+                return str(m.get("content", ""))
+        return None
 
     def render(self, agent, ctx: dict) -> str | None:
         rel = ctx.get("doc_path")
         if not rel:
             if ctx.get("privacy_doc"):
                 # 隐私打开文档（spec 2026-11-18 语义升级）：路径不进上下文，
-                # 注入逐字引导文案（前缀同族 → strip() 天然覆盖旧提醒）。
+                # 注入逐字引导文案（前缀同族 → last_injected() 按前缀识别，
+                # 内容不变即跳过、变化才追加，不堆叠）。
                 from ..core.privacy import DOC_PRIVACY_NOTICE
 
                 return DOC_PRIVACY_NOTICE

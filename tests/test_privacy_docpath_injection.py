@@ -12,8 +12,10 @@ The editor auto-attaches its currently-open document to both chat channels:
 Semantics (2026-11-18 user decision, 升级): a privacy-scoped open doc is
 never named or read, but the model gets the FIXED guided notice
 (``DOC_PRIVACY_NOTICE`` — verbatim constant, prefix in the ``[当前打开:``
-family so ``strip()`` replaces it on the next turn, never interpolates the
-real path) teaching it how to route the user. No 409 on privacy paths (a
+family so ``last_injected()`` recognizes it: injection is append-only —
+skipped when unchanged, appended when the open doc changes, keeping the
+conversation prefix cacheable — and it never interpolates the real path)
+teaching it how to route the user. No 409 on privacy paths (a
 validation error would leak path existence). ``ctx.privacy`` None →
 byte-equivalent old behavior (equivalence pins).
 """
@@ -63,6 +65,37 @@ def _mock_openai():
     mock_stream.__aiter__ = lambda s: fake_aiter()
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+    return patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client)
+
+
+def _mock_openai_recording(calls: list):
+    """Same single-chunk mock as :func:`_mock_openai`, but every create()
+    call records a ``copy.deepcopy`` of its ``messages`` kwarg — the two
+    requests are projections of the same live list, so a bare reference
+    would not be a snapshot (prefix-extension pin, 待办 f1374245)."""
+    import copy
+
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "ok"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+
+    async def create_with_capture(**kw):
+        calls.append(copy.deepcopy(kw["messages"]))
+        return mock_stream
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = create_with_capture
     return patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client)
 
 
@@ -137,15 +170,16 @@ def test_agent_chat_privacy_doc_path_guided_notice(vault_dir, db_conn,
     assert len(msgs) == 1
     assert msgs[0]["content"] == DOC_PRIVACY_NOTICE   # 逐字常量
     assert "日记/" not in msgs[0]["content"]          # 无真实路径
-    # 前缀同族钉：strip() 靠 _PREFIX 清理，新文案必须留在 [当前打开: 家族里
+    # 前缀同族钉：last_injected() 靠 _PREFIX 识别旧提醒，新文案必须留在 [当前打开: 家族里
     assert msgs[0]["content"].startswith("[当前打开:")
     assert "日记/secret.md" not in agent().evidence_paths
 
 
-def test_agent_chat_notice_replaced_not_stacked(vault_dir, db_conn, ai_config,
-                                                tmp_path, monkeypatch):
-    """strip 语义钉：隐私提醒两次连续 chat 不堆叠（恰一条）；随后开普通
-    文档 → 隐私提醒被替换掉，只剩普通提醒。"""
+def test_agent_chat_notice_deduped_and_updated(vault_dir, db_conn, ai_config,
+                                               tmp_path, monkeypatch):
+    """append-only 去重钉（待办 f1374245）：同隐私文档连续两轮 → 内容不变跳过
+    （恰一条）；第三轮切普通文档 → 变化只追加（隐私提醒保留在历史 + 新增
+    普通提醒，共两条），绝不删除历史中段消息（保前缀缓存）。"""
     tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=True)
     _post_chat(tc, message="one", doc_path="日记/secret.md")
@@ -156,9 +190,34 @@ def test_agent_chat_notice_replaced_not_stacked(vault_dir, db_conn, ai_config,
 
     _post_chat(tc, message="three", doc_path="notes/test.md")
     msgs = _open_doc_msgs(agent())
-    assert len(msgs) == 1
-    assert msgs[0]["content"] != DOC_PRIVACY_NOTICE
-    assert "notes/test.md" in msgs[0]["content"]
+    assert len(msgs) == 2                              # 旧提醒未被删 + 新提醒追加
+    assert msgs[0]["content"] == DOC_PRIVACY_NOTICE    # append-only：隐私提醒仍在历史
+    assert "notes/test.md" in msgs[-1]["content"]      # 最后一条提醒是普通文档提醒
+
+
+def test_agent_chat_history_is_append_only_across_turns(vault_dir, db_conn,
+                                                        ai_config, tmp_path,
+                                                        monkeypatch):
+    """前缀缓存回归钉（待办 f1374245）：同一 session 同 doc_path 连发两条消息
+    → 第二次 create() 收到的 messages 是第一次的严格前缀扩展（前 len(第一次)
+    项逐字典相等），即隐式前缀缓存可命中的形式。strip 式中段删除会在此断言
+    上当场失败。"""
+    tc, _agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+                                 monkeypatch, privacy=True)
+    calls: list[list[dict]] = []
+    with _mock_openai_recording(calls):
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "one", "session_id": "s1",
+                             "doc_path": "notes/test.md"})
+        assert resp.status_code == 200
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "two", "session_id": "s1",
+                             "doc_path": "notes/test.md"})
+        assert resp.status_code == 200
+    assert len(calls) == 2
+    first, second = calls
+    assert len(second) > len(first)
+    assert second[: len(first)] == first  # 严格前缀扩展（逐字典相等）
 
 
 def test_agent_chat_nonprivacy_doc_path_reminder(vault_dir, db_conn, ai_config,
