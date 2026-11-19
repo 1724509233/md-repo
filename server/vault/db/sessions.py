@@ -87,13 +87,43 @@ def set_auto_approve(conn: sqlite3.Connection | None, session_id: str, value) ->
     conn.commit()
 
 
-def get_recent_sessions(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
-    """Return recent sessions ordered by last_active DESC."""
+# 同源钉：server/agent/reminders.py:65 DocPathUserReminder._PREFIX。
+# 此处不 import agent 层（agent→vault 反向依赖，分层红线）；一致性由
+# tests/test_db.py::test_list_session_summaries 的字面量断言守住（spec §1.1）。
+_REMINDER_PREFIX = "[当前打开:"
+
+
+def _session_title(msgs: list) -> str:
+    """First non-reminder user message, truncated to 40 chars (+ ellipsis);
+    no such message → 工具会话 fallback with the message count."""
+    for m in msgs:
+        if m.get("role") == "user":
+            content = str(m.get("content", ""))
+            if not content.startswith(_REMINDER_PREFIX):
+                return content if len(content) <= 40 else content[:40] + "…"
+    return f"工具会话 · {len(msgs)} 条"
+
+
+def list_session_summaries(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """Session summaries ordered by last_active DESC:
+    {id, title, message_count, last_active}. Empty-messages rows
+    (auto_approve pre-creation shape) are skipped."""
     rows = conn.execute(
-        "SELECT id, messages, token_count, last_active FROM sessions ORDER BY last_active DESC LIMIT ?",
+        "SELECT id, messages, last_active FROM sessions ORDER BY last_active DESC LIMIT ?",
         (limit,),
     ).fetchall()
-    return [
-        {"id": r[0], "messages": json.loads(r[1]), "token_count": r[2], "last_active": r[3]}
-        for r in rows
-    ]
+    out = []
+    for sid, raw, last_active in rows:
+        msgs = json.loads(raw)
+        if not msgs:
+            continue
+        out.append({"id": sid, "title": _session_title(msgs),
+                    "message_count": len(msgs), "last_active": last_active})
+    return out
+
+
+def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
+    """Delete a session row. True if a row was removed."""
+    cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    return cur.rowcount > 0

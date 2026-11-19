@@ -344,15 +344,31 @@ def test_load_session_not_found(db_conn):
     assert load_session(db_conn, "nonexistent") is None
 
 
-def test_get_recent_sessions(db_conn):
-    from server.vault.db.sessions import save_session, get_recent_sessions
+def test_list_session_summaries(db_conn):
+    from server.vault.db.sessions import save_session, list_session_summaries
+    from server.agent.reminders import DocPathUserReminder
+    # 空行（auto_approve 预建形态）不进列表
+    save_session(db_conn, "empty", [])
+    save_session(db_conn, "s1", [{"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
+                                 {"role": "user", "content": "重构提案通道" * 30},
+                                 {"role": "assistant", "content": "好"}])
+    save_session(db_conn, "s2", [{"role": "assistant", "content": "x"}])  # 无 user
+    out = list_session_summaries(db_conn)
+    assert [s["id"] for s in out] == ["s2", "s1"]          # last_active DESC
+    t = next(s for s in out if s["id"] == "s1")["title"]
+    assert not t.startswith(DocPathUserReminder._PREFIX)    # 跳提醒行
+    assert t.startswith("重构提案通道") and len(t) <= 41    # 40 字符 + 可选省略号
+    assert next(s for s in out if s["id"] == "s1")["message_count"] == 3
+    t2 = next(s for s in out if s["id"] == "s2")["title"]
+    assert t2 == "工具会话 · 1 条"                          # 兜底链
+    assert "[当前打开:" == DocPathUserReminder._PREFIX      # 三处同源钉（spec §1.1）
 
-    save_session(db_conn, "s1", [{"role": "user", "content": "a"}])
-    save_session(db_conn, "s2", [{"role": "user", "content": "b"}])
-    sessions = get_recent_sessions(db_conn, limit=10)
-    assert len(sessions) >= 2
-    ids = [s["id"] for s in sessions]
-    assert "s1" in ids and "s2" in ids
+
+def test_delete_session(db_conn):
+    from server.vault.db.sessions import save_session, delete_session
+    save_session(db_conn, "s1", [{"role": "user", "content": "hi"}])
+    assert delete_session(db_conn, "s1") is True
+    assert delete_session(db_conn, "s1") is False
 
 
 def test_save_session_updates_existing(db_conn):
