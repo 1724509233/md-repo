@@ -7,9 +7,8 @@
 | 文件 | 职责 |
 | --- | --- |
 | `indexer.py` | 单文件/全量的 FTS 分段索引与图谱抽取；启动检查 `ensure_indexed` |
-| `move_detect.py` | `pair_moves`：两阶段级联重命名检测（与 `../watcher.py` 共用） |
 | `refs.py` | move/delete 后的 wikilink 引用维护（改写/清除） |
-| `file_ops.py` | 变更应用中枢 `apply_change` / `apply_folder_change` + 启动对账 `reconcile` |
+| `file_ops.py` | 变更应用中枢 `apply_change` / `apply_folder_change` + 启动对账 `reconcile`（move 配对用 `core.move_pairing.pair_moves`，卡 14a 自本包下沉 core） |
 
 ## 公共 API
 
@@ -94,7 +93,7 @@ delete 后从引用方文档中**删除**指向已删文件的 wikilink（全路
 纯 DB 层操作（**不扫盘**，磁盘状态由 `SnapshotWatcher` 提供，spec `~/md-vault/projects/md-repo/specs/2026-10-07-snapshot-watcher-design.md`）。调用时机：watcher 启动时（全量扫描后）——`file_ops.reconcile` 的唯一调用方；周期性兜底是 watcher 自身的扫描（`_reconcile` 把差异标记进 dirty 集，事件再经 `ledger.consume` 落库，不走本函数）。`source="reconcile"`：
 
 1. 读 `files` 表，与 disk dict 做集合比较 → created / deleted / modified（hash 不同）/ unchanged
-2. **move 检测**：`move_detect.pair_moves` 两级级联（与 watcher flush 共用）——Phase 1 按 hash 分组（1:1 直接配对，N:M 组内按 filename 精确细化）；Phase 2 未配对池按 filename 分组（1:1 配对"修改后移动"，N:M 按父目录距离最近邻确定性指派）。残留盲区：改名+修改（hash、filename 均变）仍降级为真删/真建
+2. **move 检测**：`core.move_pairing.pair_moves` 两级级联（与 watcher flush 共用；卡 14a 下沉 core 纯叶子）——Phase 1 按 hash 分组（1:1 直接配对，N:M 组内按 filename 精确细化）；Phase 2 未配对池按 filename 分组（1:1 配对"修改后移动"，N:M 按父目录距离最近邻确定性指派）。残留盲区：改名+修改（hash、filename 均变）仍降级为真删/真建
 3. 各分类经 `apply_change` 应用（FTS 由 trigger 逐行维护，无需批量抑制）
 4. 重复内容检测：同 hash 多文件告警（空文件哈希除外）
 
@@ -118,7 +117,7 @@ server/vault/watcher.py     ──► reconcile（启动对账，source="reconci
 file_ops.py ──► db/* (changes, file_index, schema._db_lock)
              ──► indexer.py (index_segments, delete_segments, graph_*)
              ──► refs.py (_update_references, update_references_batch, remove_dead_links)
-             ──► move_detect.py (pair_moves)
+             ──► core/move_pairing.py (pair_moves，卡 14a 下沉 core)
 refs.py   ──► db/graph_sql._find_referrers  (edges 查询，空表回退 fs 全扫)
 indexer.py──► fs/* (segment_markdown, _tokenize_for_index, _resolve_wikilink, _iter_vault_md)
 ```

@@ -1,5 +1,11 @@
 """Two-level cascade move detection, shared by the snapshot watcher
-(``vault/watcher.py``) and reconcile.
+(``vault/watcher.py``) and reconcile (``vault/orchestration/file_ops.py``).
+
+Card 14a (族三消除): moved down from ``vault/orchestration/move_detect.py``
+to core — the module is a pure leaf (stdlib + ``core.types.FileEntry``), and
+the vault-root watcher must reach it without an upward import
+(``watcher ⊄ orchestration`` is pinned in R5). What stays here is the pairing
+algorithm only; the callers keep their thin wrappers.
 
 Design intent
 -------------
@@ -35,7 +41,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Mapping
 
-from ...core.types import FileEntry
+from .types import FileEntry
 
 
 def _dir_distance(old_path: str, new_path: str) -> int:

@@ -21,7 +21,7 @@ from ..db.schema import ACTION_TO_OP, index_write
 from ...core.types import FileEntry
 from ..fs.link_parser import invalidate_wikilink_filename
 from ..fs.vault_ops import EXCLUDED_INDEX_DIRS
-from .move_detect import pair_moves
+from ...core.move_pairing import pair_moves
 from .indexer import (
     delete_segments,
     graph_delete_file,
@@ -191,7 +191,7 @@ def apply_change(
             # and the human's ignored verdict survive the move (D12 keeps
             # filtering after the move). Single point covering all four move
             # sources (agent move_docs / web manage_docs / client sync /
-            # external move_detect — every move lands through this branch).
+            # external rename pairing — every move lands through this branch).
             # The ledger conn arrives from the channel (A4, card 10c: the
             # production move paths pass it through record()/consume()/
             # reconcile); None = this caller has no ledger (unit-test
@@ -244,7 +244,7 @@ def reconcile(
     gate-2 addendum); None = skip (legacy callers/tests).
 
     Move detection uses the shared two-level cascade
-    (``move_detect.pair_moves``, same rule as snapshot_watcher): hash
+    (``core.move_pairing.pair_moves``, same rule as snapshot_watcher): hash
     grouping first, then filename grouping for modified-content moves.
 
     Returns:
@@ -270,7 +270,7 @@ def reconcile(
     unchanged = {p for p in common if disk[p].hash == db[p][0]}
 
     # Phase 3: move detection via the shared two-level cascade
-    # (move_detect.pair_moves, same rule as snapshot_watcher._pair_moves).
+    # (core.move_pairing.pair_moves, same rule as snapshot_watcher._pair_moves).
     # Unpaired entries degrade to true delete / true create.
     # The DB side is {path: (hash, mtime)}; build FileEntry with size=0
     # (pairing only uses the hash).

@@ -1,4 +1,5 @@
-"""Unit tests for server.vault.orchestration.move_detect.pair_moves.
+"""Unit tests for server.core.move_pairing.pair_moves (card 14a: the module
+moved down from server.vault.orchestration.move_detect to core).
 
 The two-level cascade: Phase 1 pairs by content hash (unchanged-content
 moves), refining non-1:1 hash groups by exact filename; Phase 2 pairs the
@@ -7,8 +8,8 @@ nearest-neighbor assignment for non-1:1 filename groups.
 """
 from __future__ import annotations
 
+from server.core.move_pairing import pair_moves
 from server.core.types import FileEntry
-from server.vault.orchestration.move_detect import pair_moves
 
 
 def _e(h: str) -> FileEntry:

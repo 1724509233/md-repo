@@ -19,7 +19,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from .db.file_index import get_all_files
-from .orchestration.move_detect import pair_moves
+from ..core.move_pairing import pair_moves
 from ..core.types import FileEntry
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,7 @@ def _pair_moves(
 ) -> tuple[list[tuple[str, str]], list[str], list[str]]:
     """Pair gone and new entries via the shared two-level cascade.
 
-    Thin wrapper around ``move_detect.pair_moves`` (hash grouping →
+    Thin wrapper around ``core.move_pairing.pair_moves`` (hash grouping →
     filename grouping). Returns (moves, deletes, creates):
       moves:   [(old_rel, new_rel), ...]
       deletes: [rel, ...] — unpaired gone entries

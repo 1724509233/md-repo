@@ -22,7 +22,7 @@ server/vault/          ← PEP 420 namespace 包（根 shim 已于卡 12 退役�
 | --- | --- | --- |
 | `db/` | 双账本 SQLite 数据层：`index.db` 11 表（可重建缓存）+ `ledger.db` 4 表（权威状态）；具名函数 = 接口，复合写函数内持锁 | [db/README.md](db/README.md) |
 | `fs/` | Markdown 分段 + jieba 分词、wikilink 解析与缓存、精确替换编辑、vault 遍历、原子写 | [fs/README.md](fs/README.md) |
-| `orchestration/` | FTS 分段索引与图谱抽取（`indexer`）、两相位 move 检测（`move_detect`）、引用维护（`refs`）、变更应用 `apply_change`/`apply_folder_change` 与启动对账 `reconcile`（`file_ops`） | [orchestration/README.md](orchestration/README.md) |
+| `orchestration/` | FTS 分段索引与图谱抽取（`indexer`）、引用维护（`refs`）、变更应用 `apply_change`/`apply_folder_change` 与启动对账 `reconcile`（`file_ops`）；两相位 move 检测在 `core/move_pairing.py`（卡 14a 下沉） | [orchestration/README.md](orchestration/README.md) |
 
 ## 公共 API（直接从真实模块导入）
 
@@ -94,7 +94,7 @@ server/vault/          ← PEP 420 namespace 包（根 shim 已于卡 12 退役�
 
 **注意**：`count(*) FROM segments_fts` 检测不到失步 —— external-content 表上它扫的是内容表（segments），恒等于 segments 行数；`segments_fts_docsize` shadow 表每个 FTS 索引条目一行，才是真实索引状态。
 
-### 重命名检测（`pair_moves`，orchestration/move_detect）
+### 重命名检测（`pair_moves`，core/move_pairing，卡 14a 自 orchestration/move_detect 下沉）
 
 - **Phase 1（哈希分组）**：按内容 hash 分组 gone/new，1:1 直接配对；大组按文件名精化
 - **Phase 2（文件名分组）**：未配对池按文件名分组，1:1 配对「修改后移动」；N:M 按父目录距离最近邻确定性指派
@@ -119,7 +119,7 @@ server/vault/watcher.py ──────────► file_ops.reconcile    
 server/main.py / mcp_server.py / services/recovery.py ───► indexer.ensure_indexed （启动索引检查；recovery 演练镜像生产启动路径）
 server/ai.py（rag_search）────────► db.segments_sql.segments_search（搜索工具入口）
 
-file_ops.py ──► db/*（changes, file_index, schema._db_lock）+ indexer + refs + move_detect
+file_ops.py ──► db/*（changes, file_index, schema._db_lock）+ indexer + refs + core/move_pairing
 indexer.py  ──► fs/*（segment_markdown, _tokenize_for_index, _resolve_wikilink, _iter_vault_md）
             ──► db/segments_sql, db/graph_sql
 refs.py     ──► db/graph_sql._find_referrers（edges 查询，空表回退 fs 全扫）
