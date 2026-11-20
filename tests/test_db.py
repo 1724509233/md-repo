@@ -353,14 +353,34 @@ def test_list_session_summaries(db_conn):
                                  {"role": "user", "content": "重构提案通道" * 30},
                                  {"role": "assistant", "content": "好"}])
     save_session(db_conn, "s2", [{"role": "assistant", "content": "x"}])  # 无 user
+    # 混合口径样本（2026-11-19 目检轮拍板，spec §1.1）：3 user(含1提醒) + 2 段
+    # assistant(段A 含 2 tool_calls + 2 tool 结果行，提醒行插在段中不封段) + 提醒行
+    save_session(db_conn, "s3", [
+        {"role": "user", "content": "第一问"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "t1", "function": {"name": "read_doc", "arguments": "{}"}},
+            {"id": "t2", "function": {"name": "search_docs", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+        {"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
+        {"role": "tool", "tool_call_id": "t2", "content": "ok"},
+        {"role": "assistant", "content": "搞定"},
+        {"role": "user", "content": "第二问"},
+        {"role": "assistant", "content": "答"},
+    ])
     out = list_session_summaries(db_conn)
-    assert [s["id"] for s in out] == ["s2", "s1"]          # last_active DESC
+    assert [s["id"] for s in out] == ["s3", "s2", "s1"]    # last_active DESC
     t = next(s for s in out if s["id"] == "s1")["title"]
     assert not t.startswith(DocPathUserReminder._PREFIX)    # 跳提醒行
     assert t.startswith("重构提案通道") and len(t) <= 41    # 40 字符 + 可选省略号
-    assert next(s for s in out if s["id"] == "s1")["message_count"] == 3
+    # 双数口径：message_count = 非提醒 user 行数 + 连续 assistant/tool 段数
+    s1 = next(s for s in out if s["id"] == "s1")
+    assert s1["message_count"] == 2                        # 1 user + 1 段
+    assert s1["tool_count"] == 0
+    s3 = next(s for s in out if s["id"] == "s3")
+    assert s3["message_count"] == 4                        # 2 user + 2 段（提醒不封段不计行）
+    assert s3["tool_count"] == 2                           # tool_calls 条目总数
     t2 = next(s for s in out if s["id"] == "s2")["title"]
-    assert t2 == "工具会话 · 1 条"                          # 兜底链
+    assert t2 == "工具会话 · 0 次工具"                      # 兜底链：N=tool_count
     assert "[当前打开:" == DocPathUserReminder._PREFIX      # 三处同源钉（spec §1.1）
 
 

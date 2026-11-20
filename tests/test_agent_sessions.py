@@ -1,6 +1,6 @@
 """会话管理 T2（spec 2026-11-19 §1.2/§3）：会话列表/详情/删除三路由 + SessionManager.remove。
 
-- GET /api/agent/sessions → {sessions:[{id,title,message_count,last_active}]}
+- GET /api/agent/sessions → {sessions:[{id,title,message_count,tool_count,last_active}]}
   （db None → 空列表，spec §3 表）
 - GET /api/agent/sessions/{sid} → {session_id,messages,token_count,last_active}，
   无行 404；messages 为持久化 LLM 形态原样（全保真恢复的依据）
@@ -78,7 +78,8 @@ def test_sessions_list_route(client, db_conn):
     s1 = next(s for s in sessions if s["id"] == "s1")
     assert s1["title"] == "重构提案通道"
     assert s1["message_count"] == 2
-    assert sorted(s1) == ["id", "last_active", "message_count", "title"]
+    assert s1["tool_count"] == 0
+    assert sorted(s1) == ["id", "last_active", "message_count", "title", "tool_count"]
     assert isinstance(s1["last_active"], float)
 
 
