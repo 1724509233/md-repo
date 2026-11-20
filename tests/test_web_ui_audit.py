@@ -872,3 +872,103 @@ def test_esc_chain_memory_precedes_ai():
     assert i_mem < i_ai, "memoryOpen 分支必须在 aiOpen 分支之前（Esc 先关记忆台）"
     # notif 支仍居链首：防「整链倒序」的懒修法（倒序同样满足 memory<ai）
     assert i_notif < i_mem and i_notif < i_ai
+
+
+def test_chat_events_dispatcher():
+    # chatEvents 分发器（plan 2026-11-20-agent-run-detach-stream T4；spec §6 事件表 + §5 渲染模型）。
+    # 静态钉：零 import 语句（含动态 import()）零 Vue 字样 → node 直 import 零框架依赖；
+    # 行为测试照 format.js 先例（:492 import(as_uri) + process.exit(用例号)），node 缺失 skip。
+    p = TPL / "js" / "utils" / "chatEvents.js"
+    src = p.read_text(encoding="utf-8")
+    assert "export function applyEvent" in src
+    assert not re.search(r"\bimport\b", src), "chatEvents 必须零 import（含动态 import()）"
+    assert "Vue" not in src, "chatEvents 必须零 Vue 字样"
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = """
+import(%r).then(m=>{
+const A=m.applyEvent;
+const J=JSON.stringify;
+const eq=(a,b)=>J(a)===J(b);
+const C=()=>({messages:[],currentTurn:null,queue:[],busy:false,tokenUsage:{used:0,total:0,percent:0},runId:null,cursor:0,terminal:false});
+let ctx,r,msg,blk,bl;
+// 1 snapshot：ctx.snapshot 挂 ctx（messages+边界）、runId 记录、返回 []（exit 1）
+ctx=C();
+r=A(ctx,{type:'snapshot',messages:[{role:'ai',text:'旧历史'}],persisted_through_seq:7,run_id:'r1',seq:0});
+if(!eq(r,[])||!ctx.snapshot||ctx.snapshot.messages.length!==1||ctx.snapshot.persisted_through_seq!==7||ctx.runId!=='r1')process.exit(1);
+// 2 run_status：busy=running；终帧 terminal=true + 扫 messages 把 confirm 工具块落 rejected（其余态不动）（exit 2）
+ctx=C();
+ctx.messages.push({role:'user',text:'q'},{role:'ai',blocks:[{type:'tool',id:'t1',status:'confirm'},{type:'tool',id:'t2',status:'done'},{type:'tool',id:'t3',status:'pending'}]});
+r=A(ctx,{type:'run_status',running:true,state:'running',run_id:'r1',seq:1});
+if(!eq(r,[])||ctx.busy!==true)process.exit(2);
+r=A(ctx,{type:'run_status',running:false,state:'stopped',run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.busy!==false||ctx.terminal!==true)process.exit(2);
+bl=ctx.messages[1].blocks;
+if(bl[0].status!=='rejected'||bl[1].status!=='done'||bl[2].status!=='pending')process.exit(2);
+// 3 user_message：push 气泡进 messages（唯一来源），返回 []（exit 3）
+ctx=C();
+r=A(ctx,{type:'user_message',qid:'q1',text:'第二条',run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.messages.length!==1||ctx.messages[0].role!=='user'||ctx.messages[0].text!=='第二条')process.exit(3);
+// 4 queue_update：整换 ctx.queue（追加/清空两拍）（exit 4）
+ctx=C(); ctx.queue=[{qid:'old',text:'旧'}];
+r=A(ctx,{type:'queue_update',queued:[{qid:'q1',text:'排队1'},{qid:'q2',text:'排队2'}],run_id:'r1',seq:3});
+if(!eq(r,[])||ctx.queue.length!==2||ctx.queue[0].qid!=='q1'||ctx.queue[1].qid!=='q2')process.exit(4);
+r=A(ctx,{type:'queue_update',queued:[],run_id:'r1',seq:4});
+if(ctx.queue.length!==0)process.exit(4);
+// 5 resync：ctx.resync=true，游标归零（seq 在场即记）（exit 5）
+ctx=C(); ctx.cursor=9;
+r=A(ctx,{type:'resync',seq:0});
+if(!eq(r,[])||ctx.resync!==true||ctx.cursor!==0)process.exit(5);
+// 6 token/reasoning：无 turn 建 turn（streaming=true）、空白 chunk 不建块、thinking 让位收起、指令（exit 6）
+ctx=C();
+r=A(ctx,{type:'token',text:'\\n\\n',run_id:'r1',seq:3});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.blocks.length!==0||ctx.currentTurn.streaming!==true)process.exit(6);
+r=A(ctx,{type:'token',text:'Hel',run_id:'r1',seq:4});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks.length!==1||ctx.currentTurn.blocksLen!==1)process.exit(6);
+r=A(ctx,{type:'token',text:'lo',run_id:'r1',seq:5});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks[0].text!=='Hello'||ctx.currentTurn.blocksLen!==1)process.exit(6);
+r=A(ctx,{type:'reasoning',text:'嗯',run_id:'r1',seq:6});
+if(!eq(r,['thinking'])||ctx.currentTurn.blocks.length!==2)process.exit(6);
+if(ctx.currentTurn.blocks[1].type!=='thinking'||ctx.currentTurn.blocks[1].text!=='嗯'||ctx.currentTurn.blocks[1].expanded!==true)process.exit(6);
+r=A(ctx,{type:'token',text:'后',run_id:'r1',seq:7});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks.length!==3||ctx.currentTurn.blocks[1].expanded!==false)process.exit(6);
+if(ctx.currentTurn.blocksLen!==3||ctx.cursor!==7)process.exit(6);
+// 7 tool_call（无 turn 建 turn 且 streaming=false、pending 块+blocksLen）/confirm_request（confirm+uiTick、陌生 id 不炸）/tool_result（rejected/error、meta、uiTick）（exit 7）
+ctx=C();
+r=A(ctx,{type:'tool_call',id:'t1',name:'write_doc',args:{path:'a.md'},run_id:'r1',seq:1});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.streaming!==false||ctx.currentTurn.blocksLen!==1)process.exit(7);
+blk=ctx.currentTurn.blocks[0];
+if(blk.type!=='tool'||blk.id!=='t1'||blk.name!=='write_doc'||blk.status!=='pending'||blk.result!==null||blk.expanded!==false)process.exit(7);
+r=A(ctx,{type:'confirm_request',id:'t1',name:'write_doc',run_id:'r1',seq:2});
+if(!eq(r,[])||blk.status!=='confirm'||!(ctx.currentTurn.uiTick>=1))process.exit(7);
+A(ctx,{type:'confirm_request',id:'nope',name:'x',run_id:'r1',seq:3});
+if(ctx.currentTurn.blocks.length!==1)process.exit(7);
+r=A(ctx,{type:'tool_result',id:'t1',rejected:true,result:'No',meta:{m:1},run_id:'r1',seq:4});
+if(!eq(r,[])||blk.status!=='rejected'||blk.result!=='No'||!eq(blk.meta,{m:1}))process.exit(7);
+A(ctx,{type:'tool_result',id:'nope',result:'x',run_id:'r1',seq:5});
+if(ctx.currentTurn.blocks.length!==1)process.exit(7);
+// 8 done：turn 收尾（streaming=false/finished/rendered/fullText/messageId+citations 透传）且 busy 不变（exit 8）
+r=A(ctx,{type:'token',text:'T',run_id:'r1',seq:6});
+if(!eq(r,['stream']))process.exit(8);
+ctx.busy=true;
+r=A(ctx,{type:'done',reason:'final',message_id:'m9',citations:[{c:1}],run_id:'r1',seq:7});
+if(!eq(r,[])||ctx.currentTurn!==null||ctx.busy!==true)process.exit(8);
+msg=ctx.messages.find(x=>x.role==='ai');
+if(!msg||msg.streaming!==false||msg._finished!==true||msg.rendered!==true||msg.messageId!=='m9'||!eq(msg.citations,[{c:1}])||msg.fullText!=='T')process.exit(8);
+// 9 run_id 异源丢帧：返回 []、不建块、游标不推（exit 9）
+ctx=C(); ctx.runId='r1'; ctx.cursor=5;
+A(ctx,{type:'token',text:'keep',run_id:'r1',seq:5});
+r=A(ctx,{type:'token',text:'DROP',run_id:'OTHER',seq:99});
+if(!eq(r,[])||ctx.cursor!==5||ctx.currentTurn.blocks[0].text!=='keep')process.exit(9);
+// 10 token_usage 三字段 / error 建说明块 / round 等未知型忽略 / 游标推进（exit 10）
+ctx=C();
+r=A(ctx,{type:'token_usage',used:5,total:100,percent:5,run_id:'r1',seq:1});
+if(!eq(r,[])||ctx.tokenUsage.used!==5||ctx.tokenUsage.total!==100||ctx.tokenUsage.percent!==5)process.exit(10);
+r=A(ctx,{type:'round',n:1,run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.currentTurn!==null)process.exit(10);
+r=A(ctx,{type:'error',error:'boom',run_id:'r1',seq:3});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.blocks[0].type!=='text'||ctx.currentTurn.blocks[0].text.indexOf('boom')<0||ctx.cursor!==3)process.exit(10);
+process.exit(0);
+})""" % p.as_uri()
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
