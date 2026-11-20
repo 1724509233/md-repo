@@ -21,6 +21,8 @@ Acceptance coverage (spec §5, L541-551):
   9. retract null deletes; re-POST useful restores (idempotent upsert anchor).
  10. click_paths = via=ai clicks attributed by message_id (distinct paths);
      search/preview clicks (message_id NULL) never enter.
+ 11. r8 反馈契约反转（2026-11-20 用户裁）：interrupted 行带 message_id 身份戳
+     → 写侧接受反馈（旧「中断轮不配反馈键」测试方向翻转）。
 """
 from __future__ import annotations
 
@@ -341,19 +343,26 @@ def test_get_related_docs_meta_paths_empty(vault_dir: Path, db_conn):
 # ── feedback endpoint (acceptance 2/7/8/9/10) ───────────────────────────
 
 def _seed_message(ledger_conn, session_id: str, message_id: str, citations,
-                  legacy: bool = False):
+                  legacy: bool = False, interrupted: bool = False):
     """Persist a session whose assistant message carries the done-time
     citations snapshot (D21). ``legacy=True`` omits id/citations (a
-    pre-feature message). The app's SessionManager starts with an empty
+    pre-feature message). ``interrupted=True`` seeds the r8 partial row
+    (content-only interrupted + message_id identity stamp, no id/ts/
+    citations). The app's SessionManager starts with an empty
     in-memory cache (fresh process = post-restart), so the endpoint must
     restore from the DB."""
     from server.vault.db.sessions import save_session
 
-    msg = {"role": "assistant", "content": "Answer citing [[notes/a]]."}
-    if not legacy:
-        msg["id"] = message_id
-        msg["ts"] = 1763020800.123
-        msg["citations"] = citations
+    if interrupted:
+        # r8 形态：身份戳是 message_id（非 id），无 citations 快照
+        msg = {"role": "assistant", "content": "Answer citing [[notes/a]].",
+               "interrupted": True, "message_id": message_id}
+    else:
+        msg = {"role": "assistant", "content": "Answer citing [[notes/a]]."}
+        if not legacy:
+            msg["id"] = message_id
+            msg["ts"] = 1763020800.123
+            msg["citations"] = citations
     save_session(ledger_conn, session_id, [
         {"role": "user", "content": "q"},
         msg,
@@ -420,6 +429,29 @@ def test_feedback_restart_reads_persisted_snapshot(client, db_conn,
     assert len(rows) == 1
     assert rows[0]["verdict"] == "useful"
     assert json.loads(rows[0]["citations"]) == citations
+
+
+def test_feedback_interrupted_message_id_r8(client, db_conn, ledger_conn):
+    """r8 反馈契约反转（旧「中断轮不配反馈键」方向翻转）：interrupted 行带
+    message_id 身份戳（uuid4 hex12）→ 写侧接受点赞点踩；interrupted 行无
+    citations 快照 → 台账落空列表；撤回照旧删行。"""
+    _seed_message(ledger_conn, "ses_int", "mi_int1", citations=None,
+                  interrupted=True)
+
+    r = client.post("/api/agent/feedback", json={
+        "session_id": "ses_int", "message_id": "mi_int1",
+        "verdict": "not_useful"})
+    assert r.status_code == 200
+    rows = _feedback_rows(db_conn, "ses_int", "mi_int1")
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == "not_useful"
+    assert json.loads(rows[0]["citations"]) == []  # 中断宣称不产 grounding
+
+    # retract：与 done 行同构（幂等删行）
+    r = client.post("/api/agent/feedback", json={
+        "session_id": "ses_int", "message_id": "mi_int1", "verdict": None})
+    assert r.status_code == 200
+    assert _feedback_rows(db_conn, "ses_int", "mi_int1") == []
 
 
 def _mock_openai_ok():

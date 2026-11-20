@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -373,9 +374,14 @@ def test_stop_persists_partial_row(vault_dir, db_conn, ledger_conn, ai_config):
     assert not hub.is_running("s1")
 
     msgs = _snapshot_messages(hub, "s1")
-    # 补丁卡（2026-11-20）：chat_run_id 锚随行落库，值 = RunHub run_id（join 键契约）
-    assert {"role": "assistant", "content": "说到一半", "interrupted": True,
-            "chat_run_id": rid} in msgs
+    # r8 修订重做（原补丁卡 chat_run_id 锚整体替换）：interrupted 行盖
+    # message_id 身份戳（uuid4 hex12，与 done 行同形态；双职 = 反馈键 +
+    # 通道二 join 锚）。run_id 只存活于流回放层，不再入存储（chat_run_id 废弃）。
+    part = [m for m in msgs if m.get("interrupted") is True]
+    assert len(part) == 1
+    assert part[0]["content"] == "说到一半"
+    assert re.fullmatch(r"[0-9a-f]{12}", part[0]["message_id"])
+    assert "chat_run_id" not in part[0] and "id" not in part[0]  # b621b5b4
     # stop 只增半截行，不吞既有：出队落库的 user 行仍在场
     assert any(m.get("role") == "user" and m.get("content") == "hi" for m in msgs)
 
@@ -408,9 +414,12 @@ def test_crash_persists_partial_row(vault_dir, db_conn, ledger_conn, ai_config):
                for f in frames)
 
     msgs = _snapshot_messages(hub, "s1")
-    # 补丁卡：crash 路径同款锚点
-    assert {"role": "assistant", "content": "崩前正文", "interrupted": True,
-            "chat_run_id": rid} in msgs
+    # r8：crash 路径同款 message_id 身份戳（uuid4 hex12，≠ run_id）
+    part = [m for m in msgs if m.get("interrupted") is True]
+    assert len(part) == 1
+    assert part[0]["content"] == "崩前正文"
+    assert re.fullmatch(r"[0-9a-f]{12}", part[0]["message_id"])
+    assert "chat_run_id" not in part[0] and "id" not in part[0]  # b621b5b4
 
 
 # ── POST /api/agent/queue/remove ─────────────────────────────────────────────

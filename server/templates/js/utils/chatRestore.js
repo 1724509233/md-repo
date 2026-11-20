@@ -1,7 +1,8 @@
 // 会话历史恢复映射（spec 2026-11-19 §2.3）：LLM 形态持久化 messages → AIChatPanel 消息描述符。
 // 零 import 零依赖（node 无 Vue 环境，行为测试直接 import；同 format.js 先例）。
 //
-// 输出形状：[{ role:'user'|'assistant', blocks:[Block], messageId?: string, citations?: array }]
+// 输出形状：[{ role:'user'|'assistant', blocks:[Block], messageId?: string, citations?: array, interrupted?: true }]
+// messageId 来源：done 行 id 或 interrupted 行 message_id（r8 身份戳，反馈键双职）。
 // Block = {type:'text',text} | {type:'tool',id,name,args,result,status,expanded:false}
 // status ∈ 'done'|'error'|'rejected'。tool 块字段形状对齐 live currentTurn
 // （AIChatPanel.js:281）；恢复行不带 meta（已知降级：摘要走 toolResultSummary 原文首行，a24e72ac）。
@@ -30,6 +31,10 @@ export function mapHistory(raw) {
     if (!turn) return;
     const last = lastAssistant || {};
     if (typeof last.id === 'string') turn.messageId = last.id;
+    // r8（通道一 spec 2026-11-20 修订重做）：interrupted 行身份戳是 message_id
+    // （非 id）——透传成 messageId，反馈守卫（!msg.streaming && msg.messageId）
+    // 天然放行中断轮；行无身份戳（r8 前旧行/无锚形态）则缺席，守卫照旧拦。
+    else if (typeof last.message_id === 'string') turn.messageId = last.message_id;
     if (last.citations != null) turn.citations = last.citations;
     // 空 content 且无 tool_calls 的 assistant（无终帧字段）→ 不产出空 turn
     if (turn.blocks.length || 'messageId' in turn || 'citations' in turn) out.push(turn);

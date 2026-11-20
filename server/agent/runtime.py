@@ -35,6 +35,10 @@ logger = logging.getLogger("md-vault.agent")
 # dicts verbatim, so a bare ``agent.messages`` pass would leak them. The
 # whitelist is the single exit point and is fail-closed: any future UI/telemetry
 # field added to a message is excluded from the request by default.
+# 通道二 r6 新铁律（spec 2026-11-20 stop-signals §3，唯一防线）：``reasoning``
+# 是 blob-only 字段——思考全文随行落库（done/interrupted/tool_calls 中间行），
+# 出域由本白名单结构性阻断，``reasoning`` 永不进名单（与 ``interrupted`` /
+# r8 ``message_id`` 身份戳同机制：随行持久化、模型不可见）。
 LLM_FIELDS = {"role", "content", "tool_calls", "tool_call_id"}
 
 # egress via mapping (spec 2026-11-18 §3.2): the ONLY tools whose touched
@@ -138,24 +142,36 @@ def _ensure_tool_results(agent) -> None:
             i += 1
 
 
-def _append_partial(agent, content: str) -> None:
-    """通道一（spec 2026-11-20 partial-output-retention §2）：一次流式调用以非
-    正常完成退出（cancel / APIError / 崩溃）时，已累积 content 入历史——
-    content-only 的 interrupted 行（无 tool_calls/id/ts/citations：不变式
-    「历史永不持半交付 tool call」+ 中断轮不配反馈键/引用快照）。
-    ``chat_run_id`` 锚点键（补丁卡 2026-11-20）：agent.chat_run_id 在场（RunHub
-    聊天 run，runhub._drive 盖戳）时随行落库——通道二 chat_abort_log 的 join 键，
-    消费端由此键锚定中断边界，不再依赖脆弱的位置计数；无锚环境（bgagent 等）
-    键缺席，行形态回到三键。两键均被 LLM_FIELDS 白名单挡在模型请求外：模型
-    看到自己说过的半句，中断语境由用户下一条消息自然提供（特性非缺漏）。
-    纯空白不 append。
+def _append_partial(agent, content: str, reasoning: str = "") -> None:
+    """通道一（spec 2026-11-20 partial-output-retention §2）× r8 修订重做：
+    一次流式调用以非正常完成退出（cancel / APIError / 崩溃）时，已累积 content
+    入历史——content+interrupted 行（无 tool_calls/id/ts/citations：b621b5b4
+    不变式「历史永不持半交付 tool call」，r8 扩为 content+reasoning+message_id）。
+
+    * ``message_id`` 身份戳（r8，废弃补丁卡 chat_run_id）：agent 带会话身份
+      （session_id 在场 = 聊天 run 有锚环境）时随行落库——uuid4 hex12 与 done 行
+      同形态，双职 = 反馈键 + 通道二 chat_abort_log join 锚；并留痕于
+      ``agent.last_partial_message_id`` 供 RunHub stop 写点读取注入（通道二 §3，
+      后续卡消费）。无锚环境（bgagent 等）键缺席、行回三键形态。
+    * ``reasoning``（通道二 r6）：本次调用已累计的思考全文（不截断），可空——
+      空则不产键。
+
+    三键（interrupted/message_id/reasoning）均被 LLM_FIELDS 白名单挡在请求外：
+    模型看到自己说过的半句，但看不到「这是被中断的」，中断语境由用户下一条消息
+    自然提供（特性非缺漏）。纯空白不 append。
     """
-    if content and content.strip():
-        line = {"role": "assistant", "content": content, "interrupted": True}
-        anchor = getattr(agent, "chat_run_id", "")
-        if anchor:
-            line["chat_run_id"] = anchor
-        agent.messages.append(line)
+    if not (content and content.strip()):
+        return
+    line = {"role": "assistant", "content": content, "interrupted": True}
+    if reasoning:
+        line["reasoning"] = reasoning
+    if getattr(agent, "session_id", ""):
+        message_id = uuid.uuid4().hex[:12]
+        line["message_id"] = message_id
+        # 留痕（通道二 §3：RunHub 捕获 CancelledError 后读取注入 abort_log；
+        # 取消 unwind 顺序保证先盖行后到 RunHub）
+        agent.last_partial_message_id = message_id
+    agent.messages.append(line)
 
 
 class LoopRuntime(Runtime):
@@ -243,6 +259,8 @@ class LoopRuntime(Runtime):
                     return
 
                 content = ""
+                reasoning = ""  # 通道二 r6：本次调用的思考片段累积——随落盘行入
+                                  # blob（全文不截断）；LLM_FIELDS 永不放行出域
                 tool_calls = {}
                 usage = None
 
@@ -256,13 +274,17 @@ class LoopRuntime(Runtime):
 
                         # Provider 私有思考字段（Qwen 兼容端点: reasoning_content，2026-10-29 实测；
                         # 其他 provider 或为 reasoning/thinking）：独立 reasoning 事件 emit，
-                        # 不进 content / 消息历史（思考是草稿，不是回答正文）。
+                        # 不进 content（思考是草稿，不是回答正文）；r6 改道（spec 2026-11-20
+                        # stop-signals §3）：攒进正在构造的 assistant 行——本次调用落盘自己
+                        # 那行时附 reasoning 字段（done/interrupted/tool_calls 中间行都附），
+                        # 出域由 LLM_FIELDS 白名单结构性阻断（唯一防线）。
                         # 下游：Web UI 渲染思考块；bgagent runner 不识别 reasoning → 静默忽略。
                         # isinstance str 守卫：测试的 MagicMock delta 会自动生成任意属性（truthy 的 Mock），
-                        # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit。
+                        # 真实 SDK 对象缺失字段时 getattr 返回 None——只有真实字符串才值得 emit/累积。
                         for _key in ("reasoning_content", "reasoning", "thinking"):
                             _val = getattr(delta, _key, None)
                             if isinstance(_val, str) and _val:
+                                reasoning += _val
                                 yield Event("reasoning", {"text": _val})
                                 break
 
@@ -282,10 +304,11 @@ class LoopRuntime(Runtime):
                                 if tc.function and tc.function.arguments:
                                     acc["arguments"] += tc.function.arguments
                 except asyncio.CancelledError:
-                    # stop（通道一 spec §2 落点 1）：半截正文先落库，CancelledError
-                    # 原样上抛（取消语义不变）。顺序钉：生成器帧内 except 先跑完
-                    # append 才轮到 _drive 的 except 分支抵达 _save_and_boundary。
-                    _append_partial(agent, content)
+                    # stop（通道一 spec §2 落点 1）：半截正文（含本次累计
+                    # reasoning，r6）先落库，CancelledError 原样上抛（取消语义
+                    # 不变）。顺序钉：生成器帧内 except 先跑完 append 才轮到
+                    # _drive 的 except 分支抵达 _save_and_boundary。
+                    _append_partial(agent, content, reasoning)
                     raise
                 except APIError as e:
                     # Unrecoverable mid-stream failure (e.g. the proxy's
@@ -295,22 +318,23 @@ class LoopRuntime(Runtime):
                     # tool_calls accumulation stays discarded — the assistant
                     # message carrying tool_calls is appended only after a full
                     # stream, so the history never holds a half-delivered tool
-                    # call (b621b5b4 invariant, 完整保留). The streamed CONTENT,
-                    # though, is persisted as a content-only interrupted row
-                    # (通道一 spec §2 落点 2, append 先于 error 事件). Clean
-                    # terminal — no retry (a retry would re-request an output
-                    # whose tool calls were already delivered + executed); the
-                    # consumer records status=error.
+                    # call (b621b5b4 invariant, 完整保留). The streamed CONTENT
+                    # (plus this call's accumulated reasoning, r6) though, is
+                    # persisted as an interrupted row (通道一 spec §2 落点 2,
+                    # append 先于 error 事件). Clean terminal — no retry (a retry
+                    # would re-request an output whose tool calls were already
+                    # delivered + executed); the consumer records status=error.
                     logger.exception("model stream failed at round %d: %s", _round + 1, e)
-                    _append_partial(agent, content)
+                    _append_partial(agent, content, reasoning)
                     yield Event("error", {"error": f"{type(e).__name__}: {e}"})
                     yield Event("done", {"reason": "error"})
                     return
                 except Exception:
-                    # 崩溃（通道一 spec §2 落点 3）：半截正文 append 后原样 re-raise
-                    # ——runhub 的 crash 分支接住并 _save_and_boundary 落库。
+                    # 崩溃（通道一 spec §2 落点 3）：半截正文（含本次累计
+                    # reasoning，r6）append 后原样 re-raise ——runhub 的 crash
+                    # 分支接住并 _save_and_boundary 落库。
                     # CancelledError 是 BaseException 不在此列（上分支已收口）。
-                    _append_partial(agent, content)
+                    _append_partial(agent, content, reasoning)
                     raise
 
 
@@ -366,16 +390,21 @@ class LoopRuntime(Runtime):
                     # feedback endpoint reads this snapshot and never recomputes it.
                     # ts/citations are UI/telemetry fields — the LLM boundary projects
                     # them out (LLM_FIELDS); never pass agent.messages bare to the LLM.
+                    # r6（spec 2026-11-20 stop-signals §3）：``reasoning`` = 本次调用
+                    # 已累计的思考全文（有则附，blob-only，白名单阻断出域）。
                     message_id = uuid.uuid4().hex[:12]
                     citations = _compute_citations(
                         content, spec.vault_dir, agent.evidence_paths)
-                    agent.messages.append({
+                    assistant_row = {
                         "role": "assistant",
                         "content": content,
                         "id": message_id,
                         "ts": time.time(),
                         "citations": citations,
-                    })
+                    }
+                    if reasoning:
+                        assistant_row["reasoning"] = reasoning
+                    agent.messages.append(assistant_row)
                     yield Event("done", {
                         "reason": "final",
                         "message_id": message_id,
@@ -383,7 +412,9 @@ class LoopRuntime(Runtime):
                     })
                     return
 
-                agent.messages.append({
+                # 带 tool_calls 的中间行（r6：同样附本次调用的 reasoning——
+                # 每次 LLM 调用落盘自己那行）
+                assistant_row = {
                     "role": "assistant",
                     "content": content or None,
                     "tool_calls": [
@@ -391,7 +422,10 @@ class LoopRuntime(Runtime):
                          "function": {"name": tc["name"], "arguments": tc["arguments"]}}
                         for tc in tool_calls.values()
                     ],
-                })
+                }
+                if reasoning:
+                    assistant_row["reasoning"] = reasoning
+                agent.messages.append(assistant_row)
 
                 for tc in tool_calls.values():
                     try:

@@ -468,11 +468,14 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-def _make_chunk(content=None, tool_calls=None, finish_reason=None):
-    """Build a mock streaming chunk."""
+def _make_chunk(content=None, tool_calls=None, finish_reason=None,
+                reasoning=None):
+    """Build a mock streaming chunk. ``reasoning`` 走 provider 私有思考字段
+    （reasoning_content，runtime chunk 循环第一优先键——通道二 r6 随行进 blob）。"""
     delta = MagicMock()
     delta.content = content
     delta.tool_calls = tool_calls
+    delta.reasoning_content = reasoning
     choice = MagicMock()
     choice.delta = delta
     choice.finish_reason = finish_reason
@@ -481,8 +484,12 @@ def _make_chunk(content=None, tool_calls=None, finish_reason=None):
     return chunk
 
 
-def _make_agent(tmp_path: Path, max_rounds: int = 15, auto_approve: bool = False):
-    """Build an Agent with a mock model config and an empty vault."""
+def _make_agent(tmp_path: Path, max_rounds: int = 15, auto_approve: bool = False,
+                session_id: str = ""):
+    """Build an Agent with a mock model config and an empty vault.
+
+    ``session_id`` 非空 = 聊天 run（有锚环境，r8：interrupted 行盖 message_id
+    身份戳的判据）；默认空 = bgagent 等同款的无锚形态。"""
     from server.agent import Agent, AgentSpec, ModelConfig
 
     vault = tmp_path / "vault"
@@ -495,7 +502,7 @@ def _make_agent(tmp_path: Path, max_rounds: int = 15, auto_approve: bool = False
         vault_dir=vault,
         auto_approve=auto_approve,
     )
-    return Agent(spec), vault
+    return Agent(spec, session_id=session_id), vault
 
 
 def _sse(event) -> str:
@@ -1771,11 +1778,14 @@ def test_confirm_and_timeout_single_verdict(tmp_path: Path):
     assert agent.pending_confirms == {}
 
 
-# ── 通道一：中断半截文本持久化（spec 2026-11-20，runtime 流式收口区）──────────
+# ── 通道一：中断半截文本持久化（spec 2026-11-20，r8 修订重做）───────────────────
 #
-# 行形态逐字：{"role": "assistant", "content": <累积原文>, "interrupted": True}
-# ——无 tool_calls/id/ts/citations 键；纯空白不 append；interrupted 被
-# LLM_FIELDS 白名单挡在出域 payload 外。
+# 行形态：{"role": "assistant", "content": <累积原文>, "interrupted": True}
+# + r8 message_id 身份戳（有锚环境=agent.session_id 在场；uuid4 hex12 与 done 行
+# 同形态，双职=反馈键 + 通道二 join 锚）+ r6 reasoning（本次调用已累计的思考，
+# 可空）。无 tool_calls/id/ts/citations 键（b621b5b4 不变式：扩为
+# content+reasoning+message_id，仍无半交付 tool call）；纯空白不 append；
+# interrupted/message_id/reasoning 全被 LLM_FIELDS 白名单挡在出域 payload 外。
 
 
 def _openai_api_error():
@@ -1844,25 +1854,35 @@ def test_partial_text_persisted_on_cancel(tmp_path: Path):
 
     assert cancelled, "CancelledError 必须原样上抛"
     assert any(getattr(e, "type", None) == "token" for e in seen)
-    # 行形态逐字（dict 相等即钉死键集恰为三键；本测试环境无 chat_run_id——
-    # 锚缺席形态，bgagent 等同款）
+    # 行形态逐字（dict 相等即钉死键集恰为三键；本测试环境无会话身份
+    # （session_id 空）——r8 无锚缺席形态，bgagent 等同款）
     assert agent.messages[-1] == {"role": "assistant", "content": "说到一半",
                                   "interrupted": True}
 
 
-def test_partial_anchor_key_present_and_absent():
-    """补丁卡（2026-11-20）：agent.chat_run_id 在场（RunHub 聊天 run 盖戳）→
-    锚键随行落库（通道二 chat_abort_log join 键）；缺席 → 三键形态。"""
+def test_partial_message_id_anchor_present_and_absent():
+    """r8 修订重做（原补丁卡 chat_run_id 锚整体替换）：agent.session_id 在场
+    （聊天 run，有锚环境）→ interrupted 行盖 message_id（uuid4 hex12，与 done 行
+    同形态；双职 = 反馈键 + 通道二 chat_abort_log join 锚），并留痕
+    agent.last_partial_message_id（供后续 RunHub stop 写点读取注入）；
+    无锚（bgagent 等）→ 键缺席、留痕不产、行回三键形态。"""
+    import re as _re
     from server.agent.runtime import _append_partial
 
     class _A:
         messages: list = []
-        chat_run_id = "ab12cd34ef56"
+        session_id = "ses_anchor"
 
     a = _A()
     _append_partial(a, "半句")
-    assert a.messages[-1] == {"role": "assistant", "content": "半句",
-                              "interrupted": True, "chat_run_id": "ab12cd34ef56"}
+    row = a.messages[-1]
+    mid = row["message_id"]
+    assert _re.fullmatch(r"[0-9a-f]{12}", mid), mid
+    row = dict(row)
+    del row["message_id"]
+    assert row == {"role": "assistant", "content": "半句", "interrupted": True}
+    assert "id" not in a.messages[-1]        # b621b5b4：身份戳是 message_id，非 id
+    assert a.last_partial_message_id == mid  # 留痕（通道二 §3 供 RunHub 注入）
 
     class _B:
         messages: list = []
@@ -1871,6 +1891,7 @@ def test_partial_anchor_key_present_and_absent():
     _append_partial(b, "半句")
     assert b.messages[-1] == {"role": "assistant", "content": "半句",
                               "interrupted": True}
+    assert not hasattr(b, "last_partial_message_id")
 
 
 def test_partial_blank_not_persisted(tmp_path: Path):
@@ -1944,9 +1965,8 @@ def test_partial_persisted_on_api_error_branch(tmp_path: Path):
 def _partial_then_continue(tmp_path: Path) -> list:
     """§5-4/5 共用体：首轮 mid-stream APIError（content 已累积）→ 次轮 user
     「继续」正常 final。返回次轮出域 messages（create 捕获）。"""
-    agent, vault = _make_agent(tmp_path)
-    # 补丁卡（2026-11-20）：盖聊天 Run 锚——同时证明 chat_run_id 被白名单挡在出域外
-    agent.chat_run_id = "anchor0001"
+    agent, vault = _make_agent(tmp_path, session_id="anchor0001")
+    # r8：盖 message_id 身份戳的有锚环境——同时证明该键被白名单挡在出域外
 
     stream1 = AsyncMock()
     stream1.__aiter__ = lambda s: _async_iter_exc(
@@ -1971,12 +1991,14 @@ def _partial_then_continue(tmp_path: Path) -> list:
 
 def test_partial_not_in_llm_request(tmp_path: Path):
     """§5-4：interrupted 行在场历史，但 interrupted 键被 LLM_FIELDS 白名单挡在
-    出域外（telemetry 排除同族钉；白名单代码零改动）。"""
+    出域外（telemetry 排除同族钉；白名单代码零改动）。r8：身份戳同理——
+    message_id 与 interrupted 同机制出不了域（模型不可见）。"""
     sent = _partial_then_continue(tmp_path)
     assert any(m.get("content") == "说到一半" for m in sent)  # 行在场
     for m in sent:
         assert "interrupted" not in m, "interrupted 不得出域"
-        assert "chat_run_id" not in m, "chat_run_id 锚不得出域（补丁卡）"
+        assert "message_id" not in m, "message_id 身份戳不得出域（r8）"
+        assert "chat_run_id" not in m, "chat_run_id 已废弃（r8），绝不得复活"
         assert set(m) <= {"role", "content", "tool_calls", "tool_call_id"}
 
 
@@ -1987,3 +2009,193 @@ def test_partial_then_continue(tmp_path: Path):
     idx = [i for i, m in enumerate(sent) if m.get("content") == "说到一半"]
     assert idx, "半截行必须出现在次轮出域 payload"
     assert sent[idx[0] + 1] == {"role": "user", "content": "继续"}
+
+
+# ── 通道二 r6：reasoning 随消息落 blob（spec 2026-11-20 §1 目标 2 / §8-8）────────
+#
+# 契约：chunk 循环把思考片段攒进正在构造的 assistant 行——每次 LLM 调用落盘自己
+# 那行时附 reasoning 全文（done 行、interrupted 行、带 tool_calls 的中间行都附，
+# 各带本次调用的）；blob-only 字段——LLM 出域由 LLM_FIELDS 白名单结构性阻断
+# （唯一防线，interrupted/message_id 同机制，1948 家族模式扩展钉死）；
+# restore 回环（save→load→再出域）零泄漏。
+
+
+def test_reasoning_attaches_to_done_row(tmp_path: Path):
+    """§8-8：done 行附 reasoning 全文（不截断、多片段拼接）；live reasoning
+    事件照旧 emit（零回归）。"""
+    agent, vault = _make_agent(tmp_path)
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter(
+        [_make_chunk(reasoning="想了"), _make_chunk(reasoning="又想"),
+         _make_chunk(content="答")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    async def run():
+        return [(e.type, e.data) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    assert [d["text"] for t, d in events if t == "reasoning"] == ["想了", "又想"]
+    row = agent.messages[-1]
+    assert row["role"] == "assistant" and row.get("id")
+    assert row["reasoning"] == "想了又想"  # 全文拼接，不截断
+
+
+def test_reasoning_per_call_on_multi_round(tmp_path: Path):
+    """§8-8 各带本次调用：多调用轮（tool_calls 中间行 + final done 行）每行只带
+    本次调用的 reasoning，互不串扰。"""
+    agent, vault = _make_agent(tmp_path)
+    notes = vault / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_bytes(b"# A\n")
+
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_r"
+    tc.function = MagicMock()
+    tc.function.name = "read_doc"
+    tc.function.arguments = '{"path": "notes/a.md"}'
+
+    s1 = AsyncMock()
+    s1.__aiter__ = lambda s: _async_iter(
+        [_make_chunk(reasoning="一轮的思考", tool_calls=[tc])])
+    s2 = AsyncMock()
+    s2.__aiter__ = lambda s: _async_iter(
+        [_make_chunk(reasoning="二轮的思考", content="终答")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[s1, s2])
+
+    async def run():
+        return [e async for e in agent.chat("查 a 然后总结")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    assert [e.data["reason"] for e in events if e.type == "done"] == ["final"]
+    rows = [m for m in agent.messages if m.get("role") == "assistant"]
+    assert len(rows) == 2
+    assert rows[0].get("tool_calls"), "中间行必须带 tool_calls"
+    assert rows[0]["reasoning"] == "一轮的思考"
+    assert rows[1].get("id"), "done 行"
+    assert rows[1]["reasoning"] == "二轮的思考"
+
+
+def test_reasoning_attaches_to_interrupted_row(tmp_path: Path):
+    """r6 × r8 合流：中断行形态 = content + interrupted + reasoning（本次已
+    累计思考全文）+ message_id 身份戳；b621b5b4 不变式——仍无 tool_calls/id/
+    ts/citations；留痕 agent.last_partial_message_id。"""
+    import re as _re
+    agent, vault = _make_agent(tmp_path, session_id="ses_i")
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(reasoning="想了又想"), _make_chunk(content="半截正文")],
+        _openai_api_error())
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    async def run():
+        return [(e.type, e.data) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+    assert [d for t, d in events if t == "done"] == [{"reason": "error"}]
+
+    row = agent.messages[-1]
+    mid = row["message_id"]
+    assert _re.fullmatch(r"[0-9a-f]{12}", mid), mid
+    rest = {k: v for k, v in row.items() if k != "message_id"}
+    assert rest == {"role": "assistant", "content": "半截正文",
+                    "interrupted": True, "reasoning": "想了又想"}
+    assert "id" not in row and "ts" not in row and "citations" not in row
+    assert not row.get("tool_calls")  # b621b5b4 不变式
+    assert agent.last_partial_message_id == mid
+
+
+def test_reasoning_never_in_llm_request(tmp_path: Path):
+    """§8-8 唯一防线钉（test_partial_not_in_llm_request 同族模式）：reasoning
+    随行入 blob 后，任何出站请求体不含 reasoning——白名单投影是结构性阻断。"""
+    agent, vault = _make_agent(tmp_path, session_id="anchor0001")
+
+    stream1 = AsyncMock()
+    stream1.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(reasoning="半截思考", content="说到一半")],
+        _openai_api_error())
+    stream2 = AsyncMock()
+    stream2.__aiter__ = lambda s: _async_iter(
+        [_make_chunk(reasoning="再想", content="继续完成")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[stream1, stream2])
+
+    async def run():
+        async for _ in agent.chat("写点什么"):
+            pass
+        async for _ in agent.chat("继续"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+
+    # blob 侧确实带 reasoning（否则出域零泄漏是空断言）
+    assert any(m.get("reasoning") for m in agent.messages)
+
+    for call in mock_client.chat.completions.create.call_args_list:
+        for m in call.kwargs["messages"]:
+            assert "reasoning" not in m, "reasoning 是 blob-only 字段，绝不出域"
+            assert "interrupted" not in m and "message_id" not in m
+            assert set(m) <= {"role", "content", "tool_calls", "tool_call_id"}
+
+
+def test_reasoning_restore_roundtrip_zero_leak(tmp_path: Path, ledger_conn):
+    """§8-8 restore 回环：save→load→再出域零泄漏——blob 里 reasoning 全文与
+    message_id 身份戳经 JSON 往返存活（save→load 段），载回驱动的下一次 LLM
+    调用出域 payload 无 reasoning/message_id/interrupted（再出域段）。"""
+    from server.vault.db.sessions import load_session, save_session
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    seed = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "终答", "id": "m_done000001",
+         "ts": 1763020800.5, "citations": [], "reasoning": "done 轮思考全文"},
+        {"role": "user", "content": "再问"},
+        {"role": "assistant", "content": "半截", "interrupted": True,
+         "message_id": "m_int0000001", "reasoning": "中断轮思考全文"},
+    ]
+    save_session(ledger_conn, "s_rt", seed)
+
+    loaded = load_session(ledger_conn, "s_rt")["messages"]
+    # save→load 段：blob 全文存活（本地盘，不截断）
+    assert loaded[1]["reasoning"] == "done 轮思考全文"
+    assert loaded[3]["reasoning"] == "中断轮思考全文"
+    assert loaded[3]["message_id"] == "m_int0000001"
+
+    from server.agent import Agent, AgentSpec, ModelConfig
+    spec = AgentSpec(
+        system_prompt="test",
+        model=ModelConfig(model_id="m", base_url="http://x", api_key="k"),
+        tools=[], max_rounds=5, vault_dir=vault,
+    )
+    agent = Agent(spec, messages=loaded, session_id="s_rt")
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter([_make_chunk(content="续答")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    async def run():
+        async for _ in agent.chat("继续"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+
+    # 再出域段：全量历史投影，四键零泄漏
+    sent = mock_client.chat.completions.create.call_args_list[0].kwargs["messages"]
+    assert any(m.get("content") == "半截" for m in sent)  # 行在场（连续性不丢）
+    for m in sent:
+        assert "reasoning" not in m, "restore 回环后 reasoning 仍不出域"
+        assert "interrupted" not in m and "message_id" not in m
+        assert set(m) <= {"role", "content", "tool_calls", "tool_call_id"}

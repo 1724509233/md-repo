@@ -275,10 +275,9 @@ class RunHub:
                         run.persisted_through_seq = run.seq
                     kwargs = self._prepare_doc(msg.doc_path) or {}
                     agent = self._get_agent(sid)
-                    # 通道一补丁卡（2026-11-20）：聊天 Run 身份下传给 runtime，
-                    # _append_partial 落 interrupted 行时盖 chat_run_id 锚——
-                    # 通道二 chat_abort_log 的 join 键（≠ bgagent 批次戳 run_id）。
-                    agent.chat_run_id = run.run_id
+                    # r8 修订重做（2026-11-20）：补丁卡的 agent.chat_run_id 下传
+                    # 已废弃——interrupted 行身份戳由 runtime._append_partial 自盖
+                    # message_id，RunHub run id 只存活于流回放层，不再入存储。
                     async for ev in agent.chat(msg.text, **kwargs):
                         self._emit(run, ev.type, ev.data)
                     # per-round persistence + boundary (spec §2: one save

@@ -417,11 +417,18 @@ def register(app, ctx) -> None:
         # there must not 404 a message that is durably persisted).
         # (sessions 行在 ledger.db —— 2026-11-20 升格；recall_feedback 行
         # 仍在 index.db，故本路由双 conn 并用不是疏漏。)
+        # r8（spec 2026-11-20 partial-output-retention 补丁卡修订）：寻址两态
+        # ——done 行身份键是 ``id``；interrupted 半截行身份键是 ``message_id``
+        # （uuid4 hex12 同形态，双职 = 反馈键 + 通道二 join 锚）。中断轮无
+        # citations 快照 → 下面 ``msg.get("citations", [])`` 自然落空列表。
         saved = load_session(ctx.ledger_conn, session_id)
         messages = saved["messages"] if saved else []
         msg = next(
             (m for m in messages
-             if m.get("role") == "assistant" and m.get("id") == message_id),
+             if m.get("role") == "assistant"
+             and message_id
+             and (m.get("id") == message_id
+                  or m.get("message_id") == message_id)),
             None,
         )
         if msg is None:
