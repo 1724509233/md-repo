@@ -121,7 +121,7 @@ class InterruptSignalsSystemReminder(SystemReminder):
         report the signal bare); follow = the first real post-stop user
         message or None (still unanswered).
         """
-        from ..vault.db.sessions import _REMINDER_PREFIX, load_session
+        from ..vault.db.sessions import REMINDER_PREFIX, load_session
 
         if session_id not in cache:
             saved = load_session(conn, session_id)
@@ -136,7 +136,7 @@ class InterruptSignalsSystemReminder(SystemReminder):
         for m in msgs[idx + 1:]:
             if m.get("role") == "user":
                 content = str(m.get("content", ""))
-                if content.startswith(_REMINDER_PREFIX):
+                if content.startswith(REMINDER_PREFIX):
                     continue  # 注入提醒行不是用户补发
                 follow = content
                 break

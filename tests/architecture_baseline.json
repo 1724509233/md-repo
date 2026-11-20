@@ -1,13 +1,13 @@
 {
   "R5_core_upward": [],
   "R1_sql_outside_db": [
-    "server/services/recovery.py:105:sqlite3.connect",
-    "server/services/recovery.py:250:sqlite3.connect"
+    "server/services/recovery.py:106:sqlite3.connect",
+    "server/services/recovery.py:251:sqlite3.connect"
   ],
   "R2_interface_sql": [],
   "R4_lazy_conn": [
     "server/agent/reminders.py:89:get_index_conn",
-    "server/agent/runtime.py:509:get_ledger_conn",
+    "server/agent/runtime.py:543:get_ledger_conn",
     "server/mcp_server.py:123:get_ledger_conn",
     "server/mcp_server.py:162:get_ledger_conn",
     "server/mcp_server.py:227:get_index_conn",

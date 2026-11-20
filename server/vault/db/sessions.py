@@ -90,7 +90,9 @@ def set_auto_approve(conn: sqlite3.Connection | None, session_id: str, value) ->
 # 同源钉：server/agent/reminders.py:65 DocPathUserReminder._PREFIX。
 # 此处不 import agent 层（agent→vault 反向依赖，分层红线）；一致性由
 # tests/test_db.py::test_list_session_summaries 的字面量断言守住（spec §1.1）。
-_REMINDER_PREFIX = "[当前打开:"
+# 公开名（R3 私有跨目录导入钉）：消费面 = 本模块读函数 + bgagent
+# interrupts 的 join（注入提醒行不是用户消息，跳过判据同源）。
+REMINDER_PREFIX = "[当前打开:"
 
 
 def _session_counts(msgs: list) -> tuple[int, int]:
@@ -104,7 +106,7 @@ def _session_counts(msgs: list) -> tuple[int, int]:
     for m in msgs:
         role = m.get("role")
         if role == "user":
-            if str(m.get("content", "")).startswith(_REMINDER_PREFIX):
+            if str(m.get("content", "")).startswith(REMINDER_PREFIX):
                 continue
             users += 1
             in_segment = False
@@ -123,7 +125,7 @@ def _session_title(msgs: list, tool_count: int) -> str:
     for m in msgs:
         if m.get("role") == "user":
             content = str(m.get("content", ""))
-            if not content.startswith(_REMINDER_PREFIX):
+            if not content.startswith(REMINDER_PREFIX):
                 return content if len(content) <= 40 else content[:40] + "…"
     return f"工具会话 · {tool_count} 次工具"
 
