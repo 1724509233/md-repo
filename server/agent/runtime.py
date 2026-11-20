@@ -390,9 +390,31 @@ class LoopRuntime(Runtime):
                             "id": tc["id"], "name": tc["name"], "args": args,
                         })
                         logger.info("waiting for user confirmation on %s", tc["id"])
-                        await entry["event"].wait()
+                        # 确认超时（spec 2026-11-20 §2，评审 M2）：无人应答
+                        # 不得永久挂起运行体——超时按拒绝落定。
+                        try:
+                            await asyncio.wait_for(
+                                entry["event"].wait(),
+                                timeout=spec.confirm_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            if entry["approved"] is None:
+                                logger.warning(
+                                    "confirm timeout on %s (%.0fs), auto-rejecting",
+                                    tc["id"], spec.confirm_timeout)
+                                entry["approved"] = False
+                            else:
+                                # M2 ②：确认与超时同帧落定——确认已裁决，
+                                # 弃超时权重用已落定值（绝不双发 tool_result）。
+                                logger.info(
+                                    "confirm %s settled (approved=%s) at the "
+                                    "timeout edge; keeping the confirm verdict",
+                                    tc["id"], entry["approved"])
+                        finally:
+                            # M2 ①：超时/批准/拒绝/取消任何路径都出表——不留
+                            # 僵尸条目（迟到 confirm 返回 False，假 200 面关闭）。
+                            agent.pending_confirms.pop(tc["id"], None)
                         logger.info("user confirmed/rejected %s, approved=%s", tc["id"], entry["approved"])
-                        del agent.pending_confirms[tc["id"]]
                         if not entry["approved"]:
                             result = "User rejected this operation."
                             logger.warning("tool_call %s rejected by user", tc["name"])

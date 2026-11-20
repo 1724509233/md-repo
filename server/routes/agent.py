@@ -95,6 +95,7 @@ def _build_agent_spec(ctx) -> AgentSpec:
         system_reminders=[TimeSystemReminder()],
         user_reminders=[DocPathUserReminder()],
         max_rounds=ctx.ai_config.max_rounds,
+        confirm_timeout=ctx.ai_config.confirm_timeout,
         vault_dir=ctx.vault_dir,
         read_doc_max_chars=ctx.ai_config.read_doc_max_chars,
         egress=egress,

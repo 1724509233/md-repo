@@ -111,6 +111,7 @@ def load_server_config(config_path: str) -> ServerConfig:
             context_window=int(ai_raw.get("context_window", 16384)),
             max_rounds=int(ai_raw.get("max_rounds", 15)),
             read_doc_max_chars=int(ai_raw.get("read_doc_max_chars", 4000)),
+            confirm_timeout=float(ai_raw.get("confirm_timeout", 300.0)),
             tools=_parse_ai_tools(ai_raw.get("tools")),
         )
 

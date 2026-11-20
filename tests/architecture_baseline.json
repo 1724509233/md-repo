@@ -7,7 +7,7 @@
   "R2_interface_sql": [],
   "R4_lazy_conn": [
     "server/agent/reminders.py:89:get_index_conn",
-    "server/agent/runtime.py:450:get_ledger_conn",
+    "server/agent/runtime.py:472:get_ledger_conn",
     "server/mcp_server.py:123:get_ledger_conn",
     "server/mcp_server.py:162:get_ledger_conn",
     "server/mcp_server.py:227:get_index_conn",

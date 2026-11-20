@@ -1644,3 +1644,103 @@ def test_evict_stale_agents_keeps_pending_confirms():
     assert evicted == ["plain"]
     assert cache == {"pending": pending}
     assert "pending" in last_active
+
+
+# ── ask 确认超时（spec 2026-11-20 §2，评审 M2）─────────────────────────
+
+def _timeout_confirm_agent(tmp_path: Path, confirm_timeout: float):
+    """Agent + mock LLM 脚本（write_doc 一轮 → 最终文本一轮），确认超时压小。
+
+    仿 :605 起 confirm 家族的 mock 模式；tool_call id 固定 ``call_x``。"""
+    agent, vault = _make_agent(tmp_path)
+    agent.spec.confirm_timeout = confirm_timeout
+
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_x"
+    tc.function = MagicMock()
+    tc.function.name = "write_doc"
+    tc.function.arguments = '{"path": "x.md", "content": "# X"}'
+    chunk1 = _make_chunk(tool_calls=[tc], finish_reason="tool_calls")
+    chunk2 = _make_chunk(content="OK.", finish_reason="stop")
+
+    mock_stream1 = AsyncMock()
+    mock_stream1.__aiter__ = lambda s: _async_iter([chunk1])
+    mock_stream2 = AsyncMock()
+    mock_stream2.__aiter__ = lambda s: _async_iter([chunk2])
+
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        side_effect=[mock_stream1, mock_stream2]
+    )
+    return agent, vault, mock_client
+
+
+async def _collect_chat(agent, on_line=None) -> list[str]:
+    """驱动 agent.chat 收全量 SSE 行；on_line 对每行回调（同帧 confirm 用）。"""
+    events = []
+    async for event in agent.chat("write x.md"):
+        line = _sse(event)
+        events.append(line)
+        if on_line is not None:
+            on_line(line)
+    return events
+
+
+def test_confirm_timeout_auto_rejects(tmp_path: Path):
+    """无人应答 → confirm_timeout 后自动落 rejected，拒绝文本与既有逐字一致
+    （spec M2 ③），随后正常 done；pending_confirms 不残留（M2 ①）。"""
+    agent, vault, mock_client = _timeout_confirm_agent(tmp_path, 0.05)
+
+    async def main():
+        # 测试体内不得裸挂起：无超时实现时 wait_for 兜底判红
+        return await asyncio.wait_for(_collect_chat(agent), timeout=5.0)
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(main())
+
+    assert any('"type": "confirm_request"' in e and "call_x" in e for e in events)
+    assert any('"type": "tool_result"' in e and '"rejected": true' in e
+               and "User rejected this operation." in e for e in events)
+    assert any('"type": "done"' in e for e in events)
+    assert agent.pending_confirms == {}
+    assert not (vault / "x.md").exists()  # 超时≠批准
+
+
+def test_confirm_no_zombie_after_timeout(tmp_path: Path):
+    """超时落定后条目必须已出表（finally pop，M2 ①）：迟到 confirm 返回
+    False，假 200 面关闭。"""
+    agent, vault, mock_client = _timeout_confirm_agent(tmp_path, 0.05)
+
+    async def main():
+        return await asyncio.wait_for(_collect_chat(agent), timeout=5.0)
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(main())
+
+    assert agent.pending_confirms == {}
+    assert agent.confirm("call_x", True) is False
+    assert agent.confirm("call_x", False) is False
+
+
+def test_confirm_and_timeout_single_verdict(tmp_path: Path):
+    """确认与超时不可双裁决（M2 ②）：~半程超时时 confirm(True) 落定 →
+    该 tc 的 tool_result 恰好一条，且按批准值走（不双发、不误拒）。"""
+    agent, vault, mock_client = _timeout_confirm_agent(tmp_path, 0.1)
+
+    async def drive():
+        task = asyncio.ensure_future(_collect_chat(agent))
+        while not agent.pending_confirms:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)  # ~半程超时处确认
+        assert agent.confirm("call_x", True)
+        return await asyncio.wait_for(task, timeout=5.0)
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(asyncio.wait_for(drive(), timeout=10.0))
+
+    results = [e for e in events if '"type": "tool_result"' in e and "call_x" in e]
+    assert len(results) == 1, events
+    assert '"rejected": true' not in results[0]
+    assert (vault / "x.md").is_file()  # 批准的裁决权不被超时夺走
+    assert agent.pending_confirms == {}

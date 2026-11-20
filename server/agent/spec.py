@@ -34,6 +34,10 @@ class AgentSpec:
     user_reminders: list[UserReminder] = field(default_factory=list)
     max_rounds: int = 15
     auto_approve: bool = False
+    # ask-confirm timeout (spec 2026-11-20 §2, 评审 M2): an unanswered
+    # confirm_request auto-rejects after this many seconds — a detached run
+    # must never wedge forever on a prompt nobody can answer.
+    confirm_timeout: float = 300.0
     write_scope: Path | None = None
     report_dir: Path | None = None
     vault_dir: Path | None = None
