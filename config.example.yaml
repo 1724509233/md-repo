@@ -189,6 +189,34 @@ background_agents:
 #     model_id: qwen2.5:14b
 #     base_url: "http://localhost:11434/v1"
 #     api_key: ""
+#
+# ── 记忆运行时：中断复盘（interrupt-review，示例，取消注释启用）────────────
+# 通道二消费闭环（spec 2026-11-20-stop-signals §4）：周频读近 7 天取消信号
+# （chat_abort_log，用户取消意图的行为事实）+ sessions blob join（中断轮原文/
+# 思考、停后补发），评审「哪份提示词正被用户的中断压测」；框架仿提案回读把
+# 信号素材注入 system-reminder（挂点全局、数据门自持：窗口内无信号=零注入、
+# 零出域台账行）。具体改进 → propose（summary 型，人审闸门）；评审报告 =
+# 运行报告（_write_report_and_prune，30 份留存）。报告纪律：行为事实与
+# 模型宣称（中断轮思考非证据）分开表述。
+# - name: "中断复盘"
+#   alias: interrupt-review
+#   enabled: true
+#   cron: "0 4 * * 6"                # 周六 04:00 周频（低频——信号本就稀疏）
+#   target_dir: index                # 写边界 = 机器区（propose 零文件落，此值为名义 scope）
+#   prompt: server/prompts/interrupt-review.md
+#   report_dir: .reports/interrupt-review
+#   max_rounds: 20
+#   timeout_s: 1800
+#   budget_runs_per_day: 1
+#   budget_max_proposals: 3
+#   tools: [read_doc, search_docs, list_files, get_related_docs,
+#           recent_changes, propose]  # 读×5 + propose；不持 write_doc（分界线，ADR-0004）
+#   verbs: [summary]                 # 提示词改进 = summary 型提案
+#   model:                           # 本地档建议：reminder 含中断轮思考全文，选云端=思考出域（egress 台账兜底，红线 7 知情决策）
+#     provider: openai
+#     model_id: qwen2.5:14b
+#     base_url: "http://localhost:11434/v1"
+#     api_key: ""
 
 # 通知量级守卫（v2.2 债单 #6 / D33）：当日通知行数上限，超出折叠为单日摘要行。
 # 同 alias 的 review 类通知（proposal_paths 相交）自动合并。

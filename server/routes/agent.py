@@ -186,6 +186,10 @@ def register(app, ctx) -> None:
                     persist=lambda sid: session_mgr.save(sid, _get_agent(sid).messages),
                     load_messages=_load_messages,
                     prepare_doc=_prepare_doc,
+                    # 取消信号账本 conn（通道二 §3 两写点）：本闭包已握
+                    # ctx.ledger_conn——就近注入，无新布线；None = 无库形态
+                    # （捕获静默跳过，stop 链路零变化）。
+                    ledger_conn=ctx.ledger_conn,
                     # 出队即时前缀落库（spec 2026-11-20 §2 补记，rev3）：
                     # 首帧前把 user 行写库 → 运行中会话即时进历史列表
                     # （列表滤空行，此前 done 前整轮不入库故不可见）。

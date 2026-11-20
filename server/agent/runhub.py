@@ -22,16 +22,30 @@ missing ``run_id``, or a cursor trimmed below the buffer head, answers a single
 
 Behavior law source: docs/superpowers/specs/2026-11-20-agent-run-detach-stream.md
 §2/§3.
+
+Abort-signal capture (channel-2 spec 2026-11-20-stop-signals-reasoning-
+capture §3): the two stop write points of ``_drive`` (inner / outer
+``except CancelledError``) INSERT one chat_abort_log row each — behavior
+facts only (session_id / message_id / ts / phase / tool_name / model are
+all channel-stamped here, redline 3), through the single write module
+``chat_abort_records.record`` (fail-open, never bites the stop path).
+Fault exits (APIError / crash) write NOTHING (r3: ops signals, not user
+intent). ``_emit`` carries the last-category bookkeeping that feeds the
+phase (reasoning / text_output / tool_exec + in-flight name /
+confirm_pending; default pre_dispatch).
 """
 from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Callable, Optional
+
+logger = logging.getLogger("md-vault.runhub")
 
 
 class QueueFull(Exception):
@@ -64,6 +78,13 @@ class Run:
     waiters: set = field(default_factory=set)
     state: str = "running"  # running | finished | stopped | error
     finished_at: Optional[float] = None
+    # abort-signal bookkeeping (channel-2 §3, _emit-fed last category):
+    # what was in flight when a stop lands. Fresh Run → defaults (cross-
+    # run 不残留: the Run object itself is the first half of the pin).
+    # tool_name rides tool_exec ONLY (invariant: phase=tool_exec ⇒
+    # abort_tool non-null; every other category clears it).
+    abort_phase: str = "pre_dispatch"
+    abort_tool: Optional[str] = None
 
 
 class RunHub:
@@ -75,6 +96,7 @@ class RunHub:
                  prepare_doc: Callable[[Optional[str]], dict],
                  *,
                  persist_user: Optional[Callable[[str, str], None]] = None,
+                 ledger_conn: Optional[object] = None,
                  retain: float = 600.0,
                  buffer_max: int = 20000,
                  queue_max: int = 5):
@@ -84,6 +106,10 @@ class RunHub:
         self._load_messages = load_messages
         self._prepare_doc = prepare_doc
         self._persist_user = persist_user
+        # abort-signal ledger conn (ledger.db — chat_abort_log). Taken from
+        # the route's WebContext at the existing RunHub assembly site (no new
+        # wiring); None = degraded/no-DB setup → capture silently skipped.
+        self._ledger_conn = ledger_conn
         self._retain = retain
         self._buffer_max = buffer_max
         self._queue_max = queue_max
@@ -232,7 +258,25 @@ class RunHub:
     def _emit(self, run: Run, type_: str, data: dict) -> dict:
         """Append a frame to the ring buffer (trimming oldest) and broadcast
         it to every waiter. ``put_nowait`` on unbounded queues: the broadcast
-        is a sync step inside the event loop — a subscriber never sees a gap."""
+        is a sync step inside the event loop — a subscriber never sees a gap.
+
+        Abort-signal bookkeeping (channel-2 §3, zero new probing — the frame
+        stream IS the behavior surface): the last category the run was in
+        feeds the stop row's phase. tool_result resets to pre_dispatch (the
+        round closed, the next model call is not yet dispatched) and clears
+        the in-flight tool name — only tool_call sets it (tool_exec ⇒
+        tool_name non-null invariant)."""
+        if type_ == "reasoning":
+            run.abort_phase, run.abort_tool = "reasoning", None
+        elif type_ == "token":
+            run.abort_phase, run.abort_tool = "text_output", None
+        elif type_ == "tool_call":
+            run.abort_phase = "tool_exec"
+            run.abort_tool = data.get("name")
+        elif type_ == "tool_result":
+            run.abort_phase, run.abort_tool = "pre_dispatch", None
+        elif type_ == "confirm_request":
+            run.abort_phase, run.abort_tool = "confirm_pending", None
         run.seq += 1
         frame = {"type": type_, "run_id": run.run_id, "seq": run.seq, **data}
         run.buffer.append(frame)
@@ -250,15 +294,85 @@ class RunHub:
             await res
         run.persisted_through_seq = run.seq
 
+    # ── abort-signal capture (channel-2 spec §3: two immediate write points) ─
+
+    def _reset_abort_stamp(self, sid: str) -> None:
+        """跨 run 复用不残留铁律: the Agent object is cached across runs
+        (routes' agent_cache) — clear its ``last_partial_message_id`` at run
+        start so a previous run's interrupted-row stamp can never be blamed
+        on this run's abort (the Run's own bookkeeping is fresh by
+        construction). Fail-open: the clearing is hygiene, never bite the run."""
+        try:
+            self._get_agent(sid).last_partial_message_id = None
+        except Exception:
+            pass
+
+    def _record_abort(self, sid: str, run: Run, *, anchored: bool,
+                      phase_override: Optional[str] = None) -> None:
+        """The single capture funnel for BOTH stop write points (写面收口,
+        ledger.record 同形态): identity fully channel-stamped (redline 3) —
+        ts now, session_id the run key, phase the _emit bookkeeping (live
+        ``pending_confirms`` overrides it: non-empty = confirm_pending, the
+        strongest explicit rejection), tool_name the in-flight dispatch name
+        iff tool_exec, message_id = the interrupted row's stamp the runtime
+        left on ``agent.last_partial_message_id`` during the cancel unwind
+        (NULL for the never-dispatched/blank shape and for the un-anchored
+        outer point), model the run's model id. Fault paths never reach
+        here (r3). record() itself is fail-open; the surrounding guard keeps
+        every other step (agent resolution) equally harmless.
+        """
+        if self._ledger_conn is None:
+            return
+        try:
+            from ..vault.db import chat_abort_records
+
+            try:
+                agent = self._get_agent(sid)
+            except Exception:
+                agent = None
+            if phase_override is not None:
+                phase = phase_override
+            elif getattr(agent, "pending_confirms", None):
+                phase = "confirm_pending"
+            else:
+                phase = run.abort_phase
+            message_id = (getattr(agent, "last_partial_message_id", None)
+                          if anchored else None)
+            model = getattr(getattr(getattr(agent, "spec", None),
+                                    "model", None), "model_id", None) or ""
+            chat_abort_records.record(
+                self._ledger_conn,
+                session_id=sid,
+                message_id=message_id,
+                ts=time.time(),
+                phase=phase,
+                tool_name=(run.abort_tool if phase == "tool_exec" else None),
+                model=model,
+            )
+        except Exception:
+            # belt-and-suspenders: the run's stop path must never break on
+            # telemetry (record() swallows its own failures, §3 review L1).
+            logger.warning("chat abort capture failed (harmless to the stop "
+                           "path) session_id=%r", sid, exc_info=True)
+
     async def _drive(self, sid: str, run: Run) -> None:
         """The run task: holds the session lock across the whole run."""
         lock = self._get_lock(sid)
+        # run 启动清零（跨 run 复用不残留铁律，channel-2 §3）：上一 run 缓存
+        # 的 interrupted 戳不得进本轮 abort 行。
+        self._reset_abort_stamp(sid)
         try:
             await lock.acquire()
             self._emit(run, "run_status", {"running": True, "state": "running"})
             try:
                 while run.queue:
                     msg = run.queue.popleft()
+                    # per-dequeue 清零（同铁律的轮间半段，channel-2 §3）：
+                    # 同 run 内上一轮的戳（如 APIError 轮的 interrupted 行）
+                    # 不得被后续轮次的 stop 误用。popleft→reset 同步无 await，
+                    # 取消无法插进中间。
+                    agent = self._get_agent(sid)
+                    agent.last_partial_message_id = None
                     self._emit(run, "user_message",
                                {"qid": msg.qid, "text": msg.text})
                     self._emit(run, "queue_update",
@@ -274,7 +388,6 @@ class RunHub:
                             await res
                         run.persisted_through_seq = run.seq
                     kwargs = self._prepare_doc(msg.doc_path) or {}
-                    agent = self._get_agent(sid)
                     # r8 修订重做（2026-11-20）：补丁卡的 agent.chat_run_id 下传
                     # 已废弃——interrupted 行身份戳由 runtime._append_partial 自盖
                     # message_id，RunHub run id 只存活于流回放层，不再入存储。
@@ -293,6 +406,10 @@ class RunHub:
                 # kept strictly apart from the crash branch below.
                 run.state = "stopped"
                 run.finished_at = time.monotonic()
+                # 写点 1（channel-2 §3.1，即时 INSERT）：取消 unwind 顺序保证
+                # runtime._append_partial 已盖戳（含半截文落库）先于此到达。
+                # 故障分支（下方 except Exception）绝不写——r3 定性钉。
+                self._record_abort(sid, run, anchored=True)
                 run.queue.clear()
                 await self._save_and_boundary(sid, run)
                 self._emit(run, "run_status",
@@ -315,6 +432,11 @@ class RunHub:
             if run.state == "running":
                 run.state = "stopped"
                 run.finished_at = time.monotonic()
+                # 写点 2（channel-2 §3.2，cancel-before-lock / run 未启动）：
+                # 无锚行——message_id NULL（绝不读 agent 上的残留戳），
+                # phase=pre_dispatch，tool_name NULL。
+                self._record_abort(sid, run, anchored=False,
+                                   phase_override="pre_dispatch")
 
     def _evict_expired(self) -> None:
         """Lazy sweep (spec §2, review m3): drop terminal runs past the retain

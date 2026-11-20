@@ -70,6 +70,8 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 1. **stop**：RunHub inner `except CancelledError`（`runhub.py:288-296`）——写 `ts`；`message_id` = interrupted 行的身份戳——`_append_partial` 盖 `message_id`（uuid4-hex-12，与 done 行同形态）**并留痕于 agent 属性**，RunHub 捕获 CancelledError 后读取注入（取消 unwind 顺序保证先盖行后到 RunHub）；phase = `_emit` 簿记 last category（**r8：reasoning 帧→reasoning（停于思考中）**、text→text_output、tool dispatch→tool_exec、`pending_confirms` 非空→confirm_pending、无事件→pre_dispatch）；`tool_name` = tool_exec 时在飞派发名（`_emit` 簿记已持有，零新增探测）。
 2. **等锁期取消**：RunHub outer `except CancelledError`（`runhub.py:309-314`，cancel-before-lock——用户点了停但 run 还没拿到锁）——message_id NULL（无锚行），phase=pre_dispatch，tool_name NULL。
 
+**簿记细则（实施备案）**：`_emit` last-category：reasoning→reasoning、token→text_output、tool_call→tool_exec+在飞名、confirm_request→confirm_pending、**tool_result→pre_dispatch+清名**（本轮工具已关闭、下一模型调用未派发——同时保「phase=tool_exec ⇒ tool_name 非空」不变式）；record 时 **live `pending_confirms` 非空覆盖 confirm_pending**。跨 run/跨轮双清零：run 对象即簿记载体 + 每次出队进 chat 前清 `last_partial_message_id`。
+
 **reasoning 落 blob（r6 用户提议，替换旁路缓冲全案）**：runtime chunk 循环把 reasoning 片段攒进**正在构造的 assistant 行**——每次 LLM 调用（含带 tool_calls 的中间调用）落盘自己那行时附 `reasoning` 字段（**全文不截断**，本地盘成本免谈）；通道一 `_append_partial`（interrupted 行）同附本次调用已累计的 reasoning。**旁路滚动缓冲、`reasoning_tail_bytes` 参数、RunHub 读快照——全部作废**：RunHub 写点从此只写行为事实，与思考文本零接触。**新铁律**：`reasoning` 是 blob-only 字段——LLM 出域载荷由 LLM_FIELDS 白名单构造，`reasoning` 永不进白名单（与 `interrupted` 同机制，既有钉家族扩展钉死，此为唯一防线）。「思考链恒零落库」旧铁律就此反转（法理：体积/回喂/宣称污染三防分别由本地盘、白名单、报告分层口径吸收）。blob 行形状契约归通道一 spec（interrupted/done 行 shape 增 `reasoning`，同步修订）。restore 后 UI 是否渲染为独立小卡，数据先行。
 
 落库失败 = **fail-open**：record() 永不抛——**warning 级**日志（带 session_id/message_id 上下文）后吞（评审 L1：信号静默丢必须可见，否则与「本来没中断」在消费端不可分；仿 D17 但级别钉死 warning）。
@@ -85,7 +87,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 
 ## 5. 留存（r7 用户裁：不 GC）
 
-**行永久保留**——不设 GC、不挂 executor 周期站、无 retention 参数。量级依据：单用户 stop 事件周个位数，一年千行级，ledger.db 无感。`server/vault/db/` 新增 `chat_abort_records.py` 只含 `record()`（§3 写面），无 gc_sweep。
+**行永久保留**——不设 GC、不挂 executor 周期站、无 retention 参数。量级依据：单用户 stop 事件周个位数，一年千行级，ledger.db 无感。`server/vault/db/` 新增 `chat_abort_records.py`：`record()`（§3 写面）+ `recent()`（消费读，锁外、`ORDER BY session_id, id`——「SQL 不出 db 层」家族纪律优先于本句字面「只含 record」，实施备案）。无 gc_sweep。
 
 **连带销案**：r5 的「retention × raw_ref 悬挂」张力**自然消解**——行不删，`raw_ref="abort_log:{id}"` 永久有效（会话删除也只影响 blob 侧 join，本表行与锚文本语义自足）。AUTOINCREMENT 维持（引用 id 永不复用仍是 provenance 要求，只是不再与 GC 挂钩）。
 
@@ -123,5 +125,6 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 ## 9. 备案与回滚
 
 - SIGKILL/断电不可达，与通道一/RunHub 同失败面，备案接受（notes §5）。
+- **never-started cancel 备案（实施实证）**：任务未启动即 cancel 不进协程体，outer 写点不可达——该形态属 RunHub 既有僵尸面（state=running 残留至 retain 外），不产 abort 行，不在通道二范围。
 - 回滚 = revert 单提交 + `DROP TABLE chat_abort_log`（无他表依赖，无 GC 无需人工清行）。
 - **r7 销项**：四个待拍参数全部清零——retention（不 GC，行永久）、消费 cron/模型/target_dir（bgagent 常规条目取值，实施时填）。**r6 挂起项（真实数据驱动，唯一遗留）**：`prompt_preview` 存否与归因上下文窗口宽度——signals 跑一段后按真实中断样本定。

@@ -20,6 +20,11 @@ Failure semantics: fail-open, pinned WARNING level (spec §3, review L1)
 — a silently lost signal would be indistinguishable from a run that was
 never interrupted; the trace carries the session_id / message_id context
 and swallows (the stop path of a run must never break on telemetry).
+
+The §4 consumer read (``recent()``) lives here as well so the table's
+SQL never leaves the db layer (reader discipline, egress_sql precedent):
+the only sanctioned consumers are the bgagent reminder and manual sqlite3
+(spec §2 红线 5 — no tool, no route, no SSE reads this table).
 """
 from __future__ import annotations
 
@@ -72,3 +77,26 @@ def record(
             message_id,
             exc_info=True,
         )
+
+
+def recent(
+    ledger_conn: sqlite3.Connection,
+    *,
+    since: float,
+    limit: int | None = None,
+) -> list[dict]:
+    """Consumer-side read (spec §4): rows with ``ts >= since``, ordered
+    ``ORDER BY session_id, id`` — the autoincrement id is the intra-session
+    causal order (ts is human-read only; NTP ties never sort, r8/r9).
+    Lock-free (reader discipline, egress_sql precedent); ``limit`` optional
+    (bounded-injection hygiene stays with the caller).
+    """
+    sql = ("SELECT id, ts, session_id, message_id, phase, tool_name, model"
+           "  FROM chat_abort_log WHERE ts >= ? ORDER BY session_id, id")
+    params: list = [since]
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(int(limit))
+    cur = ledger_conn.execute(sql, params)
+    cur.row_factory = sqlite3.Row  # conn factory-agnostic readback
+    return [dict(r) for r in cur.fetchall()]

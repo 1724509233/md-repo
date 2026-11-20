@@ -21,9 +21,11 @@ from ..agent import Agent, AgentSpec, LoopRuntime, Runtime
 from ..agent.tools import TOOL_REGISTRY
 from ..config import BackgroundAgentConfig
 from ..core.privacy import PrivacyConfig
-from ..services.egress import EgressTarget, parse_endpoint, should_record
+from ..services.egress import (EgressTarget, flush_touches, parse_endpoint,
+                               should_record)
 from .notify import NotificationHook, RunReport
 from .readback import ReadbackSystemReminder
+from .interrupts import InterruptSignalsSystemReminder
 
 logger = logging.getLogger("md-vault.bgagent")
 
@@ -317,6 +319,30 @@ def _bgagent_egress_target(cfg: BackgroundAgentConfig,
     return target if should_record(target) else None
 
 
+def _record_reminder_egress(conn, target: EgressTarget | None, privacy,
+                            reminder: InterruptSignalsSystemReminder) -> None:
+    """Synthetic egress row for the interrupt-signal reminder injection
+    (channel-2 spec §4 评审 M2, 红线 7): the injected text (signals + the
+    joined user originals / half outputs / reasoning) has no vault path and
+    is not a touched doc, so the per-doc collection would leave its egress
+    invisible — this row completes the audit. ``via='reminder'`` is the
+    sentinel; the synthetic path encodes the payload counts (注入字节量与信号
+    数). One row per run that actually got injection (render None → 0 bytes
+    → no row). Loopback target None → nothing left the machine → no row
+    (the table stays empty, zero behavior delta). Fail-open: telemetry
+    never bites the run."""
+    if conn is None or target is None or reminder.last_bytes <= 0:
+        return
+    path = (f"reminder:bytes={reminder.last_bytes}"
+            f":signals={reminder.last_signals}")
+    try:
+        dirs = privacy.dirs if privacy is not None else ()
+        flush_touches(conn, dirs, target, {path: "reminder"})
+    except Exception:
+        logger.warning("[bg:%s] reminder egress row failed (fail-open)",
+                       target.actor, exc_info=True)
+
+
 async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
                    hooks: list[NotificationHook] | None = None,
                    runtime_cls: type[Runtime] = LoopRuntime,
@@ -378,6 +404,17 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
             f"receive delete_doc (hard-removed, spec §3.2); config tools="
             f"{sorted(cfg.tools) if cfg.tools is not None else 'default (all)'}")
 
+    # 通道二消费闭环（spec 2026-11-20-stop-signals §4）：取消信号 reminder
+    # 挂点仿 ReadbackSystemReminder 先例——全角色挂载、数据门自持（近 7 天
+    # 无信号 / 无 conn → render None，零注入、零台账行，行为逐字节等价）。
+    interrupts = InterruptSignalsSystemReminder(cfg.alias,
+                                                ledger_conn=ledger_conn)
+    # Egress audit (spec §3.2/§3.3 + 通道二 §4 评审 M2): a non-loopback
+    # endpoint means documents leave the machine — audit one row per
+    # touched doc at run end (LoopRuntime finally) + the synthetic
+    # reminder-injection row below. Local endpoints (Ollama) attach
+    # nothing: the table stays empty, behavior byte-identical.
+    egress_target = _bgagent_egress_target(cfg, run_id)
     spec = AgentSpec(
         # bgagent 路径原本无时间注入（Web UI 走 prompts._build_time_block）：
         # 追加运行开始时间，精度到分钟，让 agent 知道"现在"。回读是独立的
@@ -386,7 +423,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
         system_reminders=[ReadbackSystemReminder(cfg.alias, tools,
                                                   db_conn=db_conn,
-                                                  ledger_conn=ledger_conn)],
+                                                  ledger_conn=ledger_conn),
+                          interrupts],
         model=cfg.model,
         tools=tools,
         max_rounds=cfg.max_rounds,
@@ -406,13 +444,12 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         # injection; the scheduler bound them on the default run_once).
         db_conn=db_conn,
         ledger_conn=ledger_conn,
-        # Egress audit (spec §3.2/§3.3): a non-loopback model endpoint means
-        # documents leave the machine — audit one row per touched doc at run
-        # end (LoopRuntime finally). Local endpoints (Ollama) attach nothing:
-        # the table stays empty, behavior byte-identical.
-        egress=_bgagent_egress_target(cfg, run_id),
+        egress=egress_target,
     )
     agent = Agent(spec, runtime=runtime_cls())
+    # reminder 注入的出域台账（通道二 §4 评审 M2）：render 已在 Agent init
+    # 发生，此处把注入字节量/信号数记成一行合成台账（fail-open）。
+    _record_reminder_egress(ledger_conn, egress_target, privacy, interrupts)
 
     try:
         reason, consume_err = await asyncio.wait_for(
