@@ -81,7 +81,8 @@ def test_escape_and_menu_semantics():
 
 def _fn_body(src, header):
     """花括号配平提取函数/回调体（header 起始处的第一个 { 到其配平 }）。
-    注意：被提取的源区间不得含字符串/模板字面量花括号（本仓自研函数均满足）。"""
+    注意：被提取的源区间不得含字符串/模板字面量花括号（本仓自研函数均满足）。
+    参数表自含 { 的解构签名不适用——onSwitchSession 收裸 sid 后原 _body_after 变体退役。"""
     i = src.index(header)
     j = src.index("{", i)
     depth, k = 1, j + 1
@@ -739,24 +740,27 @@ def test_session_history_view_pins():
     assert 'aria-label="删除会话"' in del_btn
     # 当前会话行 thinking 时隐藏 ×（后端 409 兜底的前端镜像守卫）
     assert "status === 'thinking'" in del_btn[:600] and "sessionId" in del_btn[:600]
-    # ③b 确认态收进右侧槽（目检 round2 项①②）：同一右槽在两态间切换 ×⇄确认/取消小钮簇——
+    # ③b 删除确认态收进右侧槽（目检 round2 项①②）：同一右槽在两态间切换 ×⇄确认/取消小钮簇——
     #   行主体按钮不再挂确认态 v-if（标题 + 时间副行任何态下都在）；
     #   确认簇在行主体与 × 之后、同一行内，且不得 flex-1 占主体（不替换行主体）
     body_tag = ai[body_open:ai.index(">", i)]
-    assert "deletingId" not in body_tag and "confirmSwitchId" not in body_tag, \
+    assert "deletingId" not in body_tag, \
         "行主体按钮不得挂确认态 v-if（标题/时间副行任何态下都在）"
     slot = ai[body_close:ai.index("<!-- 消息列表", body_close)]
-    assert slot.index('aria-label="删除会话"') < slot.index('@click="doDelete') < slot.index('@click="confirmSwitchTo'), \
-        "右槽唯一交互簇：× 与两个确认簇同槽互斥（v-if/v-else-if 链）"
+    assert slot.index('aria-label="删除会话"') < slot.index('@click="doDelete'), \
+        "右槽唯一交互簇：× 与删除确认簇同槽互斥（v-if/v-else-if 链）"
     assert "flex-1" not in slot, "确认簇不得 flex-1 占行主体（右侧槽两态切换，标题不动）"
     # ④ Review Focus 1 命门：toggleView 函数体零 abort（流式中开列表不得打断 SSE）
     #   （红线同族：messages/sessionId 也不得被视图开关触碰——abort 是计划指定钉）
     tv = _fn_body(ai, "function toggleView()")
     assert "abort" not in tv, "toggleView 不得触碰 abortCtrl（Review Focus 1）"
-    # ⑤ watch(sessionId) 体：落回 chat 视图 + restorePayload 恢复分支（先取数后原子换的消费端）
+    # ⑤ watch(sessionId) 体（plan T5 翻转组）：摘订阅（零 abort）→ 重置 → 落回 chat → 开快照订阅；
+    #   恢复归 stream 订阅（restorePayload prop 退役——切换/启动不再「先取数后原子换」）
     w = _fn_body(ai, "watch(() => props.sessionId")
     assert "view.value = 'chat'" in w
-    assert "restorePayload" in w and "restoreMessages(" in w
+    assert "abort" not in w, "切换=关旧订阅开新订阅，不再中止（运行脱离连接，原运行后台继续）"
+    assert "closeSub()" in w and "openSub(" in w
+    assert "restorePayload" not in w
     # ⑥ Esc 处理（用户 2026-11-19 质疑定案返工）：容器级 @keydown 在 macOS 鼠标流下失效——
     #   点击 button 不移焦点，纯鼠标流程按 Esc 时 target=body，路径 body→document→window
     #   不经面板根，组件 handler 不触发（app.js 全局 Esc 照常收面板）。必须 window+capture。
@@ -784,14 +788,14 @@ def test_session_history_view_pins():
     # ⑦ fmtRel 复用共享格式化模块（禁本地日期拷贝）
     assert "from '../utils/format.js'" in ai
     assert not re.search(r"\bpad2\b|toISOString\(\)\.slice", ai)
-    # ⑧ 与 app 层解耦契约：props.restorePayload + emit('switchSession')，组件不直接换 sessionId
-    assert "restorePayload: { type: Object, default: null }" in ai
+    # ⑧ 与 app 层解耦契约：行点击直接 emit 裸 sid（T6 消费；组件不再取数 getSession——恢复归订阅；
+    #    上期「停止并切换」确认框连同 confirmSwitchId 状态机整组拆除——切换不打断任何运行）
+    assert "restorePayload" not in ai, "restorePayload prop 退役（恢复统一归 stream 快照订阅）"
+    assert "switchTo" not in ai and "confirmSwitch" not in ai and "askSwitch" not in ai, \
+        "停止并切换确认态状态机整组拆除（spec §6 与既有功能边界）"
     assert "'switchSession'" in ai
-    st = _fn_body(ai, "async function switchTo(")
-    assert "emit('switchSession'" in st and "props.sessionId =" not in st
-    # ⑨ 确认态互斥：同一时刻至多一行处于确认态（进入一种即清另一种）
-    assert "confirmSwitchId.value = null" in _fn_body(ai, "function askDelete(")
-    assert "deletingId.value = null" in _fn_body(ai, "function askSwitch(")
+    oc = _fn_body(ai, "function onRowClick(")
+    assert "emit('switchSession', row.id)" in oc and "props.sessionId =" not in oc
     # ⑩ 删除当前会话成功 → 自动新会话（面板不留死会话）
     dd = _fn_body(ai, "async function doDelete(")
     assert "emit('newSession')" in dd and "props.sessionId" in dd
@@ -803,55 +807,52 @@ def test_session_history_view_pins():
     assert i_auto < i_new < i_hist < i_close, "ai-acts 应为 自动批准·新会话·历史，关闭末位"
 
 
-def _body_after(src, sig):
-    """_fn_body 的解构参数变体：从 sig（含参数表 {a, b}）之后的第一个 { 配平取体。
-    （_fn_body 从 header 起点找 {，header 文本自含 { 时会误抓参数对象，故另立。）"""
-    i = src.index(sig) + len(sig)
-    j = src.index("{", i)
-    depth, k = 1, j + 1
-    while depth and k < len(src):
-        depth += (src[k] == "{") - (src[k] == "}")
-        k += 1
-    return src[j + 1:k - 1]
-
-
 def test_session_persistence_pins():
-    # spec 2026-11-19 §2.5（T5）：app.js 接线——localStorage 持久化（mdvault.aiSession 键族，
-    # 先例 mdvault.searchWeights）、启动恢复与手动切换同走「先取数后原子换」单一管线。
+    # spec 2026-11-19 §2.5 + 2026-11-20 §5（T6 改写）：app.js 接线——localStorage 持久化
+    # （mdvault.aiSession 键族，先例 mdvault.searchWeights）。运行脱离连接后恢复归面板
+    # stream 快照订阅：bootRestoreSession 去 fetch 化（只 getItem→sessionId，体内零
+    # api.getSession），「先取数后原子换」载荷 restorePayload 整体退役，
+    # onSwitchSession 收裸 sid（T5 面板 emit('switchSession', row.id) 的消费端）。
     app = _templates()["app.js"]
     assert "mdvault.aiSession" in app
-    # ① 写点恰 2、无第三写点（spec §2.5）：setItem 单点封装进 persistSessionId（计划 Step 3），
-    #   字面出现恰 1 次且必须在 try/catch 内（Review Focus 5：隐私模式存储不可用不得炸面板）；
-    #   persistSessionId 调用点恰 2（startNewSession 成功处 + onSwitchSession 成功处）。
-    #   （计划 Step 1 字面「setItem 出现 2 次」与其 Step 3 强制的 persistSessionId 单点封装
-    #   自相矛盾——helper 内 setItem 只能出现 1 次；本钉按「写点=2 调用点」本意落钉，口径不变。）
+    # ① 写点恰 2、无第三写点：setItem 单点封装进 persistSessionId，字面出现恰 1 次且必须在
+    #   try/catch 内（Review Focus 5：隐私模式存储不可用不得炸面板）；persistSessionId 调用点
+    #   恰 2（startNewSession 成功处 + onSwitchSession）。
+    #   （计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
+    #   只能出现 1 次；按「写点=2 调用点」本意落钉，上轮口径不变。）
     assert app.count("localStorage.setItem(") == 1
     ps = _fn_body(app, "function persistSessionId(")
     assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
     assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
     assert len(re.findall(r"(?<!function )persistSessionId\(", app)) == 2
     sn = _fn_body(app, "async function startNewSession(")
-    assert "persistSessionId(" in sn and "state.restorePayload = null" in sn
-    os_ = _body_after(app, "function onSwitchSession({ sid, data })")
-    assert "persistSessionId(" in os_
-    # ② getItem 路径 try/catch + 启动恢复静默（catch 不发 toast——静默是新用户路径）
+    assert "persistSessionId(" in sn and "state.sessionId = data.session_id" in sn
+    # ② bootRestore 去 fetch 化（spec 2026-11-20 §5：恢复统一归 stream 快照订阅）：体内
+    #   getItem + try/catch + state.sessionId = sid，零 api.getSession、零 await、零 showToast
+    #   （catch 静默——静默是新用户路径）
     br = _fn_body(app, "async function bootRestoreSession(")
     assert "localStorage.getItem(" in br and "mdvault.aiSession" in br
     assert "try" in br and "catch" in br, "getItem 必须 try/catch（Review Focus 5）"
     assert "showToast" not in br
-    # ③ 原子换读序（手动切换与启动恢复同管线）：restorePayload 赋值先于 sessionId——
-    #   panel 的 watch(sessionId) 消费时 payload 必在场；onSwitchSession 再叠 persist 殿后
-    assert "api.getSession(" in br
-    assert br.index("state.restorePayload =") < br.index("state.sessionId =")
-    assert os_.index("state.restorePayload =") < os_.index("state.sessionId =")
+    assert "api.getSession" not in br, "boot 恢复去 fetch 化——恢复归面板订阅（spec §5）"
+    assert "await" not in br and "state.sessionId = sid" in br
+    # ③ 切换落地（T5 载荷拆除）：onSwitchSession 收裸 sid = sessionId 赋值 + persistSessionId
+    #   （写点 2，殿后——与 boot 路径同口径，无 payload 前置步）
+    assert "function onSwitchSession(sid)" in app
+    os_ = _fn_body(app, "function onSwitchSession(")
+    assert "state.sessionId = sid" in os_ and "persistSessionId(" in os_
     assert os_.index("state.sessionId =") < os_.index("persistSessionId(")
     # ④ 挂载接线：boot 调用在 onMounted 内、非阻塞（不得 await——恢复不得挡住首屏渲染）
     assert app.count("bootRestoreSession()") == 2   # 定义 + 唯一启动调用
     om = app[app.index("onMounted("):]
     assert "bootRestoreSession()" in om and "await bootRestoreSession" not in app
-    # ⑤ 模板挂载点：restorePayload prop + switchSession 事件落位（T4 emit 的消费端）
-    assert ':restore-payload="state.restorePayload"' in app
+    # ⑤ 模板挂载点：switchSession 事件落位（裸 sid 载荷消费端）
     assert '@switchSession="onSwitchSession"' in app
+    # ⑥ 跨文件双零钉（plan T6 合审）：restorePayload 整体退役——app.js 侧（state 声明/
+    #   模板 kebab prop 一并覆盖）；AIChatPanel.js 侧半组已在 test_session_history_view_pins
+    #   （⑦ watch 体零 restorePayload + ⑧ 全文件零）落钉，不重复
+    assert "restorePayload" not in app, "state.restorePayload 整体退役（含 state 声明）"
+    assert "restore-payload" not in app, "模板 :restore-payload 挂载删除"
     # setup 暴露面含 onSwitchSession（模板事件处理的消费前提）。不用 _fn_body(app,"return {")：
     # 会先命中 badgeParts computed 的 return {，此处按 setup return 独有起始行锚定切片
     ri = app.index("return {\n        state, editorPaneRef")
@@ -872,3 +873,245 @@ def test_esc_chain_memory_precedes_ai():
     assert i_mem < i_ai, "memoryOpen 分支必须在 aiOpen 分支之前（Esc 先关记忆台）"
     # notif 支仍居链首：防「整链倒序」的懒修法（倒序同样满足 memory<ai）
     assert i_notif < i_mem and i_notif < i_ai
+
+
+def test_chat_events_dispatcher():
+    # chatEvents 分发器（plan 2026-11-20-agent-run-detach-stream T4；spec §6 事件表 + §5 渲染模型）。
+    # 静态钉：零 import 语句（含动态 import()）零 Vue 字样 → node 直 import 零框架依赖；
+    # 行为测试照 format.js 先例（:492 import(as_uri) + process.exit(用例号)），node 缺失 skip。
+    p = TPL / "js" / "utils" / "chatEvents.js"
+    src = p.read_text(encoding="utf-8")
+    assert "export function applyEvent" in src
+    assert not re.search(r"\bimport\b", src), "chatEvents 必须零 import（含动态 import()）"
+    assert "Vue" not in src, "chatEvents 必须零 Vue 字样"
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = """
+import(%r).then(m=>{
+const A=m.applyEvent;
+const J=JSON.stringify;
+const eq=(a,b)=>J(a)===J(b);
+const C=()=>({messages:[],currentTurn:null,queue:[],busy:false,tokenUsage:{used:0,total:0,percent:0},runId:null,cursor:0,terminal:false});
+let ctx,r,msg,blk,bl;
+// 1 snapshot：ctx.snapshot 挂 ctx（messages+边界）、runId 记录、返回 []（exit 1）
+ctx=C();
+r=A(ctx,{type:'snapshot',messages:[{role:'ai',text:'旧历史'}],persisted_through_seq:7,run_id:'r1',seq:0});
+if(!eq(r,[])||!ctx.snapshot||ctx.snapshot.messages.length!==1||ctx.snapshot.persisted_through_seq!==7||ctx.runId!=='r1')process.exit(1);
+// 2 run_status：busy=running；终帧 terminal=true + 扫 messages 把 confirm 工具块落 rejected（其余态不动）（exit 2）
+ctx=C();
+ctx.messages.push({role:'user',text:'q'},{role:'ai',blocks:[{type:'tool',id:'t1',status:'confirm'},{type:'tool',id:'t2',status:'done'},{type:'tool',id:'t3',status:'pending'}]});
+r=A(ctx,{type:'run_status',running:true,state:'running',run_id:'r1',seq:1});
+if(!eq(r,[])||ctx.busy!==true)process.exit(2);
+r=A(ctx,{type:'run_status',running:false,state:'stopped',run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.busy!==false||ctx.terminal!==true)process.exit(2);
+bl=ctx.messages[1].blocks;
+if(bl[0].status!=='rejected'||bl[1].status!=='done'||bl[2].status!=='pending')process.exit(2);
+// 3 user_message：push 气泡进 messages（唯一来源），返回 []（exit 3）
+ctx=C();
+r=A(ctx,{type:'user_message',qid:'q1',text:'第二条',run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.messages.length!==1||ctx.messages[0].role!=='user'||ctx.messages[0].text!=='第二条')process.exit(3);
+// 4 queue_update：整换 ctx.queue（追加/清空两拍）（exit 4）
+ctx=C(); ctx.queue=[{qid:'old',text:'旧'}];
+r=A(ctx,{type:'queue_update',queued:[{qid:'q1',text:'排队1'},{qid:'q2',text:'排队2'}],run_id:'r1',seq:3});
+if(!eq(r,[])||ctx.queue.length!==2||ctx.queue[0].qid!=='q1'||ctx.queue[1].qid!=='q2')process.exit(4);
+r=A(ctx,{type:'queue_update',queued:[],run_id:'r1',seq:4});
+if(ctx.queue.length!==0)process.exit(4);
+// 5 resync：ctx.resync=true，游标归零（seq 在场即记）（exit 5）
+ctx=C(); ctx.cursor=9;
+r=A(ctx,{type:'resync',seq:0});
+if(!eq(r,[])||ctx.resync!==true||ctx.cursor!==0)process.exit(5);
+// 6 token/reasoning：无 turn 建 turn（streaming=true）、空白 chunk 不建块、thinking 让位收起、指令（exit 6）
+ctx=C();
+r=A(ctx,{type:'token',text:'\\n\\n',run_id:'r1',seq:3});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.blocks.length!==0||ctx.currentTurn.streaming!==true)process.exit(6);
+r=A(ctx,{type:'token',text:'Hel',run_id:'r1',seq:4});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks.length!==1||ctx.currentTurn.blocksLen!==1)process.exit(6);
+r=A(ctx,{type:'token',text:'lo',run_id:'r1',seq:5});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks[0].text!=='Hello'||ctx.currentTurn.blocksLen!==1)process.exit(6);
+r=A(ctx,{type:'reasoning',text:'嗯',run_id:'r1',seq:6});
+if(!eq(r,['thinking'])||ctx.currentTurn.blocks.length!==2)process.exit(6);
+if(ctx.currentTurn.blocks[1].type!=='thinking'||ctx.currentTurn.blocks[1].text!=='嗯'||ctx.currentTurn.blocks[1].expanded!==true)process.exit(6);
+r=A(ctx,{type:'token',text:'后',run_id:'r1',seq:7});
+if(!eq(r,['stream'])||ctx.currentTurn.blocks.length!==3||ctx.currentTurn.blocks[1].expanded!==false)process.exit(6);
+if(ctx.currentTurn.blocksLen!==3||ctx.cursor!==7)process.exit(6);
+// 7 tool_call（无 turn 建 turn 且 streaming=false、pending 块+blocksLen）/confirm_request（confirm+uiTick、陌生 id 不炸）/tool_result（rejected/error、meta、uiTick）（exit 7）
+ctx=C();
+r=A(ctx,{type:'tool_call',id:'t1',name:'write_doc',args:{path:'a.md'},run_id:'r1',seq:1});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.streaming!==false||ctx.currentTurn.blocksLen!==1)process.exit(7);
+blk=ctx.currentTurn.blocks[0];
+if(blk.type!=='tool'||blk.id!=='t1'||blk.name!=='write_doc'||blk.status!=='pending'||blk.result!==null||blk.expanded!==false)process.exit(7);
+r=A(ctx,{type:'confirm_request',id:'t1',name:'write_doc',run_id:'r1',seq:2});
+if(!eq(r,[])||blk.status!=='confirm'||!(ctx.currentTurn.uiTick>=1))process.exit(7);
+A(ctx,{type:'confirm_request',id:'nope',name:'x',run_id:'r1',seq:3});
+if(ctx.currentTurn.blocks.length!==1)process.exit(7);
+r=A(ctx,{type:'tool_result',id:'t1',rejected:true,result:'No',meta:{m:1},run_id:'r1',seq:4});
+if(!eq(r,[])||blk.status!=='rejected'||blk.result!=='No'||!eq(blk.meta,{m:1}))process.exit(7);
+A(ctx,{type:'tool_result',id:'nope',result:'x',run_id:'r1',seq:5});
+if(ctx.currentTurn.blocks.length!==1)process.exit(7);
+// 8 done：turn 收尾（streaming=false/finished/rendered/fullText/messageId+citations 透传）且 busy 不变（exit 8）
+r=A(ctx,{type:'token',text:'T',run_id:'r1',seq:6});
+if(!eq(r,['stream']))process.exit(8);
+ctx.busy=true;
+r=A(ctx,{type:'done',reason:'final',message_id:'m9',citations:[{c:1}],run_id:'r1',seq:7});
+if(!eq(r,[])||ctx.currentTurn!==null||ctx.busy!==true)process.exit(8);
+msg=ctx.messages.find(x=>x.role==='ai');
+if(!msg||msg.streaming!==false||msg._finished!==true||msg.rendered!==true||msg.messageId!=='m9'||!eq(msg.citations,[{c:1}])||msg.fullText!=='T')process.exit(8);
+// 9 run_id 异源丢帧：返回 []、不建块、游标不推（exit 9）
+ctx=C(); ctx.runId='r1'; ctx.cursor=5;
+A(ctx,{type:'token',text:'keep',run_id:'r1',seq:5});
+r=A(ctx,{type:'token',text:'DROP',run_id:'OTHER',seq:99});
+if(!eq(r,[])||ctx.cursor!==5||ctx.currentTurn.blocks[0].text!=='keep')process.exit(9);
+// 10 token_usage 三字段 / error 建说明块 / round 等未知型忽略 / 游标推进（exit 10）
+ctx=C();
+r=A(ctx,{type:'token_usage',used:5,total:100,percent:5,run_id:'r1',seq:1});
+if(!eq(r,[])||ctx.tokenUsage.used!==5||ctx.tokenUsage.total!==100||ctx.tokenUsage.percent!==5)process.exit(10);
+r=A(ctx,{type:'round',n:1,run_id:'r1',seq:2});
+if(!eq(r,[])||ctx.currentTurn!==null)process.exit(10);
+r=A(ctx,{type:'error',error:'boom',run_id:'r1',seq:3});
+if(!eq(r,[])||!ctx.currentTurn||ctx.currentTurn.blocks[0].type!=='text'||ctx.currentTurn.blocks[0].text.indexOf('boom')<0||ctx.cursor!==3)process.exit(10);
+process.exit(0);
+})""" % p.as_uri()
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
+
+
+def test_run_detach_stream_panel_pins():
+    # plan 2026-11-20-agent-run-detach-stream T5 + spec §5/§6/§7：常驻订阅（唯一数据源）/
+    # 投递解耦 / 真停止 / 队列面板 / 运行中徽标 / 断线指数退避重连。
+    ai = _templates()["AIChatPanel.js"]
+    # ① 订阅为唯一数据源：stream 订阅在场 + 纯函数分发器接线（面板不再手搓事件 switch——
+    #   数据归 applyEvent，渲染与滚动与 emit 副作用留面板）
+    assert "api.agentStream(" in ai
+    assert "from '../utils/chatEvents.js'" in ai and "applyEvent(" in ai
+    # ② 重连退避常量逐字（spec §6）：1s 起封顶 30s；历史列表轮询 4s 随 history 视图开合
+    assert "1000" in ai and "30000" in ai
+    assert "HISTORY_POLL_MS = 4000" in ai
+    wv = _fn_body(ai, "watch(view, v =>")
+    assert "setInterval(() => loadHistory(true), HISTORY_POLL_MS)" in wv and "clearInterval" in wv, \
+        "4s 静默轮询仅在 history 视图开时挂、离开即摘（silent=不闪「加载中」）"
+    # ③ 队列面板：输入框上方固定条（v-for 队列行），行 = 截断文本 + 真 <button> 删除钮
+    #   （a11y 红线；@click.stop 防冒泡）；空队列隐藏由 v-if 承担
+    mq = re.search(r'<div[^>]*id="ai-queue-panel"[^>]*>', ai)
+    assert mq, '队列面板容器 id="ai-queue-panel" 缺失'
+    seg = ai[mq.start():mq.start() + 900]
+    assert "v-for=" in seg and "<button" in seg and "@click.stop" in seg and "queueRemove(" in seg
+    assert mq.start() < ai.index('id="ai-input"'), "队列面板在输入框上方"
+    # ④ 历史行运行中徽标：row.running → 转圈 svg（aria-hidden + title="运行中"，× 位左侧）
+    mr = re.search(r'<svg[^>]*history-running[^>]*>', ai)
+    assert mr and 'aria-hidden="true"' in mr.group(0) and 'title="运行中"' in mr.group(0)
+    assert "row.running" in ai
+    assert mr.start() < ai.index('aria-label="删除会话"'), "spinner 在 × 删除钮左侧"
+    # ⑤ 翻转组（plan Step 1）：send 钮恒显（运行中点击=入队，服务端队列）；stop 钮显隐仍
+    #   status==='thinking'（run_status 驱动 status）
+    ms = re.search(r'<button id="ai-send"[^>]*>', ai)
+    assert ms and "hidden: status === 'thinking'" not in ms.group(0), \
+        "send 钮不再随 thinking 隐藏（运行中可发送进队列）"
+    mt = re.search(r'<button id="ai-stop"[^>]*>', ai)
+    assert mt and "hidden: status !== 'thinking'" in mt.group(0)
+    #   doSend/sendChain/abortCtrl 整组拆除（投递与订阅解耦、真停止取代 abort）
+    for dead in ("doSend", "sendChain", "abortCtrl"):
+        assert dead not in ai, f"{dead} 已拆除（运行脱离连接）"
+    #   sendChat = 纯投递（POST 无 reader，投递失败回填输入框）；stopChat = POST stop
+    #   （订阅保留看终帧；未出队内容回填在 run_status{stopped} 分支）
+    sn = _fn_body(ai, "async function sendChat(")
+    assert "api.agentChat(" in sn and "getReader" not in sn
+    sc = _fn_body(ai, "function stopChat(")
+    assert "api.agentStop(" in sc and "abort" not in sc
+    # ⑥ 订阅生命周期：挂载开一次（snapshot 恢复管线），卸载摘订阅（运行在服务端继续）
+    om = _fn_body(ai, "onMounted(() =>")
+    assert "openSub(" in om
+    ou = _fn_body(ai, "onUnmounted(() =>")
+    assert "closeSub()" in ou
+    # ⑦ resync/snapshot 消费在面板侧（restoreMessages = 前缀渲染器；snapshot 帧→chatRestore 管线）
+    assert "ctx.resync" in ai and "ctx.snapshot" in ai and "restoreMessages(" in ai
+
+
+def test_sendchat_reopens_dead_subscription():
+    # bug（2026-11-20 浏览器实证）：无活跃 Run 时订阅收 run_status{running:false} 终帧后正常
+    # 关流（terminal → 不退避重连，设计行为），sendChat 纯 POST 投递成功后无任何路径重开
+    # 订阅 → 面板对运行中的 run 全程失明。投递成功须做订阅存活检查并重开。
+    ai = _templates()["AIChatPanel.js"]
+    sn = _fn_body(ai, "async function sendChat(")
+    assert "!subActive" in sn and "openSub(true)" in sn, \
+        "sendChat 须含订阅存活重开守卫（terminal 关流/未激活 → snapshot=1 重开；健在则跳过）"
+    assert "agentStream" not in sn, \
+        "sendChat 不得自建 reader 订阅（投递与订阅解耦红线，同 ⑤ 的 getReader 钉）"
+
+
+def test_restore_scrolls_bottom_with_hidden_container_fallback():
+    # 会话渲染后滚到底（用户 2026-11-20 两轮反馈）：①同步滚发生在挂载前是空滚；
+    # ②F5 后面板 v-show 隐藏、history 视图下 #ai-messages v-if 卸载——容器
+    # clientHeight=0，连 nextTick 滚也是空滚。契约=置标志 + 可见即 nextTick 滚 +
+    # ResizeObserver 在容器获得非零尺寸时补滚一次（v-if 换节点由 watch(messagesEl) 续挂）
+    ai = _templates()["AIChatPanel.js"]
+    rm = _fn_body(ai, "function restoreMessages(")
+    assert "pendingBottomScroll = true" in rm, \
+        "restoreMessages 必须置补滚标志（隐藏期恢复是唯一可靠信号）"
+    assert rm.count("scrollToBottom") == 1, \
+        "restoreMessages 体内只允许 nextTick 尝试这一处滚底（补滚归观察器，防双源）"
+    att = _fn_body(ai, "function attachBottomObserver(")
+    assert "ResizeObserver" in att and "pendingBottomScroll" in att \
+        and "scrollToBottom(true)" in att, \
+        "补滚通道：容器非零尺寸时消费标志滚底（面板打开/v-if 切回同一通道）"
+    om = _fn_body(ai, "onMounted(() => {")
+    assert "attachBottomObserver(messagesEl.value)" in om, \
+        "初挂观察器（v-if 换节点场景由 watch(messagesEl) 续挂，初挂归 onMounted）"
+    wu = _fn_body(ai, "onUnmounted(() => {")
+    assert "bottomScrollObs" in wu, "观察器须随卸载 disconnect（防泄漏）"
+
+
+def test_chat_restore_interrupted_row():
+    # 通道一 spec 2026-11-20 §3（§5-8）：interrupted assistant 行 → 文本块照旧 +
+    # turn 描述符 interrupted:true 透传；完成轮（旧行无此键）零污染；无 tool/思考块混入
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const o=m.mapHistory([
+    {role:'user',content:'q'},
+    {role:'assistant',content:'半截正文',interrupted:true}
+  ]);
+  if(o.length!==2)process.exit(2);
+  const a=o[1];
+  if(a.role!=='assistant')process.exit(3);
+  // 文本块产出规则不变：content → text 块（恢复态照旧 markdown 渲染）
+  if(a.blocks.length!==1||a.blocks[0].type!=='text'||a.blocks[0].text!=='半截正文')process.exit(4);
+  if(a.interrupted!==true)process.exit(5);
+  // 反馈/引用键天然缺席（无 id/citations 持久化 → 无 messageId/citations）
+  if('messageId' in a||'citations' in a)process.exit(6);
+  // 完成轮不产 interrupted 键（旧行 = 完成轮，零迁移）
+  const o2=m.mapHistory([{role:'assistant',content:'done',id:'x1',ts:1,citations:[]}]);
+  if('interrupted' in o2[0])process.exit(7);
+  // 混入既有链：块按流序交错、链尾标记透传、无 tool 块混入
+  const o3=m.mapHistory([
+    {role:'assistant',content:'a1',tool_calls:[{id:'t1',type:'function',function:{name:'read_doc',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t1',content:'ok'},
+    {role:'assistant',content:'半截',interrupted:true}
+  ]);
+  if(o3.length!==1)process.exit(8);
+  const c=o3[0];
+  if(c.blocks.length!==3)process.exit(9);
+  // 链内块按流序：同一 assistant 行 content 块在前、tool 块在后（既有规则零改动）
+  if(c.blocks[0].type!=='text'||c.blocks[0].text!=='a1'||c.blocks[1].type!=='tool'||c.blocks[2].type!=='text'||c.blocks[2].text!=='半截')process.exit(10);
+  if(c.interrupted!==true)process.exit(11);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/chatRestore.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"chatRestore interrupted case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_interrupted_tail_note_pin():
+    # 通道一 spec §3（§5-9）：msg.interrupted → 气泡尾次要灰字「（已中断）」；
+    # restoreMessages 把描述符 interrupted 透传进渲染源；反馈行/sendConfirm 守卫组零回归
+    ai = _templates()["AIChatPanel.js"]
+    m = re.search(r'<div v-if="msg\.interrupted"[^>]*>（已中断）</div>', ai)
+    assert m, "interrupted 气泡尾注缺失"
+    assert "--ink-soft" in m.group(0), "尾注须次要灰字（AGENTS 文案规范：状态信息）"
+    assert "interrupted: d.interrupted" in ai, \
+        "restoreMessages 必须透传描述符 interrupted（渲染源唯一字段通道）"
+    # 回归守卫组：半截行无 messageId → 反馈行天然缺席；sendConfirm 簇零改动
+    assert 'v-if="!msg.streaming && msg.messageId"' in ai
+    assert "function sendConfirm(id, approved)" in ai

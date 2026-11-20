@@ -139,7 +139,8 @@ def _web_ctx(vault_dir: Path, privacy=None) -> SimpleNamespace:
     return SimpleNamespace(
         ai_config=SimpleNamespace(
             tools=None, model="m", base_url="http://x", api_key="k",
-            context_window=16384, max_rounds=8, read_doc_max_chars=8000),
+            context_window=16384, max_rounds=8, read_doc_max_chars=8000,
+            confirm_timeout=300.0),  # T2: _build_agent_spec 现读 ctx.ai_config.confirm_timeout（机械跟补）
         vault_dir=vault_dir,
         privacy=privacy,
         db_conn=None, ledger_conn=None)

@@ -111,6 +111,39 @@ export const api = {
     })
   },
 
+  /** GET /api/agent/stream — 会话事件订阅 SSE（返回 Response，同 agentChat 风格；
+   *  snapshot=1 恢复 / run_id+cursor 增量重连两形态，spec 2026-11-20 §6；opts.signal 摘订阅用） */
+  async agentStream(sessionId, opts = {}) {
+    const params = new URLSearchParams({ session_id: sessionId })
+    if (opts.runId) params.set('run_id', opts.runId)
+    if (opts.cursor) params.set('cursor', String(opts.cursor))
+    if (opts.snapshot) params.set('snapshot', '1')
+    return fetch('/api/agent/stream?' + params.toString(), { signal: opts.signal })
+  },
+
+  /** POST /api/agent/stop — 显式停止（cancel + 清队列 + 清 pending_confirms → 终帧 stopped）；
+   *  幂等 {ok, stopped}（无活跃 Run → stopped:false） */
+  async agentStop(sessionId) {
+    const res = await fetch('/api/agent/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId })
+    })
+    if (!res.ok) throw new Error(`agentStop → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/agent/queue/remove — 删除未出队项（已出队静默 200）；面板列表只认 queue_update 事件 */
+  async agentQueueRemove(sessionId, qid) {
+    const res = await fetch('/api/agent/queue/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId, qid })
+    })
+    if (!res.ok) throw new Error(`queue/remove → ${res.status}`)
+    return res.json()
+  },
+
   /** POST /api/agent/confirm — 工具调用确认 */
   async agentConfirm(id, approved, sessionId) {
     const res = await fetch('/api/agent/confirm', {

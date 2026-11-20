@@ -47,6 +47,9 @@ export function mapHistory(raw) {
     } else if (msg.role === 'assistant') {
       if (!turn) turn = { role: 'assistant', blocks: [] };
       lastAssistant = msg;
+      // 通道一（spec 2026-11-20 §3）：interrupted 透传到 turn 描述符（渲染尾注）；
+      // 文本块产出规则不变（content → text 块）。完成轮无此键 → 描述符不带。
+      if (msg.interrupted) turn.interrupted = true;
       if (msg.content) turn.blocks.push({ type: 'text', text: msg.content });
       for (const tc of msg.tool_calls || []) {
         // 默认 error：孤儿（无 tool 结果回填）封盘即终态；回填时改判 done/rejected

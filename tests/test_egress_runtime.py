@@ -373,7 +373,8 @@ def _web_ctx(base_url: str, vault: Path) -> SimpleNamespace:
         ai_config=SimpleNamespace(
             tools=None, model="deepseek-chat", base_url=base_url,
             api_key="sk-k", context_window=16384, max_rounds=8,
-            read_doc_max_chars=8000),
+            read_doc_max_chars=8000,
+            confirm_timeout=300.0),  # T2: _build_agent_spec 现读 ctx.ai_config.confirm_timeout（机械跟补）
         vault_dir=vault,
         privacy=None,  # T9: _build_agent_spec 现读 ctx.privacy（机械跟补）
         db_conn=None, ledger_conn=None)

@@ -24,6 +24,7 @@ ai:
   context_window: 131072
   temperature: 0.7
   # tools: [read_doc, search_docs, propose]  # 可选：工具白名单；缺省 = 全部工具；未知名/空列表启动报错
+  # confirm_timeout: 300  # ask 确认超时（秒）：确认框无人应答超时自动拒绝（运行脱离连接 spec §2）
 
 # 隐私目录名单（可选）— 目录级模型面读边界：名单内首段目录对 agent /
 # bgagent / MCP / 聊天注入不可见（搜索、关联、列表、变更日志同步过滤），

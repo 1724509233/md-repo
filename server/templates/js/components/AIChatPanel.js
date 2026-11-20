@@ -1,9 +1,12 @@
-/* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
+/* AIChatPanel 组件：常驻 SSE 订阅 + 事件驱动渲染 + 投递/停止/队列（运行脱离连接，spec 2026-11-20 §7）。
+   数据流单一来源：GET /api/agent/stream 订阅 → applyEvent（chatEvents.js 纯分发器，只管数据）
+   → 面板负责渲染（DOM 直写/滚动/adopt 包装）与 emit 副作用；POST /api/agent/chat 纯投递不读流。 */
 const { ref, reactive, shallowReactive, watch, nextTick, onMounted, onUnmounted, onBeforeUnmount, inject } = Vue
 import { ICONS } from '../utils/icons.js'
 import { renderMarkdown } from '../utils/markdown.js'
 import { mapHistory } from '../utils/chatRestore.js'
 import { fmtRel, fmtMD } from '../utils/format.js'
+import { applyEvent } from '../utils/chatEvents.js'
 import { api } from '../api.js'
 
 const toolShortNames = {
@@ -28,10 +31,9 @@ export const AIChatPanel = {
   name: 'AIChatPanel',
   props: {
     docPath: { type: String, default: '' },
-    sessionId: { type: String, default: '' },
-    // 全保真恢复载荷（app 层「先取数后原子换」喂入，spec §2.3/§2.5；T5 接线）：
-    // { sid, data }，watch(sessionId) 里 sid === 新 sessionId 时消费替代空重置
-    restorePayload: { type: Object, default: null }
+    sessionId: { type: String, default: '' }
+    // 恢复载荷 prop 已退役（spec 2026-11-20 §5/§7）：恢复统一归 stream 快照订阅
+    // （snapshot 帧 → chatRestore 前缀渲染管线），app 层不再「先取数后原子换」喂入
   },
   emits: ['toolResult', 'newSession', 'switchSession'],
   setup(props, { emit }) {
@@ -41,40 +43,42 @@ export const AIChatPanel = {
 
     // 消息稳定键 nonce（§4.1）：客户端单调递增，addMsg 打戳、永不重估——
     // 服务端 message_id 仅终帧 done 携带（流式行无 id），role+内容前缀在空流起始互撞且
-    // done 时键变 → 整行 remount。列表变异点全集 = push（addMsg）+ 整体 reset（sessionId watch），
+    // done 时键变 → 整行 remount。列表变异点全集 = push（addMsg/adopt）+ 整体 reset（snapshot 帧），
     // 无 splice/重排 → setup 级计数即可证唯一（列表与计数器同生命周期重建，无碰撞窗口）。
     let msgSeq = 0
     const messages = ref([])       // [{ id, role, blocks: [], streaming, rendered }]
     const inputText = ref('')
-    const status = ref('ready')    // 'ready' | 'thinking'
+    const status = ref('ready')    // 'ready' | 'thinking'（唯一驱动源 = 订阅 run_status，spec §3 契约）
     const aiMode = ref('当前文档')
     const autoApprove = ref(false) // 会话级自动批准开关（本会话写操作不再逐条确认）
     const tokenUsage = reactive({ used: 0, total: 0, percent: 0 })
-    const abortCtrl = ref(null)
     const inputEl = ref(null)
     const messagesEl = ref(null)
     const streamTextEl = ref(null)
     const thinkingTextEl = ref(null)
 
     // ── 历史会话视图（spec 2026-11-19 §2.1/§2.2）──
-    // 三层契约「视图 ≠ 会话 ≠ 运行」：view 是纯视图层开关，切换路径不得触碰
-    // messages / sessionId / abortCtrl——流式中打开列表绝不打断进行中的 SSE（Review Focus 1）
+    // 三层契约「视图 ≠ 会话 ≠ 运行」（本期升级为「≠ 连接」）：view 是纯视图层开关，
+    // 切换路径不得触碰 messages / sessionId / 订阅——回答中打开列表绝不影响订阅（Review Focus 1）
     const view = ref('chat')           // 'chat' | 'history'
-    const historyList = ref([])        // [{id,title,message_count,tool_count,last_active}]
+    const historyList = ref([])        // [{id,title,message_count,tool_count,last_active,running}]
     const historyLoading = ref(false)
     const historyError = ref(false)    // 列表 fetch 失败 → 行内「加载失败，重试」（无 toast 通道降级）
     const deletingId = ref(null)       // 删除两步确认态（行 id）
-    const confirmSwitchId = ref(null)  // 流式中「停止并切换」确认态（行 id）
-    // 互斥红线：同一时刻至多一行处于确认态——进入任一态前清另一态（模板 v-else-if 链兜底）
+    // 上期「停止并切换」确认态状态机已整组拆除（spec 2026-11-20 §6 边界契约）：
+    // 切换 = 关旧订阅开新订阅，原运行后台继续，切回走快照恢复管线——切换不打断任何运行
 
-    let currentTurn = null
-    let sendChain = Promise.resolve()
+    // 队列面板数据源：ctx.queue 的响应式镜像（queue_update 整换，单一真相源，spec §4）
+    const queueList = ref([])
+
     // 会话内最近一次 search_docs 的 query（tool_call 事件已知）——ai 面点击
     // 落账的 query 归因（spec 2026-11-13 §4.4：可空，无搜索时 ''）
     let lastSearchQuery = ''
     // 本会话已见的工具调用数（spec 2026-11-13 §5.4 降级口径）：citations 全 ungrounded
     // 且会话无工具调用 = 重启后证据集空的误报场景 → 摘要不显示警示色
     let sessionToolCalls = 0
+    // stop 时未出队内容快照（spec §4：停止终帧到达才回填——消息没发出去，内容不蒸发）
+    let stopQueueTexts = []
 
     // 流式直写文本的展示归一（仅显示用，lastBlock.text 保留原文供 finishTurn 的 markdown 渲染）：
     // LLM 流式原文常带行首/行尾换行与多个连续空行（如 "\n" 前导 chunk、段尾 "\n\n\n"），
@@ -178,206 +182,245 @@ export const AIChatPanel = {
       })
     }
 
+    // ── 恢复后滚底的「补滚」通道（用户 2026-11-20）──
+    // restoreMessages 置 pendingBottomScroll；此刻容器多半不可见（见彼处注释）。
+    // ResizeObserver 盯 messages 容器：任何让它从 0 → 非零尺寸的转换（v-show 开面板、
+    // v-if 切回 chat 视图）都在此消费标志滚一次到底。v-if 卸载重挂会换 DOM 节点，
+    // watch(messagesEl) 重挂观察器（RO 对新元素首报即带当前尺寸，天然覆盖切回场景）
+    let pendingBottomScroll = false
+    let bottomScrollObs = null
+    function attachBottomObserver(el) {
+      if (typeof ResizeObserver === 'undefined') { pendingBottomScroll = false; return } // 无 API：不滚也不挂
+      if (bottomScrollObs) { bottomScrollObs.disconnect(); bottomScrollObs = null }
+      if (!el) return
+      const obs = new ResizeObserver(() => {
+        if (pendingBottomScroll && messagesEl.value && messagesEl.value.clientHeight > 0) {
+          pendingBottomScroll = false
+          scrollToBottom(true)
+        }
+      })
+      obs.observe(el)
+      bottomScrollObs = obs
+    }
+    watch(messagesEl, el => attachBottomObserver(el))
+
     function setStatus(state) {
       status.value = state
     }
 
-    // 发送消息（SSE）：串行队列入口，追加到 sendChain
-    function sendChat() {
+    // ── 常驻订阅（spec §5/§7：视图 ≠ 会话 ≠ 运行 ≠ 连接）──
+    // 会话激活（挂载/切换/F5）= 开 snapshot=1 订阅：snapshot 帧 → chatRestore 渲历史前缀 →
+    // 边界后事件经分发器增量续上 → live 尾巴直到终帧。断线（非终帧、非卸载）→ 指数退避
+    // 带 run_id+cursor 增量重连；resync 帧 → 立即重开 snapshot=1（ctx 重建，run_id 守卫重新锚定）。
+    // 数据全部由 applyEvent 挂 ctx（plain 对象）；Vue 响应式镜像（status/queueList/tokenUsage）
+    // 由面板逐帧刷新；DOM 直写快路径留在面板原样（blocks 保持原始数组，token 不触发 re-render）。
+    const BACKOFF_BASE_MS = 1000, BACKOFF_CAP_MS = 30000   // 断线重连退避（spec §6：1s 起封顶 30s）
+    let ctx = null            // 分发器 ctx（applyEvent 就地更新；snapshot 路径整体重建）
+    let subActive = false     // 订阅激活标志（closeSub 置否，旧 reader 停处理帧）
+    let subAbort = null       // 当前订阅 fetch 的 AbortController（切换/卸载摘除，同时释放服务端 waiter）
+    let backoffMs = BACKOFF_BASE_MS
+    let adopted = 0           // 已 adopt 进渲染源的 ctx.messages 行数（高水位；snapshot 路径归零）
+
+    function freshCtx() {
+      return { messages: [], currentTurn: null, queue: [], busy: false,
+               tokenUsage: { used: 0, total: 0, percent: 0 },
+               runId: null, cursor: 0, terminal: false, snapshot: null, resync: false }
+    }
+
+    // tool_result 的 emit 合并用（服务端只带 {id,result,rejected?,error?}，name/args 在 tool_call 块上）
+    function findToolBlock(id) {
+      if (!ctx) return null
+      const t = ctx.currentTurn
+      if (t) {
+        const b = t.blocks.find(b => b.type === 'tool' && b.id === id)
+        if (b) return b
+      }
+      for (const m of ctx.messages) {
+        const b = Array.isArray(m.blocks) ? m.blocks.find(b => b.type === 'tool' && b.id === id) : null
+        if (b) return b
+      }
+      return null
+    }
+
+    // adopt：applyEvent push 的原始行 → 渲染源（chatEvents 契约：响应式包装/id 分配归面板）。
+    // user 气泡转 blocks 形状（模板读 msg.blocks[0].text）；ai turn 打 id + shallowReactive 包装，
+    // 并把 ctx.currentTurn 重指向包装代理——此后 applyEvent 的顶层写（blocksLen/streaming/uiTick）
+    // 走代理触发确定性 re-render，token 级块文本写仍落在原始对象（DOM 直写快路径）
+    function adoptMessages() {
+      while (adopted < ctx.messages.length) {
+        const raw = ctx.messages[adopted]
+        let msg
+        if (raw.role === 'user') {
+          msg = addMsg('user', raw.text)
+        } else {
+          raw.id = ++msgSeq
+          msg = shallowReactive(raw)
+          messages.value.push(msg)
+          scrollToBottom(true)
+          if (ctx.currentTurn === raw) ctx.currentTurn = msg
+        }
+        ctx.messages[adopted] = msg
+        adopted++
+      }
+    }
+
+    // token/reasoning 指令 → DOM 直写（streamTextEl/thinkingTextEl 在嵌套 v-for 内 ref → Vue
+    // 存数组 ref_for，归一化取 [0] 再写；streamDisplayText 归一与最终 markdown 同口径，bug 5dfce279）
+    function writeStreamDom(cmds) {
+      if (!cmds.length || !ctx || !ctx.currentTurn) return
+      const blocks = ctx.currentTurn.blocks
+      const last = blocks[blocks.length - 1]
+      if (!last) return
+      if (cmds.indexOf('stream') >= 0 && last.type === 'text') {
+        const raw = streamTextEl.value
+        const el = Array.isArray(raw) ? raw[0] : raw
+        if (el) el.textContent = streamDisplayText(last.text)
+      }
+      if (cmds.indexOf('thinking') >= 0 && last.type === 'thinking') {
+        const raw = thinkingTextEl.value
+        const el = Array.isArray(raw) ? raw[0] : raw
+        if (el) el.textContent = streamDisplayText(last.text)
+      }
+    }
+
+    // 每帧处理：applyEvent 只管数据，渲染/滚动/emit 副作用在此（T4 契约的面板侧）
+    function handleFrame(evt) {
+      // 终帧 confirm 块统一落 rejected（评审 m4）在 applyEvent 内完成——块 status 是原始对象写
+      // 不可追踪 → 帧前扫出含 confirm 块的消息，帧后推 uiTick 驱动 re-render
+      const sweep = evt.type === 'run_status' && evt.running === false
+      const sweepMsgs = sweep
+        ? messages.value.filter(m => Array.isArray(m.blocks) && m.blocks.some(b => b.type === 'tool' && b.status === 'confirm'))
+        : null
+      const cmds = applyEvent(ctx, evt)
+      if (sweepMsgs) for (const m of sweepMsgs) m.uiTick = (m.uiTick || 0) + 1
+      // 面板级副作用（分发后从帧/ctx 块上读）
+      if (evt.type === 'tool_call') {
+        sessionToolCalls++ // §5.4 降级口径计数（会话级，新会话重置）
+        if (evt.name === 'search_docs' && evt.args && evt.args.query != null) lastSearchQuery = String(evt.args.query)
+      }
+      if (evt.type === 'tool_result') {
+        const tool = findToolBlock(evt.id)
+        if (tool) {
+          // emit 前必须合并 tool_call 块的 name/args，否则 app.js 快速路径整体失效
+          //（回归史见其 handleToolResult 注，勿 emit 原始 evt）
+          emit('toolResult', { ...evt, name: tool.name, args: tool.args })
+          // §2 D2 事件失效：AI 面 search_docs 结果到达 → 召回数据必变（监控页 L2 静默重拉）
+          if (tool.name === 'search_docs' && appState) appState.recallDataVersion++
+        }
+      }
+      // 响应式镜像（ref.set 同值不触发 re-render）
+      status.value = ctx.busy ? 'thinking' : 'ready'
+      queueList.value = ctx.queue
+      if (evt.type === 'token_usage') Object.assign(tokenUsage, ctx.tokenUsage)
+      // stop 终帧：未出队队列内容回填输入框（spec §4；多条换行拼接；用户已敲字则不覆盖）
+      if (evt.type === 'run_status' && !evt.running && evt.state === 'stopped' && stopQueueTexts.length) {
+        const texts = stopQueueTexts
+        stopQueueTexts = []
+        if (!inputText.value) inputText.value = texts.join('\n')
+      }
+      // snapshot 帧 → 既有 chatRestore 管线渲历史前缀；边界后回放从零续上（adopt 水位归零）
+      if (ctx.snapshot) {
+        const snap = ctx.snapshot
+        ctx.snapshot = null
+        restoreMessages(snap.messages)
+        ctx.messages = []
+        adopted = 0
+      }
+      // resync 帧（run_id 换代/游标被修剪）→ 立即重开 snapshot=1（不走退避）
+      if (ctx.resync) {
+        ctx.resync = false
+        openSub(true)
+        return
+      }
+      adoptMessages()
+      writeStreamDom(cmds)
+    }
+
+    function scheduleReconnect(c) {
+      const delay = backoffMs
+      backoffMs = Math.min(backoffMs * 2, BACKOFF_CAP_MS)
+      setTimeout(() => { if (c === ctx && subActive) openSub(false) }, delay)
+    }
+
+    // openSub(snapshot)：true=恢复路径（ctx 重建，不带 run_id/cursor）；false=增量重连带 run_id+cursor
+    async function openSub(snapshot) {
+      subActive = true
+      if (snapshot) { ctx = freshCtx(); adopted = 0 }
+      const c = ctx
+      const ctrl = new AbortController()
+      subAbort = ctrl
+      let resp
+      try {
+        resp = await api.agentStream(props.sessionId,
+          snapshot ? { snapshot: true, signal: ctrl.signal }
+                   : { runId: c.runId, cursor: c.cursor, signal: ctrl.signal })
+      } catch (e) {
+        if (c === ctx && subActive) { console.error('[ai-chat] agentStream failed', e); scheduleReconnect(c) }
+        return
+      }
+      if (!resp.ok) {
+        console.error('[ai-chat] agentStream →', resp.status)
+        if (c === ctx && subActive) scheduleReconnect(c)
+        return
+      }
+      // reader 管线承袭旧发送路径的 buffer/split：SSE 行帧 "data: {json}"，chunk 边界可劈行
+      const rd = resp.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      try {
+        while (subActive && ctx === c) {
+          const { done, value } = await rd.read()
+          if (done) break
+          buf += dec.decode(value, { stream: true })
+          const lines = buf.split('\n')
+          buf = lines.pop()
+          for (const line of lines) {
+            const t = line.trim()
+            if (!t.startsWith('data: ')) continue
+            let evt
+            try { evt = JSON.parse(t.slice(6)) } catch (e) { continue }
+            if (!subActive || ctx !== c) break // resync/切换后的旧流：帧不处理
+            handleFrame(evt)
+            backoffMs = BACKOFF_BASE_MS // 成功读到帧 → 连接可用，退避回初始
+          }
+          scrollToBottom(false) // 事件帧：贴底跟随（用户在底部附近才跟随，上滑读历史不拽回）
+        }
+      } catch (e) {
+        // read 抛出（切换/卸载摘除）或连接中断——统一走下方退避判定
+      }
+      // 断线处理：非终帧、非卸载、未被取代 → 指数退避增量重连（带 run_id+cursor）
+      if (ctx === c && subActive && !c.terminal) scheduleReconnect(c)
+    }
+
+    function closeSub() {
+      subActive = false
+      if (subAbort) { subAbort.abort(); subAbort = null }
+    }
+
+    // 发送消息 = 纯 POST 投递（spec §7.2：无 reader、无本地回显——气泡唯一来源是 user_message
+    // 事件；运行中同一调用天然入服务端队列）。投递失败才回填输入框（用户已另敲字则不覆盖）
+    async function sendChat() {
       const text = inputText.value.trim()
       if (!text) return
       inputText.value = ''
-      sendChain = sendChain.then(() => doSend(text)).catch(e => {
-        console.error('[ai-chat] sendChain error', e)
-      })
-    }
-
-    async function doSend(text) {
-      // 1. 中止旧流（如有），等待清理完成
-      if (abortCtrl.value) {
-        const oldCtrl = abortCtrl.value
-        const oldTurn = currentTurn
-        oldCtrl.abort()
-        await new Promise(r => requestAnimationFrame(r))
-        if (oldTurn) { finishTurn(oldTurn); currentTurn = null }
-      }
-
-      // 2. 发起新请求
-      addMsg('user', text)
-      setStatus('thinking')
-
-      currentTurn = null
-      abortCtrl.value = new AbortController()
-
       try {
         const body = { message: text, session_id: props.sessionId, doc_path: props.docPath }
-
         // 全库搜索由agent自行调用工具获取结果，不做上下文注入；用户主动搜索功能由文件树顶部rag搜索功能替代
-        // if (aiMode.value === '全库搜索') {
-        //   const results = await api.aiSearch(text)
-        //   if (abortCtrl.value && abortCtrl.value.signal.aborted) return
-        //   body.context = (results || []).map(r => `【${r.path}】\n${r.snippet || ''}`).join('\n\n')
-        // }
-
-        const resp = await api.agentChat(body, abortCtrl.value.signal)
+        const resp = await api.agentChat(body)
         if (!resp.ok) {
-          addMsg('ai', `错误: ${resp.status}`)
-          setStatus('ready')
-          return
-        }
-
-        const reader = resp.body.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const chunk = await reader.read()
-          if (chunk.done) break
-          buffer += decoder.decode(chunk.value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop()
-
-          for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed.startsWith('data: ')) continue
-            try {
-              const evt = JSON.parse(trimmed.slice(6))
-              switch (evt.type) {
-                case 'token':
-                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = true }
-                  let lastBlock = currentTurn.blocks[currentTurn.blocks.length - 1]
-                  if (!lastBlock || lastBlock.type !== 'text') {
-                    if (lastBlock && lastBlock.type === 'thinking') lastBlock.expanded = false // 该轮首个内容块到达 → 思考块自动收起（expanded 变更随下方 blocksLen 写入触发的 1 次 re-render 生效）
-                    // 纯空白 chunk（模型调工具前的前导 '\n\n'，2026-10-30 抓包实测）：不建空块——
-                    // 否则空块是最后块 → 流式分支渲染空 cursor div（thinking 与 tool 之间的空 turn-text）；
-                    // 真实文本到达时正常建块 append（其 re-render 插值取同步更新后的 block.text，无冻结）
-                    if (!String(evt.text || '').trim()) break
-                    lastBlock = { type: 'text', text: '' }
-                    currentTurn.blocks.push(lastBlock)
-                    currentTurn.blocksLen = currentTurn.blocks.length // 新块 → 1 次 re-render 挂载/切换 stream div（多轮第 2 轮文本块需要）
-                  }
-                  lastBlock.text += evt.text
-                  // 直写 DOM，绕过 Vue diff。
-                  // streamTextEl 位于嵌套 v-for（messages × blocks）内 → ref_for: true，Vue setRef 收集成数组
-                  //（3.4/3.5 行为一致）；写 .textContent 到数组本身是静默 no-op——流式冻结根因，必须取 [0]
-                  const rawStreamEl = streamTextEl.value
-                  const streamEl = Array.isArray(rawStreamEl) ? rawStreamEl[0] : rawStreamEl
-                  if (streamEl) {
-                    streamEl.textContent = streamDisplayText(lastBlock.text)
-                  }
-                  break
-                case 'reasoning':
-                  // 模型思考内容（reasoning）独立 SSE 事件流，时序上先于该轮 content/tool 事件；
-                  // 规则「最后一块是 thinking → append，否则新建」天然正确：思考进行中最后块就是 thinking，
-                  // 一轮结束必然有 tool/content 块垫底，下一轮 reasoning 到达时最后块是 tool/content → 新建。
-                  // 一轮思考仅一个块，跨轮各一个。
-                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = true }
-                  let thinkingBlock = currentTurn.blocks[currentTurn.blocks.length - 1]
-                  if (!thinkingBlock || thinkingBlock.type !== 'thinking') {
-                    thinkingBlock = { type: 'thinking', text: '', expanded: true }
-                    currentTurn.blocks.push(thinkingBlock)
-                    currentTurn.blocksLen = currentTurn.blocks.length // 新块 → 1 次 re-render 挂载流式思考 div
-                  }
-                  thinkingBlock.text += evt.text
-                  {
-                    // 同 streamTextEl：嵌套 v-for 内 ref → Vue 存 Array（ref_for），归一化取 [0] 再直写 DOM
-                    const raw = thinkingTextEl.value
-                    const el = Array.isArray(raw) ? raw[0] : raw
-                    if (el) el.textContent = streamDisplayText(thinkingBlock.text)
-                  }
-                  break
-                case 'tool_call':
-                  if (evt.name === 'search_docs' && evt.args && evt.args.query != null) {
-                    lastSearchQuery = String(evt.args.query)
-                  }
-                  sessionToolCalls++ // §5.4 降级口径计数（会话级，新会话重置）
-                  if (!currentTurn) { currentTurn = addMsg('ai', ''); currentTurn.streaming = false }
-                  { const prev = currentTurn.blocks[currentTurn.blocks.length - 1]
-                    if (prev && prev.type === 'thinking') prev.expanded = false } // 工具块垫底 → 思考块自动收起（随下方 blocksLen 写入的 re-render 生效）
-                  currentTurn.blocks.push({ type: 'tool', id: evt.id, name: evt.name, args: evt.args, status: 'pending', result: null, meta: null, expanded: false })
-                  currentTurn.blocksLen = currentTurn.blocks.length // 工具块入场即 re-render（blocks 原始数组 push 本身不触发）
-                  break
-                case 'confirm_request': {
-                  const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
-                  if (tool) {
-                    tool.status = 'confirm'
-                    // status 变更在原始块对象上不可追踪（blocks 非 deep reactive）→
-                    // uiTick 驱动 1 次 re-render 让 confirm-btns 的 v-if 生效（同 toggleBlock 机制）
-                    currentTurn.uiTick = (currentTurn.uiTick || 0) + 1
-                  } else {
-                    console.warn('[ai-chat] confirm_request: no matching tool for id', evt.id)
-                  }
-                  break
-                }
-                case 'tool_result': {
-                  const tool = currentTurn ? currentTurn.blocks.find(b => b.type === 'tool' && b.id === evt.id) : null
-                  if (tool) {
-                    tool.status = evt.rejected ? 'rejected' : (evt.error ? 'error' : 'done')
-                    tool.result = evt.result
-                    tool.meta = evt.meta || null
-                    // 同 confirm_request：status/result 变更不可追踪 → uiTick 即时显示 done/error 图标与结果文本
-                    //（不再等 'done' 事件的 finishTurn render 兜底）
-                    currentTurn.uiTick = (currentTurn.uiTick || 0) + 1
-                    // 服务端 SSE tool_result 只带 {id, result, rejected?, error?}——没有 name/args；
-                    // emit 前必须合并 tool_call 块的 name/args（等价旧 HTML UI 从 dataset.toolName/
-                    // args 恢复的做法），否则 app.js 快速路径整体失效（回归史见其 handleToolResult 注）
-                    emit('toolResult', { ...evt, name: tool.name, args: tool.args })
-                    // §2 D2 事件失效：AI 面 search_docs 结果到达 → 召回数据必变（监控页 L2 静默重拉）
-                    if (tool.name === 'search_docs' && appState) appState.recallDataVersion++
-                  } else {
-                    console.warn('[ai-chat] tool_result: no matching tool for id', evt.id)
-                  }
-                  break
-                }
-                case 'error':
-                  // 不可恢复的流/API 错误（服务端 runtime 干净终止，bug b621b5b4）：
-                  // 渲染一行错误说明；紧随的 done{reason:"error"} 收尾 turn
-                  //（旧路径：SSE 裸断连，turn 悬在 streaming 态无解释）
-                  if (!currentTurn) { currentTurn = addMsg('ai', ''); }
-                  currentTurn.blocks.push({ type: 'text', text: `⚠️ 运行出错：${evt.error || '未知错误'}` })
-                  currentTurn.blocksLen = currentTurn.blocks.length
-                  break
-                case 'token_usage':
-                  tokenUsage.used = evt.used
-                  tokenUsage.total = evt.total
-                  tokenUsage.percent = evt.percent
-                  break
-                case 'done':
-                  if (currentTurn) {
-                    currentTurn.streaming = false
-                    // 仅 reason=final 的 done 带 message_id/citations（spec §5.2）；
-                    // error/round_limit 与旧服务端（legacy 无字段）不带 → 不渲染反馈行（验收 5/8）
-                    if (evt.message_id) {
-                      currentTurn.messageId = evt.message_id
-                      currentTurn.citations = evt.citations || []
-                    }
-                    finishTurn(currentTurn)
-                    currentTurn = null
-                  }
-                  break
-              }
-            } catch (e) { }
-          }
-          scrollToBottom(false) // 流式事件：贴底跟随（用户在底部附近才跟随，上滑读历史不拽回）
+          console.error('[ai-chat] submit →', resp.status)
+          if (!inputText.value.trim()) inputText.value = text
+        } else if (!subActive || ctx.terminal) {
+          // 订阅已随 run 终帧关流（terminal，不退避重连）或从未激活 → snapshot=1 重开
+          //（前缀快照 + 边界回放 + live 尾巴，覆盖 run 已产生若干事件的迟到场景）；
+          // 运行中且订阅健在则跳过，队列事件照旧从现有流进来。与挂起的退避计时器无竞态：
+          // openSub(true) 内 ctx=freshCtx() 替换引用，旧回调 c===ctx 守卫自动作废
+          openSub(true)
         }
       } catch (e) {
-        if (e.name === 'AbortError') {
-          if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
-        } else {
-          addMsg('ai', `请求失败: ${e.message}`)
-        }
+        console.error('[ai-chat] submit failed', e)
+        if (!inputText.value.trim()) inputText.value = text
       }
-      abortCtrl.value = null
-      setStatus('ready')
-    }
-
-    function finishTurn(turn) {
-      if (turn._finished) return
-      turn._finished = true
-      turn.streaming = false
-      // 合并 text blocks 用于 markdown 渲染
-      turn.fullText = turn.blocks.filter(b => b.type === 'text').map(b => b.text).join('\n\n')
-      turn.rendered = true
     }
 
     function sendConfirm(id, approved) {
@@ -449,22 +492,36 @@ export const AIChatPanel = {
       }
     }
 
+    // 显式停止（spec §7.6）：POST /api/agent/stop（cancel + 清队列 + 清 pending）。
+    // 订阅不动——留着看 stopped 终帧与其前的事件尾巴；未出队内容在终帧到达时回填输入框（spec §4）
     function stopChat() {
-      if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
-      if (currentTurn) { currentTurn.streaming = false; finishTurn(currentTurn); currentTurn = null }
-      setStatus('ready')
+      stopQueueTexts = queueList.value.map(q => q.text || '')
+      api.agentStop(props.sessionId).then(res => {
+        // 无活跃 Run（竞态：刚好自己跑完）→ 不会来 stopped 终帧，撤回填快照
+        if (res && res.stopped === false) stopQueueTexts = []
+      }).catch(err => {
+        console.error('[ai-chat] agentStop failed', err)
+        stopQueueTexts = []
+      })
+    }
+
+    // 队列删除钮：只发请求，面板行消失等 queue_update 事件确认（单一真相源，spec §4）
+    function queueRemove(qid) {
+      api.agentQueueRemove(props.sessionId, qid).catch(err => console.error('[ai-chat] queueRemove failed', err))
     }
 
     function newSession() {
       emit('newSession')
     }
 
-    // ── 历史视图逻辑（spec §2.2/§2.3）──
+    // ── 历史视图逻辑（spec §2.2/§2.3；T5 拆除「停止并切换」确认框）──
 
-    function cancelConfirm() { deletingId.value = null; confirmSwitchId.value = null }
+    function cancelConfirm() { deletingId.value = null }
 
-    async function loadHistory() {
-      historyLoading.value = true
+    const HISTORY_POLL_MS = 4000  // history 视图打开期间的静默轮询周期（spec §5 徽标新鲜度）
+    // silent=true：后台重拉（4s 轮询）不点亮「加载中」、出错不顶掉在场列表——spec「静默重拉」口径
+    async function loadHistory(silent) {
+      if (!silent) historyLoading.value = true
       historyError.value = false
       try {
         const data = await api.listSessions()
@@ -473,18 +530,17 @@ export const AIChatPanel = {
         // 组件无 toast 通道（app 层 provide 只有 state/api/manage/trashAct）→ 计划降级：
         // console + 列表显「加载失败，重试」行内钮（spec §3「列表 fetch 失败 → 列表重载；不触现场」）
         console.error('[ai-chat] listSessions failed', e)
-        historyError.value = true
+        if (!silent) historyError.value = true
       } finally {
-        historyLoading.value = false
+        if (!silent) historyLoading.value = false
       }
     }
 
-    // 零 abort / 零 messages / 零 sessionId（静态钉，Review Focus 1）：开列表只是视图切换，
-    // 流式 SSE 继续跑、消息区状态原样保留（体内不得出现这些引用，注释也不写——防误钉）
+    // 零 abort / 零 messages / 零 sessionId / 零订阅触碰（静态钉，Review Focus 1）：开列表只是
+    // 视图切换，订阅与消息区状态原样保留（体内不得出现这些引用，注释也不写——防误钉）
     function toggleView() {
       view.value = view.value === 'chat' ? 'history' : 'chat'
       cancelConfirm() // 离开/进入视图都清残留确认态
-      if (view.value === 'history') loadHistory()
     }
 
     function onHistoryKeydown(e) {
@@ -514,32 +570,12 @@ export const AIChatPanel = {
 
     function onRowClick(row) {
       if (row.id === props.sessionId) { toggleView(); return } // 点当前会话行 = 直接回聊天
-      if (status.value === 'thinking') { askSwitch(row.id); return } // 流式中 → 右槽「是/否」确认簇（目检 round2：标题不动）
-      switchTo(row.id)
+      // 直接上抛裸 sid（T6 消费）：不再取数、无「停止并切换」确认——切换=关旧订阅开新订阅，
+      // 原运行后台继续（运行脱离连接），切回走 §5 快照恢复管线
+      emit('switchSession', row.id)
     }
 
-    function askDelete(id) { confirmSwitchId.value = null; deletingId.value = id }
-    function askSwitch(id) { deletingId.value = null; confirmSwitchId.value = id }
-
-    async function switchTo(sid) {
-      // 先取数后原子换（spec §2.3）：成功 → emit 上抛，app 层做 sessionId+restorePayload
-      // 原子换（T5）——组件不直接换 sessionId；失败 → console + 只刷新列表，现场不动
-      let data
-      try {
-        data = await api.getSession(sid)
-      } catch (e) {
-        console.error('[ai-chat] getSession failed', e)
-        loadHistory() // 404（他端已删）/网络：列表与服务端对齐
-        return
-      }
-      emit('switchSession', { sid, data })
-    }
-
-    async function confirmSwitchTo(id) {
-      cancelConfirm()
-      stopChat() // 用户已确认「停止并切换」：先停流再切换（后续 getSession 与恢复不再叠流）
-      await switchTo(id)
-    }
+    function askDelete(id) { deletingId.value = id }
 
     async function doDelete(sid) {
       cancelConfirm()
@@ -570,8 +606,20 @@ export const AIChatPanel = {
         uiTick: 0,
         messageId: d.messageId,
         citations: d.citations,
+        interrupted: d.interrupted, // 通道一：chatRestore 描述符透传 → 模板尾注
       }))
-      scrollToBottom(true)
+      // 会话渲染后滚到底部（用户 2026-11-20）：恢复常发生在容器不可见时
+      //（面板 v-show 隐藏 / F5 后面板未开 / history 视图 v-if 卸载），此刻
+      // clientHeight=0，同步与 nextTick 滚都是空滚。置标志：可见则 nextTick
+      // 即滚；隐藏则由 ResizeObserver 在容器获得非零尺寸（开面板/切回 chat）时补滚
+      pendingBottomScroll = true
+      nextTick(() => {
+        const el = messagesEl.value
+        if (el && el.clientHeight > 0) {
+          pendingBottomScroll = false
+          scrollToBottom(true)
+        }
+      })
     }
 
     // 会话级自动批准开关：挂载时取初值（失败静默保持 false）；sessionId 变化时重取
@@ -594,29 +642,28 @@ export const AIChatPanel = {
       })
     }
 
-    // watch 无 immediate，挂载不触发 → 初值只在 onMounted 取一次，二者不重复请求
+    // watch 无 immediate，挂载不触发 → 初值只在 onMounted 取一次，二者不重复请求；
+    // 挂载即开一次 snapshot=1 订阅（会话激活 = 订阅，spec §7.1；启动恢复的 sessionId 写入再走 watch 重开）
     onMounted(() => {
       loadAutoApprove()
+      attachBottomObserver(messagesEl.value) // 初挂观察器（v-if 换节点由 watch 续挂）
+      openSub(true)
     })
 
-    // sessionId 变化时重置会话（新会话按钮触发）+ 重取自动批准开关（新会话 → 无行 → false）
-    watch(() => props.sessionId, (newSid) => {
-      if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
-      view.value = 'chat' // 切换落地 = 回聊天视图（列表是纯视图层，切换后不留历史态）
-      if (props.restorePayload && props.restorePayload.sid === newSid) {
-        // 全保真恢复分支（spec §2.3）：app 层「先取数后原子换」喂入的 payload 在场且对位
-        // → 原位恢复消息流，替代空重置；不匹配（新会话/启动初值）→ 维持现状 []
-        restoreMessages(props.restorePayload.data.messages)
-      } else {
-        messages.value = []
-      }
-      currentTurn = null
+    // 切换：摘旧订阅 → 重置（messages 不在重置面——由 snapshot 帧整换，恢复归订阅）→ 落回
+    // 聊天视图 → 开新订阅。原运行在服务端后台继续（运行脱离连接），切回走 §5 恢复管线
+    watch(() => props.sessionId, () => {
+      closeSub()
+      stopQueueTexts = []
+      queueList.value = []
       inputText.value = ''
       lastSearchQuery = '' // 新会话：清空搜索归因
       sessionToolCalls = 0 // 新会话：重置 §5.4 降级口径计数
       Object.assign(tokenUsage, { used: 0, total: 0, percent: 0 }) // 新会话：用量条归零（bug e785b308）
       setStatus('ready')
+      view.value = 'chat' // 切换落地 = 回聊天视图（列表是纯视图层，切换后不留历史态）
       loadAutoApprove()
+      openSub(true)
     })
 
     // 输入框高度自动扩展（上限 40% 面板高度）
@@ -633,16 +680,27 @@ export const AIChatPanel = {
     })
 
     // Esc 监听随视图开关（焦点路径无关，配合 onHistoryKeydown 注释的 macOS 鼠标流结论）：
-    // history 进 → window capture 注册（组件在 window 上最先收到）；退 → 摘除，不留常驻监听
+    // history 进 → window capture 注册（组件在 window 上最先收到）；退 → 摘除，不留常驻监听。
+    // 运行中徽标数据源同开关：进入即拉一次 + 4s 静默轮询（spec §5 ≤4s 新鲜度），离开即停
+    let historyTimer = null
     watch(view, v => {
-      if (v === 'history') window.addEventListener('keydown', onHistoryKeydown, true)
-      else window.removeEventListener('keydown', onHistoryKeydown, true)
+      if (v === 'history') {
+        window.addEventListener('keydown', onHistoryKeydown, true)
+        loadHistory()
+        historyTimer = setInterval(() => loadHistory(true), HISTORY_POLL_MS)
+      } else {
+        window.removeEventListener('keydown', onHistoryKeydown, true)
+        if (historyTimer) { clearInterval(historyTimer); historyTimer = null }
+      }
     })
     // 兜底：history 视图开着组件就被卸载（如面板整体关闭），watch 不再有机会摘 → onBeforeUnmount 摘
     onBeforeUnmount(() => window.removeEventListener('keydown', onHistoryKeydown, true))
 
+    // 卸载 = 摘订阅（订阅生命周期 = 面板生命周期；运行在服务端继续，重开面板走快照恢复）
     onUnmounted(() => {
-      if (abortCtrl.value) abortCtrl.value.abort()
+      closeSub()
+      if (bottomScrollObs) { bottomScrollObs.disconnect(); bottomScrollObs = null }
+      if (historyTimer) { clearInterval(historyTimer); historyTimer = null }
     })
 
     return {
@@ -651,9 +709,10 @@ export const AIChatPanel = {
       citationSummary, citationWarn, toggleFeedback,
       autoApprove, toggleAutoApprove,
       toolKeyParam, toolResultSummary,
-      view, historyList, historyLoading, historyError, deletingId, confirmSwitchId,
+      view, historyList, historyLoading, historyError, deletingId,
       toggleView, loadHistory, onHistoryKeydown, historyRowTime, onRowClick,
-      askDelete, doDelete, cancelConfirm, confirmSwitchTo,
+      askDelete, doDelete, cancelConfirm,
+      queueList, queueRemove,
       lastSearchQuery: () => lastSearchQuery
     }
   },
@@ -721,8 +780,8 @@ export const AIChatPanel = {
 
       <!-- 历史列表（view==='history'，spec §2.2）：消息区整块替换；行主体=原生 button
            （搜索卡键盘不可达教训 e96cf4ed），删除钮为其兄弟非后代（无嵌套 button）；
-           确认态（删除两步 / 停止切换）收进右侧槽（目检 round2 项①②）：同一右槽在两态间
-           切换 ×⇄确认/取消小钮簇，标题 + 时间副行任何态下都在；同一时刻至多一行处于确认态 -->
+           删除两步确认收进右侧槽（目检 round2 项①②）：同一右槽在两态间切换 ×⇄确认/取消小钮簇，
+           标题 + 时间副行任何态下都在；运行中会话行右侧（× 位左侧）转圈徽标（spec §5，running 由列表投影） -->
       <div v-if="view === 'history'" id="ai-history" class="flex-1 overflow-y-auto p-3 space-y-1.5"
         role="region" aria-label="历史会话列表">
         <div v-if="historyError" class="px-3 py-2 text-[13px] text-[#c0392b]">
@@ -738,19 +797,17 @@ export const AIChatPanel = {
             <span class="block truncate text-[13px]" :title="row.title">{{ row.title }}</span>
             <span class="block mt-0.5 text-[11px] text-[var(--ink-soft)]">{{ historyRowTime(row) }} · {{ row.message_count }} 条<template v-if="row.tool_count"> · {{ row.tool_count }} 次工具</template></span>
           </button>
-          <!-- 右侧槽唯一交互簇（v-if/v-else-if 链两态切换）：× ⇄ 确认/取消小钮；
-               当前会话流式中隐藏 ×（后端 409 兜底的前端镜像，spec §2.2） -->
-          <button v-if="deletingId !== row.id && confirmSwitchId !== row.id && !(status === 'thinking' && row.id === sessionId)"
+          <!-- 运行中徽标：仅活跃 Run（终止保留期不算，服务端 is_running 现场注入）；装饰 svg -->
+          <svg v-if="row.running" class="history-running icon icon-xs self-center animate-spin" aria-hidden="true" title="运行中" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+          <!-- 右侧槽唯一交互簇（v-if/v-else-if 链两态切换）：× ⇄ 删除确认小钮；
+               当前会话运行中隐藏 ×（后端 409 兜底的前端镜像，spec §2.2） -->
+          <button v-if="deletingId !== row.id && !(status === 'thinking' && row.id === sessionId)"
             type="button" class="ai-ibtn self-center" title="删除会话" aria-label="删除会话" @click="askDelete(row.id)">
             <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
           <div v-else-if="deletingId === row.id" class="flex items-center gap-1 self-center">
             <button type="button" class="confirm-yes" title="确认删除该会话" @click="doDelete(row.id)">确认</button>
             <button type="button" class="confirm-no" @click="cancelConfirm()">取消</button>
-          </div>
-          <div v-else-if="confirmSwitchId === row.id" class="flex items-center gap-1 self-center">
-            <button type="button" class="confirm-yes" title="停止当前回答并切换到该会话" @click="confirmSwitchTo(row.id)">是</button>
-            <button type="button" class="confirm-no" @click="cancelConfirm()">否</button>
           </div>
         </div>
       </div>
@@ -842,6 +899,9 @@ export const AIChatPanel = {
                 </div>
               </div>
             </template>
+            <!-- 中断尾注（通道一 spec 2026-11-20 §3）：半截 interrupted 行的气泡尾
+                 次要灰字；该行无 messageId/引用 → 反馈行/引用行天然缺席（下方守卫覆盖） -->
+            <div v-if="msg.interrupted" class="mt-1 text-[11px] text-[var(--ink-soft)]">（已中断）</div>
             <!-- 引用摘要 + 反馈行（spec 2026-11-13 §5.3）：done 后气泡底部出现。
                  仅 done 带 message_id 时渲染（reason=final；error/round_limit 与 legacy 无字段 → 不出现，验收 5/8）；
                  citations 空（非问答轮）→ 只出按钮不出摘要（§5.4）；
@@ -858,15 +918,28 @@ export const AIChatPanel = {
         </div>
       </div>
 
-      <!-- 输入区（history 视图隐藏，spec §2.1） -->
+      <!-- 输入区（history 视图隐藏，spec §2.1）。队列面板=输入框上方固定条（spec §5）：
+           每条一行 = 截断文本 + × 删除钮（真 button，a11y 红线）；空队列隐藏；
+           列表只认 queue_update 事件（服务端队列跟会话走，刷新不丢）。
+           忙态不锁输入、send 钮恒显（运行中点击=入队，spec §4/§7.7 翻转）；stop 钮随 run_status -->
       <div v-if="view !== 'history'" class="p-3 border-t border-border shrink-0">
+        <div v-if="queueList.length" id="ai-queue-panel" class="mb-2 space-y-1">
+          <div v-for="q in queueList" :key="q.qid"
+            class="flex items-center gap-2 rounded-lg px-3 py-1.5 bg-[color-mix(in_srgb,var(--brass)_8%,transparent)] text-[12px]">
+            <svg aria-hidden="true" class="icon icon-xs shrink-0 text-[var(--ink-soft)]" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>
+            <span class="flex-1 min-w-0 truncate" :title="q.text">{{ q.text }}</span>
+            <button type="button" class="ai-ibtn shrink-0" title="移出队列" aria-label="移出队列" @click.stop="queueRemove(q.qid)">
+              <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+            </button>
+          </div>
+        </div>
         <div class="flex items-end gap-2 border border-border rounded-xl p-3">
           <textarea id="ai-input" ref="inputEl" v-model="inputText" rows="1"
             class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
             placeholder="输入消息，Enter 发送…"
             @keydown="onKeydown"></textarea>
           <button id="ai-send" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            :class="{ hidden: status === 'thinking' }" @click="sendChat" aria-label="发送">
+            @click="sendChat" aria-label="发送">
             <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg>
           </button>
           <button id="ai-stop" class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
