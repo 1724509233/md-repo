@@ -4,15 +4,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sys
 import time
 
 from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..agent import SessionManager
 from ..agent.agent import Agent
 from ..agent.prompts import SYSTEM_PROMPT, sse
 from ..agent.reminders import DocPathUserReminder, TimeSystemReminder
+from ..agent.runhub import QueueFull, RunHub
 from ..agent.spec import AgentSpec, ModelConfig
 from ..agent.tools import TOOL_REGISTRY
 from ..services.egress import EgressTarget, parse_endpoint, should_record
@@ -149,6 +150,42 @@ def register(app, ctx) -> None:
             agent_cache[session_id] = agent
         return agent
 
+    # ── RunHub（运行脱离连接，spec 2026-11-20 §2）─────────────────────────
+    # 运行体与 HTTP 连接解耦：chat 投递、stream 订阅、stop/queue 都是对它的
+    # 转发。get_agent/get_lock 复用本闭包的会话状态表——三套按 sid 的状态表
+    # （agent_cache / session_mgr / RunHub）同步演化，RunHub 拥有 run 生命
+    # 周期裁决权（spec §2 n1）。
+    def _load_messages(sid: str) -> list:
+        """DB 快照读（snapshot 帧的持久化前缀源）。无库 → 空。"""
+        if ctx.db_conn is None:
+            return []
+        saved = load_session(ctx.db_conn, sid)
+        return saved["messages"] if saved else []
+
+    def _prepare_doc(raw: str | None) -> dict:
+        """出队侧重验三连（Review Focus 5，隐私红线 5：路径进模型上下文即
+        出域）：排队期间文档删除/入隐私区在注入前再验一遍。合法 → doc
+        kwargs；非法/缺失 → 降级无文档（不出队 409——投递时前置检查仍在）。
+        隐私命中 = 路径不进 kwargs（doc_path None），只走 privacy_doc 文案通道。"""
+        if not raw:
+            return {}
+        rel = _safe_rel_path(raw)
+        if rel is None:
+            logger.info("doc_context skipped at dequeue: _safe_rel_path rejected %r", raw)
+            return {}
+        if _privacy_hit(ctx, rel):
+            return {"doc_path": None, "privacy_doc": True}
+        if not (ctx.vault_dir / rel).is_file():
+            return {}
+        return {"doc_path": rel.as_posix(), "privacy_doc": False}
+
+    runhub = RunHub(get_agent=_get_agent, get_lock=session_mgr.get_lock,
+                    persist=lambda sid: session_mgr.save(sid, _get_agent(sid).messages),
+                    load_messages=_load_messages,
+                    prepare_doc=_prepare_doc)
+    # 测试 seam（T3）：路由专项测试直驱 runhub 取确定性（生产代码不读此键）
+    app.state.runhub = runhub
+
     @app.post("/api/ai/chat")
     async def ai_chat(request: Request):
         if ctx.ai_config is None:
@@ -218,64 +255,72 @@ def register(app, ctx) -> None:
         # F15b: evict idle cached Agents alongside the session cleanup.
         # session_mgr._locks is the manager's private lock table (no public
         # accessor) — read-only here; the helper only checks held-ness.
+        # 运行脱离连接后持锁者是 RunHub 的 _drive 任务（持锁跨整个 Run，
+        # spec 2026-11-20 §2）——活跃 Run 天然被既有 lock 检查覆盖，
+        # runhub.is_running(sid) 为真时锁必被持有，无需额外跳过逻辑。
         _evict_stale_agents(agent_cache, _agent_last_active, session_mgr._locks)
         session_mgr.get_or_create(session_id)
         _agent_last_active[session_id] = time.time()
 
-        # Pre-check doc_path（不修改 session，只验证；409 走 HTTP 异常）
-        doc_context = None
-        privacy_doc = False
+        # Pre-check doc_path（投递时刻的校验；运行中排队期间文档可能变化，
+        # 出队注入前由 runhub 的 prepare_doc 重跑同一三连——隐私红线义务）
         if doc_path:
             rel = _safe_rel_path(doc_path)
             if rel is None:
                 logger.info("doc_context skipped: _safe_rel_path rejected %r", doc_path)
             elif _privacy_hit(ctx, rel):
-                # P0 语义升级：隐私打开文档 → 路径当无 doc_path（409 校验不
-                # 触达，存在性不泄漏），chat 带 privacy_doc 注入固定引导文案
-                privacy_doc = True
+                # 隐私命中不在投递侧 409（存在性不泄漏），prepare_doc 出队
+                # 转 privacy_doc 引导文案通道
+                pass
             elif not (ctx.vault_dir / rel).is_file():
-                raise HTTPException(status_code=409, detail=f"doc_path '{rel.as_posix()}' not on disk")
-            else:
-                doc_context = rel
+                raise HTTPException(status_code=409,
+                                    detail=f"doc_path '{rel.as_posix()}' not on disk")
 
-        lock = session_mgr.get_lock(session_id)
-        await lock.acquire()
+        try:
+            rid = runhub.submit(session_id, message, doc_path or None)
+        except QueueFull:
+            raise HTTPException(status_code=409,
+                                detail="session queue full (max 5 queued messages)")
+        # spec §6 逐字：纯投递 202，无 queued 键（队列面板只认 queue_update）
+        return JSONResponse({"ok": True, "run_id": rid}, status_code=202)
 
-        async def event_generator():
-            agent = _get_agent(session_id)
-            exc_to_raise: BaseException | None = None
-            try:
-                # doc_context 注入 + user message 由 agent.chat 处理（user
-                # reminder）；隐私打开文档走 privacy_doc 引导文案（路径不入参）
-                async for event in agent.chat(
-                    message,
-                    doc_path=doc_context.as_posix() if doc_context else None,
-                    privacy_doc=privacy_doc,
-                ):
-                    yield sse(event.type, event.data)
-            except (GeneratorExit, asyncio.CancelledError):
-                logger.error(
-                    "SSE stream disconnected (session=%s, pending_confirms=%d)",
-                    session_id, len(agent.pending_confirms),
-                    exc_info=True,
-                )
-                exc_to_raise = sys.exc_info()[1]
-            except Exception:
-                logger.exception("Agent chat failed (session=%s)", session_id)
-                exc_to_raise = sys.exc_info()[1]
-            finally:
-                # Persist session on every exit (normal, interrupt, or error)
-                try:
-                    session_mgr.save(session_id, agent.messages)
-                except Exception:
-                    logger.exception("Failed to persist session (session=%s)", session_id)
-                lock.release()
-                if exc_to_raise is not None:
-                    raise exc_to_raise
+    @app.get("/api/agent/stream")
+    async def agent_stream(session_id: str, run_id: str | None = None,
+                           cursor: int = 0, snapshot: bool = False):
+        """订阅会话当前 Run 的事件流（spec §3/§6）。
 
-        from fastapi.responses import StreamingResponse
+        ``snapshot=1``：恢复/首订阅——snapshot 帧（持久化前缀 + 边界）→ 边界后
+        回放 → live 尾巴 → 终帧；无 Run 时是合法 200 空态。增量重连带
+        ``run_id``+``cursor``；run_id 不匹配或游标被修剪 → 单 ``resync`` 帧即终
+        （客户端重开 snapshot=1 订阅）。SSE 断开只是摘 waiter，运行无感。
+        """
+        async def frames():
+            async for frame in runhub.subscribe(session_id, run_id=run_id,
+                                                 cursor=cursor, snapshot=snapshot):
+                payload = dict(frame)
+                ftype = payload.pop("type")
+                # sse() 平铺载荷与旧事件逐字兼容（新增键仅 run_id/seq）
+                yield sse(ftype, payload)
 
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
+        return StreamingResponse(frames(), media_type="text/event-stream")
+
+    @app.post("/api/agent/stop")
+    async def agent_stop(request: Request) -> dict:
+        """显式停止：cancel 驱动任务 + 清队列 + 清该会话 pending_confirms
+        （runhub.stop 内逐项 set()，approved 保持 None 即按拒绝落定——僵尸
+        面关闭，Review Focus 3）。幂等：无活跃 Run → stopped:false。"""
+        body = await request.json()
+        session_id = body.get("session_id", "default")
+        return {"ok": True, "stopped": runhub.stop(session_id)}
+
+    @app.post("/api/agent/queue/remove")
+    async def agent_queue_remove(request: Request) -> dict:
+        """删除未出队项。已出队/未知 qid 静默成功（spec §6；真实删除会广播
+        queue_update，单一真相源在事件里）。"""
+        body = await request.json()
+        session_id = body.get("session_id", "default")
+        runhub.queue_remove(session_id, body.get("qid", ""))
+        return {"ok": True}
 
     @app.post("/api/agent/confirm")
     async def agent_confirm(request: Request) -> dict:
@@ -396,10 +441,13 @@ def register(app, ctx) -> None:
 
         T1 的 list_session_summaries 投影（last_active DESC，空行除外）。
         No DB → 空列表（spec §3 表：列表面无库是空历史，不是错误）。
+        ``running`` 由 RunHub 现场注入（spec 2026-11-20 §5：仅活跃 Run，
+        终止保留期内不算——is_running 的口径）。
         """
         if ctx.db_conn is None:
             return {"sessions": []}
-        return {"sessions": list_session_summaries(ctx.db_conn)}
+        return {"sessions": [{**s, "running": runhub.is_running(s["id"])}
+                             for s in list_session_summaries(ctx.db_conn)]}
 
     @app.get("/api/agent/sessions/{sid}")
     async def agent_session_detail(sid: str) -> dict:
@@ -439,6 +487,9 @@ def register(app, ctx) -> None:
         if not delete_session(ctx.db_conn, sid):
             raise HTTPException(status_code=404, detail="session not found")
         session_mgr.remove(sid)
+        # M3（spec 2026-11-20）：RunHub 也在同步演化面里——保留期 buffer 不
+        # 清则删掉的会话从 stream 回放整段复活。活跃 Run 到不了这里（busy 409）。
+        runhub.discard(sid)
         agent_cache.pop(sid, None)
         _agent_last_active.pop(sid, None)
         return {"ok": True}

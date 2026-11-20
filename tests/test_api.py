@@ -224,15 +224,14 @@ def test_agent_chat_not_configured(client):
 
 
 def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
-    """Agent chat returns SSE stream with token and done events."""
+    """T3 两拍迁移：POST 投递 202 + GET /api/agent/stream 订阅（snapshot=1
+    收到终帧）——token/done 帧断言原样保留（帧格式兼容证明）。"""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from server.api import create_app
 
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
-
-    tc = TestClient(app)
 
     # Mock the openai client to return a simple text response
     mock_chunk = MagicMock()
@@ -253,15 +252,21 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
-        resp = tc.post(
-            "/api/agent/chat",
-            json={"message": "hi", "session_id": "test1"},
-        )
-
-    assert resp.status_code == 200
-    assert "text/event-stream" in resp.headers["content-type"]
-    body = resp.text
+    # context-manager TestClient：runhub 驱动任务在 portal loop 上跨请求存活。
+    # cursor 模式（run_id+cursor=0）回放全 buffer——snapshot 模式收流时轮往往
+    # 已跑完，边界把事件折进 messages 前缀，token 帧不再入回放（单一真相源）
+    with TestClient(app) as tc, patch("server.agent.runtime.AsyncOpenAI",
+                                      return_value=mock_client):
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "hi", "session_id": "test1"})
+        assert resp.status_code == 202
+        rid = resp.json()["run_id"]
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": "test1", "run_id": rid,
+                               "cursor": "0"}) as stream:
+            assert "text/event-stream" in stream.headers["content-type"]
+            body = "\n".join(ln for ln in stream.iter_lines()
+                             if ln.startswith("data: "))
     assert '"type": "token"' in body
     assert '"type": "done"' in body
 
@@ -290,7 +295,6 @@ def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ai_config,
     monkeypatch.setattr(agent_routes, "_evict_stale_agents", spy)
 
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
-    tc = TestClient(app)
 
     mock_chunk = MagicMock()
     mock_delta = MagicMock()
@@ -310,13 +314,18 @@ def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ai_config,
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
-        resp = tc.post(
-            "/api/agent/chat",
-            json={"message": "hi", "session_id": "s1"},
-        )
+    # T3 两拍迁移：POST 202 + stream 收到终帧（portal 跨请求存活，agent 在
+    # _drive 里被 _get_agent 建出并缓存——收流结束即保证已缓存）
+    with TestClient(app) as tc, patch("server.agent.runtime.AsyncOpenAI",
+                                      return_value=mock_client):
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "hi", "session_id": "s1"})
+        assert resp.status_code == 202
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": "s1", "snapshot": "1"}) as stream:
+            for _ in stream.iter_lines():
+                pass
 
-    assert resp.status_code == 200
     assert "last_active" in captured                  # eviction was wired in
     assert captured["last_active"].get("s1") is not None   # refreshed at entry
     assert "s1" in captured["cache"]                  # the agent is cached
@@ -368,10 +377,8 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
 
-    tc = TestClient(app)
-
     # Create a session first (confirm requires an existing session).
-    # Mock the LLM so the chat stream completes without a real API call.
+    # Mock the LLM so the chat completes without a real API call.
     mock_chunk = MagicMock()
     mock_delta = MagicMock()
     mock_delta.content = "ok"
@@ -390,26 +397,31 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+    # T3 两拍迁移：POST 202 + stream 收到终帧（轮末后 agent 已在缓存，
+    # confirm 路由查 agent_cache 的语义不变）
+    with TestClient(app) as tc, patch("server.agent.runtime.AsyncOpenAI",
+                                      return_value=mock_client):
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "hi", "session_id": "test1"})
+        assert resp.status_code == 202
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": "test1", "snapshot": "1"}) as stream:
+            for _ in stream.iter_lines():
+                pass
+
+        # No pending confirm for this id → 404
         resp = tc.post(
-            "/api/agent/chat",
-            json={"message": "hi", "session_id": "test1"},
+            "/api/agent/confirm",
+            json={"id": "call_1", "approved": True, "session_id": "test1"},
         )
-    assert resp.status_code == 200
+        assert resp.status_code == 404
 
-    # No pending confirm for this id → 404
-    resp = tc.post(
-        "/api/agent/confirm",
-        json={"id": "call_1", "approved": True, "session_id": "test1"},
-    )
-    assert resp.status_code == 404
-
-    # Unknown session → 404
-    resp = tc.post(
-        "/api/agent/confirm",
-        json={"id": "call_1", "approved": True, "session_id": "no-such-session"},
-    )
-    assert resp.status_code == 404
+        # Unknown session → 404
+        resp = tc.post(
+            "/api/agent/confirm",
+            json={"id": "call_1", "approved": True, "session_id": "no-such-session"},
+        )
+        assert resp.status_code == 404
 
 
 def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
@@ -420,8 +432,6 @@ def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
 
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
-
-    tc = TestClient(app)
 
     # Create a session (no pending confirms)
     mock_chunk = MagicMock()
@@ -442,19 +452,24 @@ def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
 
-    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
-        resp = tc.post(
-            "/api/agent/chat",
-            json={"message": "hi", "session_id": "test-404"},
-        )
-    assert resp.status_code == 200
+    # T3 两拍迁移：POST 202 + stream 收到终帧
+    with TestClient(app) as tc, patch("server.agent.runtime.AsyncOpenAI",
+                                      return_value=mock_client):
+        resp = tc.post("/api/agent/chat",
+                       json={"message": "hi", "session_id": "test-404"})
+        assert resp.status_code == 202
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": "test-404", "snapshot": "1"}) as stream:
+            for _ in stream.iter_lines():
+                pass
 
-    # No pending confirm for this id → 404
-    resp = tc.post(
-        "/api/agent/confirm",
-        json={"id": "nonexistent-call", "approved": True, "session_id": "test-404"},
-    )
-    assert resp.status_code == 404
+        # No pending confirm for this id → 404
+        resp = tc.post(
+            "/api/agent/confirm",
+            json={"id": "nonexistent-call", "approved": True,
+                  "session_id": "test-404"},
+        )
+        assert resp.status_code == 404
 
 
 def test_agent_settings_get_default_false(client):
@@ -516,11 +531,17 @@ def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ai_config):
 
     mock_client = MagicMock()
     mock_client.chat.completions.create = AsyncMock(return_value=stream())
-    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
-        resp = tc_client.post(
-            "/api/agent/chat", json={"message": "write s.md", "session_id": "s1"},
-        )
-    body = resp.text
+    # T3 两拍迁移：POST 202 + stream 收到终帧（auto_approve 重建回灌语义不变：
+    # 无 confirm_request 事件、write_doc 在轮内直接执行落盘）
+    with TestClient(app) as tc_client, patch("server.agent.runtime.AsyncOpenAI",
+                                             return_value=mock_client):
+        resp = tc_client.post("/api/agent/chat",
+                              json={"message": "write s.md", "session_id": "s1"})
+        assert resp.status_code == 202
+        with tc_client.stream("GET", "/api/agent/stream",
+                              params={"session_id": "s1",
+                                      "snapshot": "1"}) as s:
+            body = "\n".join(ln for ln in s.iter_lines() if ln.startswith("data: "))
     assert '"type": "confirm_request"' not in body
     assert (vault_dir / "s.md").is_file()
 

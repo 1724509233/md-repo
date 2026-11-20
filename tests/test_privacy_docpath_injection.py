@@ -30,6 +30,17 @@ from fastapi.testclient import TestClient
 from server.api import create_app
 from server.core.privacy import DOC_PRIVACY_NOTICE, PrivacyConfig
 
+# TestClient context-manager 实例登记表（runhub 后台 run 需要 portal 跨请求
+# 存活；portal 线程非 daemon，测试末尾由 autouse 夹具统一 __exit__）
+_LIVE_PORTALS: list[TestClient] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_agent_portals():
+    yield
+    while _LIVE_PORTALS:
+        _LIVE_PORTALS.pop().__exit__(None, None, None)
+
 
 def _write(vault: Path, rel: str, content: str) -> None:
     """Binary write (Windows-safe hash convention per AGENTS.md gotcha)."""
@@ -134,13 +145,19 @@ def _open_doc_msgs(agent) -> list[dict]:
 
 def _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
                     *, privacy, session_id="s1"):
-    """Build the app + cache spy; returns (TestClient, agent getter)."""
+    """Build the app + cache spy; returns (TestClient, agent getter).
+
+    TestClient 以 context-manager 形态进入：runhub 的驱动任务活在 portal 事件
+    循环上，裸构造每请求一个 loop 会掐死后台 run；portal 由本文件的
+    ``_close_test_portals`` 夹具在测试末尾统一关闭。"""
     _write(vault_dir, "日记/secret.md", "# 秘密\n\n私密内容\n")
     captured: dict = {}
     _spy_agent_cache(monkeypatch, captured)
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config,
                      privacy=_pcfg(tmp_path, "[日记]") if privacy else None)
     tc = TestClient(app)
+    tc.__enter__()
+    _LIVE_PORTALS.append(tc)
 
     def agent():
         return captured["cache"][session_id]
@@ -149,13 +166,18 @@ def _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
 
 
 def _post_chat(tc, *, message="hi", session_id="s1", doc_path=None):
+    """两拍助手（T3 迁移）：POST 投递 202 + GET stream snapshot=1 收到终帧——
+    跑完才返回，agent.messages / evidence_paths 的断言仍在「轮末」时刻。"""
     body = {"message": message, "session_id": session_id}
     if doc_path is not None:
         body["doc_path"] = doc_path
     with _mock_openai():
-        resp = tc.post("/api/agent/chat", json=body)
-    assert resp.status_code == 200
-    return resp
+        r = tc.post("/api/agent/chat", json=body)
+        assert r.status_code == 202, r.text
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": session_id, "snapshot": "1"}) as resp:
+            for _ in resp.iter_lines():
+                pass
 
 
 def test_agent_chat_privacy_doc_path_guided_notice(vault_dir, db_conn,
@@ -205,15 +227,20 @@ def test_agent_chat_history_is_append_only_across_turns(vault_dir, db_conn,
     tc, _agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
                                  monkeypatch, privacy=True)
     calls: list[list[dict]] = []
+
+    def _two_beat(msg):
+        r = tc.post("/api/agent/chat",
+                    json={"message": msg, "session_id": "s1",
+                          "doc_path": "notes/test.md"})
+        assert r.status_code == 202
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": "s1", "snapshot": "1"}) as resp:
+            for _ in resp.iter_lines():
+                pass
+
     with _mock_openai_recording(calls):
-        resp = tc.post("/api/agent/chat",
-                       json={"message": "one", "session_id": "s1",
-                             "doc_path": "notes/test.md"})
-        assert resp.status_code == 200
-        resp = tc.post("/api/agent/chat",
-                       json={"message": "two", "session_id": "s1",
-                             "doc_path": "notes/test.md"})
-        assert resp.status_code == 200
+        _two_beat("one")
+        _two_beat("two")
     assert len(calls) == 2
     first, second = calls
     assert len(second) > len(first)
