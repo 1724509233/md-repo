@@ -407,10 +407,13 @@ def register(app, ctx) -> None:
                 status_code=400,
                 detail="verdict must be 'useful', 'not_useful', or null")
 
-        # Read the persisted message snapshot (D21). The session is loaded from
-        # the DB on demand (get_or_create restores it after a restart), so a
-        # historical message's citations survive a server restart.
-        messages = session_mgr.get_or_create(session_id)
+        # Read the persisted message snapshot (D21) — the DB row is the
+        # authoritative copy (same read as GET /api/agent/sessions/{sid}).
+        # A historical message's citations survive a restart; the in-memory
+        # SessionManager copy is deliberately NOT consulted (a stale cache
+        # there must not 404 a message that is durably persisted).
+        saved = load_session(ctx.db_conn, session_id)
+        messages = saved["messages"] if saved else []
         msg = next(
             (m for m in messages
              if m.get("role") == "assistant" and m.get("id") == message_id),

@@ -24,11 +24,22 @@ class Agent:
         self._spec = spec
         self._runtime = runtime or LoopRuntime()
         if not messages:
-            messages = [{"role": "system", "content": spec.system_prompt}]
+            seed = [{"role": "system", "content": spec.system_prompt}]
             for r in spec.system_reminders:
                 body = r.render()
                 if body:
-                    messages.append({"role": "system", "content": f"<system-reminder>{body}</system-reminder>"})
+                    seed.append({"role": "system", "content": f"<system-reminder>{body}</system-reminder>"})
+            if messages is None:
+                messages = seed
+            else:
+                # 就地播种，绝不换绑：调用方传进来的空 list 往往是
+                # SessionManager 缓存的那个对象（new-session/恢复的空会话——
+                # routes/agent.py 的 _get_agent 与 persist_user 都与它共享）。
+                # 换绑会让 agent 与 manager 静默分家：persist() 把 agent 的
+                # 新 list 写库，get_or_create() 却永远返回旧空 list——feedback
+                # 寻址（session_id+message_id）在缓存里找不到终帧消息（404 回归
+                # 2026-11-20；回归钉 tests/test_agent.py::test_agent_empty_shared_list_seeded_in_place）。
+                messages.extend(seed)
         self._messages = messages
         self._pending_confirms: dict[str, dict] = {}
         self._last_read_ts: dict[str, float] = {}

@@ -32,7 +32,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from fastapi.testclient import TestClient
+
 from server.agent import ToolContext, execute_tool
+from server.api import create_app
 
 
 # ── runtime test helpers (same pattern as tests/test_agent.py) ──────────
@@ -416,6 +419,64 @@ def test_feedback_restart_reads_persisted_snapshot(client, db_conn):
     assert len(rows) == 1
     assert rows[0]["verdict"] == "useful"
     assert json.loads(rows[0]["citations"]) == citations
+
+
+def _mock_openai_ok():
+    """Patch the runtime's AsyncOpenAI to a single 'ok'/stop chunk (同
+    test_agent_stream_routes 的 LLM mock——按惯例测试文件间互不 import)。"""
+    mock_chunk = MagicMock()
+    mock_delta = MagicMock()
+    mock_delta.content = "ok"
+    mock_delta.tool_calls = None
+    mock_choice = MagicMock()
+    mock_choice.delta = mock_delta
+    mock_choice.finish_reason = "stop"
+    mock_chunk.choices = [mock_choice]
+
+    async def fake_aiter():
+        yield mock_chunk
+
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__ = lambda s: fake_aiter()
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=mock_stream)
+    return patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client)
+
+
+def test_feedback_after_inprocess_first_turn(vault_dir, db_conn, ledger_conn,
+                                             ai_config):
+    """回归钉（feedback 404，2026-11-20）：刚在本进程内完成的一轮必须可寻址。
+    旧 bug：new-session 在 SessionManager 缓存空 list，Agent.__init__ 播种时
+    把它换绑——persist() 把 agent 的新 list 写库，feedback 读侧却永远拿到旧空
+    缓存 → 每次点赞点踩必 404。TestClient 用 context-manager 形态让 runhub
+    驱动任务活在跨请求存活的 portal 循环上（test_agent_stream_routes 的
+    两拍形态）。"""
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                     ledger_conn=ledger_conn, ai_config=ai_config)
+    with TestClient(app) as tc, _mock_openai_ok():
+        sid = tc.post("/api/agent/new-session").json()["session_id"]
+        r = tc.post("/api/agent/chat", json={"message": "hi", "session_id": sid})
+        assert r.status_code == 202
+        mid = None
+        with tc.stream("GET", "/api/agent/stream",
+                       params={"session_id": sid, "snapshot": "1"}) as resp:
+            for raw in resp.iter_lines():
+                if raw.startswith("data: "):
+                    f = json.loads(raw[6:])
+                    if f["type"] == "done" and f.get("message_id"):
+                        mid = f["message_id"]
+                    elif f["type"] == "snapshot":
+                        # run 在订阅前已收尾时 done 被边界划走——与 UI 恢复
+                        # 同口径：message_id 取 snapshot 里终帧 assistant 的 id
+                        ids = [m["id"] for m in f.get("messages", [])
+                               if m.get("role") == "assistant" and m.get("id")]
+                        if ids:
+                            mid = ids[-1]
+        assert mid, "done/snapshot 必须能取到 message_id"
+        r = tc.post("/api/agent/feedback", json={
+            "session_id": sid, "message_id": mid, "verdict": "useful"})
+        assert r.status_code == 200, r.text
+        assert _feedback_rows(db_conn, sid, mid)[0]["verdict"] == "useful"
 
 
 def test_feedback_legacy_message_404(client, db_conn):

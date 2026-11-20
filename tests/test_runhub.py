@@ -669,3 +669,49 @@ def test_stop_remaining_queue_never_persists_user():
         assert [c[0] for c in fake.calls] == ["m1"]
 
     asyncio.run(go())
+
+
+def test_snapshot_after_stop_resend_carries_full_history():
+    """回归钉（历史消失，2026-11-20）：stop → 重发 → 重开 snapshot=1 订阅，
+    首帧 messages 必须带全持久化历史。UI 症状「中断后重发历史不可见，done 才
+    恢复」= persist_user 用分家的缓存 list 覆写库后，这里的 snapshot 前缀
+    只剩当轮 user 行。hub 级前缀完整性 + 路由级 list 共享钉
+    （test_session_list_sharing / test_agent_empty_shared_list_seeded_in_place）
+    双层守同一条链。"""
+    async def go():
+        gate = asyncio.Event()
+        fake = FakeAgent(script={
+            "first": [("token", {"text": "a"}), ("wait", gate)],
+            "second": [("token", {"text": "b"}), ("done", {})],
+        })
+        h = Hub(fake)
+
+        # 模拟此前已有一轮完整历史落库
+        fake.messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+        ]
+        h.store["s1"] = list(fake.messages)
+
+        # run A 出一帧 token 后被 stop，旧订阅 drain 到终帧自然关闭
+        rid_a = h.hub.submit("s1", "first", None)
+        sub_a = h.hub.subscribe("s1", snapshot=True)
+        for _ in range(4):
+            await sub_a.__anext__()
+        h.hub.stop("s1")
+        try:
+            while True:
+                await asyncio.wait_for(sub_a.__anext__(), 2)
+        except StopAsyncIteration:
+            pass
+
+        # 重发 = 新 Run；客户端 sendChat 走 snapshot=1 重订阅
+        rid_b = h.hub.submit("s1", "second", None)
+        assert rid_b != rid_a
+        sub_b = h.hub.subscribe("s1", snapshot=True)
+        snap = await sub_b.__anext__()
+        assert snap["type"] == "snapshot"
+        users = [m for m in snap["messages"] if m.get("role") == "user"]
+        assert len(users) >= 2, f"snapshot 前缀丢了历史: {snap}"
+
+    asyncio.run(go())

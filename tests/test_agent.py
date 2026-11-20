@@ -505,6 +505,31 @@ def _sse(event) -> str:
     return sse(event.type, event.data)
 
 
+def test_agent_empty_shared_list_seeded_in_place(tmp_path: Path):
+    """回归钉（feedback 404，2026-11-20）：Agent(messages=[]) 必须就地播种、
+    绝不换绑。空 list 的对象身份是与 SessionManager 的共享契约——
+    routes/agent.py 的 _get_agent 传入的正是 manager 缓存里的那个 list，
+    persist() 持久化 agent 手里的 list，feedback 等读路径再经
+    get_or_create() 取回 manager 的 list。播种时换绑 = 两侧静默分家：
+    库里写的是 agent 的新 list，读侧永远拿到旧空 list，新会话的终帧消息
+    不可寻址（/api/agent/feedback 必 404）。"""
+    from server.agent import Agent, AgentSpec, ModelConfig
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    spec = AgentSpec(
+        system_prompt="test",
+        model=ModelConfig(model_id="m", base_url="http://x", api_key="k"),
+        tools=[],
+        max_rounds=15,
+        vault_dir=vault,
+    )
+    shared: list = []
+    agent = Agent(spec, messages=shared)
+    assert agent.messages is shared
+    assert shared and shared[0]["role"] == "system"
+
+
 def test_agent_loop_no_tools(tmp_path: Path):
     """LLM returns text only → done event."""
     agent, vault = _make_agent(tmp_path)
