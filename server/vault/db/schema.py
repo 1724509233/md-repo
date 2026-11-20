@@ -491,8 +491,9 @@ def init_db(db_path: Path, *, busy_timeout_ms: int = 0) -> sqlite3.Connection:
 
 
 # The authoritative-state tables + indexes (2026-10-31 ledger-file split, L4;
-# egress_log joined 2026-11-18, sessions joined 2026-11-20 — see per-entry
-# comments). Every statement carries exactly ONE %s = the schema
+# egress_log joined 2026-11-18, sessions joined 2026-11-20, chat_abort_log
+# joined 2026-11-20 — see per-entry comments). Every statement carries
+# exactly ONE %s = the schema
 # qualifier: "" for the connection's main database (init_ledger_db),
 # "ledger." for an ATTACHed ledger database (migrate_ledger, inside the
 # migration transaction). It goes on the CREATE TABLE name and on the
@@ -638,6 +639,28 @@ _LEDGER_DDL: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS %sidx_sessions_active ON sessions(last_active)",
+    # Chat abort-signal ledger (channel-2, spec 2026-11-20-stop-signals-
+    # reasoning-capture §2): one row per user stop — pure behavioral facts
+    # (zero text payload; prompt/partial/reasoning join out of the sessions
+    # blob via the message_id anchor). Authoritative (the signals cannot be
+    # regenerated), so it lives here, same lock domain. r9 column set: id is
+    # the provenance anchor (AUTOINCREMENT — ids never reused); ts/phase/
+    # tool_name/model/session_id are channel-injected facts (redline 3);
+    # message_id/tool_name NULL-able (un-anchored stop / non-tool phase).
+    # Rows are kept forever (r7: no GC). *_log family: event time column is
+    # ts, session ordering for consumers is ORDER BY session_id, id.
+    """
+    CREATE TABLE IF NOT EXISTS %schat_abort_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts REAL NOT NULL,
+        session_id TEXT NOT NULL,
+        message_id TEXT,
+        phase TEXT NOT NULL,
+        tool_name TEXT,
+        model TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS %sidx_chat_abort_log_ts ON chat_abort_log(ts)",
 )
 
 
@@ -699,7 +722,8 @@ def init_ledger_db(db_path: Path) -> sqlite3.Connection:
 
     The tables that have no rebuild source (``proposals`` /
     ``proposal_transitions`` / ``snapshots`` / ``relatedness`` — plus
-    ``egress_log`` and, since 2026-11-20, ``sessions``) live here, in
+    ``egress_log``, and since 2026-11-20 ``sessions`` and
+    ``chat_abort_log``) live here, in
     a separate file (``.sync/ledger.db``) from the rebuildable index cache
     (``.sync/index.db``, :func:`init_db`). Same connection conventions as
     :func:`init_db`: WAL mode, per-thread reuse (``check_same_thread=False``),

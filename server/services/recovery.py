@@ -90,10 +90,11 @@ def _wipe_db(vault_dir: Path) -> None:
 
 
 LEDGER_TABLES = ("proposals", "proposal_transitions", "snapshots",
-                 "relatedness", "sessions")
+                 "relatedness", "sessions", "chat_abort_log")
 # sessions joined 2026-11-20 (spec 2026-11-20-sessions-ledger-promotion):
 # chat history is authoritative state — the drill's row-wise preservation
-# check must cover it (通道二 lands → +chat_abort_log, same family rule).
+# check must cover it. chat_abort_log joined same day with 通道二 storage
+# (spec 2026-11-20-stop-signals-reasoning-capture §2, same family rule).
 
 
 def _ledger_row_counts(vault_dir: Path) -> dict[str, int] | None:

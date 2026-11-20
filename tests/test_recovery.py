@@ -204,6 +204,8 @@ def test_recovery_drill_preserves_ledger_rowwise(vault_dir: Path) -> None:
         # 2026-11-20 sessions 升格：核查族含 sessions（spec
         # 2026-11-20-sessions-ledger-promotion §4）；本 vault 未播种会话 → 0。
         "sessions": 0,
+        # 通道二 r9：chat_abort_log 入保全核查族（spec stop-signals §2）；未播种 → 0。
+        "chat_abort_log": 0,
     }
 
     report = run_recovery_drill(vault_dir)
