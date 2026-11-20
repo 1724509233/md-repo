@@ -124,7 +124,10 @@ def _privacy_hit(ctx, rel) -> bool:
 
 
 def register(app, ctx) -> None:
-    session_mgr = SessionManager(ctx.db_conn, ctx.vault_dir)
+    # sessions 表住在 ledger.db（2026-11-20 升格，spec
+    # 2026-11-20-sessions-ledger-promotion）：会话面的 DB 触点一律
+    # ctx.ledger_conn（create_app 的 None→db_conn 回退只兜无库形态）。
+    session_mgr = SessionManager(ctx.ledger_conn, ctx.vault_dir)
 
     # Agent instances per session (created on first chat, reused afterwards).
     agent_cache: dict[str, Agent] = {}
@@ -145,8 +148,8 @@ def register(app, ctx) -> None:
             # TTL-evicted / post-restart rebuild keeps the user's setting (the
             # Agent is built fresh from the static spec, which defaults False).
             # db None → no persistence, skip.
-            if ctx.db_conn is not None:
-                agent.spec.auto_approve = get_auto_approve(ctx.db_conn, session_id)
+            if ctx.ledger_conn is not None:
+                agent.spec.auto_approve = get_auto_approve(ctx.ledger_conn, session_id)
             agent_cache[session_id] = agent
         return agent
 
@@ -157,9 +160,9 @@ def register(app, ctx) -> None:
     # 周期裁决权（spec §2 n1）。
     def _load_messages(sid: str) -> list:
         """DB 快照读（snapshot 帧的持久化前缀源）。无库 → 空。"""
-        if ctx.db_conn is None:
+        if ctx.ledger_conn is None:
             return []
-        saved = load_session(ctx.db_conn, sid)
+        saved = load_session(ctx.ledger_conn, sid)
         return saved["messages"] if saved else []
 
     def _prepare_doc(raw: str | None) -> dict:
@@ -354,9 +357,9 @@ def register(app, ctx) -> None:
         ``session_id`` defaults to "default" (same convention as the other
         agent endpoints). No DB connection → False.
         """
-        if ctx.db_conn is None:
+        if ctx.ledger_conn is None:
             return {"auto_approve": False}
-        return {"auto_approve": get_auto_approve(ctx.db_conn, session_id)}
+        return {"auto_approve": get_auto_approve(ctx.ledger_conn, session_id)}
 
     @app.post("/api/agent/settings")
     async def agent_settings_set(request: Request) -> dict:
@@ -371,8 +374,8 @@ def register(app, ctx) -> None:
         body = await request.json()
         session_id = body.get("session_id", "default")
         value = bool(body.get("auto_approve", False))
-        if ctx.db_conn is not None:
-            set_auto_approve(ctx.db_conn, session_id, value)
+        if ctx.ledger_conn is not None:
+            set_auto_approve(ctx.ledger_conn, session_id, value)
         agent = agent_cache.get(session_id)
         if agent is not None:
             agent.spec.auto_approve = value
@@ -412,7 +415,9 @@ def register(app, ctx) -> None:
         # A historical message's citations survive a restart; the in-memory
         # SessionManager copy is deliberately NOT consulted (a stale cache
         # there must not 404 a message that is durably persisted).
-        saved = load_session(ctx.db_conn, session_id)
+        # (sessions 行在 ledger.db —— 2026-11-20 升格；recall_feedback 行
+        # 仍在 index.db，故本路由双 conn 并用不是疏漏。)
+        saved = load_session(ctx.ledger_conn, session_id)
         messages = saved["messages"] if saved else []
         msg = next(
             (m for m in messages
@@ -456,10 +461,10 @@ def register(app, ctx) -> None:
         ``running`` 由 RunHub 现场注入（spec 2026-11-20 §5：仅活跃 Run，
         终止保留期内不算——is_running 的口径）。
         """
-        if ctx.db_conn is None:
+        if ctx.ledger_conn is None:
             return {"sessions": []}
         return {"sessions": [{**s, "running": runhub.is_running(s["id"])}
-                             for s in list_session_summaries(ctx.db_conn)]}
+                             for s in list_session_summaries(ctx.ledger_conn)]}
 
     @app.get("/api/agent/sessions/{sid}")
     async def agent_session_detail(sid: str) -> dict:
@@ -470,9 +475,9 @@ def register(app, ctx) -> None:
         id/ts/citations) — the recovery pipeline's single source. ``sid`` is
         a plain DB key: no path semantics, so no _safe_rel_path.
         """
-        if ctx.db_conn is None:
+        if ctx.ledger_conn is None:
             raise HTTPException(status_code=503, detail="no database")
-        saved = load_session(ctx.db_conn, sid)
+        saved = load_session(ctx.ledger_conn, sid)
         if saved is None:
             raise HTTPException(status_code=404, detail="session not found")
         return {"session_id": sid, "messages": saved["messages"],
@@ -491,12 +496,12 @@ def register(app, ctx) -> None:
         ``_messages`` and would re-persist the deleted conversation on its
         next turn (the no-resurrect pin, Review Focus 2).
         """
-        if ctx.db_conn is None:
+        if ctx.ledger_conn is None:
             raise HTTPException(status_code=503, detail="no database")
         if session_mgr.get_lock(sid).locked():
             raise HTTPException(status_code=409,
                                 detail="session busy (stream in flight)")
-        if not delete_session(ctx.db_conn, sid):
+        if not delete_session(ctx.ledger_conn, sid):
             raise HTTPException(status_code=404, detail="session not found")
         session_mgr.remove(sid)
         # M3（spec 2026-11-20）：RunHub 也在同步演化面里——保留期 buffer 不

@@ -92,12 +92,12 @@ def _spy_agent_cache(monkeypatch, captured: dict) -> None:
 
 # ── GET /api/agent/sessions ────────────────────────────────────────────────
 
-def test_sessions_list_route(client, db_conn):
+def test_sessions_list_route(client, ledger_conn):
     # 空行（auto_approve 预建形态）不进列表
-    save_session(db_conn, "empty", [])
-    save_session(db_conn, "s1", [{"role": "user", "content": "重构提案通道"},
+    save_session(ledger_conn, "empty", [])
+    save_session(ledger_conn, "s1", [{"role": "user", "content": "重构提案通道"},
                                   {"role": "assistant", "content": "好"}])
-    save_session(db_conn, "s2", [{"role": "user", "content": "另一个话题"}])
+    save_session(ledger_conn, "s2", [{"role": "user", "content": "另一个话题"}])
     r = client.get("/api/agent/sessions")
     assert r.status_code == 200
     sessions = r.json()["sessions"]
@@ -114,8 +114,8 @@ def test_sessions_list_route(client, db_conn):
 
 # ── GET /api/agent/sessions/{sid} ──────────────────────────────────────────
 
-def test_session_detail_route(client, db_conn):
-    save_session(db_conn, "s1", [{"role": "user", "content": "hi"}], token_count=7)
+def test_session_detail_route(client, ledger_conn):
+    save_session(ledger_conn, "s1", [{"role": "user", "content": "hi"}], token_count=7)
     r = client.get("/api/agent/sessions/s1")
     assert r.status_code == 200
     d = r.json()
@@ -129,29 +129,31 @@ def test_session_detail_route(client, db_conn):
 
 # ── DELETE /api/agent/sessions/{sid} ───────────────────────────────────────
 
-def _chat_app(vault_dir, db_conn, ai_config, monkeypatch, captured):
+def _chat_app(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch, captured):
     """App + cache/last_active/locks spy（chat 首次进入时经 _evict_stale_agents 缝捕获）。
     context-manager TestClient：runhub 驱动任务跨请求存活，portal 由本文件
     autouse 夹具在测试末尾统一关闭。"""
     _spy_agent_cache(monkeypatch, captured)
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
     tc = TestClient(app)
     tc.__enter__()
     _LIVE_PORTALS.append(tc)
     return tc
 
 
-def test_delete_route_pops_cache_and_no_resurrect(vault_dir, db_conn, ai_config, monkeypatch):
+def test_delete_route_pops_cache_and_no_resurrect(vault_dir, db_conn,
+                                                 ledger_conn, ai_config, monkeypatch):
     captured: dict = {}
-    tc = _chat_app(vault_dir, db_conn, ai_config, monkeypatch, captured)
+    tc = _chat_app(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch, captured)
     with _mock_openai():
         _run_chat(tc, "你好", session_id="s1")
-        assert "s1" in captured["cache"] and load_session(db_conn, "s1") is not None
+        assert "s1" in captured["cache"] and load_session(ledger_conn, "s1") is not None
 
         r = tc.delete("/api/agent/sessions/s1")
         assert r.status_code == 200
         assert r.json() == {"ok": True}
-        assert load_session(db_conn, "s1") is None           # 行已删
+        assert load_session(ledger_conn, "s1") is None           # 行已删
         assert "s1" not in captured["cache"]                 # Agent 缓存 pop
         assert "s1" not in captured["last_active"]           # TTL 表同步 pop
 
@@ -167,25 +169,25 @@ def test_delete_route_pops_cache_and_no_resurrect(vault_dir, db_conn, ai_config,
 
         # Review Focus 2：同 sid 再聊 → 只有新会话内容，删掉的会话不复活
         _run_chat(tc, "第二句", session_id="s1")
-    msgs = load_session(db_conn, "s1")["messages"]
+    msgs = load_session(ledger_conn, "s1")["messages"]
     users = [m for m in msgs if m.get("role") == "user"]
     assert len(users) == 1 and users[0]["content"] == "第二句"
 
 
-def test_delete_route_locked_409(vault_dir, db_conn, ai_config, monkeypatch):
+def test_delete_route_locked_409(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch):
     captured: dict = {}
-    tc = _chat_app(vault_dir, db_conn, ai_config, monkeypatch, captured)
+    tc = _chat_app(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch, captured)
     with _mock_openai():
         _run_chat(tc, "你好", session_id="s1")
     # 内存 seam：锁表在场即锁被持有（仿 test_sync_lock 的缝上拒绝，不落盘）
     captured["locks"]["s1"]._locked = True
     r = tc.delete("/api/agent/sessions/s1")
     assert r.status_code == 409
-    assert load_session(db_conn, "s1") is not None           # 409 前置，行未动
+    assert load_session(ledger_conn, "s1") is not None           # 409 前置，行未动
     assert "s1" in captured["cache"]                          # 缓存未动
     captured["locks"]["s1"]._locked = False
     assert tc.delete("/api/agent/sessions/s1").status_code == 200
-    assert load_session(db_conn, "s1") is None
+    assert load_session(ledger_conn, "s1") is None
 
 
 # ── db None 面（spec §3 表：列表 []；详情/删除 503）───────────────────────

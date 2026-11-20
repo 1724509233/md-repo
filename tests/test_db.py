@@ -327,35 +327,35 @@ def test_edit_file_preserves_rest(tmp_path) -> None:
     assert fp.read_bytes() == b"line one\nline TWO\nline three\n"
 
 
-def test_save_and_load_session(db_conn):
+def test_save_and_load_session(ledger_conn):
     from server.vault.db.sessions import save_session, load_session
 
     msgs = [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]
-    save_session(db_conn, "test-sess", msgs, token_count=100)
-    result = load_session(db_conn, "test-sess")
+    save_session(ledger_conn, "test-sess", msgs, token_count=100)
+    result = load_session(ledger_conn, "test-sess")
     assert result is not None
     assert result["messages"] == msgs
     assert result["token_count"] == 100
 
 
-def test_load_session_not_found(db_conn):
+def test_load_session_not_found(ledger_conn):
     from server.vault.db.sessions import load_session
 
-    assert load_session(db_conn, "nonexistent") is None
+    assert load_session(ledger_conn, "nonexistent") is None
 
 
-def test_list_session_summaries(db_conn):
+def test_list_session_summaries(ledger_conn):
     from server.vault.db.sessions import save_session, list_session_summaries
     from server.agent.reminders import DocPathUserReminder
     # 空行（auto_approve 预建形态）不进列表
-    save_session(db_conn, "empty", [])
-    save_session(db_conn, "s1", [{"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
+    save_session(ledger_conn, "empty", [])
+    save_session(ledger_conn, "s1", [{"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
                                  {"role": "user", "content": "重构提案通道" * 30},
                                  {"role": "assistant", "content": "好"}])
-    save_session(db_conn, "s2", [{"role": "assistant", "content": "x"}])  # 无 user
+    save_session(ledger_conn, "s2", [{"role": "assistant", "content": "x"}])  # 无 user
     # 混合口径样本（2026-11-19 目检轮拍板，spec §1.1）：3 user(含1提醒) + 2 段
     # assistant(段A 含 2 tool_calls + 2 tool 结果行，提醒行插在段中不封段) + 提醒行
-    save_session(db_conn, "s3", [
+    save_session(ledger_conn, "s3", [
         {"role": "user", "content": "第一问"},
         {"role": "assistant", "content": "", "tool_calls": [
             {"id": "t1", "function": {"name": "read_doc", "arguments": "{}"}},
@@ -367,7 +367,7 @@ def test_list_session_summaries(db_conn):
         {"role": "user", "content": "第二问"},
         {"role": "assistant", "content": "答"},
     ])
-    out = list_session_summaries(db_conn)
+    out = list_session_summaries(ledger_conn)
     assert [s["id"] for s in out] == ["s3", "s2", "s1"]    # last_active DESC
     t = next(s for s in out if s["id"] == "s1")["title"]
     assert not t.startswith(DocPathUserReminder._PREFIX)    # 跳提醒行
@@ -384,63 +384,63 @@ def test_list_session_summaries(db_conn):
     assert "[当前打开:" == DocPathUserReminder._PREFIX      # 三处同源钉（spec §1.1）
 
 
-def test_delete_session(db_conn):
+def test_delete_session(ledger_conn):
     from server.vault.db.sessions import save_session, delete_session
-    save_session(db_conn, "s1", [{"role": "user", "content": "hi"}])
-    assert delete_session(db_conn, "s1") is True
-    assert delete_session(db_conn, "s1") is False
+    save_session(ledger_conn, "s1", [{"role": "user", "content": "hi"}])
+    assert delete_session(ledger_conn, "s1") is True
+    assert delete_session(ledger_conn, "s1") is False
 
 
-def test_save_session_updates_existing(db_conn):
+def test_save_session_updates_existing(ledger_conn):
     from server.vault.db.sessions import save_session, load_session
 
-    save_session(db_conn, "upd", [{"role": "user", "content": "v1"}], token_count=10)
-    save_session(db_conn, "upd", [{"role": "user", "content": "v2"}], token_count=20)
-    result = load_session(db_conn, "upd")
+    save_session(ledger_conn, "upd", [{"role": "user", "content": "v1"}], token_count=10)
+    save_session(ledger_conn, "upd", [{"role": "user", "content": "v2"}], token_count=20)
+    result = load_session(ledger_conn, "upd")
     assert result is not None
     assert result["messages"][0]["content"] == "v2"
     assert result["token_count"] == 20
 
 
-def test_save_session_preserves_auto_approve(db_conn):
+def test_save_session_preserves_auto_approve(ledger_conn):
     """先 set 再 save（消息持久化路径不带 auto_approve 参数），开关值不丢。"""
     from server.vault.db.sessions import save_session
     from server.vault.db.sessions import set_auto_approve, get_auto_approve
 
-    set_auto_approve(db_conn, "s-aa", True)
-    save_session(db_conn, "s-aa", [{"role": "user", "content": "hi"}], token_count=1)
-    assert get_auto_approve(db_conn, "s-aa") is True
+    set_auto_approve(ledger_conn, "s-aa", True)
+    save_session(ledger_conn, "s-aa", [{"role": "user", "content": "hi"}], token_count=1)
+    assert get_auto_approve(ledger_conn, "s-aa") is True
 
 
-def test_load_session_returns_auto_approve(db_conn):
+def test_load_session_returns_auto_approve(ledger_conn):
     """load_session 带回 auto_approve（int）。"""
     from server.vault.db.sessions import load_session
     from server.vault.db.sessions import set_auto_approve
 
-    set_auto_approve(db_conn, "s-on", True)
-    assert load_session(db_conn, "s-on")["auto_approve"] == 1
-    set_auto_approve(db_conn, "s-off", False)
-    assert load_session(db_conn, "s-off")["auto_approve"] == 0
+    set_auto_approve(ledger_conn, "s-on", True)
+    assert load_session(ledger_conn, "s-on")["auto_approve"] == 1
+    set_auto_approve(ledger_conn, "s-off", False)
+    assert load_session(ledger_conn, "s-off")["auto_approve"] == 0
 
 
-def test_set_auto_approve_creates_empty_row(db_conn):
+def test_set_auto_approve_creates_empty_row(ledger_conn):
     """无行时按 create_new 形态建空行（messages []、token_count 0）再写值。"""
     from server.vault.db.sessions import set_auto_approve, get_auto_approve, load_session
 
-    set_auto_approve(db_conn, "s-new", True)
-    assert get_auto_approve(db_conn, "s-new") is True
-    row = load_session(db_conn, "s-new")
+    set_auto_approve(ledger_conn, "s-new", True)
+    assert get_auto_approve(ledger_conn, "s-new") is True
+    row = load_session(ledger_conn, "s-new")
     assert row is not None
     assert row["messages"] == []
     assert row["token_count"] == 0
     assert row["auto_approve"] == 1
 
 
-def test_get_auto_approve_missing_returns_false(db_conn):
+def test_get_auto_approve_missing_returns_false(ledger_conn):
     """无行 → False。"""
     from server.vault.db.sessions import get_auto_approve
 
-    assert get_auto_approve(db_conn, "no-such-session") is False
+    assert get_auto_approve(ledger_conn, "no-such-session") is False
 
 
 def test_set_auto_approve_none_conn_noop():

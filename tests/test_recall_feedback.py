@@ -340,7 +340,7 @@ def test_get_related_docs_meta_paths_empty(vault_dir: Path, db_conn):
 
 # ── feedback endpoint (acceptance 2/7/8/9/10) ───────────────────────────
 
-def _seed_message(db_conn, session_id: str, message_id: str, citations,
+def _seed_message(ledger_conn, session_id: str, message_id: str, citations,
                   legacy: bool = False):
     """Persist a session whose assistant message carries the done-time
     citations snapshot (D21). ``legacy=True`` omits id/citations (a
@@ -354,7 +354,7 @@ def _seed_message(db_conn, session_id: str, message_id: str, citations,
         msg["id"] = message_id
         msg["ts"] = 1763020800.123
         msg["citations"] = citations
-    save_session(db_conn, session_id, [
+    save_session(ledger_conn, session_id, [
         {"role": "user", "content": "q"},
         msg,
     ])
@@ -367,13 +367,13 @@ def _feedback_rows(db_conn, session_id: str, message_id: str):
         (session_id, message_id)).fetchall()
 
 
-def test_feedback_rows_snapshot_and_retract(client, db_conn):
+def test_feedback_rows_snapshot_and_retract(client, db_conn, ledger_conn):
     """Acceptance 2: useful/not_useful each upsert ONE row keyed
     (session_id, message_id); the citations snapshot = the persisted server
     value (a client-sent citations field is ignored — there is nothing to
     forge); retract (null) deletes the row."""
     citations = [{"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"}]
-    _seed_message(db_conn, "ses_1", "m1", citations)
+    _seed_message(ledger_conn, "ses_1", "m1", citations)
 
     r = client.post("/api/agent/feedback", json={
         "session_id": "ses_1", "message_id": "m1", "verdict": "useful"})
@@ -401,7 +401,8 @@ def test_feedback_rows_snapshot_and_retract(client, db_conn):
     assert _feedback_rows(db_conn, "ses_1", "m1") == []
 
 
-def test_feedback_restart_reads_persisted_snapshot(client, db_conn):
+def test_feedback_restart_reads_persisted_snapshot(client, db_conn,
+                                                  ledger_conn):
     """Acceptance 7: after a restart (fresh SessionManager — empty in-memory
     cache, the session restored from the DB on demand), feedback on a
     HISTORICAL message lands the row with the persisted citations snapshot —
@@ -410,7 +411,7 @@ def test_feedback_restart_reads_persisted_snapshot(client, db_conn):
         {"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"},
         {"path": "notes/b.md", "exists": "ok", "grounded": "ungrounded"},
     ]
-    _seed_message(db_conn, "ses_hist", "m_hist", citations)
+    _seed_message(ledger_conn, "ses_hist", "m_hist", citations)
 
     r = client.post("/api/agent/feedback", json={
         "session_id": "ses_hist", "message_id": "m_hist", "verdict": "useful"})
@@ -479,11 +480,11 @@ def test_feedback_after_inprocess_first_turn(vault_dir, db_conn, ledger_conn,
         assert _feedback_rows(db_conn, sid, mid)[0]["verdict"] == "useful"
 
 
-def test_feedback_legacy_message_404(client, db_conn):
+def test_feedback_legacy_message_404(client, db_conn, ledger_conn):
     """Acceptance 8 (endpoint half): a legacy message (no id field) cannot be
     addressed — 404, no row. (The UI half — no summary row / buttons — is
     pinned in test_ui_feedback_row_gated_on_message_id.)"""
-    _seed_message(db_conn, "ses_legacy", "m_legacy", [], legacy=True)
+    _seed_message(ledger_conn, "ses_legacy", "m_legacy", [], legacy=True)
 
     r = client.post("/api/agent/feedback", json={
         "session_id": "ses_legacy", "message_id": "m_legacy", "verdict": "useful"})
@@ -491,11 +492,11 @@ def test_feedback_legacy_message_404(client, db_conn):
     assert _feedback_rows(db_conn, "ses_legacy", "m_legacy") == []
 
 
-def test_feedback_retract_then_restore(client, db_conn):
+def test_feedback_retract_then_restore(client, db_conn, ledger_conn):
     """Acceptance 9: verdict=null deletes (idempotent — deleting a missing
     row is a no-op); re-POST useful restores the row (the upsert anchor)."""
     citations = [{"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"}]
-    _seed_message(db_conn, "ses_2", "m2", citations)
+    _seed_message(ledger_conn, "ses_2", "m2", citations)
     body = {"session_id": "ses_2", "message_id": "m2"}
 
     assert client.post("/api/agent/feedback", json={**body, "verdict": "useful"}).status_code == 200
@@ -516,13 +517,13 @@ def test_feedback_retract_then_restore(client, db_conn):
     assert json.loads(rows[0]["citations"]) == citations
 
 
-def test_feedback_click_paths_attribution(client, db_conn):
+def test_feedback_click_paths_attribution(client, db_conn, ledger_conn):
     """Acceptance 10: click_paths = the via=ai clicks attributed to this
     message_id (distinct paths); search/preview clicks (message_id NULL) and
     other messages' clicks never enter."""
     from server.vault.db.recall import log_click
 
-    _seed_message(db_conn, "ses_3", "m3",
+    _seed_message(ledger_conn, "ses_3", "m3",
                   [{"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"}])
     log_click(db_conn, "notes/a.md", via="ai", session_id="ses_3", message_id="m3")
     log_click(db_conn, "notes/b.md", via="ai", session_id="ses_3", message_id="m3")
@@ -539,9 +540,10 @@ def test_feedback_click_paths_attribution(client, db_conn):
     assert json.loads(rows[0]["click_paths"]) == ["notes/a.md", "notes/b.md"]
 
 
-def test_feedback_click_paths_null_when_no_clicks(client, db_conn):
+def test_feedback_click_paths_null_when_no_clicks(client, db_conn,
+                                                   ledger_conn):
     """No via=ai clicks for the message → click_paths is NULL (not '[]')."""
-    _seed_message(db_conn, "ses_4", "m4",
+    _seed_message(ledger_conn, "ses_4", "m4",
                   [{"path": "notes/a.md", "exists": "ok", "grounded": "in_evidence"}])
     r = client.post("/api/agent/feedback", json={
         "session_id": "ses_4", "message_id": "m4", "verdict": "not_useful"})
@@ -551,9 +553,9 @@ def test_feedback_click_paths_null_when_no_clicks(client, db_conn):
     assert rows[0]["click_paths"] is None
 
 
-def test_feedback_validation_errors(client, db_conn):
+def test_feedback_validation_errors(client, db_conn, ledger_conn):
     """Input contract: missing message_id / missing verdict / bad verdict → 400."""
-    _seed_message(db_conn, "ses_5", "m5", [])
+    _seed_message(ledger_conn, "ses_5", "m5", [])
     assert client.post("/api/agent/feedback", json={
         "session_id": "ses_5", "verdict": "useful"}).status_code == 400
     assert client.post("/api/agent/feedback", json={

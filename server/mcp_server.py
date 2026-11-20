@@ -332,13 +332,17 @@ def main():
     # with SQLITE_BUSY (P0 L5).
 
     # Ledger file split (2026-10-31, L4): same first-boot migration as
-    # server/main.py — the four authoritative-state tables move to ledger.db.
-    from server.vault.db.migrate_ledger import migrate_ledger
+    # server/main.py — the authoritative-state tables move to ledger.db
+    # (incl. sessions, 2026-11-20 promotion; the MCP process reads no
+    # sessions but participates in the migration — the BEGIN IMMEDIATE
+    # queue covers the concurrent-boot face).
+    from server.vault.db.migrate_ledger import migrate_ledger, promote_sessions
     from server.vault.db.schema import init_ledger_db
 
     ledger_path = vault_dir / ".sync" / "ledger.db"
     ledger_conn = init_ledger_db(ledger_path)
     migrate_ledger(db_conn, ledger_path)
+    promote_sessions(db_conn, ledger_path)
 
     # Register the module-level DB handle pair for lazy access (agent tools).
     from server.vault.db.conn import init as register_db_conn

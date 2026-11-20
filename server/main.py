@@ -19,7 +19,7 @@ from .config import load_background_agents, load_notifications, load_server_conf
 from .config.core import lan_gate_check
 from .services.egress import log_model_endpoints
 from .core.privacy import PrivacyConfig
-from .vault.db.migrate_ledger import migrate_ledger
+from .vault.db.migrate_ledger import migrate_ledger, promote_sessions
 from .vault.db.schema import init_db, init_ledger_db
 from .vault.orchestration.file_ops import reconcile
 from .vault.orchestration.indexer import ensure_indexed
@@ -190,14 +190,19 @@ def main(argv: list[str] | None = None) -> None:
         logging.getLogger("md-vault.egress").info("%s", _egress_line)
 
     db_path = vault_dir / ".sync" / "index.db"
-    conn = init_db(db_path)
+    # busy_timeout (spec 2026-11-20 §7, review L1): same 5000ms as the MCP
+    # side — a migration transaction colliding with the MCP process's lock
+    # waits instead of failing the boot instantly.
+    conn = init_db(db_path, busy_timeout_ms=5000)
 
-    # Ledger file split (2026-10-31, L4): the four authoritative-state
-    # tables (proposals / proposal_transitions / snapshots / relatedness)
-    # live in their own file. First boot migrates them out of index.db.
+    # Ledger file split (2026-10-31, L4): the authoritative-state tables
+    # (proposals / proposal_transitions / snapshots / relatedness, plus
+    # sessions since the 2026-11-20 promotion) live in their own file.
+    # First boot migrates them out of index.db.
     ledger_path = vault_dir / ".sync" / "ledger.db"
     ledger_conn = init_ledger_db(ledger_path)
     migrate_ledger(conn, ledger_path)
+    promote_sessions(conn, ledger_path)
 
     # Register the module-level DB handle pair for lazy access
     # (agent tools, reminders).

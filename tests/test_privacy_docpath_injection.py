@@ -143,7 +143,7 @@ def _open_doc_msgs(agent) -> list[dict]:
 
 # ── /api/agent/chat: doc_path → user reminder + evidence seeding ────────────
 
-def _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+def _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                     *, privacy, session_id="s1"):
     """Build the app + cache spy; returns (TestClient, agent getter).
 
@@ -153,7 +153,8 @@ def _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
     _write(vault_dir, "日记/secret.md", "# 秘密\n\n私密内容\n")
     captured: dict = {}
     _spy_agent_cache(monkeypatch, captured)
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config,
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config,
                      privacy=_pcfg(tmp_path, "[日记]") if privacy else None)
     tc = TestClient(app)
     tc.__enter__()
@@ -180,12 +181,12 @@ def _post_chat(tc, *, message="hi", session_id="s1", doc_path=None):
                 pass
 
 
-def test_agent_chat_privacy_doc_path_guided_notice(vault_dir, db_conn,
+def test_agent_chat_privacy_doc_path_guided_notice(vault_dir, db_conn, ledger_conn,
                                                    ai_config, tmp_path,
                                                    monkeypatch):
     """隐私路径打开 → 恰有一条逐字等于 DOC_PRIVACY_NOTICE 的 user 提醒
     （引导文案常量，绝不内插真实路径），evidence_paths 不被种入。"""
-    tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=True)
     _post_chat(tc, doc_path="日记/secret.md")
     msgs = _open_doc_msgs(agent())
@@ -197,12 +198,12 @@ def test_agent_chat_privacy_doc_path_guided_notice(vault_dir, db_conn,
     assert "日记/secret.md" not in agent().evidence_paths
 
 
-def test_agent_chat_notice_deduped_and_updated(vault_dir, db_conn, ai_config,
+def test_agent_chat_notice_deduped_and_updated(vault_dir, db_conn, ledger_conn, ai_config,
                                                tmp_path, monkeypatch):
     """append-only 去重钉（待办 f1374245）：同隐私文档连续两轮 → 内容不变跳过
     （恰一条）；第三轮切普通文档 → 变化只追加（隐私提醒保留在历史 + 新增
     普通提醒，共两条），绝不删除历史中段消息（保前缀缓存）。"""
-    tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=True)
     _post_chat(tc, message="one", doc_path="日记/secret.md")
     assert [m["content"] for m in _open_doc_msgs(agent())] == [DOC_PRIVACY_NOTICE]
@@ -217,14 +218,14 @@ def test_agent_chat_notice_deduped_and_updated(vault_dir, db_conn, ai_config,
     assert "notes/test.md" in msgs[-1]["content"]      # 最后一条提醒是普通文档提醒
 
 
-def test_agent_chat_history_is_append_only_across_turns(vault_dir, db_conn,
+def test_agent_chat_history_is_append_only_across_turns(vault_dir, db_conn, ledger_conn,
                                                         ai_config, tmp_path,
                                                         monkeypatch):
     """前缀缓存回归钉（待办 f1374245）：同一 session 同 doc_path 连发两条消息
     → 第二次 create() 收到的 messages 是第一次的严格前缀扩展（前 len(第一次)
     项逐字典相等），即隐式前缀缓存可命中的形式。strip 式中段删除会在此断言
     上当场失败。"""
-    tc, _agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, _agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                  monkeypatch, privacy=True)
     calls: list[list[dict]] = []
 
@@ -247,10 +248,10 @@ def test_agent_chat_history_is_append_only_across_turns(vault_dir, db_conn,
     assert second[: len(first)] == first  # 严格前缀扩展（逐字典相等）
 
 
-def test_agent_chat_nonprivacy_doc_path_reminder(vault_dir, db_conn, ai_config,
+def test_agent_chat_nonprivacy_doc_path_reminder(vault_dir, db_conn, ledger_conn, ai_config,
                                                  tmp_path, monkeypatch):
     """非隐私路径照常注入（守恒）。"""
-    tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=True)
     _post_chat(tc, doc_path="notes/test.md")
     msgs = _open_doc_msgs(agent())
@@ -259,11 +260,11 @@ def test_agent_chat_nonprivacy_doc_path_reminder(vault_dir, db_conn, ai_config,
     assert "notes/test.md" in agent().evidence_paths
 
 
-def test_agent_chat_privacy_unset_doc_path_injected(vault_dir, db_conn,
+def test_agent_chat_privacy_unset_doc_path_injected(vault_dir, db_conn, ledger_conn,
                                                     ai_config, tmp_path,
                                                     monkeypatch):
     """等价钉：privacy=None 时隐私路径也照常注入（未配置=逐字节旧行为）。"""
-    tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=False)
     _post_chat(tc, doc_path="日记/secret.md")
     msgs = _open_doc_msgs(agent())
@@ -271,12 +272,12 @@ def test_agent_chat_privacy_unset_doc_path_injected(vault_dir, db_conn,
     assert DOC_PRIVACY_NOTICE not in msgs[0]["content"]
 
 
-def test_agent_chat_privacy_doc_path_offdisk_no_409(vault_dir, db_conn,
+def test_agent_chat_privacy_doc_path_offdisk_no_409(vault_dir, db_conn, ledger_conn,
                                                     ai_config, tmp_path,
                                                     monkeypatch):
     """隐私路径的 409 校验同样不得泄漏存在性：命中隐私即当无 doc_path
     （走引导提醒分支，不触达磁盘校验）。"""
-    tc, agent = _agent_chat_app(vault_dir, db_conn, ai_config, tmp_path,
+    tc, agent = _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                 monkeypatch, privacy=True)
     _post_chat(tc, doc_path="日记/ghost.md")  # 不在盘上，不 409
     assert [m["content"] for m in _open_doc_msgs(agent())] == [DOC_PRIVACY_NOTICE]
@@ -284,11 +285,12 @@ def test_agent_chat_privacy_doc_path_offdisk_no_409(vault_dir, db_conn,
 
 # ── /api/ai/chat legacy: current_doc content + rag_search ───────────────────
 
-def _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+def _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
              *, privacy, body):
     captured: dict = {}
     _capture_chat_stream(monkeypatch, captured)
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config,
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config,
                      privacy=_pcfg(tmp_path, "[日记]") if privacy else None)
     tc = TestClient(app)
     resp = tc.post("/api/ai/chat", json=body)
@@ -300,13 +302,13 @@ def _sys_text(messages) -> str:
     return "\n".join(m["content"] for m in messages if m["role"] == "system")
 
 
-def test_ai_chat_current_doc_privacy_notice_no_content(vault_dir, db_conn,
+def test_ai_chat_current_doc_privacy_notice_no_content(vault_dir, db_conn, ledger_conn,
                                                        ai_config, tmp_path,
                                                        monkeypatch):
     """mode=current_doc + 隐私路径 → 注入逐字引导文案（同语义），
     文档全文与真实路径不进模型上下文。"""
     _write(vault_dir, "日记/secret.md", "私密正文 zebralog\n")
-    messages = _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+    messages = _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                         privacy=True,
                         body={"message": "q", "mode": "current_doc",
                               "doc_path": "日记/secret.md"})
@@ -318,9 +320,9 @@ def test_ai_chat_current_doc_privacy_notice_no_content(vault_dir, db_conn,
     assert "日记/secret.md" not in sys_text        # 真实路径不出现
 
 
-def test_ai_chat_current_doc_nonprivacy_injects(vault_dir, db_conn, ai_config,
+def test_ai_chat_current_doc_nonprivacy_injects(vault_dir, db_conn, ledger_conn, ai_config,
                                                 tmp_path, monkeypatch):
-    messages = _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+    messages = _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                         privacy=True,
                         body={"message": "q", "mode": "current_doc",
                               "doc_path": "notes/test.md"})
@@ -330,12 +332,12 @@ def test_ai_chat_current_doc_nonprivacy_injects(vault_dir, db_conn, ai_config,
     assert DOC_PRIVACY_NOTICE not in sys_text
 
 
-def test_ai_chat_current_doc_privacy_unset_injects(vault_dir, db_conn,
+def test_ai_chat_current_doc_privacy_unset_injects(vault_dir, db_conn, ledger_conn,
                                                    ai_config, tmp_path,
                                                    monkeypatch):
     """等价钉：privacy=None → 隐私路径内容照注入（无引导文案）。"""
     _write(vault_dir, "日记/secret.md", "私密正文 zebralog\n")
-    messages = _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+    messages = _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                         privacy=False,
                         body={"message": "q", "mode": "current_doc",
                               "doc_path": "日记/secret.md"})
@@ -345,7 +347,7 @@ def test_ai_chat_current_doc_privacy_unset_injects(vault_dir, db_conn,
     assert DOC_PRIVACY_NOTICE not in sys_text
 
 
-def test_ai_chat_rag_search_passes_privacy_dirs(vault_dir, db_conn, ai_config,
+def test_ai_chat_rag_search_passes_privacy_dirs(vault_dir, db_conn, ledger_conn, ai_config,
                                                 tmp_path, monkeypatch):
     """接线钉：rag_search 收到 ctx.privacy.dirs（未配置 → ()）。"""
     import server.ai as ai_mod
@@ -361,23 +363,23 @@ def test_ai_chat_rag_search_passes_privacy_dirs(vault_dir, db_conn, ai_config,
     _write(vault_dir, "日记/a.md", "# 秘密\n\nzebrafish habitat\n")
     _write(vault_dir, "notes/b.md", "# Public\n\nzebrafish zoo plan\n")
 
-    _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch, privacy=True,
+    _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch, privacy=True,
              body={"message": "zebrafish", "mode": "rag_search"})
     assert calls and calls[0].get("privacy_dirs") == ("日记",)
 
     calls.clear()
-    _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch, privacy=False,
+    _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch, privacy=False,
              body={"message": "zebrafish", "mode": "rag_search"})
     assert calls and calls[0].get("privacy_dirs") == ()
 
 
-def test_ai_chat_rag_search_privacy_hits_filtered(vault_dir, db_conn,
+def test_ai_chat_rag_search_privacy_hits_filtered(vault_dir, db_conn, ledger_conn,
                                                   ai_config, tmp_path,
                                                   monkeypatch):
     """行为面：隐私片段不进 Relevant documents（检索层过滤，非事后遮罩）。"""
     _write(vault_dir, "日记/a.md", "# 秘密\n\nzebrafish habitat notes\n")
     _write(vault_dir, "notes/b.md", "# Public\n\nzebrafish zoo plan\n")
-    messages = _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+    messages = _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                         privacy=True,
                         body={"message": "zebrafish", "mode": "rag_search"})
     sys_text = _sys_text(messages)
@@ -385,13 +387,13 @@ def test_ai_chat_rag_search_privacy_hits_filtered(vault_dir, db_conn,
     assert "日记" not in sys_text
 
 
-def test_ai_chat_rag_search_privacy_unset_keeps_hits(vault_dir, db_conn,
+def test_ai_chat_rag_search_privacy_unset_keeps_hits(vault_dir, db_conn, ledger_conn,
                                                      ai_config, tmp_path,
                                                      monkeypatch):
     """等价钉：privacy=None → 隐私片段照进结果。"""
     _write(vault_dir, "日记/a.md", "# 秘密\n\nzebrafish habitat notes\n")
     _write(vault_dir, "notes/b.md", "# Public\n\nzebrafish zoo plan\n")
-    messages = _ai_chat(vault_dir, db_conn, ai_config, tmp_path, monkeypatch,
+    messages = _ai_chat(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkeypatch,
                         privacy=False,
                         body={"message": "zebrafish", "mode": "rag_search"})
     sys_text = _sys_text(messages)

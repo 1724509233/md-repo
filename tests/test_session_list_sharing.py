@@ -22,12 +22,12 @@ from types import SimpleNamespace
 
 from server.agent.agent import Agent
 from server.agent.session import SessionManager
-from server.vault.db.schema import init_db
+from server.vault.db.schema import init_ledger_db
 from server.vault.db.sessions import load_session
 
 
 def make_conn(tmp: Path) -> sqlite3.Connection:
-    return init_db(tmp / "sessions.db")
+    return init_ledger_db(tmp / "sessions.db")
 
 
 def spec_stub():

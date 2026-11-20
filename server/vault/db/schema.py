@@ -108,7 +108,7 @@ def _ensure_trigger_cols(conn: sqlite3.Connection) -> None:
             )
 
 
-def _ensure_session_cols(conn: sqlite3.Connection) -> None:
+def _ensure_session_cols(conn: sqlite3.Connection, schema: str = "") -> None:
     """Idempotent migration: add the per-session auto_approve column.
 
     auto_approve is the session-level runtime switch that skips the per-write
@@ -116,11 +116,17 @@ def _ensure_session_cols(conn: sqlite3.Connection) -> None:
     auto_approve=True directly). Same idiom as
     :func:`_ensure_notification_cols` — PRAGMA table_info check, ALTER only
     when the column is missing, safe to call on every startup.
+
+    sessions lives in ledger.db since the 2026-11-20 promotion (spec
+    ``2026-11-20-sessions-ledger-promotion``): ``schema`` is "" for the
+    connection's main database (the ``init_ledger_db`` path) or "ledger." for
+    an ATTACHed ledger database (the migration path) — the one slot on the
+    PRAGMA and the ALTER follows the _LEDGER_DDL qualifier convention.
     """
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    cols = {r[1] for r in conn.execute(f"PRAGMA {schema}table_info(sessions)")}
     if "auto_approve" not in cols:
         conn.execute(
-            "ALTER TABLE sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
+            f"ALTER TABLE {schema}sessions ADD COLUMN auto_approve INTEGER NOT NULL DEFAULT 0"
         )
 
 
@@ -409,19 +415,14 @@ def init_db(db_path: Path, *, busy_timeout_ms: int = 0) -> sqlite3.Connection:
     # the session id (web/mcp write NULL).
     _ensure_recall_session_cols(conn)
     _ensure_recall_traffic_col(conn)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            messages TEXT NOT NULL,
-            token_count INTEGER NOT NULL DEFAULT 0,
-            last_active REAL NOT NULL,
-            created_at REAL NOT NULL,
-            auto_approve INTEGER NOT NULL DEFAULT 0
-        )
-        """
-    )
-    _ensure_session_cols(conn)
+    # sessions (agent chat persistence) left index.db for ledger.db —
+    # 2026-11-20-sessions-ledger-promotion: chat history is authoritative
+    # state now (RunHub snapshot prefix + feedback read + future memory
+    # floor), NOT a rebuildable cache. Do not re-add the DDL here: any
+    # zombie table here re-trips the promote_sessions row-count invariant into
+    # a permanent boot-failure loop (spec §2.0, C1). The old
+    # ``idx_sessions_active`` was a dead reference (no CREATE ever shipped);
+    # the ledger DDL below ships the real index.
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS notifications (
@@ -489,8 +490,9 @@ def init_db(db_path: Path, *, busy_timeout_ms: int = 0) -> sqlite3.Connection:
     return conn
 
 
-# The four authoritative-state tables + indexes (2026-10-31 ledger-file
-# split, L4). Every statement carries exactly ONE %s = the schema
+# The authoritative-state tables + indexes (2026-10-31 ledger-file split, L4;
+# egress_log joined 2026-11-18, sessions joined 2026-11-20 — see per-entry
+# comments). Every statement carries exactly ONE %s = the schema
 # qualifier: "" for the connection's main database (init_ledger_db),
 # "ledger." for an ATTACHed ledger database (migrate_ledger, inside the
 # migration transaction). It goes on the CREATE TABLE name and on the
@@ -616,11 +618,31 @@ _LEDGER_DDL: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS %sidx_egress_path ON egress_log(path)",
     "CREATE INDEX IF NOT EXISTS %sidx_egress_ts ON egress_log(ts)",
     "CREATE INDEX IF NOT EXISTS %sidx_egress_run ON egress_log(run_id)",
+    # Agent chat sessions (2026-11-20 promotion, spec
+    # 2026-11-20-sessions-ledger-promotion): the messages blob is the
+    # conversation's durable truth (RunHub snapshot-frame prefix source,
+    # feedback read side, the future memory floor) — authoritative, NOT
+    # rebuildable, so it lives here, not in the index cache. Column shape
+    # is verbatim the old index.db table (auto_approve inline; the
+    # historical DBs carried it via ALTER — _ensure_session_cols below
+    # covers those). idx_sessions_active is the real index the old dead
+    # name referenced; list_session_summaries orders by last_active DESC.
+    """
+    CREATE TABLE IF NOT EXISTS %ssessions (
+        id TEXT PRIMARY KEY,
+        messages TEXT NOT NULL,
+        token_count INTEGER NOT NULL DEFAULT 0,
+        last_active REAL NOT NULL,
+        created_at REAL NOT NULL,
+        auto_approve INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS %sidx_sessions_active ON sessions(last_active)",
 )
 
 
 def ensure_ledger_tables(conn: sqlite3.Connection, prefix: str = "") -> None:
-    """Create the four authoritative-state tables + indexes (idempotent).
+    """Create the authoritative-state tables + indexes (idempotent).
 
     ``prefix``: the schema qualifier for the CREATE statements — "" = the
     connection's main database (the ``init_ledger_db`` path), "ledger." =
@@ -639,6 +661,11 @@ def ensure_ledger_tables(conn: sqlite3.Connection, prefix: str = "") -> None:
         # the _LEDGER_DDL header for why the index table and REFERENCES
         # stay unqualified
         conn.execute(stmt % prefix)
+    # sessions auto_approve backfill (spec 2026-11-20 §2.1-1): runs on the
+    # ledger table, both schema faces ("" / "ledger.") — old ledger files
+    # predate the entry and the promoted zombie can carry the pre-ALTER
+    # shape; no-op once the column exists.
+    _ensure_session_cols(conn, prefix)
 
 
 def _set_wal(conn: sqlite3.Connection) -> None:
@@ -670,8 +697,9 @@ def _set_wal(conn: sqlite3.Connection) -> None:
 def init_ledger_db(db_path: Path) -> sqlite3.Connection:
     """Create (or open) the authoritative-state ledger database.
 
-    The four tables that have no rebuild source (``proposals`` /
-    ``proposal_transitions`` / ``snapshots`` / ``relatedness``) live here, in
+    The tables that have no rebuild source (``proposals`` /
+    ``proposal_transitions`` / ``snapshots`` / ``relatedness`` — plus
+    ``egress_log`` and, since 2026-11-20, ``sessions``) live here, in
     a separate file (``.sync/ledger.db``) from the rebuildable index cache
     (``.sync/index.db``, :func:`init_db`). Same connection conventions as
     :func:`init_db`: WAL mode, per-thread reuse (``check_same_thread=False``),

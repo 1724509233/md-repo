@@ -223,14 +223,15 @@ def test_agent_chat_not_configured(client):
     assert resp.status_code == 503
 
 
-def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
+def test_agent_chat_sse_stream(vault_dir, db_conn, ledger_conn, ai_config):
     """T3 两拍迁移：POST 投递 202 + GET /api/agent/stream 订阅（snapshot=1
     收到终帧）——token/done 帧断言原样保留（帧格式兼容证明）。"""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from server.api import create_app
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
 
     # Mock the openai client to return a simple text response
@@ -271,7 +272,7 @@ def test_agent_chat_sse_stream(vault_dir, db_conn, ai_config):
     assert '"type": "done"' in body
 
 
-def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ai_config,
+def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ledger_conn, ai_config,
                                         monkeypatch):
     """F15b wiring: agent_chat runs the agent-cache TTL eviction next to
     session_mgr.cleanup() and stamps the session's last_active. The cache /
@@ -294,7 +295,8 @@ def test_agent_chat_evicts_stale_agents(vault_dir, db_conn, ai_config,
 
     monkeypatch.setattr(agent_routes, "_evict_stale_agents", spy)
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
 
     mock_chunk = MagicMock()
     mock_delta = MagicMock()
@@ -368,13 +370,14 @@ def test_graph_related_endpoint(client, vault_dir, db_conn):
     assert any(item["path"] == "b.md" for item in data)
 
 
-def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
+def test_agent_confirm_endpoint(vault_dir, db_conn, ledger_conn, ai_config):
     """Agent confirm endpoint: non-pending id returns 404, unknown session returns 404."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from server.api import create_app
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
 
     # Create a session first (confirm requires an existing session).
@@ -424,13 +427,14 @@ def test_agent_confirm_endpoint(vault_dir, db_conn, ai_config):
         assert resp.status_code == 404
 
 
-def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ai_config):
+def test_agent_confirm_unknown_id_returns_404(vault_dir, db_conn, ledger_conn, ai_config):
     """Confirming a tool_call id that is not pending returns 404."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from server.api import create_app
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
     from fastapi.testclient import TestClient
 
     # Create a session (no pending confirms)
@@ -493,7 +497,7 @@ def test_agent_settings_post_get_roundtrip(client):
     assert client.get("/api/agent/settings", params={"session_id": "s1"}).json() == {"auto_approve": False}
 
 
-def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ai_config):
+def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ledger_conn, ai_config):
     """POST 设值后，缓存未命中时新 Agent 从 DB 回灌 auto_approve：
     写工具直接执行（无 confirm_request）+ 文件落盘，证明开关在重建后生效。"""
     from unittest.mock import AsyncMock, MagicMock, patch
@@ -501,7 +505,8 @@ def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ai_config):
     from server.api import create_app
     from fastapi.testclient import TestClient
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+                 ledger_conn=ledger_conn, ai_config=ai_config)
     tc_client = TestClient(app)
 
     # POST 设值（DB 行存在；此时尚无缓存 Agent → 下次 chat 触发 _get_agent 重建回灌）
@@ -546,7 +551,7 @@ def test_agent_settings_backfill_on_rebuild(vault_dir, db_conn, ai_config):
     assert (vault_dir / "s.md").is_file()
 
 
-def test_new_session_clean(client, db_conn):
+def test_new_session_clean(client, ledger_conn):
     """New session is always clean — no old messages injected."""
     from server.vault.db.sessions import save_session, load_session
 
@@ -555,32 +560,32 @@ def test_new_session_clean(client, db_conn):
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi there"},
     ]
-    save_session(db_conn, "old-sess", old_msgs, token_count=100)
+    save_session(ledger_conn, "old-sess", old_msgs, token_count=100)
     r = client.post("/api/agent/new-session", json={"old_session_id": "old-sess"})
     assert r.status_code == 200
     new_id = r.json()["session_id"]
     assert new_id != "old-sess"
-    loaded = load_session(db_conn, new_id)
+    loaded = load_session(ledger_conn, new_id)
     assert loaded is not None
     # System prompt + time reminder are seeded by the Agent on first chat,
     # not at session creation.
     assert loaded["messages"] == []
 
 
-def test_new_session_no_old(client, db_conn):
+def test_new_session_no_old(client, ledger_conn):
     from server.vault.db.sessions import load_session
 
     r = client.post("/api/agent/new-session", json={"old_session_id": ""})
     assert r.status_code == 200
     new_id = r.json()["session_id"]
-    loaded = load_session(db_conn, new_id)
+    loaded = load_session(ledger_conn, new_id)
     assert loaded is not None
     # System prompt + time reminder are seeded by the Agent on first chat,
     # not at session creation.
     assert loaded["messages"] == []
 
 
-def test_new_session_no_injection_even_with_history(client, db_conn):
+def test_new_session_no_injection_even_with_history(client, ledger_conn):
     """Even with extensive old history, new session has zero non-system messages."""
     from server.vault.db.sessions import save_session, load_session
 
@@ -588,10 +593,10 @@ def test_new_session_no_injection_even_with_history(client, db_conn):
     for i in range(10):
         old_msgs.append({"role": "user", "content": f"msg{i}"})
         old_msgs.append({"role": "assistant", "content": f"reply{i}"})
-    save_session(db_conn, "big-sess", old_msgs)
+    save_session(ledger_conn, "big-sess", old_msgs)
     r = client.post("/api/agent/new-session", json={"old_session_id": "big-sess"})
     new_id = r.json()["session_id"]
-    loaded = load_session(db_conn, new_id)
+    loaded = load_session(ledger_conn, new_id)
     assert loaded is not None
     non_system = [m for m in loaded["messages"] if m["role"] != "system"]
     assert len(non_system) == 0

@@ -201,6 +201,9 @@ def test_recovery_drill_preserves_ledger_rowwise(vault_dir: Path) -> None:
     expected = {
         "proposals": 2, "proposal_transitions": 2, "snapshots": 1,
         "relatedness": 1,
+        # 2026-11-20 sessions 升格：核查族含 sessions（spec
+        # 2026-11-20-sessions-ledger-promotion §4）；本 vault 未播种会话 → 0。
+        "sessions": 0,
     }
 
     report = run_recovery_drill(vault_dir)

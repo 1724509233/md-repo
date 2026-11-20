@@ -89,11 +89,15 @@ def _wipe_db(vault_dir: Path) -> None:
             p.unlink()
 
 
-LEDGER_TABLES = ("proposals", "proposal_transitions", "snapshots", "relatedness")
+LEDGER_TABLES = ("proposals", "proposal_transitions", "snapshots",
+                 "relatedness", "sessions")
+# sessions joined 2026-11-20 (spec 2026-11-20-sessions-ledger-promotion):
+# chat history is authoritative state — the drill's row-wise preservation
+# check must cover it (通道二 lands → +chat_abort_log, same family rule).
 
 
 def _ledger_row_counts(vault_dir: Path) -> dict[str, int] | None:
-    """Per-table row counts of the four authoritative-state tables in
+    """Per-table row counts of the authoritative-state tables in
     ledger.db, or None when the file does not exist."""
     path = vault_dir / ".sync" / "ledger.db"
     if not path.is_file():
@@ -277,7 +281,8 @@ def run_recovery_drill(vault_dir: Path) -> dict:
         if ledger_preserved:
             notes.append(
                 "ledger.db = authoritative state: the drill never touches "
-                "it (zero rebuild) — all four tables preserved row-wise"
+                "it (zero rebuild) — every ledger table (incl. sessions) "
+                "preserved row-wise"
             )
         else:
             notes.append(
@@ -305,16 +310,20 @@ def run_recovery_drill(vault_dir: Path) -> dict:
         "trigger_state/recall_log empty is expected: re-seeded lazily on the "
         "next arming tick / search (acceptable telemetry-cache loss)"
     )
-    # v2b② (spec 2026-11-13 §6/§7.6): the rebuild criterion for the two
-    # tables this lane touches — sessions (index.db: chat history is NOT
-    # re-seeded on cold recovery, acceptable cache loss) and relatedness
-    # (ledger.db: the drill never touches it — row-wise preservation is
-    # verified in the ledger section above; authoritative, not rebuildable).
+    # v2b② (spec 2026-11-13 §6/§7.6), sessions row 口径改假为真 (spec
+    # 2026-11-20-sessions-ledger-promotion §4): the rebuild criterion for
+    # the two tables this lane touches — sessions NOW lives in ledger.db
+    # (chat history is authoritative, must survive the drill row-wise; the
+    # count is reported right here and the before/after equality is checked
+    # in the ledger section above) and relatedness (ledger.db likewise,
+    # never touched — authoritative, not rebuildable).
+    sessions_after = (ledger_rows_after or {}).get("sessions")
     notes.append(
-        "sessions empty is expected: chat history is not re-seeded on cold "
-        "recovery (acceptable cache loss); relatedness lives in ledger.db "
-        "and is never touched by the drill — row-wise preservation is "
-        "checked in the ledger section (authoritative state, not rebuildable)"
+        "sessions lives in ledger.db (authoritative since the 2026-11-20 "
+        f"promotion): {sessions_after} row(s) after the drill — chat history "
+        "MUST survive (row-wise preservation checked in the ledger section); "
+        "relatedness likewise lives in ledger.db and is never touched by the "
+        "drill (authoritative state, not rebuildable)"
     )
 
     return {

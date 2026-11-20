@@ -1,6 +1,7 @@
-"""First-boot migration of the four authoritative-state tables from
+"""First-boot migration of the authoritative-state tables from
 ``.sync/index.db`` into ``.sync/ledger.db`` (2026-10-31 ledger-file split,
-L4).
+L4; sessions promotion joined 2026-11-20, spec
+``2026-11-20-sessions-ledger-promotion``).
 
 The pre-split index DB still carries ``proposals`` / ``proposal_transitions``
 / ``snapshots`` / ``relatedness``. On the first boot after the split,
@@ -8,6 +9,13 @@ The pre-split index DB still carries ``proposals`` / ``proposal_transitions``
 both ``init_db`` and ``init_ledger_db``: the rows move to the new file and
 the source tables are dropped from index.db — the source of truth for the
 four tables is ledger.db from that moment on.
+
+The 2026-11-20 promotion adds :func:`promote_sessions` (same standing:
+startup path, after both conns exist, before serving; both entry points
+call it), moving the ``sessions`` table the same way — except the source is
+RENAMED (``sessions_pre_ledger_migration``), never dropped: the rollback
+window = rename back (spec §2.1-4; closed by the first recovery drill,
+which wipes index.db — spec §6).
 
 Per-table branches:
 
@@ -37,7 +45,7 @@ import logging
 import sqlite3
 from pathlib import Path
 
-from .schema import ensure_ledger_tables
+from .schema import _ensure_session_cols, ensure_ledger_tables
 
 logger = logging.getLogger("md-vault.migrate")
 
@@ -114,6 +122,105 @@ def migrate_ledger(index_conn: sqlite3.Connection, ledger_path: Path) -> dict[st
             logger.warning(
                 "ledger migration: %s found in index.db — moved to "
                 "ledger.db (first boot after the 2026-10-31 split)", table,
+            )
+        index_conn.execute("COMMIT")
+    except BaseException:
+        index_conn.execute("ROLLBACK")
+        raise
+    finally:
+        index_conn.execute("DETACH DATABASE ledger")
+    return report
+
+
+# Explicit column list (spec §2.1-2, review M2): the pre-promotion index
+# table is 5-column CREATE + auto_approve appended by ALTER — ``SELECT *``
+# would positionally couple to whatever shape the zombie happens to have.
+_SESSION_COLS = ("id", "messages", "token_count", "last_active",
+                 "created_at", "auto_approve")
+
+
+def promote_sessions(index_conn: sqlite3.Connection,
+                     ledger_path: Path) -> str:
+    """Move the ``sessions`` table out of ``index_conn``'s database into
+    the ledger file (spec 2026-11-20-sessions-ledger-promotion).
+
+    Idempotent: after a completed promotion the source name is gone →
+    ``"skipped"``. Returns the branch taken:
+
+    - ``"migrated"`` — rows copied (explicit column list), count verified
+      (mismatch raises → the single transaction rolls back → the boot fails
+      visibly, spec §2.2), then the source is RENAMED to
+      ``sessions_pre_ledger_migration`` (hidden, never dropped — rollback =
+      rename back; the first recovery drill closes that window, spec §6).
+      An EMPTY zombie (the upgrade boot where ``init_db`` of the old code
+      had just created it) takes this branch too: rename to yield the name
+      (spec §2.0).
+    - ``"kept-both"`` — the ledger target is non-empty while the source
+      still exists (half-state residue / re-upgrade after rollback: same
+      ids may hold diverged content). Following the migrate_ledger precedent
+      we NEVER silently resolve (no ``INSERT OR IGNORE``): warn with both
+      row counts, skip the migration, boot continues — humans decide which
+      copy wins (clearing the target re-triggers the move on next boot).
+    - ``"skipped"`` — source table absent (already promoted / fresh DB).
+
+    Same transaction discipline as :func:`migrate_ledger`: ONE explicit
+    ``BEGIN IMMEDIATE`` on the index connection, ledger DDL ensured INSIDE
+    it on the ATTACHed database, so a concurrent MCP-process promote parks
+    on the write lock instead of racing.
+    """
+    ledger_path = Path(ledger_path)
+    _attach_ledger(index_conn, ledger_path)
+    try:
+        index_conn.execute("BEGIN IMMEDIATE")
+        # ledger side: DDL + auto_approve backfill on BOTH faces (see
+        # ensure_ledger_tables / _ensure_session_cols — spec §2.1-1).
+        ensure_ledger_tables(index_conn, "ledger.")
+        if not _table_exists(index_conn, "main", "sessions"):
+            index_conn.execute("COMMIT")
+            return "skipped"
+        # ancient zombies can predate the auto_approve ALTER; backfill the
+        # source too so the explicit-column copy never sees a missing column.
+        _ensure_session_cols(index_conn, "main.")
+        src_rows = index_conn.execute(
+            "SELECT count(*) FROM main.sessions").fetchone()[0]
+        dst_rows = index_conn.execute(
+            "SELECT count(*) FROM ledger.sessions").fetchone()[0]
+        if dst_rows:
+            logger.warning(
+                "sessions promotion: sessions exists in BOTH index.db "
+                "(%d rows) and ledger.db (%d rows) — kept-both: migration "
+                "SKIPPED, boot continues; the ledger side is authoritative, "
+                "the index.db copy at %s is human-adjudication residue "
+                "(diverged same-id content must never be silently merged — "
+                "clear the ledger side to re-trigger the move)",
+                src_rows, dst_rows, index_conn.execute(
+                    "PRAGMA database_list").fetchone()[2] or "?",
+            )
+            report = "kept-both"
+        else:
+            cols = ", ".join(_SESSION_COLS)
+            index_conn.execute(
+                f"INSERT INTO ledger.sessions ({cols}) "
+                f"SELECT {cols} FROM main.sessions"
+            )
+            moved = index_conn.execute(
+                "SELECT count(*) FROM ledger.sessions").fetchone()[0]
+            if moved != src_rows:
+                # cannot happen under one transaction; belt for the
+                # "拒绝带疑迁移" rule (spec §2.2) — raise → ROLLBACK below.
+                raise RuntimeError(
+                    "sessions promotion: row count mismatch after copy "
+                    f"(source {src_rows}, target {moved}) — refusing to "
+                    "promote a doubtful migration"
+                )
+            index_conn.execute(
+                "ALTER TABLE main.sessions RENAME TO sessions_pre_ledger_migration"
+            )
+            report = "migrated"
+            logger.warning(
+                "sessions promotion: %d session row(s) moved index.db → "
+                "ledger.db; source renamed sessions_pre_ledger_migration "
+                "(first boot after the 2026-11-20 promotion)", src_rows,
             )
         index_conn.execute("COMMIT")
     except BaseException:
