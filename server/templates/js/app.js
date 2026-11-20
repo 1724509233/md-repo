@@ -29,6 +29,7 @@ const state = reactive({
   previewMode: true,
   dirty: false,
   sessionId: 'web-' + Date.now(),
+  restorePayload: null,   // {sid, data}：切换/启动恢复的「先取数后原子换」载荷（spec 2026-11-19 §2.3/§2.5）
   files: [],
   dirs: [],
   aiOpen: false,
@@ -457,12 +458,41 @@ function applyInitialHash() {
   openDoc(h.path)
 }
 
-// ─── AI 新会话 ───
+// ─── AI 会话持久化与恢复（spec 2026-11-19 §2.5）───
+// 写点恰 2（无第三写点）：startNewSession 成功处 + onSwitchSession 成功处，与 state.sessionId
+// 赋值同点。localStorage 不可用（隐私模式）→ 静默仅本会话生效（mdvault.searchWeights 先例同形）。
+function persistSessionId(sid) {
+  try { localStorage.setItem('mdvault.aiSession', sid) } catch (e) { /* 隐私模式存储不可用 */ }
+}
+
 async function startNewSession() {
   try {
     const data = await api.newSession(state.sessionId)
     state.sessionId = data.session_id
+    persistSessionId(data.session_id)   // 写点 1：存储自然覆盖旧会话 id（boot 失败残留同口径自愈）
+    state.restorePayload = null         // 新会话不留旧载荷（防旧 payload 被后续同 sid 复用误恢复）
   } catch (e) { }
+}
+
+// 启动恢复：存储有 sid → getSession → 复用 §2.3 全保真管线（与手动切换同路）。
+// 全程 try/catch 静默（404=他端已删/网络/存储炸 → 保当前新会话；静默是新用户路径）；
+// 非阻塞：onMounted 裸调用不 await，期间空面板，消息到达回填。
+async function bootRestoreSession() {
+  try {
+    const sid = localStorage.getItem('mdvault.aiSession')
+    if (!sid) return
+    const data = await api.getSession(sid)
+    state.restorePayload = { sid, data }   // 读序命门：payload 先于 sessionId（panel watch 消费时必在场）
+    state.sessionId = sid
+  } catch (e) { /* 静默保当前新会话 */ }
+}
+
+// 历史切换落地（AIChatPanel emit('switchSession', {sid, data})，先取数已在组件完成）：
+// 顺序 payload→sessionId→persist——与 bootRestoreSession 同一条原子换管线（单一恢复路径）。
+function onSwitchSession({ sid, data }) {
+  state.restorePayload = { sid, data }
+  state.sessionId = sid
+  persistSessionId(sid)   // 写点 2
 }
 
 // ─── AI 面板切换（桌面/移动适配）───
@@ -731,6 +761,7 @@ export function createApp() {
 
       onMounted(() => {
         loadDocs().then(applyInitialHash)
+        bootRestoreSession()   // 会话启动恢复（spec §2.5）：非阻塞渲染，内部 catch 静默
         loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
         // 通知 + 记忆共用一个 30s 定时器：同周期串行触发两次取数（合并前为两个独立 30s 定时器）
@@ -757,10 +788,11 @@ export function createApp() {
           else if (state.relSheetOpen) state.relSheetOpen = false
           else if (state.relOpen) state.relOpen = false
           else if (state.tocOpen) toggleToc()
-          else if (state.aiOpen) toggleAI(false)
+          // 记忆台先于 AI 面板（2026-11-19 用户定案）：记忆控制台开着时 Esc 先关台
           // 关台同 @close 集合（目检轮 B）：只清 open 会让详情面/报告（含 rsn-ta）
           // 保持挂载——面板关了残面犹在，下次开台直落旧详情
           else if (state.memoryOpen) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null }
+          else if (state.aiOpen) toggleAI(false)
           else if (state.monitoring) exitMonitorPage()
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
@@ -906,7 +938,7 @@ export function createApp() {
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
-        handleToolResult, startNewSession, toggleAI, renderMarkdown,
+        handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
         onEditorInput, acceptConflict, skipToMain,
         tocItems, toggleToc, onTocClickItem
@@ -1119,7 +1151,9 @@ export function createApp() {
             :class="{ open: state.aiOpen }">
             <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
+              :restore-payload="state.restorePayload"
               @tool-result="handleToolResult" @new-session="startNewSession"
+              @switchSession="onSwitchSession"
               @close="toggleAI(false)" />
           </div>
         </div>
