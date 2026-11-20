@@ -29,7 +29,6 @@ const state = reactive({
   previewMode: true,
   dirty: false,
   sessionId: 'web-' + Date.now(),
-  restorePayload: null,   // {sid, data}：切换/启动恢复的「先取数后原子换」载荷（spec 2026-11-19 §2.3/§2.5）
   files: [],
   dirs: [],
   aiOpen: false,
@@ -458,8 +457,8 @@ function applyInitialHash() {
   openDoc(h.path)
 }
 
-// ─── AI 会话持久化与恢复（spec 2026-11-19 §2.5）───
-// 写点恰 2（无第三写点）：startNewSession 成功处 + onSwitchSession 成功处，与 state.sessionId
+// ─── AI 会话持久化与恢复（spec 2026-11-19 §2.5；2026-11-20 §5 恢复归订阅改造）───
+// 写点恰 2（无第三写点）：startNewSession 成功处 + onSwitchSession，与 state.sessionId
 // 赋值同点。localStorage 不可用（隐私模式）→ 静默仅本会话生效（mdvault.searchWeights 先例同形）。
 function persistSessionId(sid) {
   try { localStorage.setItem('mdvault.aiSession', sid) } catch (e) { /* 隐私模式存储不可用 */ }
@@ -470,27 +469,24 @@ async function startNewSession() {
     const data = await api.newSession(state.sessionId)
     state.sessionId = data.session_id
     persistSessionId(data.session_id)   // 写点 1：存储自然覆盖旧会话 id（boot 失败残留同口径自愈）
-    state.restorePayload = null         // 新会话不留旧载荷（防旧 payload 被后续同 sid 复用误恢复）
   } catch (e) { }
 }
 
-// 启动恢复：存储有 sid → getSession → 复用 §2.3 全保真管线（与手动切换同路）。
-// 全程 try/catch 静默（404=他端已删/网络/存储炸 → 保当前新会话；静默是新用户路径）；
-// 非阻塞：onMounted 裸调用不 await，期间空面板，消息到达回填。
+// 启动恢复（去 fetch 化，spec 2026-11-20 §5）：存储有 sid → 仅换 sessionId，
+// 消息恢复归面板挂载/切换时的 stream 快照订阅（openSub(snapshot=1)，单一恢复路径）。
+// 全程 try/catch 静默（存储炸 → 保当前新会话；静默是新用户路径）；
+// 非阻塞：onMounted 裸调用不 await，期间空面板，订阅快照到达回填。
 async function bootRestoreSession() {
   try {
     const sid = localStorage.getItem('mdvault.aiSession')
     if (!sid) return
-    const data = await api.getSession(sid)
-    state.restorePayload = { sid, data }   // 读序命门：payload 先于 sessionId（panel watch 消费时必在场）
     state.sessionId = sid
   } catch (e) { /* 静默保当前新会话 */ }
 }
 
-// 历史切换落地（AIChatPanel emit('switchSession', {sid, data})，先取数已在组件完成）：
-// 顺序 payload→sessionId→persist——与 bootRestoreSession 同一条原子换管线（单一恢复路径）。
-function onSwitchSession({ sid, data }) {
-  state.restorePayload = { sid, data }
+// 历史切换落地（AIChatPanel emit('switchSession', row.id) 裸 sid，T5 载荷拆除）：
+// 组件不再取数——赋值后面板 watch(sessionId) 自开快照订阅；persist 殿后。
+function onSwitchSession(sid) {
   state.sessionId = sid
   persistSessionId(sid)   // 写点 2
 }
@@ -1151,7 +1147,6 @@ export function createApp() {
             :class="{ open: state.aiOpen }">
             <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
-              :restore-payload="state.restorePayload"
               @tool-result="handleToolResult" @new-session="startNewSession"
               @switchSession="onSwitchSession"
               @close="toggleAI(false)" />

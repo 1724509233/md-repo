@@ -515,8 +515,11 @@ def test_ui_feedback_row_gated_on_message_id():
     consumption is unaffected."""
     js = _read_js("components/AIChatPanel.js")
     # done handler: message_id/citations stored only when present
-    assert "if (evt.message_id)" in js
-    assert "currentTurn.messageId = evt.message_id" in js
+    # （运行脱离连接 T5：done 分支整体上移至 chatEvents 分发器——透传语义逐一对齐旧 switch，
+    #   行为由 test_chat_events_dispatcher 用例 8 钉死；本处静态钉同口径换源）
+    ev = _read_js("utils/chatEvents.js")
+    assert "if (evt.message_id)" in ev
+    assert "ctx.currentTurn.messageId = evt.message_id" in ev
     # template gate: the row requires a non-streaming turn WITH a message_id
     assert re.search(r'v-if="!msg\.streaming && msg\.messageId"\s+class="feedback-row"', js)
     # summary line renders only when citations is non-empty (non-QA round:

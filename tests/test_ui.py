@@ -78,7 +78,10 @@ def test_api_js_exports_all_endpoints():
                    "getDocRelated", "ignoreRelatedness",
                    "getRollbackCalls", "rollbackCall",
                    # 会话管理 T2/T4（spec 2026-11-19 §2.4）：三方法 + 端点路径字面量
-                   "listSessions", "getSession", "deleteSession", "/api/agent/sessions"]:
+                   "listSessions", "getSession", "deleteSession", "/api/agent/sessions",
+                   # 投递/订阅解耦（plan 2026-11-20-agent-run-detach-stream T5）：三方法 + 端点路径字面量
+                   "agentStream", "agentStop", "agentQueueRemove",
+                   "/api/agent/stream", "/api/agent/stop", "/api/agent/queue/remove"]:
         assert method in js, f"api.{method} missing"
 
 
