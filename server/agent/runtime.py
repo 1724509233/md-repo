@@ -138,6 +138,19 @@ def _ensure_tool_results(agent) -> None:
             i += 1
 
 
+def _append_partial(agent, content: str) -> None:
+    """通道一（spec 2026-11-20 partial-output-retention §2）：一次流式调用以非
+    正常完成退出（cancel / APIError / 崩溃）时，已累积 content 入历史——
+    content-only 的 interrupted 行（逐字三键，无 tool_calls/id/ts/citations：
+    不变式「历史永不持半交付 tool call」+ 中断轮不配反馈键/引用快照）。
+    纯空白不 append。``interrupted`` 被 LLM_FIELDS 白名单挡在模型请求外：模型
+    看到自己说过的半句，中断语境由用户下一条消息自然提供（特性非缺漏）。
+    """
+    if content and content.strip():
+        agent.messages.append({"role": "assistant", "content": content,
+                               "interrupted": True})
+
+
 class LoopRuntime(Runtime):
     """Streaming LLM loop: rounds of model calls + tool dispatch."""
 
@@ -261,20 +274,37 @@ class LoopRuntime(Runtime):
                                     acc["name"] = tc.function.name
                                 if tc.function and tc.function.arguments:
                                     acc["arguments"] += tc.function.arguments
+                except asyncio.CancelledError:
+                    # stop（通道一 spec §2 落点 1）：半截正文先落库，CancelledError
+                    # 原样上抛（取消语义不变）。顺序钉：生成器帧内 except 先跑完
+                    # append 才轮到 _drive 的 except 分支抵达 _save_and_boundary。
+                    _append_partial(agent, content)
+                    raise
                 except APIError as e:
                     # Unrecoverable mid-stream failure (e.g. the proxy's
                     # "unrecoverable tool call" abort — the endpoint re-delivers a
                     # tool call that was already streamed in the interrupted first
-                    # attempt and refuses to continue). The partial round
-                    # accumulation is discarded: the assistant message is appended
-                    # only after a full stream, so the history never holds a
-                    # half-delivered tool call. Clean terminal — no retry (a retry
-                    # would re-request an output whose tool calls were already
-                    # delivered + executed); the consumer records status=error.
+                    # attempt and refuses to continue). The half-delivered
+                    # tool_calls accumulation stays discarded — the assistant
+                    # message carrying tool_calls is appended only after a full
+                    # stream, so the history never holds a half-delivered tool
+                    # call (b621b5b4 invariant, 完整保留). The streamed CONTENT,
+                    # though, is persisted as a content-only interrupted row
+                    # (通道一 spec §2 落点 2, append 先于 error 事件). Clean
+                    # terminal — no retry (a retry would re-request an output
+                    # whose tool calls were already delivered + executed); the
+                    # consumer records status=error.
                     logger.exception("model stream failed at round %d: %s", _round + 1, e)
+                    _append_partial(agent, content)
                     yield Event("error", {"error": f"{type(e).__name__}: {e}"})
                     yield Event("done", {"reason": "error"})
                     return
+                except Exception:
+                    # 崩溃（通道一 spec §2 落点 3）：半截正文 append 后原样 re-raise
+                    # ——runhub 的 crash 分支接住并 _save_and_boundary 落库。
+                    # CancelledError 是 BaseException 不在此列（上分支已收口）。
+                    _append_partial(agent, content)
+                    raise
 
 
                 # Emit token usage from the API response (prompt_tokens = current context size)

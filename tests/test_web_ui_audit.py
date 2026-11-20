@@ -1058,3 +1058,60 @@ def test_restore_scrolls_bottom_with_hidden_container_fallback():
         "初挂观察器（v-if 换节点场景由 watch(messagesEl) 续挂，初挂归 onMounted）"
     wu = _fn_body(ai, "onUnmounted(() => {")
     assert "bottomScrollObs" in wu, "观察器须随卸载 disconnect（防泄漏）"
+
+
+def test_chat_restore_interrupted_row():
+    # 通道一 spec 2026-11-20 §3（§5-8）：interrupted assistant 行 → 文本块照旧 +
+    # turn 描述符 interrupted:true 透传；完成轮（旧行无此键）零污染；无 tool/思考块混入
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const o=m.mapHistory([
+    {role:'user',content:'q'},
+    {role:'assistant',content:'半截正文',interrupted:true}
+  ]);
+  if(o.length!==2)process.exit(2);
+  const a=o[1];
+  if(a.role!=='assistant')process.exit(3);
+  // 文本块产出规则不变：content → text 块（恢复态照旧 markdown 渲染）
+  if(a.blocks.length!==1||a.blocks[0].type!=='text'||a.blocks[0].text!=='半截正文')process.exit(4);
+  if(a.interrupted!==true)process.exit(5);
+  // 反馈/引用键天然缺席（无 id/citations 持久化 → 无 messageId/citations）
+  if('messageId' in a||'citations' in a)process.exit(6);
+  // 完成轮不产 interrupted 键（旧行 = 完成轮，零迁移）
+  const o2=m.mapHistory([{role:'assistant',content:'done',id:'x1',ts:1,citations:[]}]);
+  if('interrupted' in o2[0])process.exit(7);
+  // 混入既有链：块按流序交错、链尾标记透传、无 tool 块混入
+  const o3=m.mapHistory([
+    {role:'assistant',content:'a1',tool_calls:[{id:'t1',type:'function',function:{name:'read_doc',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t1',content:'ok'},
+    {role:'assistant',content:'半截',interrupted:true}
+  ]);
+  if(o3.length!==1)process.exit(8);
+  const c=o3[0];
+  if(c.blocks.length!==3)process.exit(9);
+  // 链内块按流序：同一 assistant 行 content 块在前、tool 块在后（既有规则零改动）
+  if(c.blocks[0].type!=='text'||c.blocks[0].text!=='a1'||c.blocks[1].type!=='tool'||c.blocks[2].type!=='text'||c.blocks[2].text!=='半截')process.exit(10);
+  if(c.interrupted!==true)process.exit(11);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/chatRestore.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"chatRestore interrupted case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_interrupted_tail_note_pin():
+    # 通道一 spec §3（§5-9）：msg.interrupted → 气泡尾次要灰字「（已中断）」；
+    # restoreMessages 把描述符 interrupted 透传进渲染源；反馈行/sendConfirm 守卫组零回归
+    ai = _templates()["AIChatPanel.js"]
+    m = re.search(r'<div v-if="msg\.interrupted"[^>]*>（已中断）</div>', ai)
+    assert m, "interrupted 气泡尾注缺失"
+    assert "--ink-soft" in m.group(0), "尾注须次要灰字（AGENTS 文案规范：状态信息）"
+    assert "interrupted: d.interrupted" in ai, \
+        "restoreMessages 必须透传描述符 interrupted（渲染源唯一字段通道）"
+    # 回归守卫组：半截行无 messageId → 反馈行天然缺席；sendConfirm 簇零改动
+    assert 'v-if="!msg.streaming && msg.messageId"' in ai
+    assert "function sendConfirm(id, approved)" in ai

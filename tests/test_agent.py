@@ -1744,3 +1744,194 @@ def test_confirm_and_timeout_single_verdict(tmp_path: Path):
     assert '"rejected": true' not in results[0]
     assert (vault / "x.md").is_file()  # 批准的裁决权不被超时夺走
     assert agent.pending_confirms == {}
+
+
+# ── 通道一：中断半截文本持久化（spec 2026-11-20，runtime 流式收口区）──────────
+#
+# 行形态逐字：{"role": "assistant", "content": <累积原文>, "interrupted": True}
+# ——无 tool_calls/id/ts/citations 键；纯空白不 append；interrupted 被
+# LLM_FIELDS 白名单挡在出域 payload 外。
+
+
+def _openai_api_error():
+    """b621b5b4 家族同形的 openai.APIError（流中 endpoint abort）。"""
+    import httpx2
+    import openai
+
+    return openai.APIError("mid-stream boom",
+                           httpx2.Request("POST", "http://x/v1/chat/completions"),
+                           body=None)
+
+
+def _async_iter_exc(items, exc):
+    """流完 items 后抛 exc（流中 endpoint abort 的 mock 形态）。"""
+    async def gen():
+        for item in items:
+            yield item
+        raise exc
+    return gen()
+
+
+def _async_iter_blocked(items, blocker):
+    """流完 items 后挂在 blocker 上（cancel 落点：stream await 点）。"""
+    async def gen():
+        for item in items:
+            yield item
+        await blocker.wait()
+        yield _make_chunk(content="不可达")
+    return gen()
+
+
+def test_partial_text_persisted_on_cancel(tmp_path: Path):
+    """§2 落点 1 / §5-1：流中途 cancel（stop 路数）→ content 半截以 interrupted
+    行入 agent.messages，CancelledError 照常上抛（取消语义不变）。"""
+    agent, vault = _make_agent(tmp_path)
+    blocker: asyncio.Event = asyncio.Event()  # 永不释放
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter_blocked(
+        [_make_chunk(content="说到一半")], blocker)
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    seen: list = []
+
+    async def consume():
+        async for e in agent.chat("hi"):
+            seen.append(e)
+
+    async def main():
+        task = asyncio.ensure_future(consume())
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            if seen:
+                break
+        assert seen, "token 事件未达消费者（流未开）"
+        task.cancel()
+        try:
+            await task
+            return False  # CancelledError 未上抛 = 红
+        except asyncio.CancelledError:
+            return True
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        cancelled = asyncio.run(main())
+
+    assert cancelled, "CancelledError 必须原样上抛"
+    assert any(getattr(e, "type", None) == "token" for e in seen)
+    # 行形态逐字（dict 相等即钉死键集恰为三键）
+    assert agent.messages[-1] == {"role": "assistant", "content": "说到一半",
+                                  "interrupted": True}
+
+
+def test_partial_blank_not_persisted(tmp_path: Path):
+    """§2 规则前提 / §5-2：累积仅纯空白 → 零 append（三路径共用收口，抽 APIError
+    分支取样；error 事件 + 正常收流语义零回归）。"""
+    agent, vault = _make_agent(tmp_path)
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(content="  \n \t ")], _openai_api_error())
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    async def run():
+        return [(e.type, e.data) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    assert any(t == "error" for t, _ in events)          # 收流照旧
+    assert [d for t, d in events if t == "done"] == [{"reason": "error"}]
+    assert [m["role"] for m in agent.messages] == ["system", "user"]  # 零 append
+
+
+def test_partial_persisted_on_api_error_branch(tmp_path: Path):
+    """§2 落点 2 / §5-3：mid-stream APIError → append 发生，且既有 error 事件 +
+    干净收流 + 不重试零回归；b621b5b4 不变式：半截 tool_calls 碎片丢弃，
+    历史永不持半交付 tool call。"""
+    from server.agent.runtime import _ensure_tool_results
+
+    agent, vault = _make_agent(tmp_path)
+
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_half"
+    tc.function = MagicMock()
+    tc.function.name = "read_doc"
+    tc.function.arguments = '{"path": "a.md"}'
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(content="正文前半"), _make_chunk(tool_calls=[tc])],
+        _openai_api_error())
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    async def run():
+        return [(e.type, e.data) async for e in agent.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        events = asyncio.run(run())
+
+    types = [t for t, _ in events]
+    assert any(d.get("text") == "正文前半" for t, d in events if t == "token")
+    err = next(d for t, d in events if t == "error")
+    assert "APIError" in err["error"]
+    assert [d for t, d in events if t == "done"] == [{"reason": "error"}]  # 干净收流
+    assert mock_client.chat.completions.create.await_count == 1           # 不重试
+    assert "tool_call" not in types                                        # 未派发
+    # append 发生且行形态逐字（无 tool_calls/id/ts/citations）
+    assert agent.messages[-1] == {"role": "assistant", "content": "正文前半",
+                                  "interrupted": True}
+    # b621b5b4 不变式：无半交付 tool call，补全守卫无活可干
+    assert all(not m.get("tool_calls") for m in agent.messages
+               if m.get("role") == "assistant")
+    n = len(agent.messages)
+    _ensure_tool_results(agent)
+    assert len(agent.messages) == n
+
+
+def _partial_then_continue(tmp_path: Path) -> list:
+    """§5-4/5 共用体：首轮 mid-stream APIError（content 已累积）→ 次轮 user
+    「继续」正常 final。返回次轮出域 messages（create 捕获）。"""
+    agent, vault = _make_agent(tmp_path)
+
+    stream1 = AsyncMock()
+    stream1.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(content="说到一半")], _openai_api_error())
+    stream2 = AsyncMock()
+    stream2.__aiter__ = lambda s: _async_iter([_make_chunk(content="继续完成")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[stream1, stream2])
+
+    async def run():
+        async for _ in agent.chat("写点什么"):
+            pass
+        async for _ in agent.chat("继续"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        asyncio.run(run())
+
+    assert mock_client.chat.completions.create.await_count == 2
+    return mock_client.chat.completions.create.call_args_list[1].kwargs["messages"]
+
+
+def test_partial_not_in_llm_request(tmp_path: Path):
+    """§5-4：interrupted 行在场历史，但 interrupted 键被 LLM_FIELDS 白名单挡在
+    出域外（telemetry 排除同族钉；白名单代码零改动）。"""
+    sent = _partial_then_continue(tmp_path)
+    assert any(m.get("content") == "说到一半" for m in sent)  # 行在场
+    for m in sent:
+        assert "interrupted" not in m, "interrupted 不得出域"
+        assert set(m) <= {"role", "content", "tool_calls", "tool_call_id"}
+
+
+def test_partial_then_continue(tmp_path: Path):
+    """§5-5：续跑锚点在域内——次轮出域 payload 含半截 content（模型看得见自己
+    说到哪），且半截行紧随其后才是用户「继续」。"""
+    sent = _partial_then_continue(tmp_path)
+    idx = [i for i, m in enumerate(sent) if m.get("content") == "说到一半"]
+    assert idx, "半截行必须出现在次轮出域 payload"
+    assert sent[idx[0] + 1] == {"role": "user", "content": "继续"}

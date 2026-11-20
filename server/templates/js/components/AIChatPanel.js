@@ -606,6 +606,7 @@ export const AIChatPanel = {
         uiTick: 0,
         messageId: d.messageId,
         citations: d.citations,
+        interrupted: d.interrupted, // 通道一：chatRestore 描述符透传 → 模板尾注
       }))
       // 会话渲染后滚到底部（用户 2026-11-20）：恢复常发生在容器不可见时
       //（面板 v-show 隐藏 / F5 后面板未开 / history 视图 v-if 卸载），此刻
@@ -898,6 +899,9 @@ export const AIChatPanel = {
                 </div>
               </div>
             </template>
+            <!-- 中断尾注（通道一 spec 2026-11-20 §3）：半截 interrupted 行的气泡尾
+                 次要灰字；该行无 messageId/引用 → 反馈行/引用行天然缺席（下方守卫覆盖） -->
+            <div v-if="msg.interrupted" class="mt-1 text-[11px] text-[var(--ink-soft)]">（已中断）</div>
             <!-- 引用摘要 + 反馈行（spec 2026-11-13 §5.3）：done 后气泡底部出现。
                  仅 done 带 message_id 时渲染（reason=final；error/round_limit 与 legacy 无字段 → 不出现，验收 5/8）；
                  citations 空（非问答轮）→ 只出按钮不出摘要（§5.4）；

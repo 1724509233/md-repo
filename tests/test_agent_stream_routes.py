@@ -309,6 +309,96 @@ def test_stop_route(vault_dir, db_conn, ai_config, monkeypatch):
     assert captured["cache"]["s1"].pending_confirms == {}   # 僵尸面关闭
 
 
+# ── 通道一：中断半截持久化（spec 2026-11-20 §5-6/7，runhub 集成 + 顺序钉）──────
+
+def _snapshot_messages(hub, session_id):
+    """快照帧的 DB 会话行（snapshot=True 一体返回；终止 Run 回放至终帧自然收流）。"""
+    async def go():
+        frames = [f async for f in hub.subscribe(session_id, snapshot=True)]
+        return frames[0]["messages"]
+    return asyncio.run(go())
+
+
+def test_stop_persists_partial_row(vault_dir, db_conn, ai_config):
+    """§5-6 顺序钉：stop 半截正文以 interrupted 行进会话行。
+
+    stop 分支唯一落库路径是 _drive 的 _save_and_boundary——快照前缀含半截行
+    ⇔ 生成器帧内 except（append）先于落库执行、CancelledError 后上抛。
+    TestClient 读流期间无法发第二请求（transport 缓冲整响应），走
+    test_stream_live_tail_after_submit 先例：asyncio.run 直驱 runhub seam。"""
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    hub = app.state.runhub
+
+    async def main():
+        gate: asyncio.Event = asyncio.Event()   # 永不释放：stop 落在 stream await 点
+
+        async def fake_aiter():
+            yield _chunk("说到一半")
+            await gate.wait()
+            yield _chunk("不可达", "stop")
+
+        stream = MagicMock()
+        stream.__aiter__ = lambda s: fake_aiter()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=stream)
+        with patch("server.agent.runtime.AsyncOpenAI", return_value=client):
+            rid = hub.submit("s1", "hi", None)
+            agen = hub.subscribe("s1", run_id=rid, cursor=0)
+            tok = None
+            while tok is None:                       # 缓冲前缀直到首个 token
+                f = await agen.__anext__()
+                if f["type"] == "token":
+                    tok = f
+            assert tok["text"] == "说到一半"
+            assert hub.is_running("s1")              # 此刻 Run 仍活着（停在 stream 内）
+            assert hub.stop("s1") is True
+            tail = []
+            async for f in agen:                     # 收到 stopped 终帧即落库完成
+                tail.append(f)
+                if f["type"] == "run_status" and f["running"] is False:
+                    break
+        return tail
+
+    tail = asyncio.run(main())
+    assert tail[-1]["type"] == "run_status" and tail[-1]["state"] == "stopped"
+    assert not hub.is_running("s1")
+
+    msgs = _snapshot_messages(hub, "s1")
+    assert {"role": "assistant", "content": "说到一半", "interrupted": True} in msgs
+    # stop 只增半截行，不吞既有：出队落库的 user 行仍在场
+    assert any(m.get("role") == "user" and m.get("content") == "hi" for m in msgs)
+
+
+def test_crash_persists_partial_row(vault_dir, db_conn, ai_config):
+    """§5-7：崩溃路径（流中注入非 APIError 异常）→ runtime append 后 re-raise，
+    runhub crash 分支 _save_and_boundary 落库——快照前缀含半截行。"""
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    hub = app.state.runhub
+
+    async def main():
+        async def fake_aiter():
+            yield _chunk("崩前正文")
+            raise RuntimeError("injected crash")
+
+        stream = MagicMock()
+        stream.__aiter__ = lambda s: fake_aiter()
+        client = MagicMock()
+        client.chat.completions.create = AsyncMock(return_value=stream)
+        with patch("server.agent.runtime.AsyncOpenAI", return_value=client):
+            rid = hub.submit("s1", "hi", None)
+            frames = [f async for f in hub.subscribe("s1", run_id=rid, cursor=0)]
+        return frames
+
+    frames = asyncio.run(main())
+    assert frames[-1]["type"] == "run_status" and frames[-1]["state"] == "error"
+    assert any(f["type"] == "token" and f["text"] == "崩前正文" for f in frames)
+    assert any(f["type"] == "error" and "injected crash" in f.get("message", "")
+               for f in frames)
+
+    msgs = _snapshot_messages(hub, "s1")
+    assert {"role": "assistant", "content": "崩前正文", "interrupted": True} in msgs
+
+
 # ── POST /api/agent/queue/remove ─────────────────────────────────────────────
 
 def test_queue_remove_route(vault_dir, db_conn, ai_config):
