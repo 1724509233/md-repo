@@ -91,3 +91,14 @@ class SessionManager:
     def get(self, session_id: str) -> list[dict] | None:
         """Return the session's messages if in memory, else None."""
         return self._messages.get(session_id)
+
+    def remove(self, session_id: str) -> None:
+        """Drop ALL in-memory state for a session (spec 2026-11-19 §1.2).
+
+        Used by the DELETE route after its lock check (409 on held) and the
+        DB row deletion — no held-lock race here, and the route owns the
+        agent_cache pop. Missing sid is a silent no-op.
+        """
+        self._messages.pop(session_id, None)
+        self._last_active.pop(session_id, None)
+        self._locks.pop(session_id, None)

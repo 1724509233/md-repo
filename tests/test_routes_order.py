@@ -1,4 +1,4 @@
-"""Route-table order snapshot: the 40 routes' (methods, path) sequence,
+"""Route-table order snapshot: the 45 routes' (methods, path) sequence,
 the /static mount, and the no-duplicate invariant.
 
 Starlette matches the FIRST fully-matching route in registration order
@@ -18,7 +18,7 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
 # notifications → sync → recall → egress → memory → agent → trash).
-# 42 routes.
+# 45 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -59,7 +59,7 @@ EXPECTED = (
     (("GET",), "/api/memory/doc/{relpath:path}"),             # 31 (v2b② doc face, spec §6.4)
     (("POST",), "/api/memory/relatedness/{edge_id}/ignore"),  # 32 (v2b② D12/D15)
     (("GET",), "/api/memory/status"),                   # 33
-    # agent (7).
+    # agent (10).
     (("POST",), "/api/ai/chat"),                        # 34
     (("POST",), "/api/agent/chat"),                     # 35
     (("POST",), "/api/agent/confirm"),                  # 36
@@ -67,9 +67,12 @@ EXPECTED = (
     (("POST",), "/api/agent/settings"),                 # 38
     (("POST",), "/api/agent/new-session"),              # 39
     (("POST",), "/api/agent/feedback"),                 # 40 (lane B, same batch)
+    (("GET",), "/api/agent/sessions"),                  # 41 list (会话管理 T2)
+    (("GET",), "/api/agent/sessions/{sid}"),            # 42 detail
+    (("DELETE",), "/api/agent/sessions/{sid}"),         # 43 delete
     # trash (2).
-    (("GET",), "/api/trash"),                           # 41 list
-    (("POST",), "/api/trash"),                          # 42 restore/purge/empty
+    (("GET",), "/api/trash"),                           # 44 list
+    (("POST",), "/api/trash"),                          # 45 restore/purge/empty
 )
 
 

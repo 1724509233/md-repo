@@ -87,13 +87,70 @@ def set_auto_approve(conn: sqlite3.Connection | None, session_id: str, value) ->
     conn.commit()
 
 
-def get_recent_sessions(conn: sqlite3.Connection, limit: int = 10) -> list[dict]:
-    """Return recent sessions ordered by last_active DESC."""
+# 同源钉：server/agent/reminders.py:65 DocPathUserReminder._PREFIX。
+# 此处不 import agent 层（agent→vault 反向依赖，分层红线）；一致性由
+# tests/test_db.py::test_list_session_summaries 的字面量断言守住（spec §1.1）。
+_REMINDER_PREFIX = "[当前打开:"
+
+
+def _session_counts(msgs: list) -> tuple[int, int]:
+    """(可见消息数, 工具调用次数)——与恢复渲染 chatRestore.mapHistory 语义一一对照：
+    可见消息数 = 非提醒 user 行数 + 连续 assistant/tool 段数（段 = maximal 连续
+    assistant+tool 行块，遇非提醒 user 或结束封段；提醒行不封段也不计数）；
+    工具调用次数 = 所有 assistant 行 tool_calls 条目总数（孤儿与已回填都算，
+    与恢复后工具块数一致）。"""
+    users, segments, tool_count = 0, 0, 0
+    in_segment = False
+    for m in msgs:
+        role = m.get("role")
+        if role == "user":
+            if str(m.get("content", "")).startswith(_REMINDER_PREFIX):
+                continue
+            users += 1
+            in_segment = False
+        elif role in ("assistant", "tool"):
+            if not in_segment:
+                segments += 1
+                in_segment = True
+            if role == "assistant":
+                tool_count += len(m.get("tool_calls") or [])
+    return users + segments, tool_count
+
+
+def _session_title(msgs: list, tool_count: int) -> str:
+    """First non-reminder user message, truncated to 40 chars (+ ellipsis);
+    no such message → 工具会话 fallback with the tool-call count."""
+    for m in msgs:
+        if m.get("role") == "user":
+            content = str(m.get("content", ""))
+            if not content.startswith(_REMINDER_PREFIX):
+                return content if len(content) <= 40 else content[:40] + "…"
+    return f"工具会话 · {tool_count} 次工具"
+
+
+def list_session_summaries(conn: sqlite3.Connection, limit: int = 50) -> list[dict]:
+    """Session summaries ordered by last_active DESC:
+    {id, title, message_count, tool_count, last_active}. Empty-messages rows
+    (auto_approve pre-creation shape) are skipped. message_count/tool_count
+    口径见 _session_counts（恢复渲染语义对照，spec 2026-11-19 §1.1）."""
     rows = conn.execute(
-        "SELECT id, messages, token_count, last_active FROM sessions ORDER BY last_active DESC LIMIT ?",
+        "SELECT id, messages, last_active FROM sessions ORDER BY last_active DESC LIMIT ?",
         (limit,),
     ).fetchall()
-    return [
-        {"id": r[0], "messages": json.loads(r[1]), "token_count": r[2], "last_active": r[3]}
-        for r in rows
-    ]
+    out = []
+    for sid, raw, last_active in rows:
+        msgs = json.loads(raw)
+        if not msgs:
+            continue
+        message_count, tool_count = _session_counts(msgs)
+        out.append({"id": sid, "title": _session_title(msgs, tool_count),
+                    "message_count": message_count, "tool_count": tool_count,
+                    "last_active": last_active})
+    return out
+
+
+def delete_session(conn: sqlite3.Connection, session_id: str) -> bool:
+    """Delete a session row. True if a row was removed."""
+    cur = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    return cur.rowcount > 0

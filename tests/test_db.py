@@ -344,15 +344,51 @@ def test_load_session_not_found(db_conn):
     assert load_session(db_conn, "nonexistent") is None
 
 
-def test_get_recent_sessions(db_conn):
-    from server.vault.db.sessions import save_session, get_recent_sessions
+def test_list_session_summaries(db_conn):
+    from server.vault.db.sessions import save_session, list_session_summaries
+    from server.agent.reminders import DocPathUserReminder
+    # 空行（auto_approve 预建形态）不进列表
+    save_session(db_conn, "empty", [])
+    save_session(db_conn, "s1", [{"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
+                                 {"role": "user", "content": "重构提案通道" * 30},
+                                 {"role": "assistant", "content": "好"}])
+    save_session(db_conn, "s2", [{"role": "assistant", "content": "x"}])  # 无 user
+    # 混合口径样本（2026-11-19 目检轮拍板，spec §1.1）：3 user(含1提醒) + 2 段
+    # assistant(段A 含 2 tool_calls + 2 tool 结果行，提醒行插在段中不封段) + 提醒行
+    save_session(db_conn, "s3", [
+        {"role": "user", "content": "第一问"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "t1", "function": {"name": "read_doc", "arguments": "{}"}},
+            {"id": "t2", "function": {"name": "search_docs", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "t1", "content": "ok"},
+        {"role": "user", "content": DocPathUserReminder._PREFIX + " a.md]"},
+        {"role": "tool", "tool_call_id": "t2", "content": "ok"},
+        {"role": "assistant", "content": "搞定"},
+        {"role": "user", "content": "第二问"},
+        {"role": "assistant", "content": "答"},
+    ])
+    out = list_session_summaries(db_conn)
+    assert [s["id"] for s in out] == ["s3", "s2", "s1"]    # last_active DESC
+    t = next(s for s in out if s["id"] == "s1")["title"]
+    assert not t.startswith(DocPathUserReminder._PREFIX)    # 跳提醒行
+    assert t.startswith("重构提案通道") and len(t) <= 41    # 40 字符 + 可选省略号
+    # 双数口径：message_count = 非提醒 user 行数 + 连续 assistant/tool 段数
+    s1 = next(s for s in out if s["id"] == "s1")
+    assert s1["message_count"] == 2                        # 1 user + 1 段
+    assert s1["tool_count"] == 0
+    s3 = next(s for s in out if s["id"] == "s3")
+    assert s3["message_count"] == 4                        # 2 user + 2 段（提醒不封段不计行）
+    assert s3["tool_count"] == 2                           # tool_calls 条目总数
+    t2 = next(s for s in out if s["id"] == "s2")["title"]
+    assert t2 == "工具会话 · 0 次工具"                      # 兜底链：N=tool_count
+    assert "[当前打开:" == DocPathUserReminder._PREFIX      # 三处同源钉（spec §1.1）
 
-    save_session(db_conn, "s1", [{"role": "user", "content": "a"}])
-    save_session(db_conn, "s2", [{"role": "user", "content": "b"}])
-    sessions = get_recent_sessions(db_conn, limit=10)
-    assert len(sessions) >= 2
-    ids = [s["id"] for s in sessions]
-    assert "s1" in ids and "s2" in ids
+
+def test_delete_session(db_conn):
+    from server.vault.db.sessions import save_session, delete_session
+    save_session(db_conn, "s1", [{"role": "user", "content": "hi"}])
+    assert delete_session(db_conn, "s1") is True
+    assert delete_session(db_conn, "s1") is False
 
 
 def test_save_session_updates_existing(db_conn):

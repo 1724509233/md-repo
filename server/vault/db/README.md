@@ -145,7 +145,7 @@ relatedness(id PK AUTOINC, source, target, basis, actor,
 | 函数 | 模块 | 说明 |
 | --- | --- | --- |
 | `upsert_file(conn, path, hash, mtime)` / `get_all_files(conn) -> list[dict]` / `delete_file(conn, path)` | `file_index` | files 表写 / 读 / 删 |
-| `save_session(conn, session_id, messages, token_count=0)` / `load_session(conn, session_id) -> dict \| None` / `get_recent_sessions(conn, limit=10) -> list[dict]` | `sessions` | Agent 会话持久化 |
+| `save_session(conn, session_id, messages, token_count=0)` / `load_session(conn, session_id) -> dict \| None` / `list_session_summaries(conn, limit=50) -> list[dict]` / `delete_session(conn, session_id) -> bool` | `sessions` | Agent 会话持久化（摘要列表跳空行/提醒行标题，删除返回是否有行） |
 | `guarded_insert(conn, fields, daily_cap, collapsed_msg_factory) -> str` | `notifications` | 量控通知：count-then-act **一锁**；返回 `insert`/`collapsed`/`merged` |
 | `cleanup_old(conn, max_age_s=30*86400) -> int` | `notifications` | 清理过期通知 |
 

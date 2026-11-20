@@ -79,6 +79,18 @@ def test_escape_and_menu_semantics():
     assert "Escape" in t["SearchPanel.js"]
 
 
+def _fn_body(src, header):
+    """花括号配平提取函数/回调体（header 起始处的第一个 { 到其配平 }）。
+    注意：被提取的源区间不得含字符串/模板字面量花括号（本仓自研函数均满足）。"""
+    i = src.index(header)
+    j = src.index("{", i)
+    depth, k = 1, j + 1
+    while depth and k < len(src):
+        depth += (src[k] == "{") - (src[k] == "}")
+        k += 1
+    return src[j + 1:k - 1]
+
+
 def test_hash_state_sync_wired():
     src = _templates()["app.js"]
     for token in ("docHash", "parseHash", "hashchange", "replaceState"):
@@ -644,3 +656,219 @@ def test_p2_visual_round_js():
     assert "if (e.metaKey || e.ctrlKey) {" in dl
     assert "window.open(href, '_blank', 'noopener')" in dl
     assert dl.index("api.recallClick") < dl.index("window.open")
+
+
+def test_chat_restore_module():
+    # 会话历史恢复映射（spec 2026-11-19 §2.3）：独立 ESM 模块，零 import 零依赖
+    # （node 无 Vue 环境，行为测试直接 import——照 test_p2_intl_format_module 模式）
+    f = (TPL / "js/utils/chatRestore.js").read_text(encoding="utf-8")
+    assert "export function mapHistory" in f
+    assert not re.search(r"^\s*import\b", f, re.M), "chatRestore.js 必须零 import"
+    assert not re.search(r"\brequire\s*\(", f), "chatRestore.js 必须零依赖"
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const raw=[
+    {role:'user',content:'[当前打开: a.md]'},
+    {role:'user',content:'hello'},
+    {role:'assistant',content:null,tool_calls:[{id:'t1',type:'function',function:{name:'read_doc',arguments:'{\"path\":\"a.md\"}'}}]},
+    {role:'tool',tool_call_id:'t1',content:'Doc contents'},
+    {role:'assistant',content:'first',tool_calls:[{id:'t2',type:'function',function:{name:'search_docs',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t2',content:'Error: boom'},
+    {role:'assistant',content:'done',id:'abc',ts:1,citations:[{path:'a.md',exists:true,grounded:true}]},
+    {role:'user',content:'again'},
+    {role:'assistant',content:'',tool_calls:[{id:'t3',type:'function',function:{name:'write_doc',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t3',content:'User rejected this operation.'},
+    {role:'assistant',content:null,tool_calls:[{id:'t4',type:'function',function:{name:'delete_doc',arguments:'{}'}}]}
+  ];
+  const o=m.mapHistory(raw);
+  // 用例1 提醒行丢弃 + 用例2 user 文本气泡（user 描述符不带 messageId/citations）
+  if(o.length!==4)process.exit(2);
+  if(o[0].role!=='user'||o[0].blocks.length!==1||o[0].blocks[0].type!=='text'||o[0].blocks[0].text!=='hello')process.exit(3);
+  if('messageId' in o[0]||'citations' in o[0])process.exit(3);
+  // 用例3 多轮归并：3 个 assistant + 2 个 tool → 一条描述符，块按流序交错
+  const a=o[1];
+  if(a.role!=='assistant'||a.blocks.length!==4)process.exit(4);
+  const b=a.blocks;
+  if(b[0].type!=='tool'||b[0].id!=='t1'||b[0].name!=='read_doc'||b[0].status!=='done'||b[0].result!=='Doc contents'||b[0].expanded!==false||b[0].args.path!=='a.md')process.exit(5);
+  if(b[1].type!=='text'||b[1].text!=='first')process.exit(6);
+  if(b[2].type!=='tool'||b[2].status!=='error'||b[2].result!=='Error: boom')process.exit(7);
+  if(b[3].type!=='text'||b[3].text!=='done')process.exit(8);
+  if(a.messageId!=='abc')process.exit(9);
+  if(!a.citations||a.citations.length!==1||a.citations[0].path!=='a.md')process.exit(10);
+  if(o[2].role!=='user'||o[2].blocks[0].text!=='again')process.exit(11);
+  // 用例4 rejected 逐字 / 用例5 孤儿 tool_call→error（result 保持 null）/
+  // 用例7 非末轮不出现 messageId+citations / 用例6 content 空串不产 text 块
+  const c=o[3];
+  if(c.blocks.length!==2)process.exit(12);
+  if(c.blocks[0].status!=='rejected')process.exit(13);
+  if(c.blocks[1].status!=='error'||c.blocks[1].result!==null)process.exit(14);
+  if('messageId' in c||'citations' in c)process.exit(15);
+  // 用例6 空 content 且无 tool_calls → 不产出空 turn 描述符
+  if(m.mapHistory([{role:'user',content:'q'},{role:'assistant',content:''}]).length!==1)process.exit(16);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/chatRestore.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    # exit code 逐个区分用例（1=import 失败）；用例号见上方 JS 注释
+    assert r.returncode == 0, f"chatRestore case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_session_history_view_pins():
+    # spec 2026-11-19 §2.1/§2.2/§2.3（T4）：历史列表 = 纯视图层开关，三层契约「视图≠会话≠运行」。
+    ai = _templates()["AIChatPanel.js"]
+    # ① 历史钮：ai-ibtn 家族规格 + aria-label + aria-pressed 随 view
+    btn = re.search(r'<button[^>]*aria-label="历史会话"[^>]*>', ai)
+    assert btn, "历史会话按钮缺失"
+    tag = btn.group(0)
+    assert 'class="ai-ibtn' in tag and ":aria-pressed=\"view === 'history'\"" in tag
+    # ② view === 'history' 模板分支存在（头部展示层 + 消息区 + 按钮 pressed 态 ≥3 处）
+    assert ai.count("view === 'history'") >= 3
+    # 输入区在 history 视图隐藏
+    assert """v-if="view !== 'history'" class="p-3 border-t border-border""" in ai
+    # ③ 行主体必须原生 <button>（搜索卡教训 e96cf4ed）；删除钮是行 wrapper 的兄弟非后代
+    #   ——行主体按钮体内不得再出现 <button（嵌套 button 非法且键盘语义坏）
+    i = ai.index('@click="onRowClick')
+    body_open = ai.rindex("<button", 0, i)
+    body_close = ai.index("</button>", i)
+    assert "<button" not in ai[body_open + len("<button"):body_close], "行主体 button 不得含嵌套按钮"
+    del_btn = ai[body_close:body_close + 900]
+    assert 'aria-label="删除会话"' in del_btn
+    # 当前会话行 thinking 时隐藏 ×（后端 409 兜底的前端镜像守卫）
+    assert "status === 'thinking'" in del_btn[:600] and "sessionId" in del_btn[:600]
+    # ③b 确认态收进右侧槽（目检 round2 项①②）：同一右槽在两态间切换 ×⇄确认/取消小钮簇——
+    #   行主体按钮不再挂确认态 v-if（标题 + 时间副行任何态下都在）；
+    #   确认簇在行主体与 × 之后、同一行内，且不得 flex-1 占主体（不替换行主体）
+    body_tag = ai[body_open:ai.index(">", i)]
+    assert "deletingId" not in body_tag and "confirmSwitchId" not in body_tag, \
+        "行主体按钮不得挂确认态 v-if（标题/时间副行任何态下都在）"
+    slot = ai[body_close:ai.index("<!-- 消息列表", body_close)]
+    assert slot.index('aria-label="删除会话"') < slot.index('@click="doDelete') < slot.index('@click="confirmSwitchTo'), \
+        "右槽唯一交互簇：× 与两个确认簇同槽互斥（v-if/v-else-if 链）"
+    assert "flex-1" not in slot, "确认簇不得 flex-1 占行主体（右侧槽两态切换，标题不动）"
+    # ④ Review Focus 1 命门：toggleView 函数体零 abort（流式中开列表不得打断 SSE）
+    #   （红线同族：messages/sessionId 也不得被视图开关触碰——abort 是计划指定钉）
+    tv = _fn_body(ai, "function toggleView()")
+    assert "abort" not in tv, "toggleView 不得触碰 abortCtrl（Review Focus 1）"
+    # ⑤ watch(sessionId) 体：落回 chat 视图 + restorePayload 恢复分支（先取数后原子换的消费端）
+    w = _fn_body(ai, "watch(() => props.sessionId")
+    assert "view.value = 'chat'" in w
+    assert "restorePayload" in w and "restoreMessages(" in w
+    # ⑥ Esc 处理（用户 2026-11-19 质疑定案返工）：容器级 @keydown 在 macOS 鼠标流下失效——
+    #   点击 button 不移焦点，纯鼠标流程按 Esc 时 target=body，路径 body→document→window
+    #   不经面板根，组件 handler 不触发（app.js 全局 Esc 照常收面板）。必须 window+capture。
+    # ⑥a 守卫与消费同体：Escape + 'history' 守卫 + stopPropagation（目检 round2 项③：
+    #   history 下 Esc 只回聊天，capture 在 window 最先收到、掐断后续全部层——
+    #   不得连带触发 app 级「收起 AI 面板」，app.js 不动）
+    kb = _fn_body(ai, "function onHistoryKeydown(")
+    assert "Escape" in kb and "'history'" in kb
+    assert "stopPropagation" in kb, "history 视图消费 Esc 必须阻断冒泡（不得同时收起 AI 面板）"
+    # ⑥b 注册在 window capture 相位（字面 true 不可省：冒泡相位 window 是最后一站，
+    #   document 级的 app.js 全局 Esc 会先触发）
+    assert "addEventListener('keydown', onHistoryKeydown, true)" in ai
+    # ⑥c 摘除两处：watch(view) 的 else 分支 + onBeforeUnmount 兜底（history 视图开着被卸载）
+    assert ai.count("removeEventListener('keydown', onHistoryKeydown, true)") >= 2, \
+        "监听必须随视图摘除且卸载兜底（残留 window 监听 = 泄漏）"
+    # ⑥d 旧的容器级绑定废除：模板根 div 不得再挂 @keydown="onHistoryKeydown"（鼠标流下不触发）
+    assert '@keydown="onHistoryKeydown"' not in ai, \
+        "根 div 容器级 keydown 绑定在鼠标流下失效，必须移除"
+    # ⑥e 焦点在文本面让位（用户 2026-11-19 越权质疑定案）：window capture 最先收到——
+    #   焦点在搜索框（SearchPanel Esc 清查询）/重命名输入框/编辑器 textarea 时事件路径同样
+    #   过 window，stopPropagation 掐死文本面自己更晚收到的 keydown handler，
+    #   变成「按 Esc 想清搜索却把面板切回聊天」。消费前 closest('input, textarea') 即让位。
+    assert "closest('input, textarea')" in kb, \
+        "焦点在 input/textarea 必须让位，本监听只管焦点不在文本面的鼠标流场景"
+    # ⑦ fmtRel 复用共享格式化模块（禁本地日期拷贝）
+    assert "from '../utils/format.js'" in ai
+    assert not re.search(r"\bpad2\b|toISOString\(\)\.slice", ai)
+    # ⑧ 与 app 层解耦契约：props.restorePayload + emit('switchSession')，组件不直接换 sessionId
+    assert "restorePayload: { type: Object, default: null }" in ai
+    assert "'switchSession'" in ai
+    st = _fn_body(ai, "async function switchTo(")
+    assert "emit('switchSession'" in st and "props.sessionId =" not in st
+    # ⑨ 确认态互斥：同一时刻至多一行处于确认态（进入一种即清另一种）
+    assert "confirmSwitchId.value = null" in _fn_body(ai, "function askDelete(")
+    assert "deletingId.value = null" in _fn_body(ai, "function askSwitch(")
+    # ⑩ 删除当前会话成功 → 自动新会话（面板不留死会话）
+    dd = _fn_body(ai, "async function doDelete(")
+    assert "emit('newSession')" in dd and "props.sessionId" in dd
+    # ⑪ 头部 ai-acts 操作钮顺序（目检 round2 项④）：自动批准 · 新会话 · 历史 · 关闭（关闭末位不动）
+    i_auto = ai.index('id="auto-approve-toggle"')
+    i_new = ai.index('id="btn-new-session"')
+    i_hist = ai.index('id="btn-history"')
+    i_close = ai.index('aria-label="关闭"')
+    assert i_auto < i_new < i_hist < i_close, "ai-acts 应为 自动批准·新会话·历史，关闭末位"
+
+
+def _body_after(src, sig):
+    """_fn_body 的解构参数变体：从 sig（含参数表 {a, b}）之后的第一个 { 配平取体。
+    （_fn_body 从 header 起点找 {，header 文本自含 { 时会误抓参数对象，故另立。）"""
+    i = src.index(sig) + len(sig)
+    j = src.index("{", i)
+    depth, k = 1, j + 1
+    while depth and k < len(src):
+        depth += (src[k] == "{") - (src[k] == "}")
+        k += 1
+    return src[j + 1:k - 1]
+
+
+def test_session_persistence_pins():
+    # spec 2026-11-19 §2.5（T5）：app.js 接线——localStorage 持久化（mdvault.aiSession 键族，
+    # 先例 mdvault.searchWeights）、启动恢复与手动切换同走「先取数后原子换」单一管线。
+    app = _templates()["app.js"]
+    assert "mdvault.aiSession" in app
+    # ① 写点恰 2、无第三写点（spec §2.5）：setItem 单点封装进 persistSessionId（计划 Step 3），
+    #   字面出现恰 1 次且必须在 try/catch 内（Review Focus 5：隐私模式存储不可用不得炸面板）；
+    #   persistSessionId 调用点恰 2（startNewSession 成功处 + onSwitchSession 成功处）。
+    #   （计划 Step 1 字面「setItem 出现 2 次」与其 Step 3 强制的 persistSessionId 单点封装
+    #   自相矛盾——helper 内 setItem 只能出现 1 次；本钉按「写点=2 调用点」本意落钉，口径不变。）
+    assert app.count("localStorage.setItem(") == 1
+    ps = _fn_body(app, "function persistSessionId(")
+    assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
+    assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
+    assert len(re.findall(r"(?<!function )persistSessionId\(", app)) == 2
+    sn = _fn_body(app, "async function startNewSession(")
+    assert "persistSessionId(" in sn and "state.restorePayload = null" in sn
+    os_ = _body_after(app, "function onSwitchSession({ sid, data })")
+    assert "persistSessionId(" in os_
+    # ② getItem 路径 try/catch + 启动恢复静默（catch 不发 toast——静默是新用户路径）
+    br = _fn_body(app, "async function bootRestoreSession(")
+    assert "localStorage.getItem(" in br and "mdvault.aiSession" in br
+    assert "try" in br and "catch" in br, "getItem 必须 try/catch（Review Focus 5）"
+    assert "showToast" not in br
+    # ③ 原子换读序（手动切换与启动恢复同管线）：restorePayload 赋值先于 sessionId——
+    #   panel 的 watch(sessionId) 消费时 payload 必在场；onSwitchSession 再叠 persist 殿后
+    assert "api.getSession(" in br
+    assert br.index("state.restorePayload =") < br.index("state.sessionId =")
+    assert os_.index("state.restorePayload =") < os_.index("state.sessionId =")
+    assert os_.index("state.sessionId =") < os_.index("persistSessionId(")
+    # ④ 挂载接线：boot 调用在 onMounted 内、非阻塞（不得 await——恢复不得挡住首屏渲染）
+    assert app.count("bootRestoreSession()") == 2   # 定义 + 唯一启动调用
+    om = app[app.index("onMounted("):]
+    assert "bootRestoreSession()" in om and "await bootRestoreSession" not in app
+    # ⑤ 模板挂载点：restorePayload prop + switchSession 事件落位（T4 emit 的消费端）
+    assert ':restore-payload="state.restorePayload"' in app
+    assert '@switchSession="onSwitchSession"' in app
+    # setup 暴露面含 onSwitchSession（模板事件处理的消费前提）。不用 _fn_body(app,"return {")：
+    # 会先命中 badgeParts computed 的 return {，此处按 setup return 独有起始行锚定切片
+    ri = app.index("return {\n        state, editorPaneRef")
+    assert "onSwitchSession" in app[ri:app.index("\n      }", ri)]
+
+
+def test_esc_chain_memory_precedes_ai():
+    """Esc 分层链优先级（2026-11-19 用户定案）：记忆控制台开着时 Esc 先关记忆台，
+    而不是先收 AI 面板——memoryOpen 支须在 aiOpen 支之前。
+    链体提取：app.js 唯一 keydown 监听体内、`if (e.key !== 'Escape') return` 起到监听闭合。"""
+    app = _templates()["app.js"]
+    chain = _fn_body(app, "document.addEventListener('keydown', (e) => {")
+    assert "if (e.key !== 'Escape') return" in chain
+    esc = chain.split("if (e.key !== 'Escape') return", 1)[1]
+    i_mem = esc.index("state.memoryOpen")
+    i_ai = esc.index("state.aiOpen")
+    i_notif = esc.index("state.notifOpen")
+    assert i_mem < i_ai, "memoryOpen 分支必须在 aiOpen 分支之前（Esc 先关记忆台）"
+    # notif 支仍居链首：防「整链倒序」的懒修法（倒序同样满足 memory<ai）
+    assert i_notif < i_mem and i_notif < i_ai
