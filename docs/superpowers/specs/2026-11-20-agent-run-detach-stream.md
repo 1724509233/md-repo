@@ -1,6 +1,7 @@
 # Agent 运行脱离连接：关 SSE 续跑 / 重连回放 / 服务端消息队列
 
 - 日期：2026-11-20（rev2，按 oracle 评审修订：B1 边界回放 / M1 run_id 游标契约 / M2 确认条目清理 / M3 删会话清 buffer / M4 总表勘正 + 10 条 minor 织入）
+- 2026-11-20 rev3（用户实测修订）：出队即时前缀持久化（`persist_user`）+ 边界同步推进；snapshot 订阅对未终止 Run 合成 `run_status{true}`——修复「运行中会话在历史列表不可见，done 才出现」（§2 补记）。
 - 待办：`aa6a2096`（agent chat 关闭 sse 链接续跑，重连 sse 可恢复；回答中发送消息进队列，done 事件后自动出队进 user message）
 - 前作边界契约：`2026-11-19-agent-session-history.md`（「视图 ≠ 会话 ≠ 运行」——本期把「运行」真正独立出来，契约升级为 **视图 ≠ 会话 ≠ 运行 ≠ 连接**）
 
@@ -31,6 +32,7 @@
 - **生命周期**：投递消息 → 无活跃 Run 则 `create_task(_drive(sid))`；`_drive` 从队头逐条驱动 `agent.chat()`，事件 append buffer + 广播 waiters；`done` 后队列非空则 popleft 立即开下一轮，空则收摊。SSE 断开只减一个 waiter，不参与生命周期。
 - **锁**：session 锁由 `_drive` **从 run 创建到终止连持不放**（跨排队轮次，评审 n5 写死措辞；替代 HTTP 生成器 acquire/release）。既有保护自动继承：TTL 驱逐跳过持锁会话（routes/agent.py:52）、删会话 busy 409（routes/agent.py:435）。
 - **持久化与边界**：`session_mgr.save` 每轮结束执行（正常/error/stopped 三口径同一落库点）；**每次 save 成功后立刻记 `persisted_through_seq = 当前 buffer 尾 seq`**（§5 恢复协议的边界来源）。**退出顺序钉死（评审 m2）：save 先于终帧 `run_status{false}`**——客户端见终帧即可能重连走快照路径。`_drive` 外层 `except asyncio.CancelledError`（stop 路径）与 `except Exception`（崩溃路径）**必须分开写**（Py3.8+ CancelledError 是 BaseException，`except Exception` 吞不掉）。
+  - **补记（2026-11-20 用户实测修订，rev3）**：save 点契约从「每队列项完成时全量」扩为「**出队即前缀 + 完成时全量**」——`_drive` 出队后（`user_message`/`queue_update` 广播之后、`agent.chat` 首帧之前）调 `persist_user(sid, text)`（路由注入：save = 当前会话消息**副本**追加 user 行，绝不改共享原 list），随后推进 `persisted_through_seq` 覆盖这三帧。效果：运行中会话即时进历史列表（列表滤空行，此前 done 前整轮不入库故不可见）；snapshot 前缀已含 user 行，边界后回放不得再吐 `user_message`（不重复气泡）。配套：`subscribe(snapshot=True)` 对未终止 Run（`finished_at is None`）在 snapshot 头后、回放前补发**合成** `run_status{running:true, seq=边界值}`（边界推进/修剪会把真实 busy 帧划进前缀或整帧丢弃——busy 需有驱动源；seq=边界值防游标回退；合成帧不入 buffer）。终止 Run 不合成（buffer 尾部必有真实终帧可回放）。
 - **RunHub 逐出（评审 m3）**：终止态 Run 保留 `RUN_RETAIN=10min`（覆盖「刷新时恰好跑完」的回放窗口）。**惰性清理，零定时器**：任意 sid 的 POST /chat、GET /stream、POST /stop 入口顺带扫过期终止 Run 逐出。下次投递开**新 run_id、新 buffer、seq 归零**。
 - **确认超时（评审 M2 重写）**：runtime.py:393 `wait()` 改 `asyncio.wait_for(..., timeout)`，默认 **300s**（`ai_config.confirm_timeout` 可配，config.example.yaml 同步——评审 n4）。三处硬约束：
   1. `entry["event"].wait()` 外必须 `finally: agent.pending_confirms.pop(tc_id, None)`——超时/cancel 两条新退出路径都不留僵尸条目（否则 routes/agent.py:59 的「pending_confirms 豁免」把该 Agent 钉死到进程重启，且迟到 `/confirm` 命中僵尸返回假 200）；

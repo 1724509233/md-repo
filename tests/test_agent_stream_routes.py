@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
@@ -148,7 +149,12 @@ def test_chat_queue_full_409(vault_dir, db_conn, ai_config):
                        json={"message": "m6", "session_id": "s1"}).status_code == 409
         gate.set()
         frames = _frames(_drain(tc, "s1"))
-    assert sum(1 for f in frames if f["type"] == "user_message") == 6
+    # rev3 契约（persist_user 出队落库 + 边界推进）：已出队条目的 user 行进
+    # snapshot 前缀（DB 行），未出队的以 user_message 帧回放——两侧并集恒等
+    # 于全部投递（单一前缀源，不重复计数）
+    pref_users = sum(1 for m in frames[0]["messages"] if m.get("role") == "user")
+    replay_users = sum(1 for f in frames[1:] if f["type"] == "user_message")
+    assert pref_users + replay_users == 6
 
 
 def test_chat_precheck_doc_path_409_preserved(vault_dir, db_conn, ai_config):
@@ -332,8 +338,13 @@ def test_queue_remove_route(vault_dir, db_conn, ai_config):
     qu = [f for f in frames if f["type"] == "queue_update"]
     assert qu[-1]["queued"] == []                # 收尾排空
     assert any([q["qid"] for q in f["queued"]] == ["q3"] for f in qu)  # 删后只剩 q3
-    texts = [f["text"] for f in frames if f["type"] == "user_message"]
-    assert texts == ["m1", "m3"]              # 被删的一条永不出队
+    # rev3 契约：已出队条目的 user 行进 snapshot 前缀（persist_user 落库+
+    # 边界推进划走其 user_message 帧），未出队的以帧回放——前缀先、帧后，
+    # 拼接即时间序。被删的 q2 两边都不在场（永不出队）。
+    pref_texts = [m["content"] for m in frames[0]["messages"]
+                  if m.get("role") == "user"]
+    texts = pref_texts + [f["text"] for f in frames[1:] if f["type"] == "user_message"]
+    assert texts == ["m1", "m3"]
 
 
 # ── 出队重验（Review Focus 5，隐私红线义务）─────────────────────────────────
@@ -399,6 +410,32 @@ def test_sessions_list_running_flag(vault_dir, db_conn, ai_config):
         _drain(tc, "s1")
         r = tc.get("/api/agent/sessions")
         assert next(s for s in r.json()["sessions"] if s["id"] == "s1")["running"] is False
+
+
+def test_sessions_row_visible_while_running(vault_dir, db_conn, ai_config):
+    """出队即时前缀持久化（2026-11-20 rev3，用户报告）：运行中会话行在列
+    表即时可见——此前只在 done 落库后才出现（list 滤空行 + 首条消息运行中
+    从不入库）。202 后轮询列表（出队落库在 portal 后台 loop 上完成，与轮询
+    请求之间推进），行出现即断言 running=true；跑完后 running=false。"""
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    gate = threading.Event()
+    with TestClient(app) as tc, _mock_openai_gated(gate):
+        r = tc.post("/api/agent/chat", json={"message": "hi", "session_id": "s2"})
+        assert r.status_code == 202
+        row = None
+        for _ in range(300):  # 出队 persist_user 落库后即在场（gated 轮保持 alive）
+            sess = tc.get("/api/agent/sessions").json()["sessions"]
+            row = next((s for s in sess if s["id"] == "s2"), None)
+            if row is not None:
+                break
+            time.sleep(0.01)
+        assert row is not None, "出队消息在运行中应即时进列表行"
+        assert row["running"] is True
+        gate.set()
+        _drain(tc, "s2")
+        sess = tc.get("/api/agent/sessions").json()["sessions"]
+        row = next(s for s in sess if s["id"] == "s2")
+        assert row["running"] is False
 
 
 def test_delete_clears_runhub_buffer(vault_dir, db_conn, ai_config):

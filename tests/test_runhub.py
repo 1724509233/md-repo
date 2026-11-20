@@ -62,12 +62,12 @@ class Hub:
     """
 
     def __init__(self, agent, *, retain=600.0, buffer_max=20000, queue_max=5,
-                 prepare_doc=None):
+                 prepare_doc=None, persist_user=None, store=None):
         from server.agent.runhub import RunHub
 
         self.agent = agent
         self._locks = {}
-        self.store = {}
+        self.store = store if store is not None else {}
         self.persist_log = []  # [(sid, tail_seq_at_call, messages_snapshot)]
         self.prep = prepare_doc or (lambda raw: {"doc_path": raw, "privacy_doc": False})
 
@@ -84,6 +84,7 @@ class Hub:
             persist=persist,
             load_messages=lambda sid: self.store.get(sid, []),
             prepare_doc=self.prep,
+            persist_user=persist_user,
             retain=retain, buffer_max=buffer_max, queue_max=queue_max,
         )
         self.hub = hub
@@ -388,7 +389,12 @@ def test_snapshot_boundary_no_dup_no_gap():
         assert snap["messages"] == h.persist_log[0][2]
         boundary = snap["persisted_through_seq"]
         assert boundary == h.persist_log[0][1]
-        replay = frames[1:]
+        # rev3: 未终止 Run → snapshot 头后先合成 busy 帧（真 run_status{true}
+        # 已被边界划进前缀），seq=边界值防游标回退；回放自 boundary+1 接续
+        synth = frames[1]
+        assert synth["type"] == "run_status" and synth["running"] is True
+        assert synth["seq"] == boundary
+        replay = frames[2:]
         assert replay[0]["seq"] == boundary + 1  # no gap...
         assert replay[0]["type"] == "user_message" and replay[0]["qid"] == "q2"
         assert all(f["seq"] > boundary for f in replay)  # ...no dup of round 1
@@ -449,7 +455,12 @@ def test_trim_clamp():
         frames = await collected
 
         assert frames[0]["type"] == "snapshot"
-        replay = frames[1:]
+        # rev3: 真 run_status{true} 已被修剪 → 合成 busy 帧接手（seq=边界 0），
+        # 回放仍自存活 head 起
+        synth = frames[1]
+        assert synth["type"] == "run_status" and synth["running"] is True
+        assert synth["seq"] == 0
+        replay = frames[2:]
         # replay clamps to the surviving head: contiguous, ordered, a suffix
         seqs = [f["seq"] for f in replay]
         assert seqs[0] == head
@@ -520,5 +531,141 @@ def test_is_running_false_after_done_until_evict():
         # ...but the buffer survives the retain window
         run = h.hub._runs.get("s1")
         assert run is not None and run.buffer
+
+    asyncio.run(go())
+
+
+# ── 出队即时前缀持久化（2026-11-20 rev3：运行中会话即时可见）────────────────
+
+
+class LoggedAgent(FakeAgent):
+    """FakeAgent + 调用顺序日志：('chat', text) 进 chat 体首行。
+    与 persist_user 写同一 log，钉「每条出队：先落前缀，后进 chat」。"""
+
+    def __init__(self, log, **kw):
+        super().__init__(**kw)
+        self.log = log
+
+    async def chat(self, message, **kwargs):
+        self.log.append(("chat", message))
+        async for ev in super().chat(message, **kwargs):
+            yield ev
+
+
+class PersistUser:
+    """路由闭包语义的测试替身：副本追加 user 行进假 DB（共享原 list 不动），
+    并记 ('persist_user', text) 入 log。"""
+
+    def __init__(self, store, log):
+        self.store = store
+        self.log = log
+
+    def __call__(self, sid, text):
+        self.log.append(("persist_user", text))
+        self.store[sid] = list(self.store.get(sid, [])) + [
+            {"role": "user", "content": text}]
+
+
+def test_dequeue_prefix_persist_visible_midrun_no_user_replay():
+    """出队即时落库（rev3 主钉）：fake agent 首帧前挂起时 snapshot 订阅 →
+    ①snapshot.messages 含该 user 行（前缀已入库）；②边界 ≥3 覆盖
+    run_status/user_message/queue_update 三帧；③边界后回放无 user_message
+    （不重复吐泡）；④snapshot 后合成 run_status{true}（busy 驱动源，
+    真 busy 帧已被边界划进前缀）；⑤persist_user 恰调 1 次且先于 agent.chat。"""
+    async def go():
+        log: list = []
+        store: dict = {}
+        pu = PersistUser(store, log)
+        gate = asyncio.Event()
+        fake = LoggedAgent(log, script={
+            "m1": [("wait", gate), ("token", {"text": "a"}), ("done", {})]})
+        h = Hub(fake, store=store, persist_user=pu)
+        rid = h.hub.submit("s1", "m1", None)
+        await h.pump(lambda: log, "persist_user ran (chat gated right after)")
+        # 顺序钉：同一条目 persist_user 先于 chat（_drive 内顺序执行，
+        # 日志顺序即执行顺序）
+        assert log == [("persist_user", "m1"), ("chat", "m1")]
+
+        collected = asyncio.create_task(h.collect("s1", snapshot=True))
+        await h.settle()
+        gate.set()
+        frames = await collected
+
+        snap = frames[0]
+        assert snap["type"] == "snapshot" and snap["run_id"] == rid
+        assert snap["messages"] == [{"role": "user", "content": "m1"}]
+        boundary = snap["persisted_through_seq"]
+        assert boundary >= 3  # run_status(1)+user_message(2)+queue_update(3)
+        synth = frames[1]
+        assert synth["type"] == "run_status" and synth["running"] is True
+        assert synth["state"] == "running" and synth["run_id"] == rid
+        assert synth["seq"] == boundary  # 边界值：游标不回退
+        replay = frames[2:]
+        assert not any(f["type"] == "user_message" for f in replay)
+        assert all(f["seq"] > boundary for f in replay)
+        assert frames[-1]["type"] == "run_status" and frames[-1]["running"] is False
+        assert [e for e in log if e[0] == "persist_user"] == [("persist_user", "m1")]
+
+    asyncio.run(go())
+
+
+def test_persist_user_once_per_dequeued_entry():
+    """多条目 run：每条出队各调一次 persist_user，逐条即时可见——
+    调用序与 agent.chat 交替（m1 落库→m1 跑→m2 落库→m2 跑）。"""
+    async def go():
+        log: list = []
+        store: dict = {}
+        pu = PersistUser(store, log)
+        fake = LoggedAgent(log, script={
+            "m1": [("token", {"text": "1"}), ("done", {})],
+            "m2": [("token", {"text": "2"}), ("done", {})],
+        })
+        h = Hub(fake, store=store, persist_user=pu)
+        h.hub.submit("s1", "m1", None)
+        h.hub.submit("s1", "m2", None)  # 驱动任务未启动：同 run 排队
+        await h.wait_idle("s1")
+
+        assert log == [("persist_user", "m1"), ("chat", "m1"),
+                       ("persist_user", "m2"), ("chat", "m2")]
+
+    asyncio.run(go())
+
+
+def test_terminal_snapshot_no_synthetic_busy():
+    """回归钉：终止 Run 的 snapshot 订阅零合成帧——回放只剩 buffer 尾部
+    真实终帧（running:false），不掺合成 busy。"""
+    async def go():
+        fake = FakeAgent()
+        h = Hub(fake)
+        h.hub.submit("s1", "m1", None)
+        await h.wait_idle("s1")
+
+        frames = await h.collect("s1", snapshot=True)
+        assert h.types(frames) == ["snapshot", "run_status"]
+        assert frames[1]["running"] is False and frames[1]["state"] == "finished"
+        assert not any(f.get("running") is True for f in frames)
+
+    asyncio.run(go())
+
+
+def test_stop_remaining_queue_never_persists_user():
+    """stop 后队列剩余条目不再触发 persist_user（只落过已出队的那条）。"""
+    async def go():
+        log: list = []
+        store: dict = {}
+        pu = PersistUser(store, log)
+        gate = asyncio.Event()
+        fake = LoggedAgent(log, script={"m1": [("wait", gate)],
+                                        "m2": [("done", {})]})
+        h = Hub(fake, store=store, persist_user=pu)
+        h.hub.submit("s1", "m1", None)
+        await h.wait_running("s1")  # m1 已出队（persist_user 已调），chat 挂起
+        h.hub.submit("s1", "m2", None)
+
+        assert h.hub.stop("s1") is True
+        await h.wait_idle("s1")
+
+        assert [e for e in log if e[0] == "persist_user"] == [("persist_user", "m1")]
+        assert [c[0] for c in fake.calls] == ["m1"]
 
     asyncio.run(go())

@@ -6,13 +6,17 @@ the per-session message queue, streams ``Agent.chat()`` events into a per-run
 ring buffer (each frame carries ``run_id`` + monotone ``seq``), persists at
 every round end and records the persistence boundary
 (``persisted_through_seq``) *before* the terminal ``run_status`` frame is
-broadcast (Review Focus 6 order pin). SSE subscribers come and go; the run is
-unaware.
+broadcast (Review Focus 6 order pin). Save-point contract (rev3, 2026-11-20):
+*dequeue-time prefix* (``persist_user``, boundary advances over the three
+pre-chat frames) + *full save at round end*. SSE subscribers come and go; the
+run is unaware.
 
 Recovery contract (spec §3): ``subscribe(snapshot=True)`` answers atomically
 with a ``snapshot`` header (DB messages + boundary + run_id, not buffered)
-followed by replay of ``seq > boundary`` and the live tail. Incremental
-reconnect (``run_id`` + ``cursor``) replays ``seq > cursor``; a mismatched or
+followed by replay of ``seq > boundary`` and the live tail. For a not-yet-
+terminal run a synthesized ``run_status{running:true}`` (seq=boundary, never
+buffered) rides between header and replay — the boundary advance or trim can
+hide the real busy frame. Incremental reconnect (``run_id`` + ``cursor``) replays ``seq > cursor``; a mismatched or
 missing ``run_id``, or a cursor trimmed below the buffer head, answers a single
 ``resync`` frame (client reopens with snapshot).
 
@@ -70,6 +74,7 @@ class RunHub:
                  load_messages: Callable[[str], list],
                  prepare_doc: Callable[[Optional[str]], dict],
                  *,
+                 persist_user: Optional[Callable[[str, str], None]] = None,
                  retain: float = 600.0,
                  buffer_max: int = 20000,
                  queue_max: int = 5):
@@ -78,6 +83,7 @@ class RunHub:
         self._persist = persist
         self._load_messages = load_messages
         self._prepare_doc = prepare_doc
+        self._persist_user = persist_user
         self._retain = retain
         self._buffer_max = buffer_max
         self._queue_max = queue_max
@@ -130,6 +136,13 @@ class RunHub:
                        "run_id": None, "seq": 0}
                 return
             start = boundary
+            if run.finished_at is None:
+                # rev3 合成 busy 帧：边界推进（出队前缀落库）会把真实
+                # run_status{true} 划进前缀，修剪可整帧丢弃——busy 失去驱动
+                # 源。合成帧不入 buffer，seq=边界值防游标回退；终止 Run 不
+                # 合成（buffer 尾部必有真实终帧可回放）。
+                yield {"type": "run_status", "run_id": run.run_id,
+                       "seq": start, "running": True, "state": "running"}
         else:
             if run is None or run_id is None or run.run_id != run_id:
                 yield {"type": "resync", "seq": 0}
@@ -250,6 +263,16 @@ class RunHub:
                                {"qid": msg.qid, "text": msg.text})
                     self._emit(run, "queue_update",
                                {"queued": _queued_view(run)})
+                    # 出队即前缀落库（rev3，2026-11-20 用户实测修订，spec §2
+                    # 补记）：chat 首帧之前把 user 前缀写库并推进边界——运行中
+                    # 会话即时进历史列表；snapshot 前缀已含 user 行，边界 >
+                    # 这三帧（run_status/user_message/queue_update），回放不得
+                    # 再吐 user_message（不重复气泡）。异常并入下方 crash 分支。
+                    if self._persist_user is not None:
+                        res = self._persist_user(sid, msg.text)
+                        if inspect.isawaitable(res):  # seam 容忍，同 _save_and_boundary
+                            await res
+                        run.persisted_through_seq = run.seq
                     kwargs = self._prepare_doc(msg.doc_path) or {}
                     agent = self._get_agent(sid)
                     async for ev in agent.chat(msg.text, **kwargs):

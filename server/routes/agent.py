@@ -182,7 +182,16 @@ def register(app, ctx) -> None:
     runhub = RunHub(get_agent=_get_agent, get_lock=session_mgr.get_lock,
                     persist=lambda sid: session_mgr.save(sid, _get_agent(sid).messages),
                     load_messages=_load_messages,
-                    prepare_doc=_prepare_doc)
+                    prepare_doc=_prepare_doc,
+                    # 出队即时前缀落库（spec 2026-11-20 §2 补记，rev3）：
+                    # 首帧前把 user 行写库 → 运行中会话即时进历史列表
+                    # （列表滤空行，此前 done 前整轮不入库故不可见）。
+                    # 副本追加，绝不改共享原 list（agent._messages 在 chat
+                    # 时自行追加，全量 save 点仍走 persist）。
+                    persist_user=lambda sid, text: session_mgr.save(
+                        sid,
+                        list(session_mgr.get_or_create(sid))
+                        + [{"role": "user", "content": text}]))
     # 测试 seam（T3）：路由专项测试直驱 runhub 取确定性（生产代码不读此键）
     app.state.runhub = runhub
 
