@@ -163,6 +163,30 @@ export const api = {
     return res.json()
   },
 
+  /** GET /api/agent/sessions — 会话摘要列表（last_active 降序；
+   *  {sessions:[{id,title,message_count,tool_count,last_active}]}，spec 2026-11-19 §1.2） */
+  async listSessions() {
+    const res = await fetch('/api/agent/sessions')
+    if (!res.ok) throw new Error(`GET /api/agent/sessions → ${res.status}`)
+    return res.json()
+  },
+
+  /** GET /api/agent/sessions/{sid} — 全保真恢复载荷（{session_id,messages,token_count,last_active}）；
+   *  非 2xx 抛错带 status（404 = 他端已删，spec §3「详情 404 → 刷新列表，现场不动」） */
+  async getSession(sid) {
+    const res = await fetch('/api/agent/sessions/' + encodeURIComponent(sid))
+    if (!res.ok) throw new Error(`GET /api/agent/sessions/${sid} → ${res.status}`)
+    return res.json()
+  },
+
+  /** DELETE /api/agent/sessions/{sid} — 删除会话；非 2xx 抛错带 status
+   *  （409 = 流中持锁，404 = 无行，503 = 无 db） */
+  async deleteSession(sid) {
+    const res = await fetch('/api/agent/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })
+    if (!res.ok) throw new Error(`DELETE /api/agent/sessions/${sid} → ${res.status}`)
+    return res.json()
+  },
+
   /** GET /api/notifications?unread=1 — 未读通知（最新 50） */
   async getNotifications(unread = true) {
     const res = await fetch('/api/notifications?unread=' + (unread ? 1 : 0))

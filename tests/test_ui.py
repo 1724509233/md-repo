@@ -76,7 +76,9 @@ def test_api_js_exports_all_endpoints():
     for method in ["getDocs", "getDoc", "saveDoc", "getChanges",
                    "aiSearch", "getTags", "agentChat", "agentConfirm", "newSession",
                    "getDocRelated", "ignoreRelatedness",
-                   "getRollbackCalls", "rollbackCall"]:
+                   "getRollbackCalls", "rollbackCall",
+                   # 会话管理 T2/T4（spec 2026-11-19 §2.4）：三方法 + 端点路径字面量
+                   "listSessions", "getSession", "deleteSession", "/api/agent/sessions"]:
         assert method in js, f"api.{method} missing"
 
 

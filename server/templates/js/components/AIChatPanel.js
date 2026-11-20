@@ -1,7 +1,9 @@
 /* AIChatPanel 组件：SSE 流式消息 + 工具调用 UI + 确认按钮 */
-const { ref, reactive, shallowReactive, watch, nextTick, onMounted, onUnmounted, inject } = Vue
+const { ref, reactive, shallowReactive, watch, nextTick, onMounted, onUnmounted, onBeforeUnmount, inject } = Vue
 import { ICONS } from '../utils/icons.js'
 import { renderMarkdown } from '../utils/markdown.js'
+import { mapHistory } from '../utils/chatRestore.js'
+import { fmtRel, fmtMD } from '../utils/format.js'
 import { api } from '../api.js'
 
 const toolShortNames = {
@@ -26,9 +28,12 @@ export const AIChatPanel = {
   name: 'AIChatPanel',
   props: {
     docPath: { type: String, default: '' },
-    sessionId: { type: String, default: '' }
+    sessionId: { type: String, default: '' },
+    // 全保真恢复载荷（app 层「先取数后原子换」喂入，spec §2.3/§2.5；T5 接线）：
+    // { sid, data }，watch(sessionId) 里 sid === 新 sessionId 时消费替代空重置
+    restorePayload: { type: Object, default: null }
   },
-  emits: ['toolResult', 'newSession'],
+  emits: ['toolResult', 'newSession', 'switchSession'],
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
     const toolNames = toolShortNames
@@ -50,6 +55,17 @@ export const AIChatPanel = {
     const messagesEl = ref(null)
     const streamTextEl = ref(null)
     const thinkingTextEl = ref(null)
+
+    // ── 历史会话视图（spec 2026-11-19 §2.1/§2.2）──
+    // 三层契约「视图 ≠ 会话 ≠ 运行」：view 是纯视图层开关，切换路径不得触碰
+    // messages / sessionId / abortCtrl——流式中打开列表绝不打断进行中的 SSE（Review Focus 1）
+    const view = ref('chat')           // 'chat' | 'history'
+    const historyList = ref([])        // [{id,title,message_count,tool_count,last_active}]
+    const historyLoading = ref(false)
+    const historyError = ref(false)    // 列表 fetch 失败 → 行内「加载失败，重试」（无 toast 通道降级）
+    const deletingId = ref(null)       // 删除两步确认态（行 id）
+    const confirmSwitchId = ref(null)  // 流式中「停止并切换」确认态（行 id）
+    // 互斥红线：同一时刻至多一行处于确认态——进入任一态前清另一态（模板 v-else-if 链兜底）
 
     let currentTurn = null
     let sendChain = Promise.resolve()
@@ -443,6 +459,121 @@ export const AIChatPanel = {
       emit('newSession')
     }
 
+    // ── 历史视图逻辑（spec §2.2/§2.3）──
+
+    function cancelConfirm() { deletingId.value = null; confirmSwitchId.value = null }
+
+    async function loadHistory() {
+      historyLoading.value = true
+      historyError.value = false
+      try {
+        const data = await api.listSessions()
+        historyList.value = data.sessions || []
+      } catch (e) {
+        // 组件无 toast 通道（app 层 provide 只有 state/api/manage/trashAct）→ 计划降级：
+        // console + 列表显「加载失败，重试」行内钮（spec §3「列表 fetch 失败 → 列表重载；不触现场」）
+        console.error('[ai-chat] listSessions failed', e)
+        historyError.value = true
+      } finally {
+        historyLoading.value = false
+      }
+    }
+
+    // 零 abort / 零 messages / 零 sessionId（静态钉，Review Focus 1）：开列表只是视图切换，
+    // 流式 SSE 继续跑、消息区状态原样保留（体内不得出现这些引用，注释也不写——防误钉）
+    function toggleView() {
+      view.value = view.value === 'chat' ? 'history' : 'chat'
+      cancelConfirm() // 离开/进入视图都清残留确认态
+      if (view.value === 'history') loadHistory()
+    }
+
+    function onHistoryKeydown(e) {
+      // Esc 返回聊天——守卫与 Esc 同体（监听只随 history 视图驻留 window，见下方 watch(view)）。
+      // 必须 window+capture 相位（用户 2026-11-19 质疑定案）：macOS（Chrome/Safari）点击 button
+      // 不移焦点，纯鼠标流程下按 Esc 时 event.target=body，事件路径 body→document→window
+      // 不经面板根——旧的容器级 @keydown 在鼠标流下压根不触发（bug 没修掉）。
+      // window capture 让组件最先收到，stopPropagation（目检 round2 项③）掐断后续全部层，
+      // 同一按键不再连带触发 app.js 的 document 级全局 Esc「收起 AI 面板」（app.js 不动）。
+      // chat 视图下无守卫外的无效路径（textarea 的 onKeydown 不动，监听摘除后更收不到）。
+      // 焦点在文本面就让位（用户 2026-11-19 越权质疑定案）：搜索框（Esc 清查询）、重命名
+      // 输入框（Esc 取消）、编辑器 textarea 各自的 keydown handler 归它们；window capture
+      // 虽最先收到事件，但 stopPropagation 会把更晚收到事件的 input 自己 handler 掐死。
+      // 本监听只管焦点不在文本面的鼠标流场景（点 button 不移焦点 → target=body）。
+      const t = e.target
+      if (t instanceof HTMLElement && t.closest('input, textarea')) return
+      if (e.key !== 'Escape' || view.value !== 'history') return
+      e.stopPropagation()
+      toggleView()
+    }
+
+    function historyRowTime(row) {
+      // fmtRel null（≥2 天前）→ 日期兜底（format.js 契约：调用方自组，禁本地拷贝）
+      const r = fmtRel(row.last_active)
+      return r == null ? fmtMD(row.last_active) : r
+    }
+
+    function onRowClick(row) {
+      if (row.id === props.sessionId) { toggleView(); return } // 点当前会话行 = 直接回聊天
+      if (status.value === 'thinking') { askSwitch(row.id); return } // 流式中 → 右槽「是/否」确认簇（目检 round2：标题不动）
+      switchTo(row.id)
+    }
+
+    function askDelete(id) { confirmSwitchId.value = null; deletingId.value = id }
+    function askSwitch(id) { deletingId.value = null; confirmSwitchId.value = id }
+
+    async function switchTo(sid) {
+      // 先取数后原子换（spec §2.3）：成功 → emit 上抛，app 层做 sessionId+restorePayload
+      // 原子换（T5）——组件不直接换 sessionId；失败 → console + 只刷新列表，现场不动
+      let data
+      try {
+        data = await api.getSession(sid)
+      } catch (e) {
+        console.error('[ai-chat] getSession failed', e)
+        loadHistory() // 404（他端已删）/网络：列表与服务端对齐
+        return
+      }
+      emit('switchSession', { sid, data })
+    }
+
+    async function confirmSwitchTo(id) {
+      cancelConfirm()
+      stopChat() // 用户已确认「停止并切换」：先停流再切换（后续 getSession 与恢复不再叠流）
+      await switchTo(id)
+    }
+
+    async function doDelete(sid) {
+      cancelConfirm()
+      try {
+        await api.deleteSession(sid)
+      } catch (e) {
+        // 409（他标签页流中持锁）/404（已删）：行保留（重载后与服务端一致）
+        console.error('[ai-chat] deleteSession failed', e)
+        loadHistory()
+        return
+      }
+      historyList.value = historyList.value.filter(r => r.id !== sid)
+      if (sid === props.sessionId) emit('newSession') // 删的是当前会话 → 自动新会话，不留死会话
+    }
+
+    // 恢复行与 live 行同字段形状（addMsg 的 shallowReactive 契约）：
+    // rendered: role==='assistant' 是恢复行直出 markdown（renderedHtml）的前提；
+    // messageId/citations 透传 → 反馈行 v-if="!msg.streaming && msg.messageId" 直接复用；
+    // blocksLen/uiTick 镜像与重置一次到位（blocks 保持原始数组，toggleBlock 靠 uiTick 驱动）
+    function restoreMessages(raw) {
+      messages.value = mapHistory(raw).map(d => shallowReactive({
+        id: ++msgSeq,
+        role: d.role,
+        blocks: d.blocks,
+        streaming: false,
+        rendered: d.role === 'assistant',
+        blocksLen: d.blocks.length,
+        uiTick: 0,
+        messageId: d.messageId,
+        citations: d.citations,
+      }))
+      scrollToBottom(true)
+    }
+
     // 会话级自动批准开关：挂载时取初值（失败静默保持 false）；sessionId 变化时重取
     async function loadAutoApprove() {
       try {
@@ -469,9 +600,16 @@ export const AIChatPanel = {
     })
 
     // sessionId 变化时重置会话（新会话按钮触发）+ 重取自动批准开关（新会话 → 无行 → false）
-    watch(() => props.sessionId, () => {
+    watch(() => props.sessionId, (newSid) => {
       if (abortCtrl.value) { abortCtrl.value.abort(); abortCtrl.value = null }
-      messages.value = []
+      view.value = 'chat' // 切换落地 = 回聊天视图（列表是纯视图层，切换后不留历史态）
+      if (props.restorePayload && props.restorePayload.sid === newSid) {
+        // 全保真恢复分支（spec §2.3）：app 层「先取数后原子换」喂入的 payload 在场且对位
+        // → 原位恢复消息流，替代空重置；不匹配（新会话/启动初值）→ 维持现状 []
+        restoreMessages(props.restorePayload.data.messages)
+      } else {
+        messages.value = []
+      }
       currentTurn = null
       inputText.value = ''
       lastSearchQuery = '' // 新会话：清空搜索归因
@@ -494,6 +632,15 @@ export const AIChatPanel = {
       })
     })
 
+    // Esc 监听随视图开关（焦点路径无关，配合 onHistoryKeydown 注释的 macOS 鼠标流结论）：
+    // history 进 → window capture 注册（组件在 window 上最先收到）；退 → 摘除，不留常驻监听
+    watch(view, v => {
+      if (v === 'history') window.addEventListener('keydown', onHistoryKeydown, true)
+      else window.removeEventListener('keydown', onHistoryKeydown, true)
+    })
+    // 兜底：history 视图开着组件就被卸载（如面板整体关闭），watch 不再有机会摘 → onBeforeUnmount 摘
+    onBeforeUnmount(() => window.removeEventListener('keydown', onHistoryKeydown, true))
+
     onUnmounted(() => {
       if (abortCtrl.value) abortCtrl.value.abort()
     })
@@ -504,12 +651,15 @@ export const AIChatPanel = {
       citationSummary, citationWarn, toggleFeedback,
       autoApprove, toggleAutoApprove,
       toolKeyParam, toolResultSummary,
+      view, historyList, historyLoading, historyError, deletingId, confirmSwitchId,
+      toggleView, loadHistory, onHistoryKeydown, historyRowTime, onRowClick,
+      askDelete, doDelete, cancelConfirm, confirmSwitchTo,
       lastSearchQuery: () => lastSearchQuery
     }
   },
   template: `
     <div class="flex flex-col h-full">
-      <!-- 头部 v2：左展示层（品牌 + 标题/文档路径/状态）/ 右操作层（新会话 · 自动批准 · 关闭）。
+      <!-- 头部 v2：左展示层（品牌 + 标题/文档路径/状态）/ 右操作层（自动批准 · 新会话 · 历史 · 关闭）。
            设计稿：design/ai-panel-header-v2.html（2026-11-07 评审定稿）。
            死胶囊「当前文档」降为只读路径指示（形态 A）：title=全路径、无文档整块隐藏、无点击无 hover 变色；
            自动批准图标化：30px icon 按钮与新会话/关闭同规格，状态只由颜色表达、几何零变化；
@@ -519,26 +669,44 @@ export const AIChatPanel = {
           <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3Z"/></svg>
         </div>
         <div class="ai-id">
-          <div class="ai-line1">
-            <span class="ai-title">AI 助手</span>
-            <span v-if="docPath" class="ai-doc" :title="docPath">
-              <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-              <span class="ai-doc-path">{{ docPath }}</span>
-            </span>
-          </div>
-          <div class="ai-line2" aria-live="polite">
-            <span v-if="status === 'thinking'">思考中<span class="thinking-dots" aria-hidden="true"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></span>
-            <span v-else>就绪</span>
-          </div>
+          <!-- history 视图：左展示层换「← 返回 + 历史会话」（spec §2.1）；chat 视图原样 -->
+          <template v-if="view === 'history'">
+            <div class="ai-line1">
+              <button class="ai-ibtn" @click="toggleView" aria-label="返回聊天" title="返回聊天">
+                <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+              </button>
+              <span class="ai-title">历史会话</span>
+            </div>
+            <div class="ai-line2">共 {{ historyList.length }} 个会话</div>
+          </template>
+          <template v-else>
+            <div class="ai-line1">
+              <span class="ai-title">AI 助手</span>
+              <span v-if="docPath" class="ai-doc" :title="docPath">
+                <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                <span class="ai-doc-path">{{ docPath }}</span>
+              </span>
+            </div>
+            <div class="ai-line2" aria-live="polite">
+              <span v-if="status === 'thinking'">思考中<span class="thinking-dots" aria-hidden="true"><span class="dot">.</span><span class="dot">.</span><span class="dot">.</span></span></span>
+              <span v-else>就绪</span>
+            </div>
+          </template>
         </div>
         <div class="ai-acts">
-          <button id="btn-new-session" class="ai-ibtn" title="新会话" aria-label="新会话" @click="newSession">
-            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M12 7v6"/><path d="M9 10h6"/></svg>
-          </button>
+          <!-- 操作钮序（目检 round2 项④）：自动批准 · 新会话 · 历史 · 关闭（关闭末位不动）；
+               历史视图开关=纯视图层（三层契约），开列表不打断流（Review Focus 1 目检项①） -->
           <button id="auto-approve-toggle" class="ai-ibtn" role="switch" :aria-checked="autoApprove"
             :class="{ 'is-on': autoApprove }"
             title="自动批准：开启后本会话写操作不再逐条确认" aria-label="自动批准" @click="toggleAutoApprove">
             <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>
+          </button>
+          <button id="btn-new-session" class="ai-ibtn" title="新会话" aria-label="新会话" @click="newSession">
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"/><path d="M12 7v6"/><path d="M9 10h6"/></svg>
+          </button>
+          <button id="btn-history" class="ai-ibtn" title="历史会话" aria-label="历史会话"
+            :class="{ 'text-[var(--brass)]': view === 'history' }" :aria-pressed="view === 'history'" @click="toggleView">
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
           </button>
           <button class="ai-ibtn" @click="$emit('close')" aria-label="关闭">
             <span v-html="ICONS_LOCAL.x"></span>
@@ -551,8 +719,44 @@ export const AIChatPanel = {
         </div>
       </div>
 
+      <!-- 历史列表（view==='history'，spec §2.2）：消息区整块替换；行主体=原生 button
+           （搜索卡键盘不可达教训 e96cf4ed），删除钮为其兄弟非后代（无嵌套 button）；
+           确认态（删除两步 / 停止切换）收进右侧槽（目检 round2 项①②）：同一右槽在两态间
+           切换 ×⇄确认/取消小钮簇，标题 + 时间副行任何态下都在；同一时刻至多一行处于确认态 -->
+      <div v-if="view === 'history'" id="ai-history" class="flex-1 overflow-y-auto p-3 space-y-1.5"
+        role="region" aria-label="历史会话列表">
+        <div v-if="historyError" class="px-3 py-2 text-[13px] text-[#c0392b]">
+          加载失败<button type="button" class="confirm-no ml-2" @click="loadHistory()">重试</button>
+        </div>
+        <div v-else-if="historyLoading" class="px-3 py-2 text-[13px] text-[var(--ink-soft)]">加载中…</div>
+        <div v-else-if="!historyList.length" class="px-3 py-2 text-[13px] text-[var(--ink-soft)]">暂无历史会话</div>
+        <div v-for="row in historyList" :key="row.id" class="flex items-stretch gap-1.5">
+          <button type="button"
+            class="flex-1 min-w-0 text-left rounded-lg px-3 py-2.5 transition-colors hover:bg-[color-mix(in_srgb,var(--brass)_8%,transparent)]"
+            :class="row.id === sessionId ? 'bg-[color-mix(in_srgb,var(--brass)_12%,transparent)] text-[var(--brass)] is-current' : ''"
+            @click="onRowClick(row)">
+            <span class="block truncate text-[13px]" :title="row.title">{{ row.title }}</span>
+            <span class="block mt-0.5 text-[11px] text-[var(--ink-soft)]">{{ historyRowTime(row) }} · {{ row.message_count }} 条<template v-if="row.tool_count"> · {{ row.tool_count }} 次工具</template></span>
+          </button>
+          <!-- 右侧槽唯一交互簇（v-if/v-else-if 链两态切换）：× ⇄ 确认/取消小钮；
+               当前会话流式中隐藏 ×（后端 409 兜底的前端镜像，spec §2.2） -->
+          <button v-if="deletingId !== row.id && confirmSwitchId !== row.id && !(status === 'thinking' && row.id === sessionId)"
+            type="button" class="ai-ibtn self-center" title="删除会话" aria-label="删除会话" @click="askDelete(row.id)">
+            <svg aria-hidden="true" class="icon icon-xs" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+          <div v-else-if="deletingId === row.id" class="flex items-center gap-1 self-center">
+            <button type="button" class="confirm-yes" title="确认删除该会话" @click="doDelete(row.id)">确认</button>
+            <button type="button" class="confirm-no" @click="cancelConfirm()">取消</button>
+          </div>
+          <div v-else-if="confirmSwitchId === row.id" class="flex items-center gap-1 self-center">
+            <button type="button" class="confirm-yes" title="停止当前回答并切换到该会话" @click="confirmSwitchTo(row.id)">是</button>
+            <button type="button" class="confirm-no" @click="cancelConfirm()">否</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 消息列表 -->
-      <div id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4" role="log">
+      <div v-else id="ai-messages" ref="messagesEl" class="flex-1 overflow-y-auto p-4 space-y-4" role="log">
         <!-- :key="msg.id"（§4.1）：客户端单调 nonce（addMsg 打戳），流式行 remount 炸反馈行/滚动锚的根治。
              blocks 内层 :key="bi" 不动：blocks 为消息内 append-only（push + blocksLen 镜像），无重排——YAGNI -->
         <div v-for="msg in messages" :key="msg.id"
@@ -654,8 +858,8 @@ export const AIChatPanel = {
         </div>
       </div>
 
-      <!-- 输入区 -->
-      <div class="p-3 border-t border-border shrink-0">
+      <!-- 输入区（history 视图隐藏，spec §2.1） -->
+      <div v-if="view !== 'history'" class="p-3 border-t border-border shrink-0">
         <div class="flex items-end gap-2 border border-border rounded-xl p-3">
           <textarea id="ai-input" ref="inputEl" v-model="inputText" rows="1"
             class="flex-1 border-0 bg-transparent resize-none focus:outline-none text-sm"
