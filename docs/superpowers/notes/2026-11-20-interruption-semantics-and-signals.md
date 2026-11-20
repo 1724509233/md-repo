@@ -43,7 +43,7 @@ runtime 的 append 粒度是「每次 LLM 调用结束」：
 
 ## 5. 落点建议（两条通道，均未排期）
 
-- **通道一（小增量）**：在飞半截文本以 `interrupted: true` assistant 行落库——修显示不一致 + 解锁「继续」。改动小、语义清晰；待决参数：是否附带停后补发轮的系统提醒（如「上一轮被用户中断」）、tool_calls 半途形态的落库口径（现由孤儿封 error 兜底，可不动）。run-detach 合入后做。
+- **通道一（小增量）**：**spec 已立（2026-11-20）**：`../specs/2026-11-20-partial-output-retention.md`——在飞半截文本以 `interrupted` 标记的 content-only assistant 行三路径落库（cancel/APIError/崩溃），修显示不一致 + 解锁「继续」；思考链/半截 tool_calls/SIGKILL 明确不做。待用户评审后实施。
 - **通道二（独立功能）**：stop 信号账本（run_id/session/trigger/dwell/落点阶段/停后首条补发/是否同义重问）+ 失败轮思考选段 + bgagent 消费闭环。待决产品参数：思考抓取长度上界、保留期、dwell 阈值口径、同义重问的判定归谁（离线消费侧判，不进账本）。
 
 与既有备案的关系：spec §9「观感分叉（评审 m7）」是本问题的同族——live 显示与持久化真相在取消窗口分叉，当时的口径是「以持久化为准」；通道一本质是把半截文本拉进持久化真相，让分叉面收缩。

@@ -221,7 +221,7 @@ sequenceDiagram
 - 多标签页降级（评审 m5）：一标签走快照路径（无活跃 Run）时不持 live 订阅；另一标签随后开跑，本标签页只在切会话/刷新/4s 列表轮（history 视图）时感知，聊天视图内不自愈。接受。
 - 双标签页停止回填（评审 m10）：两标签各回填一份未出队内容（后写者赢口径延伸），接受。
 - 多标签页并发投递/停止：全部串行进单驱动，无竞态义务。
-- **中断时的半截输出与 stop 意图信号（用户实测讨论 2026-11-20）**：run 死亡（stop/crash）后，在飞文本半截与全部思考链只活在 live 画面，重进即蒸发（工具事实与 change_ledger 不受影响）——live/持久化分叉同族（评审 m7 口径「以持久化为准」的延伸面）。完整思考与设计草案（通道一：半截文本以 `interrupted` 标记入历史；通道二：stop 信号账本 + 失败轮思考选段 + bgagent 消费闭环，均未排期）见 [`../notes/2026-11-20-interruption-semantics-and-signals.md`](../notes/2026-11-20-interruption-semantics-and-signals.md)。
+- **中断时的半截输出与 stop 意图信号（用户实测讨论 2026-11-20）**：run 死亡（stop/crash）后，在飞文本半截与全部思考链只活在 live 画面，重进即蒸发（工具事实与 change_ledger 不受影响）——live/持久化分叉同族（评审 m7 口径「以持久化为准」的延伸面）。完整思考与设计草案（通道一：半截文本持久化，**spec 已立** [`2026-11-20-partial-output-retention.md`](2026-11-20-partial-output-retention.md)；通道二：stop 信号账本 + 失败轮思考选段 + bgagent 消费闭环，未排期）见 [`../notes/2026-11-20-interruption-semantics-and-signals.md`](../notes/2026-11-20-interruption-semantics-and-signals.md)。
 
 ## 10. 测试与目检
 
