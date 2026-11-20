@@ -11,7 +11,7 @@ run 死亡（stop / 流中 APIError / 通用崩溃）时，在飞 LLM 调用的�
 2. 半截正文进入 LLM 历史，「继续」有锚点（模型看得见自己说到哪）。
 
 **非目标（明确不做）**
-- 思考链持久化 → 通道二（旁路账本 + 选段采集），本 spec 不碰：reasoning 仍零落库。
+- 思考链持久化 → 通道二：~~旁路账本 + 选段采集~~ **r6 改道（2026-11-20 用户定）**——reasoning 全文落 blob（assistant 行 `reasoning` 字段，done/interrupted 同附），LLM_FIELDS 白名单阻断出域；账本零文本。shape 契约归本 spec：**interrupted 行增 `reasoning` 字段（本次调用已累计的思考，可空）**，b621b5b4 content-only 不变式扩为 content+reasoning（仍无 tool_calls/id/citations）。**实施前现状仍为零落库**（实施卡落地前，既有测试口径不变）。
 - SIGKILL/断电：无代码得执行，不可恢复——与 run-detach §9「服务进程重启」同失败面，备案接受。
 - 中断轮的可反馈性：半截行无 `message_id`，反馈行不出现（既有 `!msg.streaming && msg.messageId` 守卫天然覆盖），不补。
 - 半截 tool_calls 落库：维持既有不变式——**历史永不持有半交付 tool call**（tool_calls 增量碎片照旧丢弃，APIError 先例的理由完整保留）。
@@ -25,6 +25,7 @@ run 死亡（stop / 流中 APIError / 通用崩溃）时，在飞 LLM 调用的�
 ```
 
 - **只带 content + interrupted**：无 `tool_calls`（不变式）、无 `id`/`ts`/`citations`（非完成轮，不配反馈键、不配 done-time 引用快照——中断宣称不产 grounding）。
+- **补丁卡（2026-11-20 实施 → r8 修订重做）**：锚点键随行落库初版为 `chat_run_id`；**r8 用户裁改为 `message_id`**——interrupted 行盖 `message_id`（uuid4-hex-12，与 done 行同形态）**双职**=反馈键 + 通道二 chat_abort_log join 锚；盖戳在 `_append_partial` 并留痕于 agent 属性供 RunHub 注入。随之**反馈契约反转**：中断轮可点赞点踩（前端 `!msg.streaming && msg.messageId` 守卫天然放行，旧「中断轮不配反馈键」测试家族方向翻转），recall_feedback 写侧接受 interrupted message_id。无锚环境（bgagent 等）键缺席、行回三键形态。锚键同被 LLM_FIELDS 白名单挡在出域外（模型不可见）。**重做项（实施卡）**：补丁卡已落地的 chat_run_id 盖戳/下传/测试钉整体替换为 message_id；r6 reasoning 字段随行附落（见通道二 spec r6 §3）。
 - **顺序钉**：append 必须发生在 runhub `_save_and_boundary` 之前。cancel 路径：CancelledError 在生成器帧内抛出 → runtime 的 except 先跑（append）→ 异常上抛 → `_drive` except 分支落库——生成器展开顺序天然满足，测试钉死。
 - 三处落点（全部在 runtime 的流式累积区收口，runhub/run 路由零改动）：
   1. **CancelledError**（stop）：append 后原样 re-raise（取消语义不变）。

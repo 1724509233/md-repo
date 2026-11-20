@@ -191,3 +191,8 @@ _Avoid_: source（裸词）、agent source、写来源（裸词）
 **agent session**：
 主 agent 的一次对话实例，三个职责分属三个主语：`AgentSpec` 声明 agent 是什么（model/tools/limits + `policy()` 派生）；`Agent` 是运行体（spec + runtime + 内部状态，持有 messages / pending confirms / read tracking，外部经 `chat()`/`confirm()` 驱动）；`SessionManager` 管消息状态与并发（内存缓存、miss 从 `sessions` 表恢复——跨重启存活、TTL 30min、持锁会话不驱逐）。runtime（LoopRuntime）决定怎么执行，是确认流程的单点。
 _Avoid_: session（裸词）、chat、conversation
+
+**run_id**（⚠️ 双义，新代码禁用裸词）：
+① bgagent 批次戳（`runner.py` 盖 `{alias}-{ts}`，proposals/snapshots/egress_log 的 join 列，trusted stamp）；② RunHub 聊天 Run 事件帧键（`uuid4().hex[:12]`，subscribe/resync 匹配）——**r8（2026-11-20）起 ② 不再入存储**，只存活于流回放层。
+**message_id**：assistant 消息身份戳（`uuid4-hex12`，done 行与 interrupted 行同形态），**双职**：反馈键（recall_feedback 唯一键成员）+ chat_abort_log join 锚（r8 用户裁取代 chat_run_id——该名为补丁卡中间态，自此废弃，重做项见通道一 spec）；interrupted 行可点赞点踩（旧「中断轮不配反馈键」契约作废）。表命名规约：追加式事件流 `*_log`（change_log/egress_log/chat_abort_log 同族，事件时刻列名从族用 `ts`）；`message_*` 侧表预留作废（r6 思考改道 blob）。
+_Avoid_: 裸 run_id 指聊天 Run、signal（表名，用 chat_abort_log）、chat_run_id（r8 废弃）

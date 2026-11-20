@@ -44,7 +44,7 @@ runtime 的 append 粒度是「每次 LLM 调用结束」：
 ## 5. 落点建议（两条通道，均未排期）
 
 - **通道一（小增量）**：**spec 已立（2026-11-20）**：`../specs/2026-11-20-partial-output-retention.md`——在飞半截文本以 `interrupted` 标记的 content-only assistant 行三路径落库（cancel/APIError/崩溃），修显示不一致 + 解锁「继续」；思考链/半截 tool_calls/SIGKILL 明确不做。待用户评审后实施。
-- **通道二（独立功能）**：stop 信号账本（run_id/session/trigger/dwell/落点阶段/停后首条补发/是否同义重问）+ 失败轮思考选段 + bgagent 消费闭环。待决产品参数：思考抓取长度上界、保留期、dwell 阈值口径、同义重问的判定归谁（离线消费侧判，不进账本）。
+- **通道二（独立功能）**：**spec 已立（2026-11-20）**：`../specs/2026-11-20-stop-signals-reasoning-capture.md`——**r6 定稿口径：纯 stop 行为账本（零文本）+ 思考改道 blob**（APIError/crash 归运维不入表；confirm_timeout 被拒事实 blob reject 行已有、缺席混淆拒绝——不入表；reasoning 全文入 assistant 行 `reasoning` 字段、LLM_FIELDS 白名单阻断出域，「思考零落库」旧铁律反转在案）；chat_abort_log 单表（双时间戳/phase/tool_name，id=provenance 锚）+ bgagent 消费闭环。dwell 阈值与同义重问判定归消费侧（账本只存原始事实）；待决参数与 r6 挂起项（prompt_preview/归因窗口，真实数据驱动）见 spec §9。**上游讨论纪要（vault）**：`1-项目/md-repo/discussions/2026-11-20-中断归因沉淀与记忆消费.md`——信号分型（放弃/修正/增补/撤回）、三条件准入、统一采集层（决策 1：中断=普通信号源，source 枚举）、消费端隔离（决策 2：记忆类型×消费端）是整条「中断→归因→分级→沉淀」流水线的法源；通道二只是其捕获底座 + 第一消费端，归因分类器/分级器/提案沉淀归记忆系统 spec（另立）。
 
 与既有备案的关系：spec §9「观感分叉（评审 m7）」是本问题的同族——live 显示与持久化真相在取消窗口分叉，当时的口径是「以持久化为准」；通道一本质是把半截文本拉进持久化真相，让分叉面收缩。
 
