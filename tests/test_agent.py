@@ -1844,9 +1844,33 @@ def test_partial_text_persisted_on_cancel(tmp_path: Path):
 
     assert cancelled, "CancelledError 必须原样上抛"
     assert any(getattr(e, "type", None) == "token" for e in seen)
-    # 行形态逐字（dict 相等即钉死键集恰为三键）
+    # 行形态逐字（dict 相等即钉死键集恰为三键；本测试环境无 chat_run_id——
+    # 锚缺席形态，bgagent 等同款）
     assert agent.messages[-1] == {"role": "assistant", "content": "说到一半",
                                   "interrupted": True}
+
+
+def test_partial_anchor_key_present_and_absent():
+    """补丁卡（2026-11-20）：agent.chat_run_id 在场（RunHub 聊天 run 盖戳）→
+    锚键随行落库（通道二 chat_abort_log join 键）；缺席 → 三键形态。"""
+    from server.agent.runtime import _append_partial
+
+    class _A:
+        messages: list = []
+        chat_run_id = "ab12cd34ef56"
+
+    a = _A()
+    _append_partial(a, "半句")
+    assert a.messages[-1] == {"role": "assistant", "content": "半句",
+                              "interrupted": True, "chat_run_id": "ab12cd34ef56"}
+
+    class _B:
+        messages: list = []
+
+    b = _B()
+    _append_partial(b, "半句")
+    assert b.messages[-1] == {"role": "assistant", "content": "半句",
+                              "interrupted": True}
 
 
 def test_partial_blank_not_persisted(tmp_path: Path):
@@ -1921,6 +1945,8 @@ def _partial_then_continue(tmp_path: Path) -> list:
     """§5-4/5 共用体：首轮 mid-stream APIError（content 已累积）→ 次轮 user
     「继续」正常 final。返回次轮出域 messages（create 捕获）。"""
     agent, vault = _make_agent(tmp_path)
+    # 补丁卡（2026-11-20）：盖聊天 Run 锚——同时证明 chat_run_id 被白名单挡在出域外
+    agent.chat_run_id = "anchor0001"
 
     stream1 = AsyncMock()
     stream1.__aiter__ = lambda s: _async_iter_exc(
@@ -1950,6 +1976,7 @@ def test_partial_not_in_llm_request(tmp_path: Path):
     assert any(m.get("content") == "说到一半" for m in sent)  # 行在场
     for m in sent:
         assert "interrupted" not in m, "interrupted 不得出域"
+        assert "chat_run_id" not in m, "chat_run_id 锚不得出域（补丁卡）"
         assert set(m) <= {"role", "content", "tool_calls", "tool_call_id"}
 
 

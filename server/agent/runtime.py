@@ -141,14 +141,21 @@ def _ensure_tool_results(agent) -> None:
 def _append_partial(agent, content: str) -> None:
     """通道一（spec 2026-11-20 partial-output-retention §2）：一次流式调用以非
     正常完成退出（cancel / APIError / 崩溃）时，已累积 content 入历史——
-    content-only 的 interrupted 行（逐字三键，无 tool_calls/id/ts/citations：
-    不变式「历史永不持半交付 tool call」+ 中断轮不配反馈键/引用快照）。
-    纯空白不 append。``interrupted`` 被 LLM_FIELDS 白名单挡在模型请求外：模型
+    content-only 的 interrupted 行（无 tool_calls/id/ts/citations：不变式
+    「历史永不持半交付 tool call」+ 中断轮不配反馈键/引用快照）。
+    ``chat_run_id`` 锚点键（补丁卡 2026-11-20）：agent.chat_run_id 在场（RunHub
+    聊天 run，runhub._drive 盖戳）时随行落库——通道二 chat_abort_log 的 join 键，
+    消费端由此键锚定中断边界，不再依赖脆弱的位置计数；无锚环境（bgagent 等）
+    键缺席，行形态回到三键。两键均被 LLM_FIELDS 白名单挡在模型请求外：模型
     看到自己说过的半句，中断语境由用户下一条消息自然提供（特性非缺漏）。
+    纯空白不 append。
     """
     if content and content.strip():
-        agent.messages.append({"role": "assistant", "content": content,
-                               "interrupted": True})
+        line = {"role": "assistant", "content": content, "interrupted": True}
+        anchor = getattr(agent, "chat_run_id", "")
+        if anchor:
+            line["chat_run_id"] = anchor
+        agent.messages.append(line)
 
 
 class LoopRuntime(Runtime):

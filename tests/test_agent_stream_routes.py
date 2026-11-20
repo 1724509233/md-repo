@@ -120,8 +120,9 @@ def _types(frames):
 
 # ── POST /api/agent/chat 形状 ────────────────────────────────────────────────
 
-def test_chat_post_returns_json_not_sse(vault_dir, db_conn, ai_config):
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+def test_chat_post_returns_json_not_sse(vault_dir, db_conn, ledger_conn, ai_config):
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         r = tc.post("/api/agent/chat", json={"message": "hi", "session_id": "s1"})
@@ -136,9 +137,10 @@ def test_chat_post_returns_json_not_sse(vault_dir, db_conn, ai_config):
         _drain(tc, "s1")
 
 
-def test_chat_queue_full_409(vault_dir, db_conn, ai_config):
+def test_chat_queue_full_409(vault_dir, db_conn, ledger_conn, ai_config):
     """运行中最多再排 QUEUE_MAX=5 条；第 6 条 409（spec §4）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         for i in range(6):                      # m1 开跑 + 5 条排队
@@ -157,9 +159,10 @@ def test_chat_queue_full_409(vault_dir, db_conn, ai_config):
     assert pref_users + replay_users == 6
 
 
-def test_chat_precheck_doc_path_409_preserved(vault_dir, db_conn, ai_config):
+def test_chat_precheck_doc_path_409_preserved(vault_dir, db_conn, ledger_conn, ai_config):
     """投递入口的 doc_path 409 前置保留（出队侧才降级）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     with TestClient(app) as tc, _mock_openai():
         r = tc.post("/api/agent/chat",
                     json={"message": "hi", "session_id": "s1",
@@ -169,12 +172,13 @@ def test_chat_precheck_doc_path_409_preserved(vault_dir, db_conn, ai_config):
 
 # ── GET /api/agent/stream ────────────────────────────────────────────────────
 
-def test_stream_snapshot_shape(vault_dir, db_conn, ai_config):
+def test_stream_snapshot_shape(vault_dir, db_conn, ledger_conn, ai_config):
     """无运行会话 → snapshot 空态帧 + run_status(null)；有历史 → messages
     为持久化全量（B1 前缀完整性）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     hist = [{"role": "user", "content": "旧话"}, {"role": "assistant", "content": "答"}]
-    save_session(db_conn, "hist", hist)
+    save_session(ledger_conn, "hist", hist)
     with TestClient(app) as tc:
         frames = _frames(_stream_lines(tc, "ghost", snapshot="1"))
         assert _types(frames) == ["snapshot", "run_status"]
@@ -189,9 +193,10 @@ def test_stream_snapshot_shape(vault_dir, db_conn, ai_config):
         assert frames[0]["persisted_through_seq"] == 0
 
 
-def test_stream_cursor_and_resync(vault_dir, db_conn, ai_config):
+def test_stream_cursor_and_resync(vault_dir, db_conn, ledger_conn, ai_config):
     """无 run_id / run_id 不匹配 → 单 resync 帧即终（游标只在同 run_id 内有效）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     with TestClient(app) as tc, _mock_openai():
         frames = _frames(_stream_lines(tc, "s1"))          # 无 Run
         assert _types(frames) == ["resync"]
@@ -203,7 +208,7 @@ def test_stream_cursor_and_resync(vault_dir, db_conn, ai_config):
         assert _types(frames) == ["resync"]
 
 
-def test_stream_live_tail_after_submit(vault_dir, db_conn, ai_config):
+def test_stream_live_tail_after_submit(vault_dir, db_conn, ledger_conn, ai_config):
     """submit 后 cursor 订阅收到 live 帧直至终帧（seq 单调）。
 
     starlette TestClient 的 transport 把整个响应缓冲后才交回（portal.call 跑
@@ -211,7 +216,8 @@ def test_stream_live_tail_after_submit(vault_dir, db_conn, ai_config):
     asyncio.run + 直驱 app.state.runhub seam（路由注册时挂上），asyncio.Event
     门控 LLM 流，保证「门前的帧=已缓冲前缀、门后的帧=live 尾巴」无竞态。
     """
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     hub = app.state.runhub
 
     async def main():
@@ -253,14 +259,15 @@ def test_stream_live_tail_after_submit(vault_dir, db_conn, ai_config):
     assert seqs == sorted(seqs)                      # 无重排
 
 
-def test_stream_route_snapshot_blocks_until_terminal(vault_dir, db_conn,
+def test_stream_route_snapshot_blocks_until_terminal(vault_dir, db_conn, ledger_conn,
                                                       ai_config):
     """路由面形状钉：snapshot 订阅一体返回「snapshot 前缀 + 边界后回放 + 终帧」。
 
     收流完成时轮已跑完：持久化快照已含本轮 → 边界覆盖全部 buffer 事件 →
     回放只剩终帧（前缀唯一源、无重复的单一真相源钉）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
-    save_session(db_conn, "s1", [{"role": "user", "content": "旧话"}])
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
+    save_session(ledger_conn, "s1", [{"role": "user", "content": "旧话"}])
     with TestClient(app) as tc, _mock_openai():
         rid = tc.post("/api/agent/chat",
                       json={"message": "hi", "session_id": "s1"}).json()["run_id"]
@@ -278,7 +285,7 @@ def test_stream_route_snapshot_blocks_until_terminal(vault_dir, db_conn,
 
 # ── POST /api/agent/stop ─────────────────────────────────────────────────────
 
-def test_stop_route(vault_dir, db_conn, ai_config, monkeypatch):
+def test_stop_route(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch):
     """运行中 → {ok:true,stopped:true} + 会话终帧 stopped；空会话 stopped:false；
     stop 后该会话 agent.pending_confirms 为空（Review Focus 3 路由侧钉）。"""
     captured: dict = {}
@@ -289,7 +296,8 @@ def test_stop_route(vault_dir, db_conn, ai_config, monkeypatch):
         return []
 
     monkeypatch.setattr(agent_routes, "_evict_stale_agents", spy)
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         tc.post("/api/agent/chat", json={"message": "hi", "session_id": "s1"})
@@ -319,14 +327,15 @@ def _snapshot_messages(hub, session_id):
     return asyncio.run(go())
 
 
-def test_stop_persists_partial_row(vault_dir, db_conn, ai_config):
+def test_stop_persists_partial_row(vault_dir, db_conn, ledger_conn, ai_config):
     """§5-6 顺序钉：stop 半截正文以 interrupted 行进会话行。
 
     stop 分支唯一落库路径是 _drive 的 _save_and_boundary——快照前缀含半截行
     ⇔ 生成器帧内 except（append）先于落库执行、CancelledError 后上抛。
     TestClient 读流期间无法发第二请求（transport 缓冲整响应），走
     test_stream_live_tail_after_submit 先例：asyncio.run 直驱 runhub seam。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     hub = app.state.runhub
 
     async def main():
@@ -357,22 +366,25 @@ def test_stop_persists_partial_row(vault_dir, db_conn, ai_config):
                 tail.append(f)
                 if f["type"] == "run_status" and f["running"] is False:
                     break
-        return tail
+        return tail, rid
 
-    tail = asyncio.run(main())
+    tail, rid = asyncio.run(main())
     assert tail[-1]["type"] == "run_status" and tail[-1]["state"] == "stopped"
     assert not hub.is_running("s1")
 
     msgs = _snapshot_messages(hub, "s1")
-    assert {"role": "assistant", "content": "说到一半", "interrupted": True} in msgs
+    # 补丁卡（2026-11-20）：chat_run_id 锚随行落库，值 = RunHub run_id（join 键契约）
+    assert {"role": "assistant", "content": "说到一半", "interrupted": True,
+            "chat_run_id": rid} in msgs
     # stop 只增半截行，不吞既有：出队落库的 user 行仍在场
     assert any(m.get("role") == "user" and m.get("content") == "hi" for m in msgs)
 
 
-def test_crash_persists_partial_row(vault_dir, db_conn, ai_config):
+def test_crash_persists_partial_row(vault_dir, db_conn, ledger_conn, ai_config):
     """§5-7：崩溃路径（流中注入非 APIError 异常）→ runtime append 后 re-raise，
     runhub crash 分支 _save_and_boundary 落库——快照前缀含半截行。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     hub = app.state.runhub
 
     async def main():
@@ -387,26 +399,29 @@ def test_crash_persists_partial_row(vault_dir, db_conn, ai_config):
         with patch("server.agent.runtime.AsyncOpenAI", return_value=client):
             rid = hub.submit("s1", "hi", None)
             frames = [f async for f in hub.subscribe("s1", run_id=rid, cursor=0)]
-        return frames
+        return frames, rid
 
-    frames = asyncio.run(main())
+    frames, rid = asyncio.run(main())
     assert frames[-1]["type"] == "run_status" and frames[-1]["state"] == "error"
     assert any(f["type"] == "token" and f["text"] == "崩前正文" for f in frames)
     assert any(f["type"] == "error" and "injected crash" in f.get("message", "")
                for f in frames)
 
     msgs = _snapshot_messages(hub, "s1")
-    assert {"role": "assistant", "content": "崩前正文", "interrupted": True} in msgs
+    # 补丁卡：crash 路径同款锚点
+    assert {"role": "assistant", "content": "崩前正文", "interrupted": True,
+            "chat_run_id": rid} in msgs
 
 
 # ── POST /api/agent/queue/remove ─────────────────────────────────────────────
 
-def test_queue_remove_route(vault_dir, db_conn, ai_config):
+def test_queue_remove_route(vault_dir, db_conn, ledger_conn, ai_config):
     """删除未出队项：queue_update 掉一条；重复/未知 qid 幂等 {ok:true}。
 
     qid 由 RunHub 按会话计数分配（q1/q2/q3，T1 定案）：m1 开轮（q1），m2/m3
     排队（q2/q3），删除 q2 后终帧序列里永不出队。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         tc.post("/api/agent/chat", json={"message": "m1", "session_id": "s1"})
@@ -446,7 +461,7 @@ def _pcfg(tmp_path, dirs_yaml: str) -> PrivacyConfig:
     return PrivacyConfig(cfg)
 
 
-def test_dequeue_revalidates_privacy(vault_dir, db_conn, ai_config, tmp_path,
+def test_dequeue_revalidates_privacy(vault_dir, db_conn, ledger_conn, ai_config, tmp_path,
                                      monkeypatch):
     """排队期间磁盘删除 → 出队降级无 doc kwargs；隐私名单路径 → 出队注入
     privacy_doc=True 且 doc_path 为 None（路径不进模型上下文）。"""
@@ -462,7 +477,8 @@ def test_dequeue_revalidates_privacy(vault_dir, db_conn, ai_config, tmp_path,
 
     monkeypatch.setattr(Agent, "chat", rec)
 
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config,
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config,
                      privacy=_pcfg(tmp_path, "[private]"))
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
@@ -486,9 +502,10 @@ def test_dequeue_revalidates_privacy(vault_dir, db_conn, ai_config, tmp_path,
 
 # ── sessions 徽标 + 删除清 buffer（Review Focus 4 / M3）─────────────────────
 
-def test_sessions_list_running_flag(vault_dir, db_conn, ai_config):
-    save_session(db_conn, "s1", [{"role": "user", "content": "x"}])
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+def test_sessions_list_running_flag(vault_dir, db_conn, ledger_conn, ai_config):
+    save_session(ledger_conn, "s1", [{"role": "user", "content": "x"}])
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         r = tc.get("/api/agent/sessions")
@@ -502,12 +519,13 @@ def test_sessions_list_running_flag(vault_dir, db_conn, ai_config):
         assert next(s for s in r.json()["sessions"] if s["id"] == "s1")["running"] is False
 
 
-def test_sessions_row_visible_while_running(vault_dir, db_conn, ai_config):
+def test_sessions_row_visible_while_running(vault_dir, db_conn, ledger_conn, ai_config):
     """出队即时前缀持久化（2026-11-20 rev3，用户报告）：运行中会话行在列
     表即时可见——此前只在 done 落库后才出现（list 滤空行 + 首条消息运行中
     从不入库）。202 后轮询列表（出队落库在 portal 后台 loop 上完成，与轮询
     请求之间推进），行出现即断言 running=true；跑完后 running=false。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
     with TestClient(app) as tc, _mock_openai_gated(gate):
         r = tc.post("/api/agent/chat", json={"message": "hi", "session_id": "s2"})
@@ -528,10 +546,11 @@ def test_sessions_row_visible_while_running(vault_dir, db_conn, ai_config):
         assert row["running"] is False
 
 
-def test_delete_clears_runhub_buffer(vault_dir, db_conn, ai_config):
+def test_delete_clears_runhub_buffer(vault_dir, db_conn, ledger_conn, ai_config):
     """终止保留期内 DELETE → snapshot 走空态、cursor 回放只剩 resync
     （M3 回归钉：discard 不清则删掉的会话整段从 buffer 复活）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     with TestClient(app) as tc, _mock_openai():
         lines = _run_chat(tc, "你好", session_id="s1")
         rid = _frames(lines)[0]["run_id"]
@@ -546,8 +565,9 @@ def test_delete_clears_runhub_buffer(vault_dir, db_conn, ai_config):
                                             run_id=rid, cursor="0"))) == ["resync"]
 
 
-def test_runhub_exposed_on_app_state(vault_dir, db_conn, ai_config):
+def test_runhub_exposed_on_app_state(vault_dir, db_conn, ledger_conn, ai_config):
     """测试 seam：路由注册时 runhub 挂 app.state（注释见 routes/agent.py）。"""
-    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ai_config=ai_config)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn,
+             ledger_conn=ledger_conn, ai_config=ai_config)
     from server.agent.runhub import RunHub
     assert isinstance(app.state.runhub, RunHub)
