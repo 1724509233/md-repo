@@ -183,6 +183,7 @@ def test_privacy_config_file_vanishes_keeps_previous(tmp_path: Path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
                    encoding="utf-8")
+    os.utime(cfg, ns=(1_000_000_000, 1_000_000_000))  # 显式 mtime：mtime-缓存键不赌时钟 tick（Windows 粒度 ~15.6ms，同卡 ①-③ 先例）
     pc = PrivacyConfig(cfg)
     assert pc.dirs == ("日记",)
     cfg.unlink()
@@ -190,6 +191,7 @@ def test_privacy_config_file_vanishes_keeps_previous(tmp_path: Path):
     # 文件回来 → 立即恢复新值（未缓存瞬态，下次访问重试）
     cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [finance]\n",
                    encoding="utf-8")
+    os.utime(cfg, ns=(2_000_000_000, 2_000_000_000))
     assert pc.dirs == ("finance",)
 
 
