@@ -541,3 +541,55 @@ def test_executor_add_remove(tmp_path, ledger_conn):
         await asyncio.gather(*sup.tasks(), return_exceptions=True)
 
     asyncio.run(go())
+
+
+# ── M5: shutdown 覆盖缓退任务；死后 apply 拒绝 ────────────────────────────
+
+
+def test_shutdown_covers_retiring_task(tmp_path, monkeypatch):
+    """M5：retired 未完的任务留在 tasks() 直到自然完成；shutdown 一律
+    cancel 全部 live 任务（含缓退中的），死后 apply raise（stop 后不得复活）。"""
+    from datetime import timedelta
+
+    import server.bgagent.scheduler as sched
+
+    cfg_on = _cfg(tmp_path, "a", cron="0 3 * * *")
+    cfg_off = _cfg(tmp_path, "a", enabled=False, cron="0 3 * * *")
+
+    def first_past(cron, now=None):
+        first_past.n += 1
+        if first_past.n == 1:
+            return datetime.now() - timedelta(seconds=1)
+        return datetime.now() + timedelta(days=1)
+    first_past.n = 0
+    monkeypatch.setattr(sched, "_next_fire", first_past)
+
+    async def go():
+        sup = sched.BgSupervisor(tmp_path / "vault", hooks=[])
+        started = asyncio.Event()
+        gate = asyncio.Event()
+
+        async def run_fn(c, v, hooks=None, trigger="cron"):
+            started.set()
+            await gate.wait()          # 环卡在 _handle_tick 内（缓退者形象）
+
+        sup.run_fn = run_fn
+        sup.apply([cfg_on])
+        await _poll_until(lambda: started.is_set(), 2.0)
+
+        sup.apply([cfg_off])           # retire：环在 run 里，回不到圈顶
+        retiring = _named(sup.tasks(), "bgagent-a")
+        assert len(retiring) == 1 and not retiring[0].done()   # 缓退者仍在 tasks()
+
+        sup.shutdown()                 # stop 必须够到缓退者
+        await asyncio.gather(*retiring, return_exceptions=True)
+        assert retiring[0].cancelled() or retiring[0].done()
+        await _poll_until(lambda: _named(sup.tasks(), "bgagent-a") == [], 2.0)
+
+        try:
+            sup.apply([cfg_on])
+            raise AssertionError("apply after shutdown must raise")
+        except RuntimeError:
+            pass
+
+    asyncio.run(go())

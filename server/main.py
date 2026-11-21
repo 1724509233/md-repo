@@ -12,9 +12,8 @@ import uvicorn
 from .services import ledger
 from .core import events
 from .api import create_app
-from .bgagent import start_background_agents
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
-from .bgagent.scheduler import self_exclusion
+from .bgagent.scheduler import BgSupervisor
 from .config import load_background_agents, load_notifications, load_server_config
 from .config.core import lan_gate_check
 from .services.egress import log_model_endpoints
@@ -33,19 +32,30 @@ class Runtime:
     """Assembled runtime: snapshot watcher, ledger callbacks, bgagent tasks.
 
     ``build_runtime()`` builds one; ``stop()`` tears it all down (watcher
-    first, then the bgagent tasks)."""
+    first, then the bgagent supervisor — spec 2026-11-22 §5.4 M5: shutdown
+    goes through the supervisor so RETIRING tasks are covered too).
+
+    ``supervisor`` / ``notif_hook`` (2026-11-22 §4.3): the hot-apply handles
+    the settings route reaches through ``SettingsDeps.runtime`` — never
+    reassign them after build."""
 
     def __init__(self, watcher, on_created, on_modified, on_moved, on_deleted,
-                 bg_tasks: list[asyncio.Task]) -> None:
+                 bg_tasks: list[asyncio.Task], *, supervisor=None,
+                 notif_hook=None) -> None:
         self.watcher = watcher
         self.on_created = on_created
         self.on_modified = on_modified
         self.on_moved = on_moved
         self.on_deleted = on_deleted
         self.bg_tasks = bg_tasks
+        self.supervisor = supervisor
+        self.notif_hook = notif_hook
 
     def stop(self) -> None:
         self.watcher.stop()
+        if self.supervisor is not None:
+            self.supervisor.shutdown()   # cancel 全部 live（含缓退者）+ 死标志
+            return
         for task in self.bg_tasks:
             task.cancel()
 
@@ -59,20 +69,18 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
     watcher, and the background agents. Must be called from a running
     loop (the Bus is loop-bound).
 
-    ``privacy`` (spec 2026-11-18 §2.2): passed straight to
-    start_background_agents (the bgagent/executor privacy parameter chain);
+    ``privacy`` (spec 2026-11-18 §2.2): passed straight to the
+    BgSupervisor (the bgagent/executor privacy parameter chain);
     ``None`` = unwired, behavior identical to before.
     """
     # Event bus: wake signals for the arming/executor loops
     # (spec 2026-10-24). Publisher-side filters drop events that
     # contribute zero to every agent's arming scan — pure volume
-    # reduction; the scan-side exclusion stays the authority. The change
-    # filter reuses the scheduler's self_exclusion (single source — it
-    # must not drift from the scan-side authority).
+    # reduction; the scan-side exclusion stays the authority. The
+    # ``change`` filter is written ONLY by BgSupervisor.apply (spec
+    # 2026-11-22 §5.4 单源铁律: both exclusion sides read the same live
+    # alias set — build_runtime deliberately holds no copy).
     events.set_bus(events.Bus())
-    _excluded_sources = self_exclusion({a.alias for a in bg_agents})
-    events.set_filter("change",
-                      lambda p: p.get("source") not in _excluded_sources)
     events.set_filter("recall", lambda p: not (
         p.get("traffic") == "synthetic" and p.get("hits", 0) > 0))
 
@@ -105,18 +113,22 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
     watcher.observe()
     await asyncio.sleep(0)  # let the task start
 
-    bg_tasks: list[asyncio.Task] = []
+    # BgSupervisor is the production path (spec 2026-11-22 §5.4 S8 — no
+    # test-only facade in main). apply() ALWAYS runs — even with zero
+    # agents it installs the change filter over the (empty) live set, so
+    # the executor/agent synthetic sources stay excluded from boot.
+    notif_hook = GuardedNotificationHook(conn, daily_cap=notifications_cfg.daily_cap)
+    supervisor = BgSupervisor(vault_dir, hooks=[notif_hook],
+                              db_conn=conn, ledger_conn=ledger_conn,
+                              privacy=privacy)
+    supervisor.apply(bg_agents)
     if bg_agents:
         cleanup_old_notifications(conn)
-        bg_tasks = start_background_agents(
-            bg_agents, vault_dir,
-            hooks=[GuardedNotificationHook(
-                conn, daily_cap=notifications_cfg.daily_cap)],
-            db_conn=conn, ledger_conn=ledger_conn, privacy=privacy)
-        await asyncio.sleep(0)  # let the bgagent tasks start
+    bg_tasks = supervisor.tasks()
+    await asyncio.sleep(0)  # let the bgagent tasks start
 
     return Runtime(watcher, on_created, on_modified, on_moved, on_deleted,
-                   bg_tasks)
+                   bg_tasks, supervisor=supervisor, notif_hook=notif_hook)
 
 
 def _agent_caps(agents: list) -> dict[str, dict]:

@@ -160,3 +160,15 @@ def test_concurrent_cap_boundary_is_a_hard_cap(db_conn):
     # single collapsed row, counter = overflow count.
     assert len(normal) == cap
     assert f"其余 {n_threads - cap} 条已折叠" in collapsed[0]["summary"]
+
+
+def test_set_daily_cap_hot(db_conn):
+    """spec 2026-11-22 §5.2：设置页保存后 cap 原位热调——旧 cap 溢出折叠，
+    调高后普通行重新放行（cap 仍是法，只是法改了）。"""
+    hook = GuardedNotificationHook(db_conn, daily_cap=1)
+    hook.notify(_report(alias="a1"))
+    hook.notify(_report(alias="a2"))            # cap=1 溢出 → collapsed
+    assert len([r for r in _rows(db_conn) if r["kind"] != "collapsed"]) == 1
+    hook.set_daily_cap(3)
+    hook.notify(_report(alias="a3"))
+    assert len([r for r in _rows(db_conn) if r["kind"] != "collapsed"]) == 2
