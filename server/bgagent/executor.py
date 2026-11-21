@@ -382,6 +382,16 @@ def _merge_errata(conn: sqlite3.Connection, vault: Path, p: dict) -> None:
     if not refs:
         raise ValueError("errata proposal has no source_refs")
     stem = Path(str(refs[0])).stem
+    # M4b 防御（memory-pipeline spec §3 errata 契约，评审 M4）：stem 含
+    # Windows/POSIX 非法文件名字符（典型：abort_log 章误居 refs[0] 首位 →
+    # "abort_log:123"）→ _MergeFailed park。无此防御则 atomic_write 抛
+    # OSError 走「环境/进程级」分支 → 提案永驻 adopted 每周期重报错（毒环）。
+    if re.search(r'[:\\/?*"><|"]', stem):
+        raise _MergeFailed(
+            f"errata stem {stem!r} contains illegal filename chars — "
+            "source_refs[0] must be a real vault path (the abort_log "
+            "provenance stamp is never first)"
+        )
     actor = str(p.get("actor") or "")
 
     lines = ["## 矛盾", contradiction, ""]

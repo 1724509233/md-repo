@@ -191,13 +191,18 @@ background_agents:
 #     api_key: ""
 #
 # ── 记忆运行时：中断分析（abort-analyzer，示例，取消注释启用）────────────
-# 通道二消费闭环（spec 2026-11-20-stop-signals §4）：周频读近 7 天取消信号
-# （chat_abort_log，用户取消意图的行为事实）+ sessions blob join（中断轮原文/
-# 思考、停后补发），评审「哪份提示词正被用户的中断压测」；框架仿提案回读把
-# 信号素材注入 system-reminder（挂点全局、数据门自持：窗口内无信号=零注入、
-# 零出域台账行）。具体改进 → propose（summary 型，人审闸门）；评审报告 =
-# 运行报告（_write_report_and_prune，30 份留存）。报告纪律：行为事实与
-# 模型宣称（中断轮思考非证据）分开表述。
+# 记忆流水线卡 A+B（spec 2026-11-21-interrupt-memory-pipeline，底座通道二
+# 2026-11-20-stop-signals §4）：周频消费近 7 天取消信号（chat_abort_log 行为
+# 事实）+ sessions blob join 前后窗（准入门：无锚/停后无下文整条不注入），
+# reminder 注入走 runner 硬编码角色门（_INTERRUPT_ROLES，spec §6 S1 r1.6——
+# 挂点全局旧裁废止），门内另有数据门+字节硬帽降级：无信号=零注入、零出域台账行。
+# 归因 = mem0 四操作（增/删/改/NONE）：四操作全出 summary 型提案（r1.8 收窄；
+# payload 携带条目级差异：目标文件 个人记忆.md 或其链接详情笔记/分区/原文/新文/
+# 理由/记忆日期）；落地 = 人 adopt 后亲手改 个人记忆.md（手编元文件，人即执行器）；
+# NONE 只进报告计数；敏感内容（健康/财务/证件/密码/私密关系）降 NONE 标「敏感未入」。
+# source_refs 定序铁律：refs[0] 恒归因证据所在存活用户笔记，abort_log:{id} 章恒非首位。
+# 评审报告 = 运行报告（_write_report_and_prune，30 份留存）。报告纪律：行为
+# 事实与模型宣称（中断轮思考非证据）分开表述。
 # - name: "中断分析"
 #   alias: abort-analyzer
 #   enabled: true
@@ -208,10 +213,10 @@ background_agents:
 #   max_rounds: 20
 #   timeout_s: 1800
 #   budget_runs_per_day: 1
-#   budget_max_proposals: 5
+#   budget_max_proposals: 5          # prompt 义务值（≤5 条写进 prompt 方法论）——全仓无执行点，非机制
 #   tools: [read_doc, search_docs, list_files, get_related_docs,
-#           recent_changes, propose]  # 读×5 + propose；不持 write_doc（分界线，ADR-0004）
-#   verbs: [summary]                 # 提示词改进 = summary 型提案
+#           recent_changes, list_proposals, propose]  # 读×6 + propose（list_proposals = 防重③对账）；不持 write_doc（分界线，ADR-0004）
+#   verbs: [summary]                # 四操作全 summary 型（r1.8：entity_index/errata/relatedness 均不进 verbs；落地=人 adopt 后手改 个人记忆.md）
 #   model:                           # 本地档建议：reminder 含中断轮思考全文，选云端=思考出域（egress 台账兜底，红线 7 知情决策）
 #     provider: openai
 #     model_id: qwen2.5:14b

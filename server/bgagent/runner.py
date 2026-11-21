@@ -32,6 +32,12 @@ logger = logging.getLogger("md-vault.bgagent")
 WRITE_TOOLS = {"write_doc", "edit_doc", "move_docs", "delete_doc"}
 RETENTION = 30          # keep the N newest reports per alias
 
+# 取消信号 reminder 的硬编码角色门（memory-pipeline spec §6 S1 r1.6 用户裁）：
+# 仅内置流水线角色挂 InterruptSignalsSystemReminder——通道二「挂点全局无 alias
+# 特判」旧裁就此废止（reminder payload 膨胀后失效）：consolidator/narrator 等
+# 不再白烧 token / 产 reminder egress 行。不进配置（用户裁定），法源 = spec §6。
+_INTERRUPT_ROLES = frozenset({"abort-analyzer"})
+
 
 def filter_tools(names: tuple[str, ...] | list[str]) -> list:
     """Apply a tool whitelist: registry tools whose name is in ``names``.
@@ -320,7 +326,7 @@ def _bgagent_egress_target(cfg: BackgroundAgentConfig,
 
 
 def _record_reminder_egress(conn, target: EgressTarget | None, privacy,
-                            reminder: InterruptSignalsSystemReminder) -> None:
+                            reminder: InterruptSignalsSystemReminder | None) -> None:
     """Synthetic egress row for the interrupt-signal reminder injection
     (channel-2 spec §4 评审 M2, 红线 7): the injected text (signals + the
     joined user originals / half outputs / reasoning) has no vault path and
@@ -328,10 +334,11 @@ def _record_reminder_egress(conn, target: EgressTarget | None, privacy,
     invisible — this row completes the audit. ``via='reminder'`` is the
     sentinel; the synthetic path encodes the payload counts (注入字节量与信号
     数). One row per run that actually got injection (render None → 0 bytes
-    → no row). Loopback target None → nothing left the machine → no row
-    (the table stays empty, zero behavior delta). Fail-open: telemetry
-    never bites the run."""
-    if conn is None or target is None or reminder.last_bytes <= 0:
+    → no row). ``reminder`` None = role not in ``_INTERRUPT_ROLES`` (the
+    hard-coded gate) → never constructed, nothing to audit. Loopback target
+    None → nothing left the machine → no row (the table stays empty, zero
+    behavior delta). Fail-open: telemetry never bites the run."""
+    if conn is None or target is None or reminder is None or reminder.last_bytes <= 0:
         return
     path = (f"reminder:bytes={reminder.last_bytes}"
             f":signals={reminder.last_signals}")
@@ -404,11 +411,13 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
             f"receive delete_doc (hard-removed, spec §3.2); config tools="
             f"{sorted(cfg.tools) if cfg.tools is not None else 'default (all)'}")
 
-    # 通道二消费闭环（spec 2026-11-20-stop-signals §4）：取消信号 reminder
-    # 挂点仿 ReadbackSystemReminder 先例——全角色挂载、数据门自持（近 7 天
-    # 无信号 / 无 conn → render None，零注入、零台账行，行为逐字节等价）。
-    interrupts = InterruptSignalsSystemReminder(cfg.alias,
-                                                ledger_conn=ledger_conn)
+    # 取消信号 reminder（通道二 §4 消费闭环 + memory-pipeline 卡 A）：仅
+    # _INTERRUPT_ROLES 内的流水线角色挂载（S1 r1.6 用户裁硬编码角色门，
+    # 见常量注释），非门内角色不构造不注入零 egress 行；门内仍有数据门
+    # 自持（准入门无信号 / 无 conn → render None，零注入、零台账行）。
+    interrupts = (InterruptSignalsSystemReminder(cfg.alias,
+                                                 ledger_conn=ledger_conn)
+                  if cfg.alias in _INTERRUPT_ROLES else None)
     # Egress audit (spec §3.2/§3.3 + 通道二 §4 评审 M2): a non-loopback
     # endpoint means documents leave the machine — audit one row per
     # touched doc at run end (LoopRuntime finally) + the synthetic
@@ -423,8 +432,8 @@ async def run_once(cfg: BackgroundAgentConfig, vault_dir: Path, *,
         + f"\n\n当前时间：{datetime.fromtimestamp(started_at):%Y-%m-%d %H:%M}",
         system_reminders=[ReadbackSystemReminder(cfg.alias, tools,
                                                   db_conn=db_conn,
-                                                  ledger_conn=ledger_conn),
-                          interrupts],
+                                                  ledger_conn=ledger_conn)]
+        + ([interrupts] if interrupts is not None else []),
         model=cfg.model,
         tools=tools,
         max_rounds=cfg.max_rounds,

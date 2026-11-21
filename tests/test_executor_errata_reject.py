@@ -32,12 +32,12 @@ def _valid_payload():
     }
 
 
-def _adopted_errata(vault_dir, conn, payload=None):
+def _adopted_errata(vault_dir, conn, payload=None, source_refs=None):
     """Create an errata record and drive it to ``adopted`` via legal
     transitions (errata is a review-tier type: awaiting_review → human)."""
     rec = proposals.create(
         conn, vault_dir, "errata", actor="consolidator", run_id="batch-test",
-        source_refs=["notes/test.md"], justification="body",
+        source_refs=source_refs or ["notes/test.md"], justification="body",
         payload=payload if payload is not None else _valid_payload(),
     )
     proposals.advance(conn, vault_dir, rec["id"], "processing", actor="consolidator")
@@ -131,3 +131,37 @@ def test_merge_errata_occupied_slot_raises_before_capture(vault_dir, ledger_conn
 
     assert card.read_bytes() == pre_bytes
     assert _snap_rows(ledger_conn, "index/errata/test.md") == pre_rows
+
+
+# ── M4b 防御：非法 stem → park failed（memory-pipeline spec §3 评审 M4）────
+
+def test_errata_illegal_stem_parks_failed_no_poison_loop(vault_dir, ledger_conn):
+    """M4b 防御（卡 B 附带）：refs[0] 误放 abort_log 章 → stem 含
+    ``:``（Windows 备用数据流名 / POSIX 均非法）→ _merge_errata 抛
+    _MergeFailed park 到 failed，附可行动原因——堵死旧毒环：非法名落到
+    atomic_write 抛 OSError 走「环境/进程级」分支 → 提案永驻 adopted
+    每周期重报错。"""
+    from server.bgagent.executor import _MergeFailed, _merge_errata
+
+    # 单元面：_merge_errata 直接抛类型化失败（不落到 OSError）
+    with pytest.raises(_MergeFailed, match="illegal filename"):
+        _merge_errata(ledger_conn, vault_dir, {
+            "payload": _valid_payload(),
+            "source_refs": ["abort_log:123"],
+            "actor": "abort-analyzer",
+            "run_id": "batch-test",
+        })
+
+    # 全链路：adopted → run_executor → failed park（errors 空 = 非环境级；
+    # 不 crash、不 adopted、零文件落）
+    rec = _adopted_errata(vault_dir, ledger_conn,
+                          source_refs=["abort_log:123"])
+    summary = run_executor(vault_dir, ledger_conn)
+    assert summary["merged"] == 0
+    assert summary["errors"] == []
+    p = proposals.record(ledger_conn, rec["id"])
+    assert p["status"] == "failed"
+    assert "illegal filename" in p["reject_reason"]
+    assert "abort_log" in p["reject_reason"]
+    # 非法名零落盘：index/errata/ 目录压根不该被创建
+    assert not (vault_dir / "index" / "errata").exists()
