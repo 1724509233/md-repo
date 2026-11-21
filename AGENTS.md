@@ -24,6 +24,8 @@ md-vault-mcp                     # MCP stdio server (installed via [mcp] extra)
 - **client/** — Python polling client. `sync.py` has `scan_local_files()`, `sync_once()`, `run_polling_loop()`. `main.py` is the entry point.
 - **tests/** — pytest suite. `conftest.py` provides `vault_dir`, `db_conn` (index domain), `ledger_conn` (ledger domain, 2026-10-31 split), `app`, `client`, `ai_config` fixtures.
 
+**Out-of-registry 开连铁律（2026-11-21 连接策略评审定稿）**：`open_index_db`（`server/vault/db/conn.py`）是注册单例对之外唯一具名开连面，失败 raise（调用方 owns 降级），调用方**必须** `contextlib.closing` 包裹——R7 零容忍 AST 钉在 `tests/test_architecture.py`。连接池方案已被评审否决（建连成本占比 <5%；池的闲置句柄正撞 Windows rename 锁；既定演进位是 thread-local，见 conn.py 头注）。
+
 The vault directory is both the data store and the Obsidian vault. `.sync/` inside it holds **two SQLite files** (2026-10-31 ledger-file split, L4): `index.db` (rebuildable cache — files/segments/change_log/…; freely rebuildable, see `server/services/recovery.py`) and `ledger.db` (authoritative, not rebuildable — proposals/proposal_transitions/snapshots/relatedness/sessions; **the recovery drill only ever touches index.db**). Backing up the system must include **both** files. First-boot migration of these tables from index.db → ledger.db is in-path (`migrate_ledger` + `promote_sessions`, idempotent, per-machine); `logs/` also lives in `.sync/`. **sessions 升格铁律（2026-11-20）**：会话行是权威数据——恢复演练必须核查其存活，且演练即宣告 rename 回滚面关闭；index 侧 DDL 绝不得再长出 sessions zombie 表（违者幂等前提恒假 → 永久启动失败环）；迁移入口 `promote_sessions`（main + MCP 双入口同站位；目标非空 kept-both 人工裁决，不静默并）。法源：`docs/superpowers/specs/2026-11-20-sessions-ledger-promotion.md`。
 
 ## Gotchas

@@ -238,63 +238,69 @@ def run_recovery_drill(vault_dir: Path) -> dict:
     #    rebuild), then re-seed the files index from the production scan.
     #    The ledger side rebuilds NOTHING — that is the criterion itself.
     conn = init_db(vault_dir / ".sync" / "index.db")
-    ensure_indexed(conn, vault_dir)
-    _rebuild_files_table(conn, vault_dir)
+    try:
+        ensure_indexed(conn, vault_dir)
+        _rebuild_files_table(conn, vault_dir)
 
-    # Cold-rebuild seeding (spec 2026-11-16): change_log was wiped with
-    # index.db — re-book the delete rows the sync lane's stale-copy gate
-    # needs from their surviving sources (trash meta + ledger snapshots).
-    # ledger.db is opened read-only-ish: the SELECT never writes a row.
-    drill_ledger_conn = None
-    ledger_path = vault_dir / ".sync" / "ledger.db"
-    if ledger_path.is_file():
-        drill_ledger_conn = sqlite3.connect(str(ledger_path))
-        drill_ledger_conn.row_factory = sqlite3.Row
-    seeded = seed_deleted_prehashes(conn, vault_dir, drill_ledger_conn)
-    if drill_ledger_conn is not None:
-        drill_ledger_conn.close()
+        # Cold-rebuild seeding (spec 2026-11-16): change_log was wiped with
+        # index.db — re-book the delete rows the sync lane's stale-copy gate
+        # needs from their surviving sources (trash meta + ledger snapshots).
+        # ledger.db is opened read-only-ish: the SELECT never writes a row.
+        drill_ledger_conn = None
+        ledger_path = vault_dir / ".sync" / "ledger.db"
+        if ledger_path.is_file():
+            drill_ledger_conn = sqlite3.connect(str(ledger_path))
+            drill_ledger_conn.row_factory = sqlite3.Row
+        seeded = seed_deleted_prehashes(conn, vault_dir, drill_ledger_conn)
+        if drill_ledger_conn is not None:
+            drill_ledger_conn.close()
 
-    # 4. Verify. ``files_expected`` is an independent production scan, so the
-    #    comparison is against a second walk of the same semantics.
-    files_expected = len(full_scan(vault_dir))
-    files_rebuilt = count_table_rows(conn, "files")
-    fts_ok, fts_sample = _fts_sample(vault_dir)
-    change_log_rows = count_table_rows(conn, "change_log")
-    trigger_state_rows = count_table_rows(conn, "trigger_state")
-    recall_log_rows = count_table_rows(conn, "recall_log")
+        # 4. Verify. ``files_expected`` is an independent production scan, so
+        #    the comparison is against a second walk of the same semantics.
+        files_expected = len(full_scan(vault_dir))
+        files_rebuilt = count_table_rows(conn, "files")
+        fts_ok, fts_sample = _fts_sample(vault_dir)
+        change_log_rows = count_table_rows(conn, "change_log")
+        trigger_state_rows = count_table_rows(conn, "trigger_state")
+        recall_log_rows = count_table_rows(conn, "recall_log")
 
-    # Ledger verification: file intact + rows before == rows after (the
-    # drill cannot have written a single ledger row).
-    ledger_rows_after = _ledger_row_counts(vault_dir)
-    if ledger_rows_before is None:
-        # Degraded path (pre-split vault, first drill): no ledger file =
-        # nothing to preserve — the criterion distinguishes that from
-        # "file present = every row must survive". Reported, not ok-flipping.
-        ledger_preserved: bool | None = None
-        notes.append(
-            "ledger.db absent: nothing to preserve (pre-split vault). If "
-            "this vault is post-split and the file is missing, that is a "
-            "data-loss event — ledger.db is authoritative and NOT "
-            "rebuildable; outside this drill's scope (spec §3.4-5)."
-        )
-    else:
-        ledger_preserved = ledger_rows_after == ledger_rows_before
-        if ledger_preserved:
+        # Ledger verification: file intact + rows before == rows after (the
+        # drill cannot have written a single ledger row).
+        ledger_rows_after = _ledger_row_counts(vault_dir)
+        if ledger_rows_before is None:
+            # Degraded path (pre-split vault, first drill): no ledger file =
+            # nothing to preserve — the criterion distinguishes that from
+            # "file present = every row must survive". Reported, not ok-flipping.
+            ledger_preserved: bool | None = None
             notes.append(
-                "ledger.db = authoritative state: the drill never touches "
-                "it (zero rebuild) — every ledger table (incl. sessions) "
-                "preserved row-wise"
+                "ledger.db absent: nothing to preserve (pre-split vault). If "
+                "this vault is post-split and the file is missing, that is a "
+                "data-loss event — ledger.db is authoritative and NOT "
+                "rebuildable; outside this drill's scope (spec §3.4-5)."
             )
         else:
-            notes.append(
-                "LEDGER PRESERVATION FAILURE: ledger.db rows changed during "
-                "the drill (before=%r after=%r) — this should be "
-                "impossible; investigate before trusting the drill"
-                % (ledger_rows_before, ledger_rows_after)
-            )
+            ledger_preserved = ledger_rows_after == ledger_rows_before
+            if ledger_preserved:
+                notes.append(
+                    "ledger.db = authoritative state: the drill never touches "
+                    "it (zero rebuild) — every ledger table (incl. sessions) "
+                    "preserved row-wise"
+                )
+            else:
+                notes.append(
+                    "LEDGER PRESERVATION FAILURE: ledger.db rows changed during "
+                    "the drill (before=%r after=%r) — this should be "
+                    "impossible; investigate before trusting the drill"
+                    % (ledger_rows_before, ledger_rows_after)
+                )
 
-    backup_size = backup.stat().st_size if backup and backup.is_file() else None
-    conn.close()
+        backup_size = backup.stat().st_size if backup and backup.is_file() else None
+    finally:
+        # 卡3 小卫生 (2026-11-21): close even when a rebuild/verify step
+        # raises — the drill opens index.db against the operator's vault
+        # copy, and a leaked open handle keeps Windows from touching the
+        # file (same WinError 32 family the search 收口 pinned).
+        conn.close()
 
     files_match = files_expected == files_rebuilt
     ok = files_match and fts_ok and ledger_preserved is not False

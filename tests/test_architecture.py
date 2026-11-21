@@ -1,4 +1,4 @@
-"""Architecture ratchet: the six import/dependency rules over ``server/**/*.py``.
+"""Architecture ratchet: the seven import/dependency rules over ``server/**/*.py``.
 
 Detection is AST-only (per the 2026-11-18 target-architecture spec §4):
 import nodes and call nodes only — docstrings/comments never register, which
@@ -62,6 +62,16 @@ Rule keys (JSON keys, stable):
   injected by channel entry points only — red-line 3). AnnAssign dataclass
   field defaults (tool.py) are NOT violations and never enter the baseline.
   ``dataclasses.replace(ctx, write_source=…)`` is a documented blind spot.
+- ``R7_open_index_db_closing`` — every ``open_index_db`` call outside
+  ``server/vault/db/**`` must sit inside the context expression of a
+  ``contextlib.closing(...)`` (or bare ``closing(...)`` alias) call — the
+  handle may only ever be produced closing-wrapped, so no use can leak it
+  (2026-11-21 connection收口). Canonical shape: a with-head
+  ``with contextlib.closing(open_index_db(...))``; a named opener RETURNING
+  ``closing(open_index_db(...))`` (``ai/search._open_conn``) is the equally
+  green shape. ZERO tolerance by design: deliberately NOT in
+  architecture_baseline.json — the leak gate never ratchets, a new
+  violation is red on the spot. Entry: ``path:lineno:open_index_db``.
 """
 from __future__ import annotations
 
@@ -82,6 +92,7 @@ R4_LAZY_CONN = "R4_lazy_conn"
 R5_CORE = "R5_core_upward"
 R5_EDGES = "R5_upward_edges"
 R6_IDENTITY = "R6_identity_assignment"
+R7_OPEN_INDEX_CLOSING = "R7_open_index_db_closing"
 
 # Forbidden package edges: source dir prefix -> tuple of forbidden target roots.
 _FORBIDDEN_EDGES: dict[str, tuple[str, ...]] = {
@@ -133,6 +144,7 @@ _CONN_MODULE = "server/vault/db/conn.py"
 _SQL_METHODS = frozenset({"execute", "executemany", "executescript"})
 _CONN_FUNCS = frozenset({"get_index_conn", "get_ledger_conn"})
 _IDENTITY_ATTRS = frozenset({"write_source", "run_id", "session_id"})
+_OPEN_INDEX_FN = "open_index_db"
 
 # R2 zeroed modules (Gate-2 ③ review discipline made code, card 7): once a
 # module's interface-layer SQL reaches zero its name is PERMANENTLY banned —
@@ -389,6 +401,53 @@ def _r6_violations() -> list[str]:
     return sorted(out)
 
 
+def _is_closing_call(node: ast.Call) -> bool:
+    """``contextlib.closing(...)`` or a bare imported ``closing(...)``."""
+    fn = node.func
+    if isinstance(fn, ast.Attribute):
+        return fn.attr == "closing"
+    return isinstance(fn, ast.Name) and fn.id == "closing"
+
+
+def _is_open_index_call(node: ast.Call) -> bool:
+    """An ``open_index_db(...)`` call (bare name or attribute form)."""
+    fn = node.func
+    if isinstance(fn, ast.Attribute):
+        return fn.attr == _OPEN_INDEX_FN
+    return isinstance(fn, ast.Name) and fn.id == _OPEN_INDEX_FN
+
+
+def _r7_unwrapped_calls(tree: ast.AST) -> list[ast.Call]:
+    """open_index_db Call nodes NOT inside a closing(...) context expr.
+
+    Pure AST: every closing(...) node (Name ``closing`` or Attribute
+    ``*.closing``) "covers" the open_index_db calls in its argument
+    subtree — the with-head shape (``with contextlib.closing(
+    open_index_db(...))``) and the named-opener shape (``return
+    contextlib.closing(open_index_db(...))``) are both covered; a bare
+    ``conn = open_index_db(...)`` never is, which is the leak this gate
+    exists to prevent.
+    """
+    covered: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _is_closing_call(node):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call) and _is_open_index_call(sub):
+                    covered.add(id(sub))
+    return [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and _is_open_index_call(n)
+            and id(n) not in covered]
+
+
+def _r7_violations() -> list[str]:
+    out = []
+    for rel, py in _iter_server_py(exclude=(_DB_PKG + "/",)):
+        tree = ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+        for node in _r7_unwrapped_calls(tree):
+            out.append(f"{rel}:{node.lineno}:{_OPEN_INDEX_FN}")
+    return sorted(out)
+
+
 # --------------------------------------------------------------------------
 # ratchet plumbing
 # --------------------------------------------------------------------------
@@ -439,7 +498,7 @@ def _check_ratchet(rule: str, current: list[str],
 
 
 # --------------------------------------------------------------------------
-# the six rule tests
+# the seven rule tests
 # --------------------------------------------------------------------------
 
 def test_core_has_no_upward_imports(request: pytest.FixtureRequest) -> None:
@@ -500,6 +559,26 @@ def test_identity_fields_not_assigned_in_tools(
         request: pytest.FixtureRequest) -> None:
     """R6: agent/tools never assign ctx.write_source/run_id/session_id."""
     _check_ratchet(R6_IDENTITY, _r6_violations(), request)
+
+
+def test_open_index_db_calls_are_closing_wrapped() -> None:
+    """R7: every open_index_db call outside server/vault/db/** must be
+    closing-wrapped at the call expression (the handle only ever exists
+    under a ``closing`` wrap → no use of it can leak a connection).
+
+    ZERO tolerance ON PURPOSE — this test deliberately does NOT go through
+    ``_check_ratchet`` and the rule has NO entry in
+    architecture_baseline.json: a connection-leak gate that can be
+    baselined is not a gate (2026-11-21 连接收口卡 2; the search adapter's
+    leak — an open index.db blocking the rename on Windows, WinError 32 —
+    is what made it law).
+    """
+    current = _r7_violations()
+    assert not current, (
+        "R7_open_index_db_closing: unwrapped open_index_db call(s) — wrap "
+        "the open inside a contextlib.closing(...) call (with-head, or a "
+        "named opener returning the wrapped handle):\n" + "\n".join(current)
+    )
 
 
 # --------------------------------------------------------------------------
@@ -606,3 +685,21 @@ def test_detector_staged_edges_permanently_empty() -> None:
     Any future staging must edit THIS assertion on purpose (forced review).
     """
     assert _STAGED_EDGES == {}
+
+
+def test_detector_r7_closing_wrap_synthetic() -> None:
+    """R7 detector: a bare open → RED; the with-head canonical shape and
+    the bare ``closing`` alias / opener-return shapes → GREEN (synthetic
+    injections, no repo file needed — the same aperture the rule ships)."""
+    bad = ast.parse("conn = open_index_db('x')\n"
+                    "with contextlib.closing(conn):\n"
+                    "    pass\n")
+    assert [n.lineno for n in _r7_unwrapped_calls(bad)] == [1]
+    good = ast.parse(
+        "with contextlib.closing(open_index_db('x')) as conn:\n"
+        "    pass\n"
+        "with closing(mod.open_index_db('y')) as c2:\n"
+        "    pass\n"
+        "def _open(v):\n"
+        "    return contextlib.closing(open_index_db(v))\n")
+    assert _r7_unwrapped_calls(good) == []

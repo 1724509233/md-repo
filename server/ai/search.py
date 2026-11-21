@@ -1,6 +1,7 @@
 """AI proxy: LLM streaming, RAG search."""
 from __future__ import annotations
 
+import contextlib
 import re
 import sqlite3
 from collections import Counter
@@ -70,10 +71,16 @@ def _tag_segments(conn: sqlite3.Connection, path: str, expand: bool,
     ]
 
 
-def _get_or_open_conn(vault: Path):
-    """Open a connection to the vault's index db, or None if absent.
+def _open_conn(vault: Path):
+    """Return a ``closing``-managed connection to the vault's index db, or None.
 
-    The connect + PRAGMAs live in ``db/conn.open_index_db`` (R1 residency).
+    The connect + PRAGMAs live in ``db/conn.open_index_db`` (R1 residency);
+    a failed open now raises ``sqlite3.Error`` from there (the 2026-11-21
+    leak-closure removed its None-degrade return: a bare ``None`` must never
+    reach a ``closing`` wrap, and the wrap has to be decidable at the call
+    expression). The handle is therefore only ever handed out wrapped in
+    ``contextlib.closing`` (R7 zero-tolerance): every ``rag_search`` use is
+    a ``with`` block that closes the connection on every return path.
     Read-write remains (the read-only conversion is a recorded backlog);
     since 案 A (gate2 addendum 缺口 2) the search adapter carries NO
     rebuild write path — an empty index degrades to the legacy scan.
@@ -83,7 +90,7 @@ def _get_or_open_conn(vault: Path):
     db_path = vault / ".sync" / "index.db"
     if not db_path.is_file():
         return None
-    return open_index_db(db_path, busy_timeout_ms=5000)
+    return contextlib.closing(open_index_db(db_path, busy_timeout_ms=5000))
 
 
 def _legacy_rag_search(vault_dir: str, query: str, top_k: int = 5,
@@ -188,92 +195,115 @@ def rag_search(
 
     vault = Path(vault_dir)
 
-    conn = _get_or_open_conn(vault)
-    if conn is None:
-        return _legacy_rag_search(vault_dir, query, top_k,
-                                  privacy_dirs=privacy_dirs)
-
     try:
-        if count_segments(conn) == 0:
-            # 案 A（gate2 补裁缺口 2 终值）：空索引=显式降级 legacy——生产三入口
-            # （main / mcp / recovery）全部先跑 ensure_indexed，搜索适配器不再
-            # 携带全库重建写路（顺带消灭懒重建×file_ops 写交叠窗口）。
-            return _legacy_rag_search(vault_dir, query, top_k,
-                                      privacy_dirs=privacy_dirs)
-    except Exception:
-        return _legacy_rag_search(vault_dir, query, top_k,
-                                  privacy_dirs=privacy_dirs)
-
-    if tags is None:
-        tags, rest = _parse_tag_query(query)
-    else:
-        # Explicit structured tags (web channel): the client already
-        # stripped the #tag tokens, so the whole query is the FTS part.
-        rest = query
-    if not tags:
-        return segments_search(
-            conn, query, top_k=top_k, expand=expand, recall=recall,
-            include_code=include_code, privacy_dirs=privacy_dirs,
-        )
-
-    # Tag axis: the recall tier governs only the FTS part; tag hits are
-    # exact canonical-entity matches and are tier-independent.
-    try:
-        tag_hits = graph_docs_for_tags(conn, tags)
+        conn_cm = _open_conn(vault)
     except sqlite3.Error:
-        # Legacy index.db without the graph tables: the tag axis is ∅ —
-        # return empty instead of falling back to whole-vault FTS (that
-        # would re-introduce the v1 pollution, spec 2026-11-13 §2).
-        return []
-    if privacy_dirs:
-        # Tag axis (spec §2.3): key-filtered before fusion — privacy docs
-        # never enter the tag axis either (a filtered-empty set returns []
-        # exactly like any other empty tag hit set).
-        tag_hits = {p: n for p, n in tag_hits.items()
-                    if not is_privacy(privacy_dirs, p)}
-    if not tag_hits:
-        # Empty tag hit set: the tag condition is a hard constraint —
-        # ``#nosuchtag 关键词`` returns nothing, never non-tagged docs.
-        return []
+        # open failed (broken / locked index.db) — no handle was ever
+        # opened: degrade to the whole-vault scan.
+        return _legacy_rag_search(vault_dir, query, top_k,
+                                  privacy_dirs=privacy_dirs)
+    if conn_cm is None:
+        # index.db absent: legacy scan — kept BEFORE any with block
+        # (closing(None) would raise on block exit).
+        return _legacy_rag_search(vault_dir, query, top_k,
+                                  privacy_dirs=privacy_dirs)
 
-    fts_results = (
-        segments_search(
-            conn, rest, top_k=top_k, expand=expand, recall=recall,
-            include_code=include_code, paths=list(tag_hits),
-            privacy_dirs=privacy_dirs,
-        )
-        if rest
-        else []
-    )
-    fts_by_path = {r["path"]: r for r in fts_results}
+    # P0 leak closure (2026-11-21): everything touching the handle from
+    # here on runs inside the closing block — every return below exits
+    # through the with, which closes the sqlite3 connection
+    # deterministically (regression pin: test_privacy_surfaces.
+    # test_rag_search_releases_index_db_handle — pre-fix the handle only
+    # released on a cyclic GC pass, and Windows treats an open index.db
+    # as locked, WinError 32).
+    degrade = False
+    with conn_cm as conn:
+        try:
+            if count_segments(conn) == 0:
+                # 案 A（gate2 补裁缺口 2 终值）：空索引=显式降级 legacy——生产三入口
+                # （main / mcp / recovery）全部先跑 ensure_indexed，搜索适配器不再
+                # 携带全库重建写路（顺带消灭懒重建×file_ops 写交叠窗口）。
+                # 扫描本体在 with 退出后执行（不再占着句柄）。
+                degrade = True
+        except Exception:
+            degrade = True
+        if not degrade:
+            if tags is None:
+                tags, rest = _parse_tag_query(query)
+            else:
+                # Explicit structured tags (web channel): the client already
+                # stripped the #tag tokens, so the whole query is the FTS part.
+                rest = query
+            if not tags:
+                return segments_search(
+                    conn, query, top_k=top_k, expand=expand, recall=recall,
+                    include_code=include_code, privacy_dirs=privacy_dirs,
+                )
 
-    # Tag axis items (count desc, path asc — the axis's own order); each
-    # payload is the final result doc, so fuse's first-seen-axis payload
-    # rule yields the right segments/via without a second pass.
-    tag_items = []
-    for path in sorted(tag_hits, key=lambda p: (-tag_hits[p], p)):
-        count = tag_hits[path]
-        fts = fts_by_path.get(path)
-        if fts is not None:
-            doc = dict(fts)
-            doc["via"] = "both"
-        else:
-            doc = {
-                "path": path,
-                "score": count,
-                "segments": _tag_segments(conn, path, expand, include_code, score=count),
-                "via": "tag",
-            }
-        tag_items.append(ScoredItem(path, count, doc))
-    fts_items = [
-        ScoredItem(r["path"], r["score"], {**r, "via": "both"})
-        for r in fts_results
-    ]
+            # Tag axis: the recall tier governs only the FTS part; tag hits are
+            # exact canonical-entity matches and are tier-independent.
+            try:
+                tag_hits = graph_docs_for_tags(conn, tags)
+            except sqlite3.Error:
+                # Legacy index.db without the graph tables: the tag axis is ∅ —
+                # return empty instead of falling back to whole-vault FTS (that
+                # would re-introduce the v1 pollution, spec 2026-11-13 §2).
+                return []
+            if privacy_dirs:
+                # Tag axis (spec §2.3): key-filtered before fusion — privacy docs
+                # never enter the tag axis either (a filtered-empty set returns []
+                # exactly like any other empty tag hit set).
+                tag_hits = {p: n for p, n in tag_hits.items()
+                            if not is_privacy(privacy_dirs, p)}
+            if not tag_hits:
+                # Empty tag hit set: the tag condition is a hard constraint —
+                # ``#nosuchtag 关键词`` returns nothing, never non-tagged docs.
+                return []
 
-    fused = fuse({"tag": tag_items, "fts": fts_items}, weights)[:top_k]
-    results = []
-    for item in fused:
-        doc = dict(item.payload)
-        doc["score"] = item.score  # fused score (== axis score on single-axis passthrough)
-        results.append(doc)
-    return results
+            fts_results = (
+                segments_search(
+                    conn, rest, top_k=top_k, expand=expand, recall=recall,
+                    include_code=include_code, paths=list(tag_hits),
+                    privacy_dirs=privacy_dirs,
+                )
+                if rest
+                else []
+            )
+            fts_by_path = {r["path"]: r for r in fts_results}
+
+            # Tag axis items (count desc, path asc — the axis's own order); each
+            # payload is the final result doc, so fuse's first-seen-axis payload
+            # rule yields the right segments/via without a second pass.
+            tag_items = []
+            for path in sorted(tag_hits, key=lambda p: (-tag_hits[p], p)):
+                count = tag_hits[path]
+                fts = fts_by_path.get(path)
+                if fts is not None:
+                    doc = dict(fts)
+                    doc["via"] = "both"
+                else:
+                    doc = {
+                        "path": path,
+                        "score": count,
+                        "segments": _tag_segments(conn, path, expand, include_code, score=count),
+                        "via": "tag",
+                    }
+                tag_items.append(ScoredItem(path, count, doc))
+            fts_items = [
+                ScoredItem(r["path"], r["score"], {**r, "via": "both"})
+                for r in fts_results
+            ]
+
+            fused = fuse({"tag": tag_items, "fts": fts_items}, weights)[:top_k]
+            results = []
+            for item in fused:
+                doc = dict(item.payload)
+                doc["score"] = item.score  # fused score (== axis score on single-axis passthrough)
+                results.append(doc)
+            return results
+
+    # Degraded paths (empty index / probe error): the whole-vault scan runs
+    # AFTER the closing block exits — the legacy scan never holds the handle
+    # (2026-11-21 收口 micro-opt: a multi-second scan must not sit on a
+    # connection).
+    return _legacy_rag_search(vault_dir, query, top_k,
+                              privacy_dirs=privacy_dirs)

@@ -2,7 +2,7 @@
   "R5_core_upward": [],
   "R1_sql_outside_db": [
     "server/services/recovery.py:106:sqlite3.connect",
-    "server/services/recovery.py:251:sqlite3.connect"
+    "server/services/recovery.py:252:sqlite3.connect"
   ],
   "R2_interface_sql": [],
   "R4_lazy_conn": [

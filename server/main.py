@@ -243,9 +243,24 @@ def main(argv: list[str] | None = None) -> None:
         rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents,
                                  notifications_cfg,
                                  privacy=privacy)
-        await server.serve()
-        rt.stop()
-        events.set_bus(None)
+        try:
+            await server.serve()
+        finally:
+            # 停机顺序（2026-11-21 连接收口卡 3）：Runtime.stop() 先行——
+            # watcher / bgagent 收尾前都可能还在向这对连接记账——然后才关连接。
+            rt.stop()
+            events.set_bus(None)
+            # 关闭注册单例 conn 对：这对对象正是上方 register_db_conn 放进
+            # conn 注册表的两个句柄（不绕 get_index_conn/get_ledger_conn getter，
+            # 免得给 R4 基线添新站位）。附带收益：末连关闭触发 SQLite WAL
+            # checkpoint——干净停机后 .sync/ 无 -wal/-shm 残留，index.db +
+            # ledger.db 可直接复制备份。fail-open：停机路径绝不得被 close
+            # 异常咬住。
+            for _c in (conn, ledger_conn):
+                try:
+                    _c.close()
+                except Exception:  # noqa: BLE001 — shutdown must not be bitten
+                    pass
 
     asyncio.run(_run())
 

@@ -5,6 +5,8 @@ Pins:
 - rag_search / segments_search privacy_dirs zero-hit (SQL path, ESCAPE LIKE);
 - degraded fallback (_legacy_rag_search, index.db renamed away) same zero-hit
   (Review Focus 2);
+- search 连接收口 (2026-11-21 P0): rag_search releases its own index.db
+  handle deterministically — rename without gc.collect(), 修复前必红;
 - case pins on BOTH paths (名单 DIARY vs 路径 diary/a.md — Review Focus 3);
 - graph_get_related: privacy neighbor not recorded AND not a BFS frontier
   (no indirect leak through a privacy middle node);
@@ -95,6 +97,30 @@ def test_rag_search_privacy_dirs_zero_hits(search_vault):
     # without dirs → both docs (conservation: web callers never pass)
     hits = rag_search(str(search_vault), "zebrafish")
     assert {h["path"] for h in hits} == {"日记/a.md", "notes/b.md"}
+
+
+def test_rag_search_releases_index_db_handle(search_vault, db_conn):
+    """连接收口回归钉（2026-11-21 卡 1 P0）：rag_search 返回后，搜索适配器
+    自开的 index.db 连接必须已被 with closing 块**确定性地**关闭——无需
+    gc.collect() 即可直接 rename index.db（修复前必红的行为锁：旧代码句柄
+    只靠引用循环被 GC 回收，见 _backup_index_db 注释；Windows 上打开的
+    文件 rename 即 PermissionError/WinError 32）。
+
+    gc.disable() 钉的是红的必然性：CPython 的分代 GC 可能在测试中途顺带
+    回收泄漏循环而让修复前的代码侥幸转绿。POSIX rename 对打开句柄恒成功，
+    本测试在 mac 上天然绿，无需 skip。fixture 的 db_conn 也先关（它同样
+    握着 index.db，但不是本钉对象——只差那半句 gc.collect()）。
+    """
+    rag_search(str(search_vault), "zebrafish")                       # SQL 主路早退
+    rag_search(str(search_vault), "zebrafish", tags=["nosuchtag"])   # tag 空集 []（with 内）
+    db_conn.close()
+    gc.disable()
+    try:
+        db = search_vault / ".sync" / "index.db"
+        db.rename(db.with_suffix(".db.bak"))
+        assert db.with_suffix(".db.bak").is_file()
+    finally:
+        gc.enable()
 
 
 def test_rag_search_sql_path_case_insensitive(search_vault):
