@@ -428,10 +428,20 @@ def test_queue_remove_route(vault_dir, db_conn, ledger_conn, ai_config):
     """删除未出队项：queue_update 掉一条；重复/未知 qid 幂等 {ok:true}。
 
     qid 由 RunHub 按会话计数分配（q1/q2/q3，T1 定案）：m1 开轮（q1），m2/m3
-    排队（q2/q3），删除 q2 后终帧序列里永不出队。"""
+    排队（q2/q3），删除 q2 后终帧序列里永不出队。
+
+    订阅时序（2026-11-21 基线红修复）：snapshot 回放从持久化边界起步——rev3
+    （a9775fa persist_user 出队即前缀 + 每轮 save 推边界）把所有 queue_update
+    帧划进边界下，Run 收尾后再开 snapshot 订阅只能见终帧（基线红即栽在此：
+    断链现场 frames 里 qu 为空）。本卡要检的 queue 面帧在边界后，故按
+    test_runhub 同款确定性构造：轮被 gate 挂起时先挂上订阅（轮询
+    runhub seam 的 waiters 非空 = snapshot 已 attach、边界定格在出队三连的
+    3），再放行 gate——入队/删除/出队各 queue_update 帧经回放 + live 尾巴
+    全量在场。"""
     app = create_app(vault_dir=vault_dir, db_conn=db_conn,
              ledger_conn=ledger_conn, ai_config=ai_config)
     gate = threading.Event()
+    box: list = []
     with TestClient(app) as tc, _mock_openai_gated(gate):
         tc.post("/api/agent/chat", json={"message": "m1", "session_id": "s1"})
         tc.post("/api/agent/chat", json={"message": "m2", "session_id": "s1"})
@@ -446,8 +456,22 @@ def test_queue_remove_route(vault_dir, db_conn, ledger_conn, ai_config):
         assert tc.post("/api/agent/queue/remove",
                        json={"session_id": "s1", "qid": "zz"}).json() == {"ok": True}
 
+        # gate 挂起态下挂订阅：waiters 非空即 subscribe() 已 replay=list(buffer)
+        # + waiters.add（snapshot/synth-busy 头帧之后），此刻边界=3
+        th = threading.Thread(target=lambda: box.extend(
+            _frames(_drain(tc, "s1"))), daemon=True)
+        th.start()
+        for _ in range(3000):
+            run = app.state.runhub._runs.get("s1")
+            if run is not None and run.waiters:
+                break
+            time.sleep(0.01)
+        else:
+            raise AssertionError("stream subscriber never attached")
         gate.set()
-        frames = _frames(_drain(tc, "s1"))
+        th.join(timeout=30)
+        assert not th.is_alive()
+    frames = box
     assert frames[-1]["type"] == "run_status" and frames[-1]["state"] == "finished"
     qu = [f for f in frames if f["type"] == "queue_update"]
     assert qu[-1]["queued"] == []                # 收尾排空
