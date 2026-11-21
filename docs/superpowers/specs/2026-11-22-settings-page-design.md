@@ -61,9 +61,11 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 
 掩码格式：`首段-…末4位`（长度 <8 时只回「已设置」不回片段）。
 
+**路径口径**：加载器把 `target_dir`/`report_dir` 归一成 resolved 绝对路径——GET 必须**反归一为 vault 相对 posix** 再出（report_dir 等于缺省值 `<target_dir>/.reports/<alias>` 时**省略该键**，PUT 缺席即缺省）；`prompt` 本就相对 config 目录，原样出。PUT 方向由加载器重新归一+校验（出格 vault 即 422）。
+
 ### 4.2 `PUT /api/settings`
 
-整文档替换语义（一次提交全量五段，与「一份 yaml」模型一致）。处理序：
+**写回模型 = 字段级写回原 round-trip 文档**（不是整文档重建）：GET 读入的 ruamel 文档节点上，只对页面可见键做 set/delete，未建模键（如 bgagent 条目的 `escalation`）与页面外 section（server/client/mcp）**天然逐字节保留**——消灭「页面保存静默丢手写字段」这类缺陷。页面可见键的删除语义显式：`ai: null` = 删段；bgagent 列表按 alias 对账（payload 缺席 = 删条目）；`privacy.dirs: []` = 空名单。处理序：
 
 1. **revision 守卫**：与服务端当前文件字节哈希不符 → 409（体含当前 revision）。
 2. **密钥回填**：`ai.api_key` / `model.api_key` 键**缺省** = 从现存文件回填原明文；键存在（含 `""`）= 替换。
@@ -84,9 +86,13 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 
 ## 5. 分级热生效
 
-### 5.1 `ai:` → 换 `ctx.ai_config`
+### 5.1 `ai:` → 换 `ctx.ai_config` + 缓存 Agent 代际失效
 
-聊天投递（runhub）每次 dispatch 读 `ctx.ai_config`。保存成功后整对象替换 → 下一个 run 即新配置；进行中的 run 持有自己的 Agent 引用，不受影响。`ai` 段被整段删除 → `ctx.ai_config = None`（行为同未配置：agent 端点 503）。
+事实钉（2026-11-22 盘点）：Agent 实例按 session 缓存在 `routes/agent.py` 的 `agent_cache`，`ctx.ai_config` 只在 **Agent 构造时刻**快照进 AgentSpec（`_build_agent_spec`）——换 ctx 只影响 cache miss 的新会话。热生效语义对齐 bgagent 档：
+
+- 保存后替换 `ctx.ai_config`（新会话即刻新配置）+ `agent_cache` 条目打**代际戳**（settings generation ++）：派发时 `_get_agent` 比对代际，落后即重建（复用 TTL 驱逐的既有守卫——持会话锁/有 pending_confirm 的不重建，**进行中的 run 用旧配置跑完，下一次派发重建**）；
+- 例外通道 `/api/ai/chat` 本就每请求直读 ctx，天然热生效；
+- 测试钉三态：新会话读新值 / 空闲旧会话下一派发读新值 / 运行中会话跑完前不读新值。
 
 ### 5.2 `notifications.daily_cap` / `log`
 
@@ -143,7 +149,7 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 - `tests/test_routes_order.py`：快照更新。
 - `tests/test_settings_routes.py`：GET 形状与掩码；PUT 成功（落盘 + 备份 + 新 revision）；422 零落盘零备份；409 revision；密钥缺省=保持、显式 ""=清除；round-trip 注释保真（写入含注释样本，改一个值后注释仍在）；503 未接线。
 - `tests/test_bgagent_scheduler.py` 扩展：slot 换 cfg → 下一拍新配置；reload 打断 idle sleep 重锚；retired 在 tick 结束后退出；apply() 增删别名与 executor 增删；过滤器重算。
-- 热生效钉：保存后 `ctx.ai_config.model` 新值（下一个 run 生效钉）；`hook.set_daily_cap`；`log level` 现场变更；privacy 写盘即反映。
+- 热生效钉：保存后 `ctx.ai_config.model` 新值；**agent_cache 代际三态**（新会话读新值 / 空闲旧会话下一派发读新值 / 运行中会话跑完前不读新值）；`hook.set_daily_cap`；`log level` 现场变更；privacy 写盘即反映；字段级写回保真钉（escalation/未知键保存后原样在场）。
 - 出域台账钉：改 base_url → 日志行数/内容变化（caplog）。
 - 前端静态审计家族：新增 SettingsPage.js 进 `test_web_ui_audit` 相关钉（壳高 / preventScroll 家族按需）。
 
@@ -152,5 +158,5 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 | 动作 | 文件 |
 |---|---|
 | 新增 | `server/routes/settings.py`、`tests/test_settings_routes.py`、`server/templates/js/components/SettingsPage.js` |
-| 修改 | `server/routes/__init__.py`（ROUTE_MODULES + WebContext/SettingsDeps）、`server/api.py`（create_app 参数）、`server/main.py`（接线 + build_runtime 返 supervisor/notif_hook 引用）、`server/bgagent/scheduler.py`（slot/supervisor）、`server/bgagent/notify.py`（set_daily_cap）、`server/templates/js/components/MonitorPage.js` + `app.js` + `index.html`（入口与整页模式）、`pyproject.toml`（ruamel.yaml）、`tests/test_routes_order.py` |
+| 修改 | `server/routes/__init__.py`（ROUTE_MODULES + WebContext/SettingsDeps）、`server/api.py`（create_app 参数）、`server/routes/agent.py`（agent_cache 代际戳）、`server/main.py`（接线 + build_runtime 返 supervisor/notif_hook 引用）、`server/bgagent/scheduler.py`（slot/supervisor）、`server/bgagent/notify.py`（set_daily_cap）、`server/templates/js/components/MonitorPage.js` + `app.js` + `index.html`（入口与整页模式）、`pyproject.toml`（ruamel.yaml）、`tests/test_routes_order.py` |
 | 文档 | `server/routes/README.md`、`server/bgagent/README`（若有）同步；AGENTS.md Gotchas 视实施结果决定是否补一条热生效铁律 |
