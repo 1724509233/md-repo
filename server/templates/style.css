@@ -1765,6 +1765,40 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-save:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
 .st-save:disabled { opacity: .55; cursor: default; }
 .st-footnote { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 10.5px; line-height: 1.7; color: var(--ink-soft); }
+/* Task 9 后台 agent 段追加：.st-bg-list/.st-bg-row/.st-bg-main 条目行 · .st-badge 运行徽标
+   · .st-toggle 开关（role=switch 按钮）· .st-add/.st-danger 增删钮（删除两步武装）
+   · .st-group 分组题 · .st-bg-form 条目表单 · .st-warn-inline 内联红字 · .st-input-mono/.st-val。
+   动效只用颜色/边框过渡，无无限动画 → 无需 reduced-motion 降级规则。 */
+.st-bg-list { display: flex; flex-direction: column; gap: 6px; }
+.st-bg-row { display: flex; align-items: stretch; gap: 8px; border: 1px solid var(--line); border-radius: 8px; transition: border-color .15s ease, background-color .15s ease; }
+.st-bg-row:hover { border-color: color-mix(in srgb, var(--brass) 35%, var(--line)); }
+.st-bg-row.sel { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-bg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; border: 0; background: transparent; padding: 8px 10px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.st-bg-main:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; border-radius: 7px; }
+.st-bg-name { font-size: 12px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bg-meta { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.st-bg-alias { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bg-tag { flex-shrink: 0; font-family: var(--mono); font-size: 9px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-soft); }
+.st-badge { flex-shrink: 0; align-self: center; font-family: var(--mono); font-size: 9.5px; border-radius: 999px; padding: 2px 8px; border: 1px solid; }
+.st-badge.run { border-color: color-mix(in srgb, var(--st-ok) 40%, var(--line)); background: color-mix(in srgb, var(--st-ok) 8%, transparent); color: var(--st-ok); }
+.st-badge.idle { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 7%, transparent); color: var(--brass); }
+.st-badge.off { border-color: var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); }
+.st-toggle { flex-shrink: 0; align-self: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--ink-soft); transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.st-toggle.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.st-bg-form { margin-top: 12px; }
+.st-group { font-size: 11px; font-weight: 700; color: var(--brass); padding-top: 6px; border-top: 1px dashed var(--line); }
+.st-group:first-child { border-top: 0; padding-top: 0; }
+.st-warn-inline { font-size: 10.5px; color: var(--st-error); }
+.st-input-mono { font-family: var(--mono); }
+.st-val { font-size: 12px; color: var(--ink); word-break: break-all; }
+.st-val-mono { font-family: var(--mono); font-size: 11px; }
+.st-trg-head { display: flex; align-items: center; gap: 10px; }
+.st-bg-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.st-add { border: 1px dashed color-mix(in srgb, var(--brass) 45%, var(--line)); border-radius: 999px; padding: 6px 14px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; font-weight: 600; color: var(--brass); transition: background-color .15s ease; }
+.st-add:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.st-danger { border: 1px solid color-mix(in srgb, var(--st-error) 40%, var(--line)); border-radius: 999px; padding: 6px 14px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--st-error); transition: background-color .15s ease, color .15s ease; }
+.st-danger:hover { background: color-mix(in srgb, var(--st-error) 8%, transparent); }
+.st-danger.armed { background: var(--st-error); border-color: var(--st-error); color: var(--paper); }
 @media (max-width: 639px) {
   /* 窄屏：左锚列折成顶部分段钮行（mode-btn 横排形态）；body 归单列 */
   .st-cols { grid-template-columns: 1fr; gap: 12px; }

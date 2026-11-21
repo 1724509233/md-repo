@@ -6,14 +6,20 @@
  *   非 2xx 不抛，返回 {status,data}，仅网络失败 throw）；
  *   emits ['back', 'open-doc']；挂载点 = app 模板 v-show="state.settingsPage"。
  * 互斥契约：文档区/监控页/设置页三态互斥（app 开页时收起其余两态；「← 返回文档」不自动重开面板）。
- * 本文件 = Task 8：分段导航 + 「主 agent」+「杂项」表单；「后台 agent」段由 Task 9 在 SECTIONS
- * 的 ai 与 misc 之间插入（保存流程本 Task 建好、Task 9 共用）。
+ * 本文件 = Task 8 + Task 9：分段导航 + 「主 agent」/「后台 agent」/「杂项」表单 + 共用保存流程。
+ * 后台 agent 段（spec §6.2 / §5.4）：卡片列表 = 名称 / 标识 / 启用开关（即表单字段）/ 运行徽标；
+ *   徽标数据源 = 全站 30s 脉搏 state.memoryStatus.agents，打开本段时若尚未到货则静默补拉一次，
+ *   失败不报错不阻塞表单。条目表单四分组（基本 / 调度与预算 / 工具 / 模型）；
+ *   未建模键（escalation 等）经条目 raw 副本直通：hydrate 存 raw → 保存时非建模键合并回条目，
+ *   不可编辑、不可丢；is_executor 条目只读展示（raw 原样直通），不进编辑。
+ *   api_key 每条目独立 touched（三态同 ai 段）；改名实时提示按 spec S3（api_key 清空 + 计权归零）。
  *
  * payload 构造契约（spec §4.1/§4.2，buildPayload 是本页唯一写面——四条铁律）：
  * ① api_key 三态：未触碰（touched 集合无此键）⇒ payload 省略该键（服务端回填原明文）；
  *    「清除」小钮 ⇒ 发 ""（显式清空）；输入新值 ⇒ 发新值。GET 回的 {set,mask} 掩码形态永不回传。
- * ② background_agents 原样直通——PUT 按 alias 对账、payload 缺席即删条目，本 Task 不编辑此段
- *    也必须回传；条目内 model.api_key（同为掩码形态）一律剥除（缺省=保持，同①）。
+ * ② background_agents 条目必须全量回传——PUT 按 alias 对账、payload 缺席即删条目；条目内
+ *    model.api_key（掩码形态）未触碰一律剥除（缺省=保持，同①）。Task 9 起条目可编辑：
+ *    编辑面只建模表单可见键，raw 副本中的其余键（escalation 等）保存时原样合并回条目。
  * ③ 空标量省略键（不发 null——加载器 int(null) 即炸→422；省略 = 加载器缺省/服务端保持原值，
  *    两种后端解读下都零崩溃）；显式语义各有专职：tools null=全量、privacy.dirs []=空名单、
  *    ai null=删段、api_key ""=清除。
@@ -22,11 +28,12 @@
  * 文案纪律（AGENTS Frontend Rule 2）：正文零字段名/端点路径/设计概念名；
  * applied/restart_needed 后端键经 FIELD_CN 翻成用户语言，未知键兜底「相关设置」。
  */
-const { ref, computed, watch, nextTick, inject } = Vue
+const { ref, computed, watch, nextTick, inject, onBeforeUnmount } = Vue
 
-// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源；Task 9 在 ai 与 misc 之间插 background agents）
+// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源）
 const SECTIONS = [
   { id: 'ai', label: '主 agent' },
+  { id: 'bg', label: '后台 agent' },
   { id: 'misc', label: '杂项' }
 ]
 
@@ -40,6 +47,146 @@ const AI_PARAMS = [
   { key: 'confirm_timeout', label: '操作确认超时（秒）', min: 1, step: 1 }
 ]
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+
+// ─── 后台 agent 段（Task 9）───
+// 触发事件全集与后端 change_log 操作集对齐（服务端仍是权威：保存走加载器校验，422 原文回显）。
+// 契约缺口备案：/api/settings 的 _meta 只带 tools/verbs/restart_fields，trigger 事件集未随
+// payload 下发，此处前端镜像该闭合集（后端加事件须同步此行，漂移后果 = 422 提示而非静默错写）。
+const BG_TRIG_OPS = ['create', 'update', 'delete', 'move']
+const BG_TRIG_OP_CN = { create: '新建', update: '修改', delete: '删除', move: '移动' }
+const BG_TRIG_SOURCES = [{ v: 'change', label: '文档变更' }, { v: 'recall', label: '召回缺口' }]
+// 调度与预算数值行 / trigger 数值行 / 模型数值行（label 即用户语言，min/step 进 input 属性）
+const BG_SCHED = [
+  { key: 'max_rounds', label: '最大轮次', min: 1, step: 1 },
+  { key: 'timeout_s', label: '超时上限（秒）', min: 1, step: 1 },
+  { key: 'budget_runs_per_day', label: '每日运行上限', min: 0, step: 1 },
+  { key: 'budget_max_proposals', label: '每日提案上限', min: 0, step: 1 }
+]
+const BG_TRIG_NUMS = [
+  { key: 'arm_count', label: '触发计数', min: 1, step: 1 },
+  { key: 'min_interval_h', label: '最小间隔（小时）', min: 0, step: 0.1 },
+  { key: 'low_score', label: '低分阈值', min: 0, max: 1, step: 0.05 }
+]
+const BG_MODEL_NUMS = [
+  { key: 'context_window', label: '上下文窗口', min: 1, step: 1 },
+  { key: 'max_tokens', label: '最大输出长度', min: 1, step: 1 },
+  { key: 'temperature', label: '生成温度', min: 0, max: 2, step: 0.1 }
+]
+// 建模键全集：raw 中其余键（escalation 等）保存时原样合并回条目（不可编辑不可丢）
+const BG_MODELED = new Set(['alias', 'name', 'enabled', 'cron', 'target_dir', 'prompt', 'report_dir',
+  'max_rounds', 'timeout_s', 'budget_runs_per_day', 'budget_max_proposals', 'trigger', 'tools', 'verbs', 'model'])
+const BG_TRIG_KEYS = new Set(['source', 'events', 'metric', 'arm_count', 'min_interval_h', 'low_score'])
+const BG_MODEL_KEYS = new Set(['provider', 'model_id', 'base_url', 'api_key', 'context_window', 'max_tokens', 'temperature'])
+
+function bgBlankModel() {
+  return {
+    provider: '', model_id: '', base_url: '', context_window: '', max_tokens: '', temperature: '',
+    keySet: false, keyMask: '', keyTouched: false, keyInput: ''
+  }
+}
+function bgBlankTrigger() {
+  return { source: 'change', events: [], arm_count: '', min_interval_h: '', low_score: '' }
+}
+function bgBlankEntry() {
+  return {
+    raw: {}, readOnly: false, name: '', alias: '', enabled: true,
+    target_dir: '', prompt: '', report_dir: '', cron: '',
+    max_rounds: '', timeout_s: '', budget_runs_per_day: '', budget_max_proposals: '',
+    tools: [], verbs: [], trigger: null, model: bgBlankModel()
+  }
+}
+// raw 条目（GET payload 形）→ 编辑镜像；api_key 止步掩码 {set,mask}，touched 每条目独立
+function bgEntryView(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {}
+  const m = r.model && typeof r.model === 'object' ? r.model : {}
+  const key = m.api_key && typeof m.api_key === 'object' ? m.api_key : null
+  const trig = r.trigger && typeof r.trigger === 'object' ? r.trigger : null
+  return {
+    raw: JSON.parse(JSON.stringify(r)),
+    readOnly: !!r.is_executor,
+    name: strOrEmpty(r.name), alias: strOrEmpty(r.alias),
+    enabled: r.enabled !== false, // 缺省 = 启用（加载器同语义）
+    target_dir: strOrEmpty(r.target_dir), prompt: strOrEmpty(r.prompt),
+    report_dir: strOrEmpty(r.report_dir), cron: strOrEmpty(r.cron),
+    max_rounds: numOrEmpty(r.max_rounds), timeout_s: numOrEmpty(r.timeout_s),
+    budget_runs_per_day: numOrEmpty(r.budget_runs_per_day),
+    budget_max_proposals: numOrEmpty(r.budget_max_proposals),
+    tools: Array.isArray(r.tools) ? [...r.tools] : [],
+    verbs: Array.isArray(r.verbs) ? [...r.verbs] : [],
+    trigger: trig ? {
+      source: strOrEmpty(trig.source) || 'change',
+      events: Array.isArray(trig.events) ? [...trig.events] : [],
+      arm_count: numOrEmpty(trig.arm_count),
+      min_interval_h: numOrEmpty(trig.min_interval_h),
+      low_score: numOrEmpty(trig.low_score)
+    } : null,
+    model: {
+      provider: strOrEmpty(m.provider), model_id: strOrEmpty(m.model_id), base_url: strOrEmpty(m.base_url),
+      context_window: numOrEmpty(m.context_window), max_tokens: numOrEmpty(m.max_tokens),
+      temperature: numOrEmpty(m.temperature),
+      keySet: !!(key && key.set), keyMask: strOrEmpty(key && key.mask),
+      keyTouched: false, keyInput: ''
+    }
+  }
+}
+const bgTitle = e => String(e.name || '').trim() || String(e.alias || '').trim() || '（未命名条目）'
+// alias 与原值相异即「改名 = 删 + 增」（spec §5.4/S3）——空原值（新条目）不算改名
+const bgRenamed = e => {
+  const orig = String((e.raw && e.raw.alias) || '')
+  return !!orig && String(e.alias || '').trim() !== orig
+}
+// 分界线即时提示（前端提示、服务端权威）：提案角色与直写工具不得同持
+const bgConflict = e => e.tools.includes('propose') && e.tools.includes('write_doc')
+
+// 编辑镜像 → PUT 条目：建模键按表单写值 + raw 非建模键原样直通 + 空标量省略键（铁律③）
+function buildBgEntry(vm) {
+  const raw = vm.raw && typeof vm.raw === 'object' ? vm.raw : {}
+  // 执行器条目不进编辑：raw 原样直通（剥掩码密钥，缺省=保持原明文）
+  if (vm.readOnly) {
+    const r = JSON.parse(JSON.stringify(raw))
+    if (r.model && typeof r.model === 'object') delete r.model.api_key
+    return r
+  }
+  const setStr = (o, k, v) => { const s = String(v == null ? '' : v).trim(); if (s) o[k] = s }
+  const e = {}
+  for (const k of Object.keys(raw)) {
+    if (!BG_MODELED.has(k)) e[k] = JSON.parse(JSON.stringify(raw[k])) // 未知键直通（escalation 等）
+  }
+  setStr(e, 'alias', vm.alias); setStr(e, 'name', vm.name)
+  e.enabled = !!vm.enabled // 两态都显式（区别于省略=保持，这里保持语义由表单承载）
+  setStr(e, 'target_dir', vm.target_dir); setStr(e, 'prompt', vm.prompt)
+  setStr(e, 'report_dir', vm.report_dir) // 留空 = 缺省（GET 侧缺省键本已省略）
+  setStr(e, 'cron', vm.cron)
+  for (const p of BG_SCHED) { const v = toNum(vm[p.key]); if (v !== null) e[p.key] = v }
+  e.tools = [...vm.tools] // 空数组 = 交给加载器判（422 定位到条目，服务端权威）
+  if (vm.tools.includes('propose')) e.verbs = [...vm.verbs]
+  if (vm.trigger) {
+    const rawTrig = raw.trigger && typeof raw.trigger === 'object' ? raw.trigger : {}
+    const t = {}
+    for (const k of Object.keys(rawTrig)) {
+      if (!BG_TRIG_KEYS.has(k)) t[k] = JSON.parse(JSON.stringify(rawTrig[k]))
+    }
+    t.source = vm.trigger.source
+    if (vm.trigger.source === 'change') t.events = [...vm.trigger.events]
+    else t.metric = 'failed_or_low' // recall 源固定指标
+    const ac = toNum(vm.trigger.arm_count); if (ac !== null) t.arm_count = ac
+    const mi = toNum(vm.trigger.min_interval_h); if (mi !== null) t.min_interval_h = mi
+    const ls = toNum(vm.trigger.low_score); if (ls !== null) t.low_score = ls
+    e.trigger = t
+  }
+  const rawModel = raw.model && typeof raw.model === 'object' ? raw.model : {}
+  const model = {}
+  for (const k of Object.keys(rawModel)) {
+    if (!BG_MODEL_KEYS.has(k)) model[k] = JSON.parse(JSON.stringify(rawModel[k]))
+  }
+  setStr(model, 'provider', vm.model.provider)
+  setStr(model, 'model_id', vm.model.model_id)
+  setStr(model, 'base_url', vm.model.base_url)
+  for (const p of BG_MODEL_NUMS) { const v = toNum(vm.model[p.key]); if (v !== null) model[p.key] = v }
+  if (vm.model.keyTouched) model.api_key = String(vm.model.keyInput) // touched 三态（铁律①）
+  e.model = model
+  return e
+}
 
 // applied / restart_needed 后端键 → 用户语言（未知键兜底，绝不在正文回显原始字段名）
 const FIELD_CN = {
@@ -145,8 +292,8 @@ export const SettingsPage = {
           read_doc_max_chars: numOrEmpty(ai && ai.read_doc_max_chars),
           confirm_timeout: numOrEmpty(ai && ai.confirm_timeout)
         },
-        // 直通段（Task 9 接管编辑）：深拷贝防编辑污染，PUT 原样回传防 alias 对账误删
-        background_agents: JSON.parse(JSON.stringify(d.background_agents || [])),
+        // 条目镜像（Task 9 接管编辑）：raw 副本存底本，未知键保存时直通回条目
+        background_agents: (d.background_agents || []).map(bgEntryView),
         notifications: { daily_cap: numOrEmpty(d.notifications && d.notifications.daily_cap) },
         log: {
           level: strOrEmpty(d.log && d.log.level) || 'INFO',
@@ -168,6 +315,9 @@ export const SettingsPage = {
         toolsMode.value = 'all'
         toolsSel.value = [...(meta.value.tools || [])]
       }
+      // 服务端真相回填 = 条目编辑态归零（保存后重载同路径：折叠列表、解武装）
+      bgEditing.value = -1
+      disarmBgDelete()
     }
 
     // 打开页面首拉（深链/常开恢复均经此；此后 revision/409 机制负责新鲜度，重开不重复拉）
@@ -227,6 +377,101 @@ export const SettingsPage = {
       if (e.key === 'Enter') { e.preventDefault(); addDir() }
     }
 
+    // ═══ 后台 agent 段（Task 9）：列表/条目编辑态 + 徽标 + 增删改交互 ═══
+    const bgEditing = ref(-1)      // 展开编辑的条目下标（-1 = 仅列表）
+    const bgDelArmed = ref(-1)     // 两步删除的武装下标（TrashPanel emptyArmed 先例，3s 复位）
+    let bgDelTimer = null
+    const bgStatusPending = ref(false)
+
+    const bgForm = computed(() => {
+      const i = bgEditing.value
+      const f = form.value && form.value.background_agents
+      return i >= 0 && f && f[i] ? f[i] : null
+    })
+
+    // 徽标只显运行/待命/停用：数据源 = 全站 30s 脉搏的 agents（在册 = 有运行/触发登记）；
+    // 数据缺席（静默失败）→ 启用条目落「待命」，表单照常可用
+    const bgLive = computed(() => {
+      const s = new Set()
+      for (const a of ((state.memoryStatus && state.memoryStatus.agents) || [])) s.add(a.alias)
+      return s
+    })
+    function bgBadge(e) {
+      if (!e.enabled) return { cls: 'off', label: '停用', tip: '已停用；保存后该任务从调度中退出' }
+      if (bgLive.value.has(String(e.alias || '').trim())) return { cls: 'run', label: '运行', tip: '服务端在册（有运行或触发登记）' }
+      return { cls: 'idle', label: '待命', tip: '已启用；服务端尚未登记（新建/改名后待下一拍）' }
+    }
+    // 本段首次打开且脉搏尚未到货 → 静默补拉一次（失败吞掉，不阻塞表单加载）
+    function ensureBgStatus() {
+      if (state.memoryStatus || bgStatusPending.value) return
+      bgStatusPending.value = true
+      api.getMemoryStatus()
+        .then(st => { if (st) state.memoryStatus = st })
+        .catch(() => {})
+        .finally(() => { bgStatusPending.value = false })
+    }
+
+    function bgSelect(i) {
+      if (bgEditing.value === i) { bgEditing.value = -1; return }
+      disarmBgDelete()
+      bgEditing.value = i
+    }
+    function bgAdd() {
+      form.value.background_agents.push(bgBlankEntry())
+      disarmBgDelete()
+      bgEditing.value = form.value.background_agents.length - 1
+    }
+    function disarmBgDelete() {
+      clearTimeout(bgDelTimer)
+      bgDelArmed.value = -1
+    }
+    function onBgDelete(i) {
+      if (bgDelArmed.value !== i) { // 第一步：只武装，3s 自动复位
+        disarmBgDelete()
+        bgDelArmed.value = i
+        bgDelTimer = setTimeout(disarmBgDelete, 3000)
+        return
+      }
+      disarmBgDelete()
+      form.value.background_agents.splice(i, 1)
+      if (bgEditing.value === i) bgEditing.value = -1
+      else if (bgEditing.value > i) bgEditing.value -= 1
+    }
+    onBeforeUnmount(disarmBgDelete)
+
+    function bgToggleTrigger(i) {
+      const e = form.value.background_agents[i]
+      if (e) e.trigger = e.trigger ? null : bgBlankTrigger()
+    }
+    function bgToggleEvent(i, op) {
+      const e = form.value.background_agents[i]
+      if (!e || !e.trigger) return
+      const k = e.trigger.events.indexOf(op)
+      if (k >= 0) e.trigger.events.splice(k, 1)
+      else e.trigger.events.push(op)
+    }
+    function bgToggleTool(i, t) {
+      const e = form.value.background_agents[i]
+      if (!e) return
+      const k = e.tools.indexOf(t)
+      if (k >= 0) e.tools.splice(k, 1)
+      else e.tools.push(t)
+    }
+    function bgToggleVerb(i, v) {
+      const e = form.value.background_agents[i]
+      if (!e) return
+      const k = e.verbs.indexOf(v)
+      if (k >= 0) e.verbs.splice(k, 1)
+      else e.verbs.push(v)
+    }
+    function bgClearKey(i) {
+      const e = form.value.background_agents[i]
+      if (!e) return
+      e.model.keyTouched = true
+      e.model.keyInput = ''
+    }
+    const bgKeyHint = e => (String(e.model.keyInput) === '' ? '保存后将清除密钥' : '保存后将写入新密钥')
+
     // ═══ 保存（单一「保存全部」；三态反馈：200 生效报告 / 409 冲突重载 / 422 页顶告警，
     //     外加 500 {saved:true} 的 apply 失败窗口如实报——spec §4.2 步 6）───
     const saving = ref(false)
@@ -260,12 +505,8 @@ export const SettingsPage = {
       if (toolsMode.value === 'custom') ai.tools = [...toolsSel.value]
       else ai.tools = null // 全量的显式形态（区别于省略——文档里旧白名单须被清掉）
       p.ai = aiWasNull.value && !aiEdited.value ? null : ai
-      // ── 直通段（铁律②）：条目回传但剥掩码密钥（缺省=保持原明文）──
-      p.background_agents = (f.background_agents || []).map(e => {
-        const c = JSON.parse(JSON.stringify(e))
-        if (c && c.model && typeof c.model === 'object') delete c.model.api_key
-        return c
-      })
+      // ── 后台 agent 段（铁律②+④）：条目走 buildBgEntry 重建（raw 未知键直通 + 密钥 touched 三态）──
+      p.background_agents = (f.background_agents || []).map(buildBgEntry)
       // ── 杂项段（notifications/log 对象恒在场=段级零删除；段内空标量省略键）──
       const notif = {}
       const cap = toNum(f.notifications.daily_cap)
@@ -316,6 +557,8 @@ export const SettingsPage = {
 
     // 分段导航（单一在场段；≤639 由 CSS 折成顶部分段钮行）
     const section = ref('ai')
+    // 打开本段且全站脉搏未到货 → 静默补拉徽标数据（immediate 覆盖直落本段的后续打开路径）
+    watch(section, (s) => { if (s === 'bg') ensureBgStatus() }, { immediate: true })
 
     return {
       wrapRef, back,
@@ -324,6 +567,10 @@ export const SettingsPage = {
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
       toolsMode, setToolsMode, toggleTool,
       dirDraft, dirInputRef, addDir, removeDir, onDirKeydown,
+      // 后台 agent 段
+      BG_TRIG_OPS, BG_TRIG_OP_CN, BG_TRIG_SOURCES, BG_SCHED, BG_TRIG_NUMS, BG_MODEL_NUMS,
+      bgEditing, bgForm, bgDelArmed, bgBadge, bgTitle, bgRenamed, bgConflict, bgKeyHint,
+      bgSelect, bgAdd, onBgDelete, bgToggleTrigger, bgToggleEvent, bgToggleTool, bgToggleVerb, bgClearKey,
       saving, save, report, appliedText, restartText, reloadFromServer
     }
   },
@@ -425,6 +672,188 @@ export const SettingsPage = {
                         <span class="st-hint">点选启用；全不选 = 主 agent 无工具</span>
                       </template>
                       <span v-else class="st-hint">当前开放全部工具</span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- ═══ 后台 agent ═══ -->
+                <div v-show="section === 'bg'">
+                  <div class="mcard">
+                    <div class="mc-h"><span class="mc-t">后台 agent</span></div>
+                    <div v-if="form.background_agents.length" class="st-bg-list">
+                      <div v-for="(e, i) in form.background_agents" :key="i" class="st-bg-row"
+                        :class="{ sel: bgEditing === i }">
+                        <button type="button" class="st-bg-main" :aria-expanded="bgEditing === i"
+                          @click="bgSelect(i)">
+                          <span class="st-bg-name">{{ bgTitle(e) }}</span>
+                          <span class="st-bg-meta">
+                            <span class="st-bg-alias">{{ e.alias || '未填标识' }}</span>
+                            <span v-if="e.readOnly" class="st-bg-tag">执行器</span>
+                          </span>
+                        </button>
+                        <span class="st-badge" :class="bgBadge(e).cls" :title="bgBadge(e).tip">{{ bgBadge(e).label }}</span>
+                        <button class="st-toggle" :class="{ on: e.enabled }" type="button" role="switch"
+                          :aria-checked="e.enabled" :aria-label="(e.enabled ? '停用 ' : '启用 ') + bgTitle(e)"
+                          @click="e.enabled = !e.enabled">{{ e.enabled ? '启用' : '停用' }}</button>
+                      </div>
+                    </div>
+                    <div v-else class="zline">暂无后台 agent，可点「添加后台 agent」新建</div>
+                    <div class="st-bg-foot">
+                      <button class="st-add" type="button" @click="bgAdd()">添加后台 agent</button>
+                    </div>
+                  </div>
+
+                  <div v-if="bgForm" class="mcard st-bg-form">
+                    <div class="mc-h"><span class="mc-t">{{ bgTitle(bgForm) }}</span></div>
+                    <div v-if="!bgForm.readOnly" class="st-fields">
+                      <div class="st-group">基本</div>
+                      <div class="st-grid">
+                        <label class="st-field">
+                          <span class="st-lbl">名称</span>
+                          <input class="st-input" type="text" autocomplete="off" placeholder="界面显示名"
+                            v-model="bgForm.name">
+                        </label>
+                        <label class="st-field">
+                          <span class="st-lbl">标识</span>
+                          <input class="st-input st-input-mono" type="text" autocomplete="off"
+                            placeholder="英文短名，保存后作为该任务的身份" v-model="bgForm.alias">
+                        </label>
+                      </div>
+                      <span v-if="bgRenamed(bgForm)" class="st-warn-inline">改名将清空该条已存密钥（需重填），且触发计权从零开始</span>
+                      <label class="st-field">
+                        <span class="st-lbl">工作目录</span>
+                        <input class="st-input st-input-mono" type="text" autocomplete="off"
+                          placeholder="知识库内目录，例如 notes" v-model="bgForm.target_dir">
+                      </label>
+                      <label class="st-field">
+                        <span class="st-lbl">提示词文件</span>
+                        <input class="st-input st-input-mono" type="text" autocomplete="off"
+                          placeholder="相对配置文件路径，例如 server/prompts/x.md" v-model="bgForm.prompt">
+                      </label>
+                      <label class="st-field">
+                        <span class="st-lbl">报告目录</span>
+                        <input class="st-input st-input-mono" type="text" autocomplete="off"
+                          placeholder="留空 = 工作目录下的默认报告区" v-model="bgForm.report_dir">
+                      </label>
+                      <div class="st-field">
+                        <span class="st-lbl">启用</span>
+                        <button class="st-toggle" :class="{ on: bgForm.enabled }" type="button" role="switch"
+                          :aria-checked="bgForm.enabled" aria-label="启用此条目"
+                          @click="bgForm.enabled = !bgForm.enabled">{{ bgForm.enabled ? '启用' : '停用' }}</button>
+                        <span class="st-hint">停用后保存：该任务从调度中退出，进行中的一轮跑完即停</span>
+                      </div>
+
+                      <div class="st-group">调度与预算</div>
+                      <label class="st-field">
+                        <span class="st-lbl">定时计划</span>
+                        <input class="st-input st-input-mono" type="text" autocomplete="off"
+                          placeholder="例如 0 2 * * *（每日 02:00）" v-model="bgForm.cron">
+                      </label>
+                      <div class="st-grid">
+                        <label v-for="p in BG_SCHED" :key="p.key" class="st-field">
+                          <span class="st-lbl">{{ p.label }}</span>
+                          <input class="st-input" type="number" :min="p.min" :step="p.step" v-model="bgForm[p.key]">
+                        </label>
+                      </div>
+                      <div class="st-field" role="group" aria-label="事件触发">
+                        <div class="st-trg-head">
+                          <span class="st-lbl">事件触发</span>
+                          <button class="st-toggle" :class="{ on: bgForm.trigger }" type="button" role="switch"
+                            :aria-checked="!!bgForm.trigger" aria-label="开启事件触发"
+                            @click="bgToggleTrigger(bgEditing)">{{ bgForm.trigger ? '开' : '关' }}</button>
+                        </div>
+                        <span class="st-hint">关闭 = 仅按计划定时运行</span>
+                        <template v-if="bgForm.trigger">
+                          <select class="st-input" aria-label="触发来源" v-model="bgForm.trigger.source">
+                            <option v-for="s in BG_TRIG_SOURCES" :key="s.v" :value="s.v">{{ s.label }}</option>
+                          </select>
+                          <div v-if="bgForm.trigger.source === 'change'" class="st-chips">
+                            <button v-for="op in BG_TRIG_OPS" :key="op" class="st-chip" type="button"
+                              :class="{ on: bgForm.trigger.events.includes(op) }"
+                              @click="bgToggleEvent(bgEditing, op)">{{ BG_TRIG_OP_CN[op] }}</button>
+                          </div>
+                          <span v-else class="st-hint">按无命中或低分的召回查询触发</span>
+                          <div class="st-grid">
+                            <label v-for="p in BG_TRIG_NUMS" :key="p.key" class="st-field">
+                              <span class="st-lbl">{{ p.label }}</span>
+                              <input class="st-input" type="number" :min="p.min" :max="p.max" :step="p.step"
+                                v-model="bgForm.trigger[p.key]">
+                            </label>
+                          </div>
+                        </template>
+                      </div>
+
+                      <div class="st-group">工具</div>
+                      <div class="st-field" role="group" aria-label="工具授权">
+                        <div v-if="meta.tools.length" class="st-chips">
+                          <button v-for="t in meta.tools" :key="t" class="st-chip" type="button"
+                            :class="{ on: bgForm.tools.includes(t) }"
+                            @click="bgToggleTool(bgEditing, t)">{{ t }}</button>
+                        </div>
+                        <div v-else class="zline">工具清单暂不可用</div>
+                        <span v-if="bgConflict(bgForm)" class="st-warn-inline">提案与直写工具不可同时启用，保存会被拒绝</span>
+                        <template v-if="bgForm.tools.includes('propose')">
+                          <div v-if="meta.verbs.length" class="st-chips">
+                            <button v-for="v in meta.verbs" :key="v" class="st-chip" type="button"
+                              :class="{ on: bgForm.verbs.includes(v) }"
+                              @click="bgToggleVerb(bgEditing, v)">{{ v }}</button>
+                          </div>
+                          <span class="st-hint">选择该任务可提交的提案类型</span>
+                        </template>
+                        <span v-else class="st-hint">启用提案工具后可在此限定提案类型</span>
+                      </div>
+
+                      <div class="st-group">模型</div>
+                      <div class="st-grid">
+                        <label class="st-field">
+                          <span class="st-lbl">接口协议</span>
+                          <input class="st-input st-input-mono" type="text" autocomplete="off" placeholder="openai"
+                            v-model="bgForm.model.provider">
+                        </label>
+                        <label class="st-field">
+                          <span class="st-lbl">模型名称</span>
+                          <input class="st-input" type="text" autocomplete="off" v-model="bgForm.model.model_id">
+                        </label>
+                      </div>
+                      <label class="st-field">
+                        <span class="st-lbl">服务地址</span>
+                        <input class="st-input" type="text" autocomplete="off"
+                          placeholder="例如 http://127.0.0.1:11434/v1" v-model="bgForm.model.base_url">
+                      </label>
+                      <div class="st-field">
+                        <label class="st-lbl" :for="'st-bg-key-' + bgEditing">密钥</label>
+                        <div class="st-keyrow">
+                          <input :id="'st-bg-key-' + bgEditing" class="st-input" type="password"
+                            autocomplete="new-password"
+                            :placeholder="bgForm.model.keySet ? '已设置（留空保持不变）' : '未设置'"
+                            :title="bgForm.model.keyMask ? '当前密钥：' + bgForm.model.keyMask : ''"
+                            v-model="bgForm.model.keyInput">
+                          <button v-if="bgForm.model.keySet && !bgForm.model.keyTouched" class="mp-back" type="button"
+                            title="清除已保存的密钥（保存后生效）" @click="bgClearKey(bgEditing)">清除</button>
+                        </div>
+                        <span v-if="bgForm.model.keyTouched" class="st-hint">{{ bgKeyHint(bgForm) }}</span>
+                      </div>
+                      <div class="st-grid">
+                        <label v-for="p in BG_MODEL_NUMS" :key="p.key" class="st-field">
+                          <span class="st-lbl">{{ p.label }}</span>
+                          <input class="st-input" type="number" :min="p.min" :max="p.max" :step="p.step"
+                            v-model="bgForm.model[p.key]">
+                        </label>
+                      </div>
+                    </div>
+                    <div v-else class="st-fields">
+                      <div class="st-grid">
+                        <div class="st-field"><span class="st-lbl">名称</span><span class="st-val">{{ bgForm.name || '—' }}</span></div>
+                        <div class="st-field"><span class="st-lbl">标识</span><span class="st-val st-val-mono">{{ bgForm.alias || '—' }}</span></div>
+                        <div class="st-field"><span class="st-lbl">定时计划</span><span class="st-val st-val-mono">{{ bgForm.cron || '—' }}</span></div>
+                        <div class="st-field"><span class="st-lbl">工作目录</span><span class="st-val st-val-mono">{{ bgForm.target_dir || '—' }}</span></div>
+                      </div>
+                      <span class="st-hint">执行器条目请手改 yaml</span>
+                    </div>
+                    <div class="st-bg-foot">
+                      <button class="st-danger" :class="{ armed: bgDelArmed === bgEditing }" type="button"
+                        @click="onBgDelete(bgEditing)">{{ bgDelArmed === bgEditing ? '确认删除？' : '删除此条目' }}</button>
+                      <span class="st-hint">若正在运行，本轮跑完即停</span>
                     </div>
                   </div>
                 </div>
