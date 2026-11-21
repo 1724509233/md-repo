@@ -18,7 +18,7 @@ run 死亡（stop / 流中 APIError / 通用崩溃）时，在飞 LLM 调用的�
 
 ## 2. 机制契约（单条规则，三处落点）
 
-**规则**：一次 LLM 流式调用凡以非正常完成退出（cancel / APIError / 其它异常），且已累积的 **content 非纯空白**，则在调用结束点立即 append：
+**规则**：一次 LLM 流式调用凡以非正常完成退出（cancel / APIError / 其它异常），且已累积的 **content 非纯空白**（产行条件已被 2026-11-21 修订扩展，见下），则在调用结束点立即 append：
 
 ```json
 {"role": "assistant", "content": "<已累积文本原文，不加工>", "interrupted": true}
@@ -31,6 +31,12 @@ run 死亡（stop / 流中 APIError / 通用崩溃）时，在飞 LLM 调用的�
   1. **CancelledError**（stop）：append 后原样 re-raise（取消语义不变）。
   2. **APIError 分支**（现有 :265-277）：现行为「丢弃累积 + error 事件 + 正常收流」；改为 append 后 error 事件、收流照旧——content-only 行不触半交付 tool call，b621b5b4 不变式不破坏。
   3. **通用 Exception**（崩溃）：append 后 re-raise，runhub crash 分支落库。
+
+**修订（2026-11-21，落点契约三处）**
+
+1. **产行条件扩展——双空白才不产行**：content 为 None/空/纯空白，但本轮 `reasoning` 非空 → 仍产 interrupted 行（采集面保留思考，stop 前只想不说的轮次不丢）；行内 `content` 归一为 `""`（纯空白正文绝不原样入库）；content 与 reasoning **双空白仍不产**。
+2. **reasoning 条件键重申**：仅 `reasoning and reasoning.strip()` 才落 `reasoning` 键（「空则无键」契约不变——无思考或空白思考的思考键缺席，行回无 reasoning 形态；全等断言测试家族依赖此契约）。
+3. **重放排除（新契约）**：空正文的 interrupted 行（content 归一 `""`）只供**入库采集 / UI 渲染 / join 与反馈键**，**绝不回喂 LLM**——LLM 边界投影（runtime.py `call_messages` 列表推导）新增结构性过滤 `_is_blank_assistant_turn`：`role==assistant` 且无 `tool_calls`（键缺席/None/空均算无）且 content 空白（None/空串/纯空白）的行滤除。动机：严格 provider 对空 assistant 轮报 400，且训练模型会学出空轮形态。**带 tool_calls 的 content=None 中间行绝不被滤**（assistant+tool_calls ↔ tool 行配对完整是协议面，与 `_ensure_tool_results` 同族不变式）。白名单滤键（既有）+ 本过滤滤「空正文轮」（新增）= 边界投影双契约。
 
 **LLM 语义**：`interrupted` 被 `LLM_FIELDS` 白名单（runtime.py:31-40，fail-closed）挡在请求外——模型看到自己说过的半句，但看不到「这是被中断的」标签；中断语境由用户下一条消息自然提供（「方向不对」/「继续」）。这是特性不是缺漏：不注入系统口吻噪声，白名单零改动。
 

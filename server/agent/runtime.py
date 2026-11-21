@@ -143,27 +143,35 @@ def _ensure_tool_results(agent) -> None:
 
 
 def _append_partial(agent, content: str, reasoning: str = "") -> None:
-    """通道一（spec 2026-11-20 partial-output-retention §2）× r8 修订重做：
-    一次流式调用以非正常完成退出（cancel / APIError / 崩溃）时，已累积 content
-    入历史——content+interrupted 行（无 tool_calls/id/ts/citations：b621b5b4
-    不变式「历史永不持半交付 tool call」，r8 扩为 content+reasoning+message_id）。
+    """通道一（spec 2026-11-20 partial-output-retention §2，2026-11-21 修订）×
+    r8 修订重做：一次流式调用以非正常完成退出（cancel / APIError / 崩溃）时，
+    已累积内容入历史——content+interrupted 行（无 tool_calls/id/ts/citations：
+    b621b5b4 不变式「历史永不持半交付 tool call」，r8 扩为
+    content+reasoning+message_id）。
 
+    * 产行条件（2026-11-21 修订）：**双空白才不 append**——content 空白但本
+      轮 reasoning 非空也产行（采集面保留思考），行内 content 归一为 ""（纯
+      空白正文绝不原样入库）；content 非空白则原文照存。
     * ``message_id`` 身份戳（r8，废弃补丁卡 chat_run_id）：agent 带会话身份
       （session_id 在场 = 聊天 run 有锚环境）时随行落库——uuid4 hex12 与 done 行
       同形态，双职 = 反馈键 + 通道二 chat_abort_log join 锚；并留痕于
       ``agent.last_partial_message_id`` 供 RunHub stop 写点读取注入（通道二 §3，
       后续卡消费）。无锚环境（bgagent 等）键缺席、行回三键形态。
-    * ``reasoning``（通道二 r6）：本次调用已累计的思考全文（不截断），可空——
-      空则不产键。
+    * ``reasoning`` 条件键（通道二 r6 + 2026-11-21 重申）：本次调用已累计的
+      思考全文（不截断）——仅 ``reasoning and reasoning.strip()`` 才产键
+      （「空则无键」契约，空白思考同样不落）。
 
     三键（interrupted/message_id/reasoning）均被 LLM_FIELDS 白名单挡在请求外：
     模型看到自己说过的半句，但看不到「这是被中断的」，中断语境由用户下一条消息
-    自然提供（特性非缺漏）。纯空白不 append。
+    自然提供（特性非缺漏）。空白 content 行的重放排除另在 LLM 边界投影处结构性
+    滤除（``_is_blank_assistant_turn``，spec §2 重放排除条款）——本函数只管采集。
     """
-    if not (content and content.strip()):
+    if not (content and content.strip()) and not (reasoning and reasoning.strip()):
         return
-    line = {"role": "assistant", "content": content, "interrupted": True}
-    if reasoning:
+    line = {"role": "assistant",
+            "content": content if (content and content.strip()) else "",
+            "interrupted": True}
+    if reasoning and reasoning.strip():
         line["reasoning"] = reasoning
     if getattr(agent, "session_id", ""):
         message_id = uuid.uuid4().hex[:12]
@@ -172,6 +180,25 @@ def _append_partial(agent, content: str, reasoning: str = "") -> None:
         # 取消 unwind 顺序保证先盖行后到 RunHub）
         agent.last_partial_message_id = message_id
     agent.messages.append(line)
+
+
+def _is_blank_assistant_turn(m: dict) -> bool:
+    """LLM 边界重放过滤器（spec 2026-11-20 partial-output-retention §2，
+    2026-11-21 修订「重放排除」条款）：空正文的 assistant 轮绝不回喂模型。
+
+    空白 content 的 interrupted 行（``_append_partial`` 采集态 content 归一
+    ""）只供入库采集 / UI 渲染 / 反馈键与通道二 join，模型永不见空轮——严格
+    provider 对空 assistant 轮报 400，且训练模型会学出空轮形态。判据：
+    role==assistant 且无 tool_calls（键缺席 / None / 空均算无）且 content 非
+    有效字符串（None / 空串 / 纯空白）。**带 tool_calls 的行绝不被滤**——
+    即使 content=None，assistant+tool_calls 与其后 tool 行的配对必须完整
+    （协议面，_ensure_tool_results 同族不变式）。"""
+    if m.get("role") != "assistant":
+        return False
+    if m.get("tool_calls"):
+        return False
+    content = m.get("content")
+    return not (isinstance(content, str) and content.strip())
 
 
 class LoopRuntime(Runtime):
@@ -222,15 +249,22 @@ class LoopRuntime(Runtime):
                 else:
                     raw_messages = agent.messages
 
-                # LLM boundary whitelist projection (spec 2026-11-13 §5.2 D21): only
-                # the 4 LLM fields cross into the request. ``id``/``ts``/``citations``
-                # are UI/telemetry fields on assistant messages and must NEVER reach
-                # the model — the SDK serializes message dicts verbatim, so a bare
-                # agent.messages pass would leak them. Project the FINAL list (after
-                # reminder injection) so history and reminder are both filtered.
+                # LLM boundary projection (spec 2026-11-13 §5.2 D21 + spec 2026-11-20
+                # partial-output-retention §2 2026-11-21 修订) — 双契约：
+                # ① 白名单滤键：只有 4 个 LLM 字段进请求。``id``/``ts``/``citations``
+                #    （及 interrupted/message_id/reasoning）是 assistant 行上的
+                #    UI/telemetry/blob-only 字段，绝不可达模型——SDK 逐字序列化
+                #    message dict，裸传 agent.messages 即泄漏。投影对象是 FINAL 列表
+                #    （reminder 注入后），history 与 reminder 同过滤。
+                # ② 重放排除滤「空正文轮」（新增）：空白 content 的 interrupted 行
+                #    只供采集/UI/join，结构性滤除、永不回喂——严格 provider 对空
+                #    assistant 轮报 400，训练模型还会学出空轮形态。带 tool_calls 的
+                #    content=None 中间行绝不被滤（assistant+tool_calls ↔ tool 行
+                #    配对完整是协议面，判据见 _is_blank_assistant_turn）。
                 call_messages = [
                     {k: v for k, v in m.items() if k in LLM_FIELDS}
                     for m in raw_messages
+                    if not _is_blank_assistant_turn(m)
                 ]
 
                 create_kwargs = dict(

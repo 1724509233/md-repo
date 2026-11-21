@@ -1784,8 +1784,12 @@ def test_confirm_and_timeout_single_verdict(tmp_path: Path):
 # + r8 message_id 身份戳（有锚环境=agent.session_id 在场；uuid4 hex12 与 done 行
 # 同形态，双职=反馈键 + 通道二 join 锚）+ r6 reasoning（本次调用已累计的思考，
 # 可空）。无 tool_calls/id/ts/citations 键（b621b5b4 不变式：扩为
-# content+reasoning+message_id，仍无半交付 tool call）；纯空白不 append；
-# interrupted/message_id/reasoning 全被 LLM_FIELDS 白名单挡在出域 payload 外。
+# content+reasoning+message_id，仍无半交付 tool call）；2026-11-21 修订：双空白
+# （content 与 reasoning 皆空白）才不 append——content 空白 + reasoning 非空也
+# 产行（content 归一 ""）；reasoning 仍条件键（空白思考不落）；
+# interrupted/message_id/reasoning 全被 LLM_FIELDS 白名单挡在出域 payload 外；
+# 空正文 interrupted 行另在边界投影被 _is_blank_assistant_turn 结构性滤除
+# （重放排除：模型永不见空轮，采集/UI/join 不受影响）。
 
 
 def _openai_api_error():
@@ -1915,6 +1919,70 @@ def test_partial_blank_not_persisted(tmp_path: Path):
     assert [d for t, d in events if t == "done"] == [{"reason": "error"}]
     assert [m["role"] for m in agent.messages] == ["system", "user"]  # 零 append
 
+    # 双空白含「reasoning 为纯空白」半边：同样零 append（守卫双条件）
+    agent_b, _ = _make_agent(tmp_path)
+    stream_b = AsyncMock()
+    stream_b.__aiter__ = lambda s: _async_iter_exc(
+        [_make_chunk(content=None, reasoning="   ")], _openai_api_error())
+    client_b = MagicMock()
+    client_b.chat.completions.create = AsyncMock(return_value=stream_b)
+
+    async def run_b():
+        return [(e.type, e.data) async for e in agent_b.chat("hi")]
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=client_b):
+        events_b = asyncio.run(run_b())
+    assert any(t == "error" for t, _ in events_b)
+    assert [m["role"] for m in agent_b.messages] == ["system", "user"]  # 零 append
+
+
+def test_partial_blank_content_reasoning_kept_on_cancel(tmp_path: Path):
+    """2026-11-21 修订产行条件：content 纯空白 + 本轮 reasoning 非空 → cancel
+    仍产行——content 归一 ""（纯空白正文绝不原样入库）、reasoning 键在且原样、
+    message_id 盖戳并留痕（采集面保留；重放排除另在边界投影钉）。"""
+    import re as _re
+    agent, vault = _make_agent(tmp_path, session_id="ses_blanks")
+    blocker: asyncio.Event = asyncio.Event()  # 永不释放
+
+    stream = AsyncMock()
+    stream.__aiter__ = lambda s: _async_iter_blocked(
+        [_make_chunk(reasoning="只想了一句"), _make_chunk(content="  \n\t ")],
+        blocker)
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(return_value=stream)
+
+    seen: list = []
+
+    async def consume():
+        async for e in agent.chat("hi"):
+            seen.append(e)
+
+    async def main():
+        task = asyncio.ensure_future(consume())
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            if seen:
+                break
+        assert seen, "token 事件未达消费者（流未开）"
+        task.cancel()
+        try:
+            await task
+            return False  # CancelledError 未上抛 = 红
+        except asyncio.CancelledError:
+            return True
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        cancelled = asyncio.run(main())
+
+    assert cancelled, "CancelledError 必须原样上抛"
+    row = agent.messages[-1]
+    mid = row["message_id"]
+    assert _re.fullmatch(r"[0-9a-f]{12}", mid), mid
+    rest = {k: v for k, v in row.items() if k != "message_id"}
+    assert rest == {"role": "assistant", "content": "",
+                    "interrupted": True, "reasoning": "只想了一句"}
+    assert agent.last_partial_message_id == mid
+
 
 def test_partial_persisted_on_api_error_branch(tmp_path: Path):
     """§2 落点 2 / §5-3：mid-stream APIError → append 发生，且既有 error 事件 +
@@ -2009,6 +2077,83 @@ def test_partial_then_continue(tmp_path: Path):
     idx = [i for i, m in enumerate(sent) if m.get("content") == "说到一半"]
     assert idx, "半截行必须出现在次轮出域 payload"
     assert sent[idx[0] + 1] == {"role": "user", "content": "继续"}
+
+
+def test_blank_interrupted_row_excluded_from_llm_request(tmp_path: Path):
+    """2026-11-21 重放排除条款（边界投影滤空正文轮）：首轮 cancel 产空白
+    interrupted 行（content 归一 ""）→ 第二轮出域无该空正文 assistant 行、
+    其余行原样；带 tool_calls 的 content=None 中间行绝不被滤
+    （assistant+tool_calls ↔ tool 行配对完整是协议面）。"""
+    agent, vault = _make_agent(tmp_path, session_id="anchor0002")
+    notes = vault / "notes"
+    notes.mkdir()
+    (notes / "a.md").write_bytes(b"# A\n")
+    blocker: asyncio.Event = asyncio.Event()  # 永不释放
+
+    stream1 = AsyncMock()
+    stream1.__aiter__ = lambda s: _async_iter_blocked(
+        [_make_chunk(reasoning="空白中断轮的思考"), _make_chunk(content="   ")],
+        blocker)
+    tc = MagicMock()
+    tc.index = 0
+    tc.id = "call_r"
+    tc.function = MagicMock()
+    tc.function.name = "read_doc"
+    tc.function.arguments = '{"path": "notes/a.md"}'
+    stream2 = AsyncMock()
+    stream2.__aiter__ = lambda s: _async_iter([_make_chunk(tool_calls=[tc])])
+    stream3 = AsyncMock()
+    stream3.__aiter__ = lambda s: _async_iter([_make_chunk(content="终答")])
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(side_effect=[stream1, stream2, stream3])
+
+    seen: list = []
+
+    async def consume():
+        async for e in agent.chat("hi"):
+            seen.append(e)
+
+    async def first():
+        task = asyncio.ensure_future(consume())
+        for _ in range(300):
+            await asyncio.sleep(0.01)
+            if seen:
+                break
+        assert seen, "token 事件未达消费者（流未开）"
+        task.cancel()
+        try:
+            await task
+            return False
+        except asyncio.CancelledError:
+            return True
+
+    async def second():
+        async for _ in agent.chat("继续"):
+            pass
+
+    with patch("server.agent.runtime.AsyncOpenAI", return_value=mock_client):
+        cancelled = asyncio.run(first())
+        assert cancelled, "CancelledError 必须原样上抛"
+        asyncio.run(second())
+
+    # blob 侧空白 interrupted 行在场（否则出域零滤是空断言）
+    blank = [m for m in agent.messages if m.get("interrupted")]
+    assert len(blank) == 1 and blank[0]["content"] == ""
+
+    assert mock_client.chat.completions.create.await_count == 3
+    sent = mock_client.chat.completions.create.call_args_list[2].kwargs["messages"]
+    # 空正文 assistant 行不在出域 payload
+    assert not any(
+        m.get("role") == "assistant" and not m.get("tool_calls")
+        and not (isinstance(m.get("content"), str) and m.get("content").strip())
+        for m in sent), "空正文 interrupted 行不得回喂 LLM"
+    # 带 tool_calls 的 content=None 中间行不被滤
+    assert any(m.get("role") == "assistant" and m.get("tool_calls")
+               and m.get("content") is None for m in sent), \
+        "带 tool_calls 的 None-content 中间行绝不可滤（协议配对面）"
+    # 其余行原样：空行被滤 → 「继续」紧随「hi」，tool 行在场
+    assert [m.get("role") for m in sent] == ["system", "user", "user", "assistant", "tool"]
+    assert sent[2] == {"role": "user", "content": "继续"}
 
 
 # ── 通道二 r6：reasoning 随消息落 blob（spec 2026-11-20 §1 目标 2 / §8-8）────────
