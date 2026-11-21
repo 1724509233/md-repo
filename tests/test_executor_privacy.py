@@ -187,6 +187,15 @@ def _bg_cfg(tmp_path, alias="a"):
         model=ModelConfig(model_id="m", base_url="http://x"))
 
 
+def _exec_cfg(tmp_path, alias="exec"):
+    """executor-role registry entry — since Task 2 the executor LOOP is
+    driven by it (is_executor entry present + enabled ⇒ task; gone ⇒
+    graceful retire), so the executor-chain tests pass one."""
+    import dataclasses
+
+    return dataclasses.replace(_bg_cfg(tmp_path, alias), is_executor=True)
+
+
 def _write_privacy_cfg(tmp_path, dirs: list[str]):
     cfg = tmp_path / "config_priv.yaml"
     body = "".join(f"  - {d}\n" for d in dirs)
@@ -212,7 +221,7 @@ def test_start_background_agents_wires_live_privacy_dirs(tmp_path, vault_dir,
     async def _instant():
         return None
 
-    def fake_loop(vault, conn, executor_fn, index_conn=None):
+    def fake_loop(vault, conn, executor_fn, index_conn=None, retire=None):
         captured["fn"] = executor_fn
         return _instant()
 
@@ -220,7 +229,7 @@ def test_start_background_agents_wires_live_privacy_dirs(tmp_path, vault_dir,
 
     async def go():
         tasks = sch.start_background_agents(
-            [], vault_dir, ledger_conn=ledger_conn,
+            [_exec_cfg(tmp_path)], vault_dir, ledger_conn=ledger_conn,
             privacy=PrivacyConfig(cfg_path))
         await asyncio.gather(*tasks)
 
@@ -252,7 +261,7 @@ def test_start_background_agents_forwards_privacy_to_run_once(tmp_path, monkeypa
     async def _instant():
         return None
 
-    def fake_loop(cfg, vault, lock, hooks, run_fn, db_conn, all_aliases):
+    def fake_loop(slot, sup, vault, lock, hooks, run_fn, conn=None):
         captured["run_fn"] = run_fn
         return _instant()
 
@@ -283,11 +292,11 @@ def test_start_background_agents_privacy_none_binds_conns_only(tmp_path, vault_d
     async def _instant():
         return None
 
-    def fake_agent_loop(cfg, vault, lock, hooks, run_fn, db_conn, all_aliases):
+    def fake_agent_loop(slot, sup, vault, lock, hooks, run_fn, conn=None):
         captured["run_fn"] = run_fn
         return _instant()
 
-    def fake_exec_loop(vault, conn, executor_fn, index_conn=None):
+    def fake_exec_loop(vault, conn, executor_fn, index_conn=None, retire=None):
         captured["executor_fn"] = executor_fn
         return _instant()
 
@@ -296,7 +305,8 @@ def test_start_background_agents_privacy_none_binds_conns_only(tmp_path, vault_d
 
     async def go():
         tasks = sch.start_background_agents(
-            [_bg_cfg(tmp_path, "a")], vault_dir, ledger_conn=ledger_conn)
+            [_bg_cfg(tmp_path, "a"), _exec_cfg(tmp_path)], vault_dir,
+            ledger_conn=ledger_conn)
         await asyncio.gather(*tasks)
 
     asyncio.run(go())

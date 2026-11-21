@@ -147,7 +147,15 @@ def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn, le
 # ── 5. bgagent tasks: enabled agent → tasks spawned; none → none ──────────
 
 def test_bg_tasks_spawned_for_enabled_agent(tmp_path, vault_dir, db_conn, ledger_conn):
-    rt = _build(vault_dir, db_conn, ledger_conn, [_cfg(tmp_path, vault_dir)], tmp_path)
+    # Spec 2026-11-22 §5.4: the executor task is driven by its registry
+    # entry (is_executor present + enabled ⇒ task; gone ⇒ graceful retire),
+    # so the executor-role config is part of the applied set.
+    import dataclasses
+
+    cfgs = [_cfg(tmp_path, vault_dir),
+            dataclasses.replace(_cfg(tmp_path, vault_dir, "exec-role"),
+                                is_executor=True)]
+    rt = _build(vault_dir, db_conn, ledger_conn, cfgs, tmp_path)
     try:
         names = {t.get_name() for t in rt.bg_tasks}
         assert "bgagent-cons" in names          # cron loop

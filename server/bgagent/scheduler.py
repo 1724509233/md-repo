@@ -5,8 +5,11 @@ lock acquire — if the previous run is still going, log and skip (no
 queueing), then re-anchor from "now" (no catch-up bursts).
 
 Hot-reload contract (spec 2026-11-22 §5.4, load-bearing): config changes
-(``apply()``) are SYNCHRONOUS and run on the SAME event loop as the agent
-loops. The loop-top segment — ``reload.clear()`` → read cfg/retired/live
+(``BgSupervisor.apply()``) are SYNCHRONOUS and run on the SAME event loop
+as the agent loops. apply is the SOLE writer of the live-alias set and the
+publisher-side ``change`` filter; the scan side re-reads
+``sup.current_aliases()`` every cycle — single source, must not drift. The
+loop-top segment — ``reload.clear()`` → read cfg/retired/live
 aliases → enter ``wait_for(reload.wait(), delay)`` — contains ZERO await
 points in between, so an ``apply()`` can never interleave inside it: an
 update ``set`` before the ``clear`` is always read by the current cycle,
@@ -37,7 +40,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import logging
 import time
 from datetime import datetime
@@ -86,28 +88,6 @@ class AgentSlot:
         self.cfg = cfg
         self.retired = retired
         self.reload = asyncio.Event()
-
-
-class _FrozenAliasSet:
-    """过渡期（Task 1）duck-typed 最小 supervisor：冻结别名集。Task 2 换
-    BgSupervisor（活别名集，apply 原地增删）。循环每圈经 current_aliases()
-    现取——闭包别名集已被废除。"""
-
-    def __init__(self, aliases) -> None:
-        self._aliases = set(aliases)
-
-    def current_aliases(self) -> set[str]:
-        return set(self._aliases)
-
-
-def _legacy_loop_args(first, second, third, fourth, fifth, sixth, seventh):
-    """过渡期兼容（Task 1，Task 2 接管即删）：旧位置参数形态
-    ``(cfg, vault, lock, hooks, run_fn, conn, all_aliases)`` 的既有直调
-    （test_trigger）归一为 ``(slot, sup, vault, lock, hooks, run_fn, conn)``。"""
-    if not isinstance(first, BackgroundAgentConfig):
-        return None
-    return (AgentSlot(first), _FrozenAliasSet(seventh),
-            second, third, fourth, fifth, sixth)
 
 
 # ── policy / idle floor ───────────────────────────────────────────────────
@@ -218,10 +198,8 @@ async def _agent_loop(slot: AgentSlot, sup, vault: Path,
     ``reload.clear()`` → 读 cfg/retired/别名集 → 进 ``wait_for``——此段零 await
     （与同步 apply 同事件循环，无交错；模块头注承重契约）。TimeoutError = 正常
     到点 → tick；reload 置位 = 回圈顶按新 cron 重锚（不提前跑，S1）；retired →
-    圈顶即退（进行中的 tick 已结束后才走到圈顶）。"""
-    legacy = _legacy_loop_args(slot, sup, vault, lock, hooks, run_fn, conn)
-    if legacy is not None:  # 过渡期兼容（Task 1）：旧 cfg 位置参数直调
-        slot, sup, vault, lock, hooks, run_fn, conn = legacy
+    圈顶即退（进行中的 tick 已结束后才走到圈顶）。sup.current_aliases() 每圈
+    现取——活别名集经 BgSupervisor 单源（M4，apply 原地增删）。"""
     while True:
         slot.reload.clear()
         cfg = slot.cfg                    # 圈首现读（spawn 闭包已废除）
@@ -325,10 +303,8 @@ async def _armed_loop(slot: AgentSlot, sup, vault: Path,
 
     S1（spec 2026-11-22 评审砍点）：armed 环不接 reload——圈首只现读
     ``slot.cfg``（trigger 参数变更最晚下一拍生效），不引入 wake_wait/Event
-    双路合并；retired 同样圈顶退出。"""
-    legacy = _legacy_loop_args(slot, sup, vault, lock, hooks, run_fn, conn)
-    if legacy is not None:  # 过渡期兼容（Task 1）：旧 cfg 位置参数直调
-        slot, sup, vault, lock, hooks, run_fn, conn = legacy
+    双路合并；retired 同样圈顶退出（下一次唤醒/backstop 时自然离场）。
+    all_aliases 经 sup.current_aliases() 每圈现取（M4 单源）。"""
     bus = events.get_bus()
     queue = bus.subscribe("change") if bus is not None else None
     while True:
@@ -368,10 +344,27 @@ def _executor_armed(vault_dir: Path, conn) -> bool:
     return False
 
 
+async def _executor_sleep(queue, interval_s: float, retire) -> None:
+    """Sleep until: proposal event / backstop / retire 信号（BgSupervisor
+    apply 缓退——set 本身即唤醒，退场不拖到 backstop；进行中合并照常跑完，
+    由圈顶 retired 检查自尽，无 cancel）。取消传播 CancelledError。"""
+    wake = asyncio.ensure_future(queue.get()) if queue is not None else None
+    sleep_f = asyncio.ensure_future(asyncio.sleep(interval_s))
+    retire_f = (asyncio.ensure_future(retire.wait())
+                if retire is not None else None)
+    waiters = [f for f in (wake, sleep_f, retire_f) if f is not None]
+    try:
+        await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for f in waiters:
+            if not f.done():
+                f.cancel()
+
+
 async def _executor_loop(vault_dir: Path, conn,
                          executor_fn: Callable = run_executor,
                          interval_s: float = EXECUTOR_INTERVAL_S,
-                         index_conn=None) -> None:
+                         index_conn=None, retire=None) -> None:
     """Event-wake executor: a ``proposal`` event or the ``interval_s``
     backstop wakes the authoritative DB scan (_executor_armed); armed →
     deterministic merge in a worker thread.
@@ -389,20 +382,27 @@ async def _executor_loop(vault_dir: Path, conn,
     the event only shortens the wait. No work → silent no-op
     (debug level only — must not spam). No bus → plain sleep loop
     (old behavior).
+
+    ``retire`` (BgSupervisor.apply, spec 2026-11-22 §5.4 executor 缓退):
+    an asyncio.Event set by the supervisor when the is_executor registry
+    entry disappears/disables — the loop self-exits at the NEXT cycle top
+    (每圈自尽式检查; the deterministic merge is seconds-scale, graceful
+    beats cancel) and the set itself wakes a sleeping loop promptly.
     """
     vault = Path(vault_dir).resolve()
     bus = events.get_bus()
     queue = bus.subscribe("proposal") if bus is not None else None
     while True:
+        if retire is not None and retire.is_set():
+            logger.info("[executor] retired — graceful exit")
+            return
+        await _executor_sleep(queue, interval_s, retire)
         if queue is not None:
-            await events.wake_wait(queue, interval_s)
             while True:  # drain: payloads are wake hints only (scan is authority)
                 try:
                     queue.get_nowait()
                 except asyncio.QueueEmpty:
                     break
-        else:
-            await asyncio.sleep(interval_s)
         try:
             if not _executor_armed(vault, conn):
                 logger.debug("[executor] no adopted/overdue proposals — no-op")
@@ -423,6 +423,233 @@ async def _executor_loop(vault_dir: Path, conn,
 
 # ── entry point ──────────────────────────────────────────────────────────
 
+# ── supervisor (hot-reload authority, spec 2026-11-22 §5.4) ───────────────
+
+
+class BgSupervisor:
+    """Owns every background task and the live-alias set; ``apply()`` swaps
+    the config hot. Hot-reload contract (module header): apply is
+    SYNCHRONOUS on the SAME loop as the agent loops — the loop-top segments
+    have zero awaits before re-entering their sleeps, so apply can never
+    interleave inside them.
+
+    Single sources of truth (scheduler.py header 铁律「单源不得 drift」):
+
+    - ``current_aliases()`` — the LIVE alias set (every alias in the last
+      applied config, enabled or not — disabled aliases still retire in
+      flight and their synthetic events must keep not arming the
+      scheduler; deleted aliases leave the set). The scan side
+      (_handle_tick/_armed_check) re-reads it EVERY cycle — no spawn
+      closures (M4).
+    - per-alias ``asyncio.Lock`` — held here, REUSED across slot rebuilds
+      (M3: a fresh lock on revive would let the old in-flight run and the
+      new task double-run the same target_dir).
+    - the publisher-side ``change`` filter is recomputed inside every
+      ``apply()`` over the SAME live-set object — both exclusion sides
+      always agree.
+
+    Task lifecycle (M5): ``tasks()`` is the live set — retired tasks stay
+    listed until natural completion (a done-callback reaps them);
+    ``shutdown()`` cancels everything and kills the dead flag so a later
+    ``apply()`` raises instead of resurrecting tasks after stop.
+
+    The registry records EVERY config alias: an ``enabled: false`` entry is
+    born retired (slot kept for lock reuse, no tasks). apply branch table:
+    存续改 cfg → cfg swap + reload 唤醒重锚 / retired 复活 → 复位 + 原锁重建
+    / 删除或禁用 → retire（跑完本轮自然退出）/ 改名 = 删 + 增 / is_executor
+    条目增 → executor 任务增、删/禁用 → 缓退（retire 信号，圈顶自尽）.
+    """
+
+    def __init__(self, vault_dir: Path, *,
+                 hooks: list[NotificationHook] | None = None,
+                 run_fn: Callable | None = None,
+                 db_conn=None,
+                 ledger_conn=None,
+                 executor_fn: Callable | None = None,
+                 privacy: PrivacyConfig | None = None) -> None:
+        """Must be constructed from a running loop (slots/tasks are
+        loop-bound). ``run_fn``/``executor_fn``/``privacy`` parameter-chain
+        semantics are exactly those documented on
+        :func:`start_background_agents` (card 11 案 β + spec 2026-11-18
+        §2.2/§2.3) — moved here verbatim from the old spawn function."""
+        self.vault = Path(vault_dir).resolve()
+        self.hooks = hooks if hooks is not None else []
+        self.db_conn = db_conn
+        self.ledger_conn = ledger_conn
+        # Executor conn: the proposals/proposal_transitions tables live in
+        # ledger.db (2026-10-31 split); fall back to db_conn for callers
+        # predating the split.
+        self._exec_conn = ledger_conn if ledger_conn is not None else db_conn
+
+        run_fn = run_fn or run_once
+        executor_fn = executor_fn or run_executor
+        if run_fn is run_once:
+            # card 11 (案 β): the default run_once binding carries the
+            # scheduler's dual conns along the parameter chain (AgentSpec →
+            # ToolContext/readback); T3's privacy live view stays
+            # partial-bound only when configured. Custom run_fn overrides
+            # keep their own signatures.
+            run_fn = functools.partial(
+                run_once, db_conn=db_conn, ledger_conn=ledger_conn,
+                **({"privacy": privacy} if privacy is not None else {}))
+        if privacy is not None:
+            _exec = executor_fn
+
+            def _privacy_executor(vault, conn):
+                # privacy.dirs re-read per cycle (the mtime cache, §2.7):
+                # zero derived state — the executor never caches the list.
+                return _exec(vault, conn, privacy_dirs=privacy.dirs)
+
+            executor_fn = _privacy_executor
+        self.run_fn = run_fn
+        self.executor_fn = executor_fn
+
+        self._slots: dict[str, AgentSlot] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._live_tasks: list[asyncio.Task] = []
+        # The live-alias set — ONE object, mutated in place by apply
+        # (增删原地): the scan side reads copies of it every cycle, the
+        # publisher-side filter closure below reads it at publish time.
+        self._live_aliases: set[str] = set()
+        self._executor_task: asyncio.Task | None = None
+        self._executor_retire = asyncio.Event()
+        self._dead = False
+
+    # ── read side ─────────────────────────────────────────────────────────
+
+    def current_aliases(self) -> set[str]:
+        """Live alias set — loops call this at EVERY cycle top (M4)."""
+        return set(self._live_aliases)
+
+    def tasks(self) -> list[asyncio.Task]:
+        """All live tasks (M5): retired-until-done are included; the
+        done-callback removes finished ones."""
+        return list(self._live_tasks)
+
+    def shutdown(self) -> None:
+        """Cancel all live tasks and mark dead — later ``apply()`` raises
+        (stop 后不得复活任务). Await the tasks (Runtime.stop, Task 3)."""
+        self._dead = True
+        for t in self._live_tasks:
+            t.cancel()
+
+    # ── task plumbing ─────────────────────────────────────────────────────
+
+    def _track(self, task: asyncio.Task) -> asyncio.Task:
+        def _reap(t: asyncio.Task) -> None:
+            try:
+                self._live_tasks.remove(t)
+            except ValueError:
+                pass
+        self._live_tasks.append(task)
+        task.add_done_callback(_reap)
+        return task
+
+    def _spawn_llm(self, cfg: BackgroundAgentConfig) -> None:
+        """Cron task (+ armed task for trigger agents) on the supervisor's
+        per-alias lock — reused across rebuilds (M3)."""
+        slot = self._slots[cfg.alias]
+        lock = self._locks.setdefault(cfg.alias, asyncio.Lock())
+        self._track(asyncio.create_task(
+            _agent_loop(slot, self, self.vault, lock, self.hooks,
+                        self.run_fn, self.db_conn),
+            name=f"bgagent-{cfg.alias}"))
+        if cfg.trigger is not None and self.db_conn is not None:
+            self._track(asyncio.create_task(
+                _armed_loop(slot, self, self.vault, lock, self.hooks,
+                            self.run_fn, self.db_conn),
+                name=f"bgagent-{cfg.alias}-armed"))
+
+    def _spawn_executor(self) -> None:
+        if self._exec_conn is None:
+            return
+        t = self._executor_task
+        if t is not None and not t.done() and not self._executor_retire.is_set():
+            return                       # already live — no double executor
+        self._executor_retire = asyncio.Event()
+        self._executor_task = self._track(asyncio.create_task(
+            _executor_loop(self.vault, self._exec_conn, self.executor_fn,
+                           index_conn=self.db_conn,
+                           retire=self._executor_retire),
+            name="executor"))
+
+    def _retire_executor(self) -> None:
+        """缓退: set the retire signal — the loop wakes (set is itself the
+        wake signal, ``_executor_sleep``), finishes any merge in flight
+        (seconds-scale, deterministic), exits at the next cycle top.
+        Never cancel (an adopted merge mid-write must land)."""
+        if self._executor_task is not None and not self._executor_retire.is_set():
+            self._executor_retire.set()
+
+    # ── the branch table (synchronous, same loop as the agent loops) ──────
+
+    def apply(self, agents: list[BackgroundAgentConfig]) -> None:
+        if self._dead:
+            raise RuntimeError(
+                "BgSupervisor is shut down — apply() after stop would "
+                "resurrect tasks")
+        new_aliases = {a.alias for a in agents}
+
+        # 删除别名 → retire（slot 留注册表复用锁；活别名集原地丢——改名=删+增）
+        for alias, slot in self._slots.items():
+            if alias in new_aliases or slot.retired:
+                continue
+            slot.retired = True
+            slot.reload.set()
+            if slot.cfg.is_executor:
+                self._retire_executor()
+
+        for cfg in agents:
+            slot = self._slots.get(cfg.alias)
+            if slot is None:
+                # 新别名：enabled:false 出生即 retired（slot+锁在场，无任务）
+                slot = AgentSlot(cfg, retired=not cfg.enabled)
+                self._slots[cfg.alias] = slot
+                if cfg.enabled:
+                    self._spawn(cfg)
+            elif slot.retired:
+                if cfg.enabled:
+                    # 复活（M3）：复位 + reload 唤醒 + 原锁重建任务——缺此
+                    # 分支「禁用→启用」静默失效到重启
+                    slot.retired = False
+                    slot.cfg = cfg
+                    slot.reload.set()
+                    self._spawn(cfg)
+                else:
+                    slot.cfg = cfg           # 保持 retired，仅换 cfg 备用
+            elif not cfg.enabled:
+                # 禁用 → retire：跑完本轮自然退出（cron 环 reload 唤醒圈顶
+                # 即回；armed 环下一次唤醒/backstop 离场；executor 缓退）
+                slot.cfg = cfg
+                slot.retired = True
+                slot.reload.set()
+                if cfg.is_executor:
+                    self._retire_executor()
+            elif cfg != slot.cfg:
+                # 存续且 cfg 有变 → 圈首换读 + 唤醒重锚（进行中 run 持旧 cfg）
+                slot.cfg = cfg
+                slot.reload.set()
+            # 存续且 cfg 无变：零动作
+
+        # 活别名集原地增删 + 发布侧 change 过滤器同步重算（M4 双侧——扫描侧
+        # 已经由 current_aliases() 每圈现取天然同步）
+        self._live_aliases.clear()               # 原地增删（对象身份稳定：
+        self._live_aliases.update(new_aliases)   # 两侧共读同一集合）
+        live = self._live_aliases
+        events.set_filter(
+            "change",
+            lambda p: p.get("source") not in self_exclusion(live))
+
+    def _spawn(self, cfg: BackgroundAgentConfig) -> None:
+        if cfg.is_executor:
+            self._spawn_executor()
+        else:
+            self._spawn_llm(cfg)
+
+
+# ── entry point (test-compat facade) ─────────────────────────────────────
+
+
 def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path,
                             hooks: list[NotificationHook] | None = None,
                             run_fn: Callable | None = None,
@@ -430,16 +657,22 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
                             ledger_conn=None,
                             executor_fn: Callable | None = None,
                             privacy: PrivacyConfig | None = None) -> list[asyncio.Task]:
-    """Spawn scheduler tasks. Must be called from a running loop.
+    """测试兼容面：BgSupervisor 薄封装（建 supervisor → apply → tasks()）。
+    生产路径直接构造 BgSupervisor 并持有它（spec 2026-11-22 §5.4 S8——
+    生产跑被测路径）。签名与返回保持既有形态（Runtime.bg_tasks 语义）；
+    supervisor 的后续 apply/shutdown 不经此封装（调用方丢弃返回值即一次性
+    语义，与旧行为一致）。Must be called from a running loop.
 
     - One cron task per enabled, non-executor agent (executor registry
       entries do NOT start LLM tasks).
     - One 30-min armed-check task per enabled trigger agent (requires
       ``db_conn``; without it the agent degrades to plain cron).
-    - One shared 30-min executor task (framework role) — only when a
-      ledger connection is provided (``ledger_conn``, falling back to
-      ``db_conn`` for callers predating the 2026-10-31 ledger-file split:
-      the proposals records it scans live in ledger.db).
+    - One shared 30-min executor task (framework role) — when an ENABLED
+      ``is_executor`` registry entry is present and a ledger connection is
+      available (``ledger_conn``, falling back to ``db_conn`` for callers
+      predating the 2026-10-31 ledger-file split: the proposals records it
+      scans live in ledger.db). Retiring the entry retires the task
+      gracefully (缓退).
 
     ``privacy`` (spec 2026-11-18 §2.2/§2.3): the process-wide PrivacyConfig,
     forwarded along the parameter chain to BOTH consumers — ``run_once``
@@ -451,73 +684,8 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
     ``executor_fn`` overrides are left as-is except the default ``run_once``
     / ``run_executor`` bindings, which get wrapped when privacy is given.
     """
-    run_fn = run_fn or run_once
-    executor_fn = executor_fn or run_executor
-    if run_fn is run_once:
-        # card 11 (案 β): the default run_once binding carries the
-        # scheduler's dual conns along the parameter chain (AgentSpec →
-        # ToolContext/readback); T3's privacy live view stays partial-bound
-        # only when configured. Custom run_fn overrides keep their own
-        # signatures.
-        run_fn = functools.partial(
-            run_once, db_conn=db_conn, ledger_conn=ledger_conn,
-            **({"privacy": privacy} if privacy is not None else {}))
-    if privacy is not None:
-        _exec = executor_fn
-
-        def _privacy_executor(vault, conn):
-            # privacy.dirs re-read per cycle (the mtime cache, §2.7):
-            # zero derived state — the executor never caches the list.
-            return _exec(vault, conn, privacy_dirs=privacy.dirs)
-
-        executor_fn = _privacy_executor
-    hooks = hooks or []
-    vault = Path(vault_dir).resolve()
-    all_aliases = {a.alias for a in agents}
-    sup = _FrozenAliasSet(all_aliases)  # Task 1 过渡（Task 2 换真 supervisor）
-    aliases = []
-    tasks: list[asyncio.Task] = []
-    executor_started = False
-
-    # 过渡期兼容（Task 1，Task 2 接管即删）：测试可把 _agent_loop monkeypatch
-    # 成旧 cfg 位置参数签名（test_executor_privacy 的 fake 只取 run_fn），且
-    # 两者同 arity——位置绑定区分不了，按首参名（cfg=旧 / slot=新）择形调用。
-    try:
-        _loop_first_param = next(iter(inspect.signature(_agent_loop).parameters), "")
-    except (TypeError, ValueError):
-        _loop_first_param = "slot"
-    _legacy_loop = _loop_first_param == "cfg"
-
-    for cfg in agents:
-        if not cfg.enabled:
-            continue
-        if cfg.is_executor:
-            continue  # deterministic framework role, no LLM cron task
-        aliases.append(cfg.alias)
-        slot = AgentSlot(cfg)
-        lock = asyncio.Lock()
-        if _legacy_loop:
-            cron_coro = _agent_loop(cfg, vault, lock, hooks, run_fn,
-                                    db_conn, all_aliases)
-        else:
-            cron_coro = _agent_loop(slot, sup, vault, lock, hooks, run_fn,
-                                    db_conn)
-        tasks.append(asyncio.create_task(cron_coro, name=f"bgagent-{cfg.alias}"))
-        if cfg.trigger is not None and db_conn is not None:
-            tasks.append(asyncio.create_task(
-                _armed_loop(slot, sup, vault, lock, hooks, run_fn, db_conn),
-                name=f"bgagent-{cfg.alias}-armed"))
-
-    # Executor conn: the proposals/proposal_transitions tables live in
-    # ledger.db (2026-10-31 split); fall back to db_conn for callers
-    # predating the split.
-    exec_conn = ledger_conn if ledger_conn is not None else db_conn
-    if exec_conn is not None and not executor_started:
-        tasks.append(asyncio.create_task(
-            _executor_loop(vault, exec_conn, executor_fn, index_conn=db_conn),
-            name="executor"))
-        executor_started = True
-
-    if aliases:
-        logger.info("[bg] started %d agents: %s", len(aliases), ", ".join(aliases))
-    return tasks
+    sup = BgSupervisor(vault_dir, hooks=hooks, run_fn=run_fn,
+                       db_conn=db_conn, ledger_conn=ledger_conn,
+                       executor_fn=executor_fn, privacy=privacy)
+    sup.apply(agents)
+    return sup.tasks()

@@ -304,3 +304,240 @@ def test_run_in_flight_keeps_old_cfg(tmp_path, monkeypatch):
     asyncio.run(go())
     assert got[0] is cfg_old
     assert got[1] is cfg_new                   # 下一拍按新 cfg 走
+
+
+# ── BgSupervisor.apply 分支表（spec 2026-11-22 §5.4，评审 M3/M4 硬钉）─────
+
+
+def _exec_cfg(tmp_path, alias="exec", enabled=True):
+    """执行器角色 registry 条目（is_executor=True，免 tools 白名单）。"""
+    from server.agent.spec import ModelConfig
+    from server.config import BackgroundAgentConfig
+
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    prompt = tmp_path / f"{alias}.md"
+    prompt.write_text("p", encoding="utf-8")
+    return BackgroundAgentConfig(
+        name=alias, alias=alias, enabled=enabled, cron="0 3 * * *",
+        is_executor=True,
+        target_dir=vault.resolve(), prompt=prompt.resolve(),
+        report_dir=(vault / ".reports" / alias).resolve(),
+        max_rounds=5, timeout_s=10,
+        model=ModelConfig(model_id="m", base_url="http://x"))
+
+
+def _named(tasks, name):
+    return [t for t in tasks if t.get_name() == name]
+
+
+def test_apply_reenable_resumes(tmp_path, monkeypatch):
+    """M3：禁用→启用即时生效——retired slot 复位并用原锁重建任务
+    （环活着：_next_fire 再锚），不是静默失效到重启。"""
+    import server.bgagent.scheduler as sched
+
+    cfg_on = _cfg(tmp_path, "a", cron="0 3 * * *")
+    cfg_off = _cfg(tmp_path, "a", enabled=False, cron="0 3 * * *")
+    seen: list[str] = []
+    _install_far_clock(monkeypatch, seen)
+
+    async def run_fn(c, v, hooks=None, trigger="cron"):
+        raise AssertionError("far-future cron must never fire a tick here")
+
+    async def go():
+        sup = sched.BgSupervisor(tmp_path / "vault", hooks=[], run_fn=run_fn)
+        sup.apply([cfg_on])
+        await _poll_until(lambda: len(seen) >= 1, 2.0)
+        assert seen == ["0 3 * * *"]
+        first = _named(sup.tasks(), "bgagent-a")
+        assert len(first) == 1
+        lock0 = sup._locks["a"]                # M3：锁归 supervisor 持有
+
+        sup.apply([cfg_off])                   # 禁用 retire
+        # 远期 delay 却亚秒退出 → 只能是 reload 唤醒 → 圈顶 retired return
+        await _poll_until(lambda: first[0].done(), 2.0)
+        seen.clear()
+
+        sup.apply([cfg_on])                    # 复活：复位 + 重建
+        await _poll_until(lambda: len(seen) >= 1, 2.0)
+        assert seen == ["0 3 * * *"]
+        live = _named(sup.tasks(), "bgagent-a")
+        assert len(live) == 1
+        assert not live[0].done() and live[0] is not first[0]
+        assert sup._locks["a"] is lock0        # 锁跨重建复用
+
+        for t in sup.tasks():
+            t.cancel()
+        await asyncio.gather(*sup.tasks(), return_exceptions=True)
+        return sup.tasks()
+
+    assert asyncio.run(go()) == []             # done-callback 摘除，tasks() 收敛
+
+
+def test_apply_no_double_run_when_reenable_mid_run(tmp_path, monkeypatch):
+    """M3 + 锁归属：run 进行中禁用→启用——新旧任务共用同一把
+    asyncio.Lock（supervisor 持有），新环见锁被占即跳过，无双跑。"""
+    from datetime import timedelta
+
+    import server.bgagent.scheduler as sched
+
+    cfg_on = _cfg(tmp_path, "a", cron="0 3 * * *")
+    cfg_off = _cfg(tmp_path, "a", enabled=False, cron="0 3 * * *")
+
+    def past_then_far(cron, now=None):
+        # 前 2 圈「已到点」（旧环 tick 进 run1；新环复活后立即试拍撞锁），
+        # 之后远期——run2 永不起拍、run1 退场后旧环圈顶 retired 即回，全确定。
+        past_then_far.n += 1
+        if past_then_far.n <= 2:
+            return datetime.now() - timedelta(seconds=1)
+        return datetime.now() + timedelta(days=1)
+
+    past_then_far.n = 0
+    monkeypatch.setattr(sched, "_next_fire", past_then_far)
+
+    async def go():
+        sup = sched.BgSupervisor(tmp_path / "vault", hooks=[])
+        active = 0
+        peak = 0
+        started: list[str] = []
+        finished: list[str] = []
+        gate = asyncio.Event()
+
+        async def run_fn(c, v, hooks=None, trigger="cron"):
+            nonlocal active, peak
+            started.append(c.alias)
+            active += 1
+            peak = max(peak, active)
+            try:
+                await gate.wait()
+            finally:
+                active -= 1
+                finished.append(c.alias)
+
+        sup.run_fn = run_fn                    # 注入假 run（生产经构造器）
+        sup.apply([cfg_on])
+        await _poll_until(lambda: started, 2.0)
+        assert active == 1                     # run1 进行中
+        lock0 = sup._locks["a"]
+
+        sup.apply([cfg_off])                   # run 进行中禁用
+        sup.apply([cfg_on])                    # 立即复活 → 新环持同一把锁
+        live = [t for t in sup.tasks() if not t.done()]
+        assert len(live) == 2                  # 旧环在 run1 里，新环在场
+        assert sup._locks["a"] is lock0
+
+        await asyncio.sleep(0.3)               # 新环早该试过错拍
+        assert active == 1                     # 新环被锁挡住，run2 没起来
+        assert peak == 1
+
+        gate.set()                             # run1 收尾
+        await _poll_until(lambda: len(finished) >= 1, 2.0)
+        assert peak == 1                       # 全程峰值并发=1：无双跑
+
+        for t in sup.tasks():
+            t.cancel()
+        await asyncio.gather(*sup.tasks(), return_exceptions=True)
+        return peak, started, finished
+
+    peak, started, finished = asyncio.run(go())
+    assert peak == 1 and finished == ["a"]     # 只有 run1 真正跑过（互斥核心钉）
+
+
+def test_scan_side_sees_new_alias_immediately(tmp_path, db_conn):
+    """M4 双侧同步：apply 增别名后——扫描侧 _armed_check 收到的 all_aliases
+    立即含新别名（current_aliases 现取，非 spawn 闭包）；发布侧 change 过滤器
+    同时把新别名来源的事件早丢。"""
+    import server.bgagent.scheduler as sched
+    from server.core import events
+
+    cfg_a = _cfg(tmp_path, "a", cron="0 3 * * *")
+    cfg_a.trigger = {"events": ["create"], "arm_count": 3, "min_interval_h": 0}
+    cfg_b = _cfg(tmp_path, "b", cron="0 4 * * *")
+
+    async def go():
+        b = events.Bus()
+        events.set_bus(b)
+        try:
+            probe = b.subscribe("change")      # 发布侧过滤器观察窗
+            captured: list[set] = []
+
+            async def fake_check(cfg, vault, lock, hooks, run_fn, conn,
+                                 all_aliases):
+                captured.append(set(all_aliases))
+
+            monkey = sched
+            orig = monkey._armed_check
+            monkey._armed_check = fake_check
+            try:
+                sup = sched.BgSupervisor(tmp_path / "vault", hooks=[],
+                                         db_conn=db_conn)
+                sup.apply([cfg_a])             # 只有 a
+                await asyncio.sleep(0.05)      # 让 armed 环先订阅（发布即送达）
+                events.publish("change", {"op": "create", "source": "web",
+                                          "path": "x1.md"})
+                await _poll_until(lambda: len(captured) >= 1, 2.0)
+                assert "b" not in captured[-1]
+
+                sup.apply([cfg_a, cfg_b])      # 增 b → 活别名集原地增
+                assert sup.current_aliases() == {"a", "b"}
+                events.publish("change", {"op": "create", "source": "web",
+                                          "path": "x2.md"})
+                await _poll_until(lambda: len(captured) >= 2, 2.0)
+                assert captured[-1] >= {"a", "b"}   # 扫描侧立即含 b
+
+                # 发布侧：b 来源被早丢，web 来源照放（先排空——前面两轮
+                # wake 的 web 事件与本次过滤器检查无关）
+                while not probe.empty():
+                    probe.get_nowait()
+                events.publish("change", {"op": "create", "source": "b",
+                                          "path": "x3.md"})
+                events.publish("change", {"op": "create", "source": "web",
+                                          "path": "x4.md"})
+                await _poll_until(lambda: not probe.empty(), 2.0)
+                await asyncio.sleep(0.05)     # 宽限窗：b 若漏网此刻必在场
+                got = []
+                while not probe.empty():
+                    got.append(probe.get_nowait()["source"])
+                assert got == ["web"]
+            finally:
+                monkey._armed_check = orig
+            for t in sup.tasks():
+                t.cancel()
+            await asyncio.gather(*sup.tasks(), return_exceptions=True)
+        finally:
+            events.set_bus(None)
+
+    asyncio.run(go())
+
+
+def test_executor_add_remove(tmp_path, ledger_conn):
+    """executor 分支：registry 出现 is_executor 条目（带 ledger 连接）→ 任务增；
+    删除/禁用 → 缓退（retire 信号唤醒环，圈顶自尽，不 cancel 进行中合并）；
+    再次出现 → 可重建。"""
+    import server.bgagent.scheduler as sched
+
+    exec_cfg = _exec_cfg(tmp_path)
+
+    async def go():
+        sup = sched.BgSupervisor(tmp_path / "vault", hooks=[],
+                                 ledger_conn=ledger_conn)
+        sup.apply([exec_cfg])
+        first = _named(sup.tasks(), "executor")
+        assert len(first) == 1 and not first[0].done()
+        sup.apply([exec_cfg])                  # 同配置重复 apply：不双起
+        assert len(_named(sup.tasks(), "executor")) == 1
+
+        sup.apply([])                          # 删除 → 缓退
+        # retire 信号即时唤醒睡眠中的环 → 圈顶自尽（确定性合并秒级收尾）
+        await _poll_until(lambda: first[0].done(), 2.0)
+        assert _named(sup.tasks(), "executor") == []
+
+        sup.apply([exec_cfg])                  # 重现 → 重建
+        second = _named(sup.tasks(), "executor")
+        assert len(second) == 1 and second[0] is not first[0]
+
+        for t in sup.tasks():
+            t.cancel()
+        await asyncio.gather(*sup.tasks(), return_exceptions=True)
+
+    asyncio.run(go())
