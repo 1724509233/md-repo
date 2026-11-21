@@ -4,6 +4,7 @@
 // 输出形状：[{ role:'user'|'assistant', blocks:[Block], messageId?: string, citations?: array, interrupted?: true }]
 // messageId 来源：done 行 id 或 interrupted 行 message_id（r8 身份戳，反馈键双职）。
 // Block = {type:'text',text} | {type:'tool',id,name,args,result,status,expanded:false}
+//        | {type:'thinking',text,expanded:false}
 // status ∈ 'done'|'error'|'rejected'。tool 块字段形状对齐 live currentTurn
 // （AIChatPanel.js:281）；恢复行不带 meta（已知降级：摘要走 toolResultSummary 原文首行，a24e72ac）。
 // 孤儿 tool_call（刷新掐断 SSE 的残缺尾部）封盘时落 error——服务端合法性由既有
@@ -36,7 +37,8 @@ export function mapHistory(raw) {
     // 天然放行中断轮；行无身份戳（r8 前旧行/无锚形态）则缺席，守卫照旧拦。
     else if (typeof last.message_id === 'string') turn.messageId = last.message_id;
     if (last.citations != null) turn.citations = last.citations;
-    // 空 content 且无 tool_calls 的 assistant（无终帧字段）→ 不产出空 turn
+    // 空 content 且无 tool_calls 的 assistant（无终帧字段）→ 不产出空 turn。
+    // 纯思考行（仅 reasoning）blocks 非空（thinking 块）→ 同样产出。
     if (turn.blocks.length || 'messageId' in turn || 'citations' in turn) out.push(turn);
     turn = null;
     lastAssistant = null;
@@ -55,6 +57,12 @@ export function mapHistory(raw) {
       // 通道一（spec 2026-11-20 §3）：interrupted 透传到 turn 描述符（渲染尾注）；
       // 文本块产出规则不变（content → text 块）。完成轮无此键 → 描述符不带。
       if (msg.interrupted) turn.interrupted = true;
+      // 按位置分段 thinking 块（与实时流式视图同构，chatEvents.js:95 一轮思考一块）：
+      // 该 assistant 行带非空 reasoning → 在链上当前位置产一块，恢复态默认折叠
+      //（expanded:false 供 toggleBlock 开合）。全链无 reasoning → 零块（旧历史零迁移）。
+      if (typeof msg.reasoning === 'string' && msg.reasoning) {
+        turn.blocks.push({ type: 'thinking', text: msg.reasoning, expanded: false });
+      }
       if (msg.content) turn.blocks.push({ type: 'text', text: msg.content });
       for (const tc of msg.tool_calls || []) {
         // 默认 error：孤儿（无 tool 结果回填）封盘即终态；回填时改判 done/rejected

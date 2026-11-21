@@ -1143,3 +1143,75 @@ def test_interrupted_tail_note_pin():
     # 守卫天然放行；streaming 守卫仍拦住流进行中）；sendConfirm 簇零改动
     assert 'v-if="!msg.streaming && msg.messageId"' in ai
     assert "function sendConfirm(id, approved)" in ai
+
+
+def test_chat_restore_thinking_blocks():
+    # 恢复链按位置分段 thinking 块（与实时流式同构，chatEvents.js:95「一轮思考一块」）行为钉：
+    # ①链内每条带非空 reasoning 的 assistant 行 → 对应链上位置产出 thinking 块（每行
+    #   thinking 垫同行 text/tool 前，跨行天然呈 thinking→…→thinking→…，与 live 流序一致），
+    #   turn 不再有 reasoning 键；②无键/空串 → 零块（旧历史零迁移）；
+    # ③interrupted 行半截思考照样成块；④块 expanded:false（恢复态默认折叠，toggleBlock 可开合）；
+    # ⑤其余透传字段零回归（chatRestore node 行为测试家族既有模式）
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  // ① 多行链分段：每行 thinking 垫在同行 text/tool 块前（live 流序：reasoning→content→tool_call），
+  //   终行 R2 垫在终 text 块前 → thinking,text,tool,thinking,text
+  const o=m.mapHistory([
+    {role:'user',content:'q'},
+    {role:'assistant',content:'a1',reasoning:'R1',tool_calls:[{id:'t1',type:'function',function:{name:'read_doc',arguments:'{}'}}]},
+    {role:'tool',tool_call_id:'t1',content:'ok'},
+    {role:'assistant',content:'final',reasoning:'R2',id:'x1',ts:1,citations:[]}
+  ]);
+  if(o.length!==2)process.exit(2);
+  const a=o[1];
+  if('reasoning' in a)process.exit(3);
+  if(a.blocks.map(b=>b.type).join(',')!=='thinking,text,tool,thinking,text')process.exit(4);
+  if(a.blocks[0].text!=='R1'||a.blocks[3].text!=='R2')process.exit(5);
+  if(a.messageId!=='x1')process.exit(6);
+  // ④ 恢复态默认折叠 + 字段与 live thinking 块同形（type/text/expanded）
+  if(a.blocks[0].expanded!==false||a.blocks[3].expanded!==false)process.exit(7);
+  // ② 无键 / 空串 → 不产 thinking 块
+  const o2=m.mapHistory([{role:'assistant',content:'done',id:'x2',ts:1,citations:[]}]);
+  if(o2[0].blocks.some(b=>b.type==='thinking'))process.exit(8);
+  const o3=m.mapHistory([{role:'assistant',content:'done',reasoning:'',id:'x3',ts:1,citations:[]}]);
+  if(o3[0].blocks.some(b=>b.type==='thinking'))process.exit(9);
+  // ③ interrupted 半截思考照样成块（配合既有尾注）
+  const o4=m.mapHistory([{role:'assistant',content:'半截',reasoning:'R-half',interrupted:true,message_id:'mi0000000001'}]);
+  if(o4[0].blocks[0].type!=='thinking'||o4[0].blocks[0].text!=='R-half')process.exit(10);
+  if(o4[0].interrupted!==true||o4[0].messageId!=='mi0000000001')process.exit(11);
+  // ④ 轮间不串染：turn2 无 thinking 块（turn1 的块不泄漏）
+  const o5=m.mapHistory([
+    {role:'assistant',content:'t1',reasoning:'only-turn1'},
+    {role:'user',content:'q2'},
+    {role:'assistant',content:'t2',id:'x5',ts:1,citations:[]}
+  ]);
+  if(o5.length!==3)process.exit(12);
+  if(!o5[0].blocks.some(b=>b.type==='thinking'&&b.text==='only-turn1'))process.exit(13);
+  if(o5[2].blocks.some(b=>b.type==='thinking'))process.exit(14);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/chatRestore.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"chatRestore thinking-block case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_restored_thinking_block_pin():
+    # 轮级聚合「思考过程」块已拆除（用户拍板按位置分段，与实时流式视图同构）：
+    # ①模板不再出现 msg.reasoning 轮级块与 toggleReasoning；②restoreMessages 不再透传
+    # reasoning 键；③thinking 块渲染唯一路径 = blocks 循环内 block.type==='thinking' 分支
+    # （流式/恢复两态共用），恢复块经 v-else 折叠枝走 block.expanded + toggleBlock 可开合。
+    ai = _templates()["AIChatPanel.js"]
+    assert "toggleReasoning" not in ai, "轮级 toggleReasoning 应已删除（开合归 toggleBlock）"
+    assert "msg.reasoning" not in ai, "轮级 msg.reasoning 模板块应已删除（分段 thinking 块取代）"
+    rm = _fn_body(ai, "function restoreMessages(")
+    assert "reasoning" not in rm, "restoreMessages 不再透传 reasoning（thinking 随 blocks 自然携带）"
+    # thinking 渲染唯一分支：streaming/恢复共用，恢复块展开仍挂 block.expanded（toggleBlock 驱动）
+    assert ai.count("block.type === 'thinking'") == 1, "thinking 渲染分支唯一（恢复态复用，零新增）"
+    tb = re.search(r"v-else-if=\"block\.type === 'thinking'\".*?<div v-else class=\"thinking-detail\" :class=\"\{ open: block\.expanded \}\"", ai, re.S)
+    assert tb, "thinking 分支恢复态折叠枝（block.expanded 驱动）缺失"
+    tl = re.search(r"<div class=\"thinking-line\" @click=\"toggleBlock\(msg, block\)\">", ai)
+    assert tl, "thinking 行点击应走 toggleBlock（恢复/流式同一开合入口）"

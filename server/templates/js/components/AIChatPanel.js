@@ -887,7 +887,9 @@ export const AIChatPanel = {
                   </div>
                 </div>
               </div>
-              <!-- 思考块：流式中恒展开实时显示；该轮首个 content/tool 块到达时自动收起；done 后保留折叠态、可点击展开 -->
+              <!-- 思考块（流式/恢复两态共用唯一分支）：流式中恒展开实时显示，该轮首个 content/tool 块到达时
+                  自动收起，done 后保留折叠态；恢复块 mapHistory 按链上位置产出（expanded:false 默认折叠），
+                  点击经 toggleBlock（block.expanded + uiTick）开合 -->
               <div v-else-if="block.type === 'thinking'" class="thinking-entry">
                 <div class="thinking-line" @click="toggleBlock(msg, block)">
                   <svg aria-hidden="true" class="tool-chev icon-xs transition-transform" :class="{ 'rotate-90': block.expanded }" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg>
