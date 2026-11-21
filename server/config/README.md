@@ -11,6 +11,7 @@ md-sync 服务端读取 `config.yaml` 的解析包：拆成五个模块，各自
 | `log.py` | `LogConfig` 数据类 + `from_raw()`（扁平 `server.log_*` 键，fail-fast 校验） |
 | `notifications.py` | `NotificationsConfig` + `load_notifications()`（通知量护栏，cap 是法） |
 | `bgagent.py` | `BackgroundAgentConfig` + `load_background_agents()`；`TRIGGER_OPS` / `TRIGGER_DEFAULTS`；trigger / tools / verbs / escalation 解析器 |
+| `doc_io.py` | 设置页读写底座（spec 2026-11-22 §4）：`revision_of` / `open_roundtrip`（ruamel 注释+CRLF 保真）/ `save_doc`（同目录 tmp + `os.replace` 退避重试）/ `backup_file`（微秒尾名滚动留 3）/ `mask_api_key` / `bgagent_to_payload`（反归一 vault 相对）/ `payload_to_bgagent_entry`（api_key 三态回填）；leaf：只 import stdlib+ruamel |
 
 `__init__.py` 重导出公共面：`ServerConfig`、`load_server_config`、`AIConfig`、`LogConfig`、`NotificationsConfig`、`load_notifications`、`ModelConfig`、`BackgroundAgentConfig`、`load_background_agents`、`TRIGGER_OPS`、`TRIGGER_DEFAULTS`。
 
