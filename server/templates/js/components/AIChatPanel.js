@@ -35,7 +35,7 @@ export const AIChatPanel = {
     // 恢复载荷 prop 已退役（spec 2026-11-20 §5/§7）：恢复统一归 stream 快照订阅
     // （snapshot 帧 → chatRestore 前缀渲染管线），app 层不再「先取数后原子换」喂入
   },
-  emits: ['toolResult', 'newSession', 'switchSession'],
+  emits: ['toolResult', 'newSession', 'switchSession', 'sessionActive'],
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
     const toolNames = toolShortNames
@@ -410,12 +410,17 @@ export const AIChatPanel = {
         if (!resp.ok) {
           console.error('[ai-chat] submit →', resp.status)
           if (!inputText.value.trim()) inputText.value = text
-        } else if (!subActive || ctx.terminal) {
-          // 订阅已随 run 终帧关流（terminal，不退避重连）或从未激活 → snapshot=1 重开
-          //（前缀快照 + 边界回放 + live 尾巴，覆盖 run 已产生若干事件的迟到场景）；
-          // 运行中且订阅健在则跳过，队列事件照旧从现有流进来。与挂起的退避计时器无竞态：
-          // openSub(true) 内 ctx=freshCtx() 替换引用，旧回调 c===ctx 守卫自动作废
-          openSub(true)
+        } else {
+          // 投递成功（202）→ app 层第三写点落存储（2026-11-21 F5 断订阅流修复）：
+          // 新开页面的会话里首发消息不 emit 则存储不落，F5 恢复回旧 sid/空态 → 面板空白
+          emit('sessionActive', props.sessionId)
+          if (!subActive || ctx.terminal) {
+            // 订阅已随 run 终帧关流（terminal，不退避重连）或从未激活 → snapshot=1 重开
+            //（前缀快照 + 边界回放 + live 尾巴，覆盖 run 已产生若干事件的迟到场景）；
+            // 运行中且订阅健在则跳过，队列事件照旧从现有流进来。与挂起的退避计时器无竞态：
+            // openSub(true) 内 ctx=freshCtx() 替换引用，旧回调 c===ctx 守卫自动作废
+            openSub(true)
+          }
         }
       } catch (e) {
         console.error('[ai-chat] submit failed', e)

@@ -457,9 +457,12 @@ function applyInitialHash() {
   openDoc(h.path)
 }
 
-// ─── AI 会话持久化与恢复（spec 2026-11-19 §2.5；2026-11-20 §5 恢复归订阅改造）───
-// 写点恰 2（无第三写点）：startNewSession 成功处 + onSwitchSession，与 state.sessionId
-// 赋值同点。localStorage 不可用（隐私模式）→ 静默仅本会话生效（mdvault.searchWeights 先例同形）。
+// ─── AI 会话持久化与恢复（spec 2026-11-19 §2.5；2026-11-20 §5 恢复归订阅改造；
+//     2026-11-21 F5 断订阅流修复：写点 2 → 3）───
+// 写点恰 3（无第四写点）：startNewSession 成功处 + onSwitchSession（与前态同口径，
+// 与 state.sessionId 赋值同点）+ onSessionActive（面板投递成功回执——缺它「页面新开的
+// 会话里发消息 → F5 → bootRestore 恢复回旧 sid/空态 → 面板空白」）。
+// localStorage 不可用（隐私模式）→ 静默仅本会话生效（mdvault.searchWeights 先例同形）。
 function persistSessionId(sid) {
   try { localStorage.setItem('mdvault.aiSession', sid) } catch (e) { /* 隐私模式存储不可用 */ }
 }
@@ -489,6 +492,13 @@ async function bootRestoreSession() {
 function onSwitchSession(sid) {
   state.sessionId = sid
   persistSessionId(sid)   // 写点 2
+}
+
+// 投递落地写点（AIChatPanel sendChat 202 成功 → emit('sessionActive', props.sessionId)）：
+// 新开页面会话首发消息即落存储——前两点（新会话/历史切换）都不覆盖「在默认新会话里直接
+// 发送」这条主路径，F5 会恢复回旧 sid/空态。sid 恒等当前 state.sessionId，无赋值，只 persist。
+function onSessionActive(sid) {
+  persistSessionId(sid)   // 写点 3
 }
 
 // ─── AI 面板切换（桌面/移动适配）───
@@ -934,7 +944,7 @@ export function createApp() {
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
-        handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession,
+        handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession, onSessionActive,
         toggleNotifDropdown, markAllRead, openNotif, relativeTime,
         onEditorInput, acceptConflict, skipToMain,
         tocItems, toggleToc, onTocClickItem
@@ -1148,7 +1158,7 @@ export function createApp() {
             <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
               :doc-path="state.currentPath || ''" :session-id="state.sessionId"
               @tool-result="handleToolResult" @new-session="startNewSession"
-              @switchSession="onSwitchSession"
+              @switchSession="onSwitchSession" @sessionActive="onSessionActive"
               @close="toggleAI(false)" />
           </div>
         </div>

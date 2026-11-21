@@ -60,7 +60,7 @@
 ### 2.5 刷新恢复
 
 - 现状：`app.js:31` 每次页面加载生成全新 `sessionId: 'web-' + Date.now()`——刷新即弃会话。
-- 持久化当前会话 id：`localStorage['mdvault.aiSession']`（键族/try-catch 隐私模式先例照 `searchWeights`，search.js:86 + SearchPanel.js:141）。写点 = newSession 成功、selectSession 成功两处（与 `state.sessionId` 赋值同点，无第三写点）。
+- 持久化当前会话 id：`localStorage['mdvault.aiSession']`（键族/try-catch 隐私模式先例照 `searchWeights`，search.js:86 + SearchPanel.js:141）。写点 = newSession 成功、selectSession 成功、**sendChat 投递成功**三处（2026-11-21 F5 断订阅流修复：前两处不覆盖「页面新开的会话里直接发消息」这条主路径——存储不落则 F5 后 bootRestore 恢复回旧 sid/空态、面板空白；面板 sendChat 202 成功 → `emit('sessionActive', sid)` → app `onSessionActive` 只 persist 不赋值）。前两处与 `state.sessionId` 赋值同点，无第四写点。
 - 启动恢复：初始化读到存储 sid → `getSession(sid)`：200 → `state.sessionId = sid` + `restorePayload`（复用 §2.3 全保真路径，启动与手动切换**同一条恢复管线**）；404/失败 → 走现状新会话（存储自然被首条新会话覆盖）。恢复动作不阻塞面板挂载（异步，期间显示空面板 → 消息到达回填；addMsg 的贴底逻辑天然把首屏滚到底）。
 - **刷新中断的残缺尾部**（刷新掐断 SSE → run 夭折，finally 已持久化的 messages 可能以 assistant.tool_calls 结尾、无 tool 结果）：恢复渲染遇孤儿 tool_call → tool 块 `status='error'`；下一轮对话服务端 `_ensure_tool_results`（runtime.py:105）会补合成 tool 结果，API 合法性由既有机制守住，前端不重演该逻辑。
 - 多标签页：键全局单值，后启动/后切换者赢（文档级竞态接受，个人工具不做 per-tab 存储；备案）。
@@ -84,5 +84,5 @@
 
 - 后端 pytest：`list_session_summaries`（排除空行/标题跳提醒/排序/limit）、`delete_session`、三路由（形状/404/409/删除后 `_get_agent` 重建拉回 DB 会话继续可聊）、`SessionManager.remove` 三表清、`test_routes_order` 过。
 - node 行为测试（chatRestore.js，直调映射）：提醒行丢弃 / 多轮工具链归并单 turn / tool_call_id 配对 / Error·rejected 状态 / citations+messageId 透传 / 无 tool_calls 纯文本。
-- 静态钉（`test_web_ui_audit.py` 家族）：历史钮存在且 `aria-pressed`；行主体 `button`；toggle 视图路径零 `abort`；`utils/format.js` 复用（无本地日期拷贝）；`mdvault.aiSession` 存储键存在且写点=2（newSession/selectSession 与 sessionId 赋值同点）。
+- 静态钉（`test_web_ui_audit.py` 家族）：历史钮存在且 `aria-pressed`；行主体 `button`；toggle 视图路径零 `abort`；`utils/format.js` 复用（无本地日期拷贝）；`mdvault.aiSession` 存储键存在且写点=3（newSession/selectSession 与 sessionId 赋值同点 + sendChat 投递成功 persist；2026-11-21 口径）。
 - 浏览器目检（**不批不提交**，规则 3）：① 流式中开列表流不断 ② 点他项→内联确认→停流切换 ③ 恢复观感全保真（工具折叠可展开、引用摘要、反馈可点）④ 删除两步 + 删当前自动新会话 ⑤ Esc 返回 ⑥ 键盘 Tab 全程可达 ⑦ **会话中刷新 → 同会话消息原位恢复可续聊**（含刷新前刚发未回完的残缺尾部显 error 不白屏）。

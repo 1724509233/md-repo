@@ -815,16 +815,18 @@ def test_session_persistence_pins():
     # onSwitchSession 收裸 sid（T5 面板 emit('switchSession', row.id) 的消费端）。
     app = _templates()["app.js"]
     assert "mdvault.aiSession" in app
-    # ① 写点恰 2、无第三写点：setItem 单点封装进 persistSessionId，字面出现恰 1 次且必须在
+    # ① 写点恰 3、无第四写点：setItem 单点封装进 persistSessionId，字面出现恰 1 次且必须在
     #   try/catch 内（Review Focus 5：隐私模式存储不可用不得炸面板）；persistSessionId 调用点
-    #   恰 2（startNewSession 成功处 + onSwitchSession）。
-    #   （计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
-    #   只能出现 1 次；按「写点=2 调用点」本意落钉，上轮口径不变。）
+    #   恰 3（startNewSession 成功处 + onSwitchSession + onSessionActive）。
+    #   （2026-11-21 F5 断订阅流修复翻正：写点 2 口径下「页面新开的会话里发消息」不落存储，
+    #   F5 → bootRestore 恢复回旧 sid/空态 → 面板空白；第三写点见 ③b。
+    #   计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
+    #   只能出现 1 次；按「写点=调用点」本意落钉。）
     assert app.count("localStorage.setItem(") == 1
     ps = _fn_body(app, "function persistSessionId(")
     assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
     assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
-    assert len(re.findall(r"(?<!function )persistSessionId\(", app)) == 2
+    assert len(re.findall(r"(?<!function )persistSessionId\(", app)) == 3
     sn = _fn_body(app, "async function startNewSession(")
     assert "persistSessionId(" in sn and "state.sessionId = data.session_id" in sn
     # ② bootRestore 去 fetch 化（spec 2026-11-20 §5：恢复统一归 stream 快照订阅）：体内
@@ -842,6 +844,20 @@ def test_session_persistence_pins():
     os_ = _fn_body(app, "function onSwitchSession(")
     assert "state.sessionId = sid" in os_ and "persistSessionId(" in os_
     assert os_.index("state.sessionId =") < os_.index("persistSessionId(")
+    # ③b 投递落地写点（2026-11-21 F5 断订阅流修复）：onSessionActive 只 persist 不赋值
+    #   （sid 恒等当前 state.sessionId）；模板挂接 + 面板 emit 侧同钉。
+    #   面板侧用静态钉而非 node 行为测试：触发点是单行 emit 调用（零 DOM、零时序），
+    #   行为化需 stub api.agentChat + Vue setup 上下文，成本远超收益；emits 声明 +
+    #   sendChat 成功路径 + app 消费端三点静态闭合即全契约
+    oa = _fn_body(app, "function onSessionActive(")
+    assert "persistSessionId(" in oa and "state.sessionId" not in oa
+    assert '@sessionActive="onSessionActive"' in app
+    ai = _templates()["AIChatPanel.js"]
+    assert re.search(r"emits:\s*\[[^\]]*'sessionActive'", ai), "emits 声明缺 sessionActive"
+    sc = _fn_body(ai, "async function sendChat(")
+    assert "emit('sessionActive', props.sessionId)" in sc
+    # emit 在成功路径（resp.ok 分支）内：先于 openSub 处理、后于 !resp.ok 错误支
+    assert sc.index("emit('sessionActive'") > sc.index("if (!resp.ok)")
     # ④ 挂载接线：boot 调用在 onMounted 内、非阻塞（不得 await——恢复不得挡住首屏渲染）
     assert app.count("bootRestoreSession()") == 2   # 定义 + 唯一启动调用
     om = app[app.index("onMounted("):]
@@ -857,6 +873,7 @@ def test_session_persistence_pins():
     # 会先命中 badgeParts computed 的 return {，此处按 setup return 独有起始行锚定切片
     ri = app.index("return {\n        state, editorPaneRef")
     assert "onSwitchSession" in app[ri:app.index("\n      }", ri)]
+    assert "onSessionActive" in app[ri:app.index("\n      }", ri)]
 
 
 def test_esc_chain_memory_precedes_ai():
