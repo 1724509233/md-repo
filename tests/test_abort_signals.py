@@ -491,8 +491,9 @@ def test_tool_registry_has_no_abort_log_read_path():
 # ── §4/§8-12 reminder 注入文本：信号 + join 素材 ──────────────────────────
 
 def _seed_signals(ledger_conn):
-    """Two signals in session sX (anchored text_output + un-anchored
-    pre_dispatch) + one stale 8-days-old signal (outside the window)."""
+    """Signals in session sX: one admitted anchored text_output signal + one
+    un-anchored pre_dispatch signal (admission gate: NEVER injected, card-A
+    S7) + one stale 8-days-old signal (outside the window)."""
     now = time.time()
     chat_abort_records.record(ledger_conn, session_id="sX",
                               message_id="MID001", ts=now - 3600,
@@ -517,10 +518,13 @@ def _seed_signals(ledger_conn):
 
 
 def test_reminder_renders_signals_with_join_material(ledger_conn):
-    """The reminder carries every signal's stamped facts, the interrupted
-    row's content + reasoning (labeled 模型宣称非证据), the FIRST post-stop
-    user message (reminder rows skipped), the honest 「无锚点信号」 marker
-    for message_id NULL rows — and the 7-day window (8天前的信号绝不出现)."""
+    """Card-A admission gate + window assembly: the reminder carries the
+    ADMITTED signal's stamped facts, the pre-window turn (the prompt that
+    was interrupted — full text), the interrupted row's content + reasoning
+    (labeled 模型宣称非证据), the full post-stop user run (framework rows
+    skipped) — while the un-anchored signal is NOT injected at all (S7:
+    「无锚点信号」 rendering branch retired, blob 契约 ④) and the 7-day
+    window holds (8天前的信号绝不出现)."""
     from server.bgagent.interrupts import InterruptSignalsSystemReminder
 
     _seed_signals(ledger_conn)
@@ -529,20 +533,23 @@ def test_reminder_renders_signals_with_join_material(ledger_conn):
     out = rem.render()
     assert out is not None
     assert "## 近期取消信号" in out
-    # stamped behavioral facts
+    # stamped behavioral facts (the admitted signal only)
     assert "text_output" in out and "model-A" in out
+    # pre-window (锚行前最近一轮 = interrupted turn's user 段, 全文)
+    assert "帮我整理这篇" in out
     # join material (blob side)
     assert "我打算先通读全文再分节" in out
     assert "先梳理结构" in out
     assert "模型宣称" in out          # facts vs claims discipline
-    # 停后补发: the first REAL user row (reminder row skipped)
+    # 停后补发: the full post-stop user run (framework row skipped)
     assert "不对，我要的是摘要不是分节" in out
     assert "[当前打开" not in out
-    # un-anchored honesty + window
-    assert "无锚点信号" in out
+    # S7: un-anchored row never injected (no marker branch, no stamped row)
+    assert "无锚点信号" not in out
+    assert "pre_dispatch" not in out
     assert "model-Z" not in out       # 8 days old — outside 近 7 天
     assert rem.last_bytes > 0
-    assert rem.last_signals == 2
+    assert rem.last_signals == 1
 
     # no ledger conn → degraded silent
     assert InterruptSignalsSystemReminder("x", ledger_conn=None).render() is None
@@ -557,6 +564,280 @@ def test_reminder_silent_without_signals(ledger_conn):
                                          ledger_conn=ledger_conn)
     assert rem.render() is None
     assert rem.last_bytes == 0 and rem.last_signals == 0
+
+
+# ── 卡 A 准入门 / 前后窗 / 字节硬帽新钉（memory-pipeline spec §1）──────────
+
+def _seed_one(ledger_conn, *, session="sQ", mid="MID001", messages=None,
+              phase="text_output", tool_name=None, model="model-A"):
+    """One anchored abort signal + its session blob (default: minimal
+    admitted shape — prompt, interrupted anchor row, one real follow-up)."""
+    if messages is None:
+        messages = [
+            {"role": "user", "content": "问"},
+            {"role": "assistant", "content": "半", "interrupted": True,
+             "message_id": mid},
+            {"role": "user", "content": "后话"},
+        ]
+    chat_abort_records.record(ledger_conn, session_id=session, message_id=mid,
+                              ts=time.time(), phase=phase,
+                              tool_name=tool_name, model=model)
+    save_session(ledger_conn, session, messages)
+
+
+def test_no_followup_not_injected(ledger_conn):
+    """准入门：锚行后无任何真实 user 行（「停后再无下文」不可归因，r9 同构）
+    → 整条不注入：既不烧 token，也杜绝模型对着沉默编归因。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+
+    _seed_one(ledger_conn, messages=[
+        {"role": "user", "content": "问"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MID001"},
+    ])
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    assert rem.render() is None
+    assert rem.last_bytes == 0 and rem.last_signals == 0
+
+
+def test_framework_rows_never_admit_never_inject(ledger_conn):
+    """blob 契约 ①：``[当前打开:`` 是 role=user 框架行——
+    A) 锚后只有框架行 = 无下文（准入门不认框架行）→ 不注入；
+    B) 框架行散布前窗/后窗 → 信号照常入选，框架文本绝不进注入、
+       不计轮数（前窗 user 段只有真话「真问」）。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+
+    # A) post-window holds only a framework row → not admitted
+    _seed_one(ledger_conn, session="sF1", mid="MF1", model="mF1", messages=[
+        {"role": "user", "content": "问A"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MF1"},
+        {"role": "user", "content": "[当前打开: notes/a.md]"},
+    ])
+    # B) framework rows everywhere else → admitted, framework text never shown
+    _seed_one(ledger_conn, session="sF2", mid="MF2", model="mF2", messages=[
+        {"role": "user", "content": "[当前打开: notes/old.md]"},
+        {"role": "user", "content": "真问"},
+        {"role": "user", "content": "[当前打开: notes/b.md]"},
+        {"role": "assistant", "content": "上轮答"},
+        {"role": "user", "content": "再问"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MF2"},
+        {"role": "user", "content": "后话"},
+    ])
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert out is not None
+    assert "mF1" not in out             # A 整条未注入
+    assert "mF2" in out
+    assert "真问" in out and "再问" in out and "后话" in out
+    assert "[当前打开" not in out       # 框架文本不混入
+
+
+def test_turn_run_counts_as_one_and_depth_kept(ledger_conn):
+    """轮窗装配：连发 user 段算一段（一轮）；前窗取锚行前最近 3 轮——
+    4 轮场景最旧一轮出局，最近 3 轮全在（含 interrupted 轮的 user 段）。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+
+    msgs = []
+    for i in (1, 2, 3):
+        msgs.append({"role": "user", "content": f"轮{i}用户"})
+        msgs.append({"role": "assistant", "content": f"轮{i}答"})
+    # interrupted turn: 连发两 user（同轮）+ anchor assistant
+    msgs += [
+        {"role": "user", "content": "轮四甲"},
+        {"role": "user", "content": "轮四乙"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MID001"},
+        {"role": "user", "content": "后话"},
+    ]
+    _seed_one(ledger_conn, messages=msgs)
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert "轮1用户" not in out          # 第 4 轮前推 → 最旧一轮砍掉
+    assert "轮2用户" in out and "轮3用户" in out
+    assert "轮四甲" in out and "轮四乙" in out  # 连发段 = 同轮，两条全文
+    assert "轮2答" in out
+
+
+def test_assistant_clip_and_empty_skip(ledger_conn):
+    """前窗 assistant 行截 500 字；content None（tool_calls 中间行）/ ""
+    （双空白归一行）按空跳过（blob 契约 ②）；工具行不注入。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+
+    long_a = "B" * 600
+    _seed_one(ledger_conn, messages=[
+        {"role": "user", "content": "早问"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "t1", "function": {"name": "read_doc",
+                                                  "arguments": "{}"}}]},
+        {"role": "user", "content": ""},  # empty user row still a user row
+        {"role": "assistant", "content": long_a},
+        {"role": "user", "content": "问"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MID001"},
+        {"role": "user", "content": "后话"},
+    ])
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert "B" * 500 in out and "B" * 501 not in out  # 截 500
+    assert out.count("agent:") == 1     # None-content 中间行不注入
+    assert "'{}'" not in out            # 工具调用参数确不注入（契约 ③备案）
+
+
+def test_byte_cap_drops_reasoning_first(ledger_conn):
+    """r1.5 M6 降级第一级：巨 reasoning（>硬帽）→ 先砍 reasoning（可整字段），
+    前窗 user/agent 行与停后补发原样保留；砍处留截断标记；last_bytes=实注字节."""
+    from server.bgagent.interrupts import (MAX_INJECT_BYTES,
+                                           InterruptSignalsSystemReminder)
+
+    _seed_one(ledger_conn, messages=[
+        {"role": "user", "content": "前轮话"},
+        {"role": "assistant", "content": "前轮答"},
+        {"role": "user", "content": "问"},
+        {"role": "assistant", "content": "半", "interrupted": True,
+         "message_id": "MID001", "reasoning": "R" * 40000},
+        {"role": "user", "content": "后话"},
+    ])
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert out is not None
+    assert "R" * 100 not in out          # reasoning 整字段出局
+    assert "中断轮思考（模型宣称）" not in out
+    assert "[truncated]" in out          # 砍处标记
+    assert "前轮话" in out and "前轮答" in out  # 前窗未被砍（第一级已够）
+    assert "后话" in out
+    assert 0 < rem.last_bytes <= MAX_INJECT_BYTES
+    assert rem.last_signals == 1
+
+
+def test_byte_cap_count_cut_keeps_newest(ledger_conn):
+    """r1.5 M6 降级末级：reasoning/前窗都已砍尽仍超帽 → 砍信号条数，
+    保最新砍最旧（每信号自带不可砍的巨 user 全文场景）。"""
+    from server.bgagent.interrupts import (MAX_INJECT_BYTES,
+                                           InterruptSignalsSystemReminder)
+
+    big_post = "P" * 20000
+    for i in (1, 2, 3):
+        _seed_one(ledger_conn, session=f"sC{i}", mid=f"MC{i}", model=f"mC{i}",
+                  messages=[
+                      {"role": "user", "content": f"小问{i}"},
+                      {"role": "assistant", "content": "半", "interrupted": True,
+                       "message_id": f"MC{i}", "reasoning": f"why{i}"},
+                      {"role": "user", "content": f"后{i}" + big_post},
+                  ])
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert out is not None
+    assert "mC1" not in out and "后1" not in out   # 最旧被砍
+    assert "mC3" in out and "后3" in out           # 最新保住
+    assert "另有 2 条最旧信号未列出" in out and "[truncated]" in out
+    assert "中断轮思考（模型宣称）" not in out       # 前置级别已全执行
+    assert "why3" not in out                         # 幸存信号的 reasoning 也已被砍
+    assert rem.last_bytes <= MAX_INJECT_BYTES
+    assert rem.last_signals == 1
+
+
+def test_keep_latest_50_signals(ledger_conn):
+    """S6 截断方向：>50 条时按 id（全局单调 provenance 戳）保最新 50——
+    旧 rows[:50] 按会话序截会丢掉 session 序末尾的最新信号（本钉即旧 bug
+    的反向钉）。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+
+    def _many(session, first, count, model_prefix):
+        msgs = []
+        for i in range(count):
+            msgs.append({"role": "user", "content": f"q{first + i}"})
+            msgs.append({"role": "assistant", "content": f"a{first + i}",
+                         "interrupted": True, "message_id": f"M{first + i}"})
+        msgs.append({"role": "user", "content": "尾话"})
+        save_session(ledger_conn, session, msgs)
+        for i in range(count):
+            chat_abort_records.record(
+                ledger_conn, session_id=session, message_id=f"M{first + i}",
+                ts=time.time(), phase="text_output", tool_name=None,
+                model=f"{model_prefix}{first + i:02d}")
+
+    _many("aa", 0, 60, "ma")   # ids 1..60（会话序在前，但 id 更旧）
+    _many("bb", 60, 10, "mb")  # ids 61..70 —— 会话序在后、id 最新：旧切片丢它们
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert out is not None
+    assert rem.last_signals == 50
+    assert "mb61" in out and "mb69" in out   # 最新 10 条全保（旧 [:50] 丢）
+    assert "ma55" in out                     # 旧切片也丢的 ma50..59 亦保
+    assert "ma20" in out                     # 边界：id 21 在
+    assert "ma19" not in out                 # 边界：id 20 出局（全局最旧 20 条）
+    assert "另有 20 条最旧信号未列出" in out
+
+
+def test_proposal_annotation_three_states(vault_dir, ledger_conn):
+    """防重②（spec §5 M5）：信号行尾标注三态——已出提案#N（auto 轨 adopted）/
+    已被拒（人审 rejected）/ 已出提案#N（落地失败: reason）（executor failed）；
+    匹配 = proposals.scan + **Python 过滤**（source_refs 列是 JSON 数组文本，
+    SQL LIKE 字面恒假）∧ actor == 本角色——外 actor 的同章提案不标注。"""
+    from server.bgagent.interrupts import InterruptSignalsSystemReminder
+    from server.services import proposals
+
+    for i, mid in enumerate(["MA1", "MA2", "MA3"], start=1):
+        _seed_one(ledger_conn, session=f"sA{i}", mid=mid, model=f"mS{i}")
+    ids = [r[0] for r in ledger_conn.execute(
+        "SELECT id FROM chat_abort_log ORDER BY id").fetchall()]
+    assert ids == [1, 2, 3]
+
+    # ① auto 轨 adopted → 已出提案#N
+    r1 = proposals.create(
+        ledger_conn, vault_dir, "entity_index", actor="abort-analyzer",
+        run_id="r", source_refs=["notes/x.md", f"abort_log:{ids[0]}"],
+        justification="add", payload={"entity": "e", "attrs": {"k": "v"}})
+    proposals.advance(ledger_conn, vault_dir, r1["id"], "processing",
+                      actor="abort-analyzer")
+    proposals.advance(ledger_conn, vault_dir, r1["id"], "adopted",
+                      actor="abort-analyzer")
+    # ② 人审 rejected → 已被拒
+    r2 = proposals.create(
+        ledger_conn, vault_dir, "summary", actor="abort-analyzer", run_id="r",
+        source_refs=["notes/y.md", f"abort_log:{ids[1]}"],
+        justification="fix", payload={"form": "cache", "body": "b"})
+    for state, actor in [("processing", "abort-analyzer"),
+                         ("awaiting_review", "abort-analyzer"),
+                         ("rejected", "human")]:
+        proposals.advance(ledger_conn, vault_dir, r2["id"], state, actor=actor)
+    # ③ executor failed → 已出提案#N（落地失败: reason）
+    r3 = proposals.create(
+        ledger_conn, vault_dir, "errata", actor="abort-analyzer", run_id="r",
+        source_refs=["notes/z.md", f"abort_log:{ids[2]}"],
+        justification="del", payload={"contradiction": "c"})
+    proposals.advance(ledger_conn, vault_dir, r3["id"], "processing",
+                      actor="abort-analyzer")
+    proposals.advance(ledger_conn, vault_dir, r3["id"], "adopted",
+                      actor="abort-analyzer")
+    proposals.advance(ledger_conn, vault_dir, r3["id"], "failed",
+                      actor="executor",
+                      reject_reason="errata slot occupied: 删旧卡再 re-adopt")
+    # foreign actor 的同章提案 → 不得标注（actor 过滤）
+    proposals.create(ledger_conn, vault_dir, "summary", actor="consolidator",
+                     run_id="r", source_refs=["notes/w.md", f"abort_log:{ids[2]}"],
+                     justification="foreign", payload={"form": "cache", "body": "b"})
+
+    def sig_line(text, sid):
+        return next(l for l in text.splitlines() if l.startswith(f"- #{sid} "))
+
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
+                                         ledger_conn=ledger_conn)
+    out = rem.render()
+    assert f"已出提案#{r1['id']}" in sig_line(out, ids[0])
+    assert "已被拒" in sig_line(out, ids[1])
+    failed_line = sig_line(out, ids[2])
+    assert f"已出提案#{r3['id']}（落地失败: errata slot occupied" in failed_line
+    assert "consolidator" not in out
 
 
 # ── §8-10 reminder egress 合成台账行（红线 7 / 评审 M2）───────────────────
@@ -619,7 +900,8 @@ def test_reminder_injection_writes_egress_row_per_run(tmp_path, ledger_conn):
         assert r["actor"] == "abort-analyzer"
         assert r["run_id"].startswith("abort-analyzer-")
         assert r["model"] == "m"
-        assert re.match(r"^reminder:bytes=\d+:signals=2$", r["path"]), r["path"]
+        # 1 admitted signal only: the un-anchored row never injects (S7)
+        assert re.match(r"^reminder:bytes=\d+:signals=1$", r["path"]), r["path"]
 
     # report written through the existing channel
     assert list(cfg.report_dir.glob("*.md")), "_write_report_and_prune landed"
@@ -714,8 +996,13 @@ def test_config_example_abort_analyzer_loads_through_schema(tmp_path):
     assert set(entry) <= EXAMPLE_ALLOWED_KEYS, \
         sorted(set(entry) - EXAMPLE_ALLOWED_KEYS)
     assert set(entry["model"]) <= EXAMPLE_ALLOWED_MODEL_KEYS
+    # 白名单终值（spec r1.5 M2）：读×6 + propose（list_proposals = 防重③对账）
     assert "propose" in entry["tools"] and "write_doc" not in entry["tools"]
-    assert "summary" in entry["verbs"]
+    assert "list_proposals" in entry["tools"]
+    # verbs 终值（spec r1.5 M1）：summary + entity_index + errata；
+    # relatedness 明确不进 verbs（仅作读面对照）
+    assert entry["verbs"] == ["summary", "entity_index", "errata"]
+    assert "relatedness" not in entry["verbs"]
 
     # the repo prompt actually ships
     repo_root = Path(__file__).resolve().parents[1]
@@ -735,3 +1022,91 @@ def test_config_example_abort_analyzer_loads_through_schema(tmp_path):
     agents = load_background_agents(str(cfg_path), vault)
     assert len(agents) == 1
     assert agents[0].alias == "abort-analyzer"
+
+
+# ── 卡 A 硬编码角色门（spec §6 S1 r1.6）+ 卡 B verbs 门控 / prompt 审计钉 ──
+
+def test_role_gate_non_pipeline_alias_zero_injection(tmp_path, ledger_conn):
+    """S1 r1.6 用户裁硬编码角色门（通道二「挂点全局」旧裁废止）：非门内
+    alias（narrator）即使有入选信号 + 云端端点 → reminder 不构造——
+    零注入、零 via='reminder' egress 行（门内对照 = signals=1 的注入钉）。"""
+    from server.agent.runtime import Runtime
+    from server.bgagent.runner import _INTERRUPT_ROLES, run_once
+
+    assert "abort-analyzer" in _INTERRUPT_ROLES
+    assert "narrator" not in _INTERRUPT_ROLES  # consolidator 等同停挂
+
+    class FakeRuntime(Runtime):
+        async def run(self, agent):
+            yield Event("round", {"n": 1})
+            yield Event("token", {"text": "整理完成。"})
+            yield Event("done", {"reason": "final"})
+
+    _seed_signals(ledger_conn)  # 含入选信号（abort-analyzer 挂则会注入）
+    cfg = _bg_cfg(tmp_path, alias="narrator")
+
+    async def go():
+        return await run_once(cfg, tmp_path / "vault",
+                              runtime_cls=lambda: FakeRuntime(),
+                              ledger_conn=ledger_conn)
+
+    report = asyncio.run(go())
+    assert report.status in ("ok", "empty")  # run 本身正常
+    assert ledger_conn.execute(
+        "SELECT count(*) FROM egress_log").fetchone()[0] == 0
+
+
+def test_abort_analyzer_verb_gate(vault_dir, ledger_conn):
+    """卡 B verbs 终值门控（spec r1.5 M1：verbs 真门控）：
+    [summary, entity_index, errata] 三型全可提（abort 源提案 refs 含
+    abort_log 章居非首位）；relatedness 被拒（明确不进 verbs，仅作读面
+    对照）且零写入。"""
+    from server.agent.tools.propose import ProposeTool
+    from server.agent.tools.tool import ToolContext
+
+    ctx = ToolContext(vault_dir=vault_dir, write_source="abort-analyzer",
+                      run_id="abort-analyzer-test",
+                      verbs=("summary", "entity_index", "errata"),
+                      ledger_conn=ledger_conn)
+    tool = ProposeTool()
+
+    out = tool.call({"type": "entity_index",
+                     "payload": {"entity": "偏好X", "attrs": {"口径": "乙"}},
+                     "source_refs": ["notes/a.md", "abort_log:1"],
+                     "justification": "改=全量重发 attrs"}, ctx)
+    assert out.startswith("proposal #"), out
+    out = tool.call({"type": "summary",
+                     "payload": {"form": "cache", "body": "b"},
+                     "source_refs": ["notes/a.md", "abort_log:1"],
+                     "justification": "提示词改进"}, ctx)
+    assert out.startswith("proposal #"), out
+    out = tool.call(
+        {"type": "errata",
+         "payload": {"contradiction": "c", "candidate": "d", "rationale": "r",
+                     "excerpts": [{"path": "index/entities.md", "quote": "q1"},
+                                  {"path": "notes/a.md", "quote": "q2"}]},
+         "source_refs": ["notes/a.md", "abort_log:1"],
+         "justification": "DELETE=errata 复用"}, ctx)
+    assert out.startswith("proposal #"), out
+
+    out = tool.call({"type": "relatedness",
+                     "payload": {"target": "notes/b.md"},
+                     "source_refs": ["notes/a.md", "abort_log:1"],
+                     "justification": "j"}, ctx)
+    assert out.startswith("Error:"), out
+    assert "relatedness" in out
+    types = [r[0] for r in ledger_conn.execute(
+        "SELECT type FROM proposals ORDER BY id").fetchall()]
+    assert types == ["entity_index", "summary", "errata"]
+
+
+def test_abort_analyzer_prompt_static_audit():
+    """卡 B 静态审计钉（仿 test_web_ui_audit 家族关键词断言，挑三条最承重
+    义务）：S8「改=全量重发 attrs」/ source_refs 定序铁律（refs[0] 恒真实
+    路径、abort_log 章非首位）/ 单次 run 提案 ≤5 条（budget 义务值）。"""
+    src = (Path(__file__).resolve().parents[1] / "server" / "prompts"
+           / "abort-analyzer.md").read_text(encoding="utf-8")
+    assert "全量重发" in src                       # S8：upsert 整段替换
+    assert "恒为真实 vault 路径" in src            # refs[0] 承重位
+    assert "非首位" in src                          # abort_log 章定序
+    assert "≤5" in src                              # 预算义务值（无机制）
