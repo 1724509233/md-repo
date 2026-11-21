@@ -20,6 +20,7 @@ batch; their anchors are unchanged or updated in place.)
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from server.services import ledger, proposals
@@ -265,7 +266,9 @@ def test_no_new_upsert_edge_or_merge_edge_callers():
     for f in sorted(root.rglob("*.py")):
         text = f.read_text(encoding="utf-8")
         if "upsert_edge(" in text or "merge_edge(" in text:
-            callers.add(str(f.relative_to(root.parent)))
+            # as_posix(): POSIX slash canon — str(Path.relative_to) yields
+            # backslashes on Windows and would miss the forward-slash set.
+            callers.add(f.relative_to(root.parent).as_posix())
     assert callers == {
         "server/vault/db/relatedness.py",   # definitions + merge_edge→upsert_edge
         "server/bgagent/executor.py",       # the only merge_edge caller
@@ -327,7 +330,10 @@ def _move_a_to_b(vault_dir, db_conn, ledger_conn=None) -> None:
 
     ``ledger_conn`` (A4, card 10c): the rewrite conn now travels as a
     parameter — pass it when the test asserts on relatedness rewriting."""
-    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    # os.replace, not Path.rename: on Windows rename onto an existing
+    # destination raises FileExistsError (WinError 183); os.replace has
+    # POSIX overwrite semantics on both platforms.
+    os.replace(vault_dir / "notes" / "a.md", vault_dir / "notes" / "b.md")
     apply_change(db_conn, vault_dir, "notes/b.md", "moved",
                  from_path="notes/a.md", source="test",
                  ledger_conn=ledger_conn)
@@ -390,7 +396,7 @@ def test_card10_pin_record_move_rewrites_edge(vault_dir, db_conn, ledger_conn):
     _write(vault_dir, "notes/c.md")
     rel.upsert_edge(ledger_conn, "notes/a.md", "notes/c.md", "topic", "t")
 
-    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    os.replace(vault_dir / "notes" / "a.md", vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
                   from_path="notes/a.md", ledger_conn=ledger_conn)
 
@@ -407,7 +413,7 @@ def test_card10_pin_record_move_preserves_ignored(vault_dir, db_conn, ledger_con
     eid = rel.upsert_edge(ledger_conn, "notes/a.md", "notes/d.md", "nope", "t")
     assert rel.mark_ignored(ledger_conn, eid)
 
-    (vault_dir / "notes" / "a.md").rename(vault_dir / "notes" / "b.md")
+    os.replace(vault_dir / "notes" / "a.md", vault_dir / "notes" / "b.md")
     ledger.record(db_conn, vault_dir, "notes/b.md", "moved", source="web",
                   from_path="notes/a.md", ledger_conn=ledger_conn)
 
@@ -428,7 +434,7 @@ def test_card10_pin_consumer_move_rewrites_edge(vault_dir, db_conn, ledger_conn)
     _write(vault_dir, "notes/c.md")
     rel.upsert_edge(ledger_conn, "notes/s.md", "notes/c.md", "topic", "t")
 
-    (vault_dir / "notes" / "s.md").rename(vault_dir / "notes" / "t.md")
+    os.replace(vault_dir / "notes" / "s.md", vault_dir / "notes" / "t.md")
     simulate_consumer(db_conn, vault_dir, "notes/t.md", "moved",
                       from_path="notes/s.md", ledger_conn=ledger_conn)
 

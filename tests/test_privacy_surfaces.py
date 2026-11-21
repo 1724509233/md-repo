@@ -19,6 +19,7 @@ Pins:
 """
 from __future__ import annotations
 
+import gc
 import hashlib
 import inspect
 import time
@@ -56,6 +57,23 @@ def _pcfg(tmp_path: Path, dirs_yaml: str) -> PrivacyConfig:
     return PrivacyConfig(cfg)
 
 
+def _backup_index_db(vault: Path, db_conn) -> None:
+    """Move index.db out of the way to force the degraded fallback.
+
+    Windows refuses to rename a file with an open handle (WinError 32):
+    ① close the fixture's SQLite connection first (harmless on POSIX; the
+    db_conn teardown re-close is a no-op) and ② gc.collect() — the search
+    adapter's own connection opened by the preceding rag_search call is
+    only released when GC collects its reference cycle (refcount alone
+    never drops it to zero). POSIX renames over open handles, so this pin
+    needs both only on Windows.
+    """
+    db = vault / ".sync" / "index.db"
+    db_conn.close()
+    gc.collect()
+    db.rename(db.with_suffix(".db.bak"))
+
+
 @pytest.fixture
 def search_vault(vault_dir, db_conn):
     """Two-file vault: 日记/a.md (zebrafish) + notes/b.md — indexed
@@ -86,23 +104,21 @@ def test_rag_search_sql_path_case_insensitive(search_vault):
     assert {h["path"] for h in hits} == {"日记/a.md", "notes/b.md"}
 
 
-def test_rag_search_degraded_fallback_privacy(search_vault):
+def test_rag_search_degraded_fallback_privacy(search_vault, db_conn):
     """降级钉（Review Focus 2）：index.db 改名逼进 _legacy_rag_search，
     带名单仍零命中；不传则命中。"""
     rag_search(str(search_vault), "zebrafish")  # ensure index built
-    db = search_vault / ".sync" / "index.db"
-    db.rename(db.with_suffix(".db.bak"))
+    _backup_index_db(search_vault, db_conn)
     hits = rag_search(str(search_vault), "zebrafish", privacy_dirs=("日记",))
     assert [h["path"] for h in hits] == ["notes/b.md"]
     hits = rag_search(str(search_vault), "zebrafish")
     assert {h["path"] for h in hits} == {"日记/a.md", "notes/b.md"}
 
 
-def test_legacy_fallback_case_insensitive(search_vault):
+def test_legacy_fallback_case_insensitive(search_vault, db_conn):
     """大小写钉（legacy 路）：名单 DIARY vs diary/ 小写路径。"""
     _write(search_vault, "diary/c.md", "zebrafish diary english\n")
-    db = search_vault / ".sync" / "index.db"
-    db.rename(db.with_suffix(".db.bak"))
+    _backup_index_db(search_vault, db_conn)
     hits = rag_search(str(search_vault), "zebrafish", privacy_dirs=("DIARY",))
     assert {h["path"] for h in hits} == {"日记/a.md", "notes/b.md"}
 

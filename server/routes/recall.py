@@ -101,7 +101,10 @@ def register(app, ctx) -> None:
         rel = safe_rel_path(raw_path) if raw_path else None
         if rel is None or via not in ("search", "ai", "preview"):
             return Response(status_code=204)  # malformed → nothing to ledger
-        path = str(rel)
+        # POSIX slash canon at the egress boundary (same convention as the
+        # link/change_log family): str(Path) would write 'notes\a.md' into
+        # the ledger on Windows.
+        path = rel.as_posix()
         if not path.lower().endswith(".md"):
             path += ".md"
         if rank is not None:
