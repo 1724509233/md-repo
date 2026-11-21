@@ -1,6 +1,6 @@
 # 记忆流水线 spec（中断→归因→沉淀→召回）
 
-日期 2026-11-21 ｜ 状态：**r1.6（送审 M/S 全收 + S1 用户裁硬编码角色门；全部决策点已清，可派单）** ｜ 法源：通道二 spec（`2026-11-20-stop-signals-reasoning-capture.md`）§1「终态管道」预留位——本 spec 即其「另立」的记忆系统 spec；讨论口径：2026-11-21 用户四层提案 + 澄清轮 ｜ 采集底座：`chat_abort_log`（ledger.db，只读消费，**不加埋点不加列**，通道二铁律不破）。
+日期 2026-11-21 ｜ 状态：**r1.8（重大勘误轮：记忆库错认——③层落点库 = vault 根目录手编元文件 `个人记忆.md`，非机器区 entities.md；四操作全走 summary 型人审轨，verbs 收窄；详见 §2/§3）** ｜ 法源：通道二 spec（`2026-11-20-stop-signals-reasoning-capture.md`）§1「终态管道」预留位——本 spec 即其「另立」的记忆系统 spec；讨论口径：2026-11-21 用户四层提案 + 澄清轮 ｜ 采集底座：`chat_abort_log`（ledger.db，只读消费，**不加埋点不加列**，通道二铁律不破）。
 
 ## 0. 定位与总则
 
@@ -21,20 +21,21 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 ## 2. ② 归因层（prompt 侧）
 
 - **分类法**：对每条注入的中断记录，agent 判定四类记忆操作之一；NONE 不出提案、只进报告计数。
-- **实体锚定（r1 用户裁）**：实体提取参照 vault 现有实体索引 `index/entities.md`（机器区 `## entity` 段）——agent 读它做去重/对齐，新增不重名、改动指向既有 entity 名。读面走 bgagent 工具白名单既有读工具，不新开读径。
-- **个人记忆读面契约（r1.2 盘点，r1.7 勘误——`EXCLUDED_INDEX_DIRS` 实查）**：机器区三投影 = `index/entities.md`（entity_index replace-upsert）、`index/summaries/`（summary 双形态）、`index/errata/`（矛盾卡 appenditive）——但 `index/` 顶层**被 v1 索引排除**（`vault_ops.py:17`，全库扫描/`list_files`/console 树/relatedness_rank 共用排除，防机器输出反馈污染）：**`search_docs` 恒不可见、`list_files` 恒不可枚举（含显式 dir="index"）——读面唯一路 = `read_doc` 精确路径**。`reminder` 无投影。DELETE 缺口二次确认：upsert 只覆盖不移除，errata 非删除。
+- **个人记忆锚定（r1.8 用户裁，勘误——旧「实体锚定 entities.md」条款作废）**：当前无系统性记忆系统设计——**复用 vault 知识库结构底座**：根目录手编元文件 **`个人记忆.md`**（与 AGENTS/TAGS/MOC 并列）= **长期记忆层**（分区 偏好/事实/人物/环境；条目规范=一条一原子 bullet+记忆日期、过时删除或改写不留活条目、按分区追加），其内 `[[链接]]` 指向的详情笔记 = **深度层**（如 [[2-领域/求职/跳槽前计划]]）。**语料边界 = `个人记忆.md` + 其链接的个人记忆相关 md；其余 vault 内容（项目文档/机器区/无关笔记）不碰。** 条目规范即本流水线写入纪律：提案携带的文本必须长成可直接追加/替换/删除的样子。根目录文件 **FTS 可达**，无机器区盲区。`index/entities.md`（机器区项目实体库）与本流水线无关（consolidator 等角色的库；r1.8 收窄 verbs 后不含 entity_index）。agent 产提案前 `read_doc("个人记忆.md")` 对齐既有条文：增不重复既有 bullet、改必须指向原文、删必须引原文。
+- **记忆读面契约（r1.8 重写）**：③层唯一落点库 `个人记忆.md` 根目录可检索可读。机器区三投影（entities/summaries/errata）的 v1 索引排除事实（`vault_ops.py:17`，`search_docs` 恒不可见、`list_files` 恒不可枚举、唯一读路=精确 `read_doc`）作为**系统事实保留在案**（其他角色仍涉及），本流水线不再依赖它们。relatedness 零文件落事实同前，本流水线读面不需要 `get_related_docs`（tools 保留无妨，证据面核对用）。
 - **实体提取目标口径**：只提取**可沉淀的可复用对象**（偏好/术语/路径/人物/项目），一次性任务主题留在报告不进实体操作。
 - **纪律沿用通道二 §4**：ts/phase/tool_name 是行为事实；join 出的 reasoning 是**模型宣称非证据**；标签随注入文本走，报告不得洗混。
 - **模型档**：本地档建议维持（reminder 含思考全文，云端=完整思考出域，红线 7 知情决策）；egress 合成 `via='reminder'` 台账行机制已落地，照用。
 - **输出契约（r1 用户裁）**：结论经 `propose` 工具出——**工具白名单扩到 propose**，人审闸门即「方便我和 agent 审阅评估」的复用面，零新机制。
 
-## 3. ③ 沉淀层（提案通道，零新机制 + 一条新边界）
+## 3. ③ 沉淀层（全 summary 型人审，零新机制）
 
-- 操作映射：增/改 → `entity_index` 提案（payload `{entity, attrs}` upsert 语义）；冲突修改 = mem0 UPDATE 语义，同一映射。
-- **双轨保持（r1.4 用户裁，撤销 r1「一律人审」）**：沉淀轨沿用提案系统既有分轨——`entity_index`/`relatedness` 保持 auto 免鉴权直融，`summary`/`errata`/`reminder` 天然 awaiting_review 人审。理由（用户口径）：**pull 消费透明可审计**——机器区文件人眼恒可见、proposal_transitions 全量状态账，错了可由后续提案或人工修正；auto 轨免鉴权缺口（安全红线节挂账）维持现状不扩不修，本流水线不得以它为由改轨。
-- **entity_index 承重契约（r1.5 评审 S8 钉，进卡 B prompt 义务）**：upsert **整段替换**含 source 行（`executor.py:180-191`）——mem0「改」= **全量重发 attrs**（漏字段即丢字段）；旧 provenance 被新提案 refs 整体顶替（历史仍在 proposals 表）；**单 run 同实体两提案 = 后者整吞前者**（按 id 序 merge），prompt 须先在 run 内合并再出提案。
-- **errata 操作契约（r1.5 评审 S4/M4 钉，r1.7 勘误预检方法）**：产卡前预检 = **`read_doc("index/errata/<预测stem>.md")`**（stem=refs[0] 文件名，agent 自预测，精确路径探测）——**禁用 search_docs 查该目录**（机器区 FTS 盲区，恒查空）。同 stem 第二张卡 → 「slot occupied」failed（`executor.py:409-415`）——翻案路径=人工删旧卡再 re-adopt；**`source_refs[0]` 承重**：errata 的 stem=`refs[0]` 的文件名（`executor.py:384`）、summary 的 refs[0] 必须是存活 vault 路径（`executor.py:294-296`）——**abort_log 章恒非首位**（见 §5 防重①）。配套防御（附卡 B）：executor errata stem 含非法文件名字符 → `_MergeFailed` park（堵 `abort_log:123` 冒号名 → OSError → adopted 毒环永久重报错，评审 M4）。双摘录（entities.md 段摘录 + 用户笔记摘录）**可构造**：excerpts 的 path 不验存在性（`propose.py:179-185`）。
-- **DELETE 承接形态（r1.4 用户裁）**：**errata 复用**——废弃/矛盾判定出 errata 型提案（`## 矛盾` 卡，天然人审轨），物理删除段落的缺口保留挂账不阻塞（entities.md 的 upsert 只覆盖不移除，errata 非删除——矛盾卡在案即语义在案）。
+- **操作映射（r1.8 终值，替换旧 entity_index/errata 映射）**：增/改/删 **全部出 `summary` 型提案**——payload 携带条目级精确差异：目标文件（`个人记忆.md` 或其链接详情笔记）/ 分区 / 原文（改、删必填）/ 新文（增、改必填）/ 理由 / 记忆日期。人审轨 awaiting_review；**落地 = 人 adopt 后亲手改目标文件**（无 executor 自动 merge——个人记忆是手编文件，人就是执行器，零开发）。NONE 不出提案。
+- **DELETE 语义（r1.8 勘误，撤销 r1.4「errata 复用」——该裁定建立在锚错库的前提上）**：删某条 bullet = summary 提案写明「删除 §分区某条 + 理由」，人审后手删；errata 回归**文档间矛盾卡**本职（proofreader 等角色的域），本流水线不提。
+- **敏感红线（继承 `个人记忆.md` 文首自我约束，r1.8）**：健康/财务/证件/密码/私密关系等高敏感归因候选 → **降 NONE，报告标「敏感未入」**——敏感内容不入 vault（LAN 同步面）。终极保护=人审闸门（红线 4：prompt 只是意识义务，不得写成保护机制）。
+- **本流水线纯人审轨（r1.8 收窄，取代 r1.4「双轨保持」适用面）**：verbs 终值 **`[summary]`**。entity_index/relatedness auto 轨及其免鉴权挂账与本流水线无关（系统事实保留在案，consolidator 等角色仍用）。
+- **refs 承重仍适用**：summary 的 `refs[0]` 必须是**存活的 vault 路径**（`executor.py:294-296`；取归因证据所在的用户笔记），**`abort_log:{id}` 章恒非首位**（防重①同此）。
+- **历史契约归档（r1.8 划界，不再约束本流水线）**：S8「改=全量重发 attrs」与 errata 操作契约（槽位预检/双摘录/M4b executor 防御）为 entity_index/errata 通用契约，其他角色仍受用；已实施的 executor 防御保留不回滚。
 
 ## 4. ④ 召回：散落消费 → 融合消费（r1.3 命题定义，方案另立）
 
@@ -47,13 +48,12 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 ## 5. 实施卡拆法（建议）
 
 1. **卡 A（P1）消费层**：准入门 + 前后窗扩写（含 blob 行形状契约 ①-④）+ 注入字节硬帽与降级顺序（r1.5 M6）+ 免注入路径钉；顺带修 `rows[:MAX_SIGNALS]` 截断方向——现按 session_id,id 截**丢最新信号**（`chat_abort_records.recent` + `interrupts.py:92`，评审 S6），改为保最新。回归=既有 interrupt 测试家族 + 新钉（无下文不注入 / 连发下文全取 / 框架行跳过 / 超帽截断 / 注入文本零分类词）。
-2. **卡 B（P1）归因+沉淀闭环**：abort-analyzer prompt 重写（四操作 taxonomy + entities.md 对齐纪律 + errata=DELETE 语义 + S8 全量重发 + S4 产卡前查 errata 目录 + 报告分层）。**终值定稿（r1.5 评审 M1/M2 修正，替换旧「读×5+propose / verbs 扩 entity_index」错误措辞）**：
-   - `verbs: [summary, entity_index, errata]`——M1 实锤：verbs 真门控（`propose.py:213` 拒绝），漏 errata 则 DELETE 型 100% 被拒结构死锁；**relatedness 明确不进 verbs**（§2 只作读面对照），免模型困惑。
-   - 白名单终值 = **读×6 + propose**：`[read_doc, search_docs, list_files, get_related_docs, recent_changes, list_proposals, propose]`——M2：防重③ 要 `list_proposals` 对账而旧「即终值」白名单没有它，spec 自斥已修。注意 scan 按 id ASC 只回**最早 20 条**（`list_proposals.py:69`），prompt 用 status/type 过滤参数缩小范围（评审 S5）。
-   - 附 executor 小防御（M4b）：errata stem 非法字符 → `_MergeFailed` park（毒环封堵，与章定序同面，不入卡 A）。
-   - r1「人审轨门控」选型**随双轨保持撤销**，零门控开发。
-   - **防重三件套（r1.1 补，r1.5 评审 M4/M5/S2 修正）**：① abort 源提案 `source_refs` 必含 `abort_log:{id}` 章，且**章恒非首位、refs[0] 恒为真实 vault 路径**（summary=所指笔记；errata=主矛盾面——stem/存活校验承重位，M4）；② reminder 渲染标注「已出提案#N/已拒」改为 **`proposals.scan` + Python 过滤**（`_row_to_record` 已把 source_refs JSON 解析回 list，`proposals.py:120`；actor=abort-analyzer）——**旧 `LIKE 'abort_log:%'` 字面恒假**（列存 JSON 数组文本以 `[` 开头，M5 静默失效已修）；零 SQL 天然满足「SQL 不出 db 层」。标注显示：failed 态显示「已出提案#N（落地失败: reason）」；auto 轨（entity_index）恒无拒态，prompt 方法论不得教「被拒即收手」误伤 auto 轨（S2）；③ prompt 对账纪律：产出前 `list_proposals` 核对积压（回读节 `readback.py:56` 只有计数摘要+rejected top N，实体级明细归工具查询，consolidator.md:41 先例）。回读节随 propose 上白名单自动激活，零开发。
-3. **卡 C（P2→已并入卡 B）**：DELETE=errata 复用（r1.4 裁），不再有独立盘点卡——卡 B 的 prompt 方法论含「废弃/矛盾→errata 卡写法」即可；物理删除面挂账。
+2. **卡 B（P1）归因+沉淀闭环（r1.8 重写）**：abort-analyzer prompt 重写（四操作 taxonomy 全 summary 型差异语义 + `个人记忆.md` 锚定（长期记忆层+[[链接]]详情层，语料边界=个人记忆相关 md）+ 条目规范即写入纪律 + 敏感降 NONE + 报告分层）。**终值定稿（r1.8 收窄，替换 r1.5 的三值 verbs/errata=DELETE/S8 措辞）**：
+   - `verbs: [summary]`——四操作全 summary 型（条目级差异由 payload 承载，提案类型不再区分操作类别）；entity_index/errata/relatedness 均不进本角色 verbs。
+   - 白名单终值 = **读×6 + propose**：`[read_doc, search_docs, list_files, get_related_docs, recent_changes, list_proposals, propose]`（M2 保留；scan 只回最早 20 条 id ASC，prompt 用过滤参数收窄，S5 保留）。
+   - executor M4b 防御保留不回滚（系统级卫生，其他角色受益）。
+   - **防重三件套（r1.8 措辞适配，机制不变）**：① abort 源提案 `source_refs` 必含 `abort_log:{id}` 章，**章恒非首位、refs[0]=归因证据所在的存活用户笔记**；② 标注查询 = `proposals.scan` + Python 过滤（source_refs JSON list 含 `abort_log:{id}` ∧ actor=abort-analyzer；`proposals.py:120`；failed 态显示落地失败原因——**r1.8 后 summary 全人审轨，rejected/failed 语义统一，S2 的 auto 轨豁免条款不再适用本角色**）；③ 产出前 `list_proposals` 按 type=summary/status 过滤对账（consolidator.md:41 先例）。回读节随 propose 自动激活。
+3. **卡 C（已废除，r1.8）**：「DELETE=errata 复用」裁定随锚库勘误撤销；删除差异由 summary 提案天然承载，无独立卡。
 4. **启用**：config.yaml `background_agents:` 取消注释 abort-analyzer 条目（example :193-207）——卡 A/B 落地后；`budget_max_proposals` **r1.5 定性修正（评审 M3）**：该键**全仓只有配置解析、无任何执行点**（执行的只有 `budget_runs_per_day`）——它的真身是 **prompt 义务值**（consolidator.md:35「单次运行提案 ≤5 条」先例同构），裁 5 写进 prompt 方法论，不建机制（与「零新机制」总则一致）；「拒多自然会松」仅适用人审轨（summary/errata），auto 轨恒无拒态。
 
 ## 6. 挂起与备案
