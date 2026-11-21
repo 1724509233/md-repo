@@ -13,7 +13,7 @@ from .services import ledger
 from .core import events
 from .api import create_app
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
-from .bgagent.scheduler import BgSupervisor
+from .bgagent.scheduler import BgSupervisor, agent_caps
 from .config import load_background_agents, load_notifications, load_server_config
 from .config.core import lan_gate_check
 from .services.egress import log_model_endpoints
@@ -132,17 +132,8 @@ async def build_runtime(vault_dir: Path, conn, ledger_conn, bg_agents: list,
 
 
 def _agent_caps(agents: list) -> dict[str, dict]:
-    """Per-alias config-derived caps for the console status endpoint, keyed
-    by alias: armed_target = trigger.arm_count (None when the agent has no
-    trigger block), runs_cap = budget_runs_per_day. create_app stays
-    config-agnostic; the wiring hands it the flat values."""
-    return {
-        a.alias: {
-            "armed_target": a.trigger["arm_count"] if a.trigger is not None else None,
-            "runs_cap": a.budget_runs_per_day,
-        }
-        for a in agents
-    }
+    """单源委托 scheduler.agent_caps（防双源漂移，spec 2026-11-22 §5.4）。"""
+    return agent_caps(agents)
 
 
 def main(argv: list[str] | None = None) -> None:

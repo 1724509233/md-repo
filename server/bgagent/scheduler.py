@@ -650,6 +650,24 @@ class BgSupervisor:
 # ── entry point (test-compat facade) ─────────────────────────────────────
 
 
+def agent_caps(agents: list) -> dict[str, dict]:
+    """Per-alias config-derived caps for the console status endpoint, keyed
+    by alias: armed_target = trigger.arm_count (None when the agent has no
+    trigger block), runs_cap = budget_runs_per_day. create_app stays
+    config-agnostic; the wiring hands it the flat values.
+
+    Single source (main._agent_caps delegates here): the settings route
+    re-injects ``ctx.bg_targets`` after a successful hot-apply with the
+    SAME function it used at startup (spec 2026-11-22 §5.4 归因分层)."""
+    return {
+        a.alias: {
+            "armed_target": a.trigger["arm_count"] if a.trigger is not None else None,
+            "runs_cap": a.budget_runs_per_day,
+        }
+        for a in agents
+    }
+
+
 def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path,
                             hooks: list[NotificationHook] | None = None,
                             run_fn: Callable | None = None,
