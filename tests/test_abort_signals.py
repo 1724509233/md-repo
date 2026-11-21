@@ -999,9 +999,10 @@ def test_config_example_abort_analyzer_loads_through_schema(tmp_path):
     # 白名单终值（spec r1.5 M2）：读×6 + propose（list_proposals = 防重③对账）
     assert "propose" in entry["tools"] and "write_doc" not in entry["tools"]
     assert "list_proposals" in entry["tools"]
-    # verbs 终值（spec r1.5 M1）：summary + entity_index + errata；
-    # relatedness 明确不进 verbs（仅作读面对照）
-    assert entry["verbs"] == ["summary", "entity_index", "errata"]
+    # verbs 终值（spec r1.8 M1 收窄）：四操作全 summary 型（条目级差异由
+    # payload 承载，落地=人 adopt 后手改 个人记忆.md）；
+    # entity_index/errata/relatedness 均不进 verbs
+    assert entry["verbs"] == ["summary"]
     assert "relatedness" not in entry["verbs"]
 
     # the repo prompt actually ships
@@ -1102,11 +1103,13 @@ def test_abort_analyzer_verb_gate(vault_dir, ledger_conn):
 
 def test_abort_analyzer_prompt_static_audit():
     """卡 B 静态审计钉（仿 test_web_ui_audit 家族关键词断言，挑三条最承重
-    义务）：S8「改=全量重发 attrs」/ source_refs 定序铁律（refs[0] 恒真实
-    路径、abort_log 章非首位）/ 单次 run 提案 ≤5 条（budget 义务值）。"""
+    义务，r1.8 措辞适配）：个人记忆锚定义务（read_doc 对齐 个人记忆.md +
+    条目规范即写入纪律）/ source_refs 定序铁律（refs[0] 恒归因证据所在存活
+    用户笔记路径、abort_log 章非首位）/ 单次 run 提案 ≤5 条（budget 义务值）。"""
     src = (Path(__file__).resolve().parents[1] / "server" / "prompts"
            / "abort-analyzer.md").read_text(encoding="utf-8")
-    assert "全量重发" in src                       # S8：upsert 整段替换
-    assert "恒为真实 vault 路径" in src            # refs[0] 承重位
+    assert "个人记忆.md" in src                     # r1.8：锚定库勘误（手编元文件）
+    assert "条目规范" in src                         # 条目规范即写入纪律（拿来就能贴）
+    assert "存活用户笔记路径" in src                 # refs[0] 承重位（落地存活校验）
     assert "非首位" in src                          # abort_log 章定序
     assert "≤5" in src                              # 预算义务值（无机制）
