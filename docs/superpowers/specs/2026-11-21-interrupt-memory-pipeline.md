@@ -20,6 +20,7 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 
 - **分类法**：对每条注入的中断记录，agent 判定四类记忆操作之一；NONE 不出提案、只进报告计数。
 - **实体锚定（r1 用户裁）**：实体提取参照 vault 现有实体索引 `index/entities.md`（机器区 `## entity` 段）——agent 读它做去重/对齐，新增不重名、改动指向既有 entity 名。读面走 bgagent 工具白名单既有读工具，不新开读径。
+- **个人记忆读面契约（r1.2 盘点，`executor.py` handler 实况）**：可读投影 = `index/entities.md`（entity_index replace-upsert，attrs+source 行）、`index/summaries/`（summary cache/report 双形态）、`index/errata/`（矛盾卡，appenditive 只读）——皆 FTS 索引、`read_doc`/`search_docs` 直达，归因层对照「改/矛盾」时 errata 卡是现成可见面。**例外：relatedness 零文件落**（ledger.db 表状态，FTS 不可见）——归因要核对已有边须 `get_related_docs` 上白名单（per-doc 查询，全局边账仍归回读节/人工面；是否上=卡 B 待拍项）。`reminder` 无投影。此盘点同时二次确认 §3 DELETE 缺口：entities.md 段落 upsert 只能覆盖不能移除，errata 非删除。
 - **实体提取目标口径**：只提取**可沉淀的可复用对象**（偏好/术语/路径/人物/项目），一次性任务主题留在报告不进实体操作。
 - **纪律沿用通道二 §4**：ts/phase/tool_name 是行为事实；join 出的 reasoning 是**模型宣称非证据**；标签随注入文本走，报告不得洗混。
 - **模型档**：本地档建议维持（reminder 含思考全文，云端=完整思考出域，红线 7 知情决策）；egress 合成 `via='reminder'` 台账行机制已落地，照用。
@@ -48,4 +49,4 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 - 通道二挂起项照旧：prompt_preview 存否、归因窗口宽度按真实中断样本裁剪（观察期后）。
 - 跨会话续写：反例样本出现再议（§1）。
 - 召回层：待定，另立再议。
-- N=3 前窗、条数窗、进程形态三处标「待终审」——本草案的未决点即此三条，其余四点为 r1 已裁。
+- 未决点清单（r1.2 后）：N=3 前窗、条数窗、进程形态（三处待终审）+ 卡 B 两项选型（人审轨门控机制、`get_related_docs` 是否上白名单）+ 卡 C 的 DELETE 承接形态。其余为 r1/r1.1 已裁。
