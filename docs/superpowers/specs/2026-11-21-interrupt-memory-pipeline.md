@@ -1,6 +1,6 @@
 # 记忆流水线 spec（中断→归因→沉淀→召回）
 
-日期 2026-11-21 ｜ 状态：**r1.5（oracle 送审 GO-with-fixes 全采纳：M1-M7 必改已织入；S 系列除 S1 外已织入，S1=挂载门待拍 §6）** ｜ 法源：通道二 spec（`2026-11-20-stop-signals-reasoning-capture.md`）§1「终态管道」预留位——本 spec 即其「另立」的记忆系统 spec；讨论口径：2026-11-21 用户四层提案 + 澄清轮 ｜ 采集底座：`chat_abort_log`（ledger.db，只读消费，**不加埋点不加列**，通道二铁律不破）。
+日期 2026-11-21 ｜ 状态：**r1.6（送审 M/S 全收 + S1 用户裁硬编码角色门；全部决策点已清，可派单）** ｜ 法源：通道二 spec（`2026-11-20-stop-signals-reasoning-capture.md`）§1「终态管道」预留位——本 spec 即其「另立」的记忆系统 spec；讨论口径：2026-11-21 用户四层提案 + 澄清轮 ｜ 采集底座：`chat_abort_log`（ledger.db，只读消费，**不加埋点不加列**，通道二铁律不破）。
 
 ## 0. 定位与总则
 
@@ -62,6 +62,6 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 - 跨会话续写：反例样本出现再议（§1）。
 - ④层：命题已定义（r1.3，§4），方案另立 spec；前置=隐私分区落地 + 注入台账面扩展（红线清偿顺序在案）。
 - 物理删除面（entities.md 段落移除）挂账不阻塞（§3 DELETE 条目）。
-- **S1 挂载门（待拍，卡 A 开工前）**：interrupt reminder 现挂**每个** bgagent（`runner.py:410-427` 无 alias 门控，通道二「挂点全局无特判」旧裁）——记忆流水线令 payload 膨胀数倍，consolidator 等角色每次 run 白烧 token 并产 egress 台账行。选项：(a) 保持全局（守旧裁，接受成本，观察期数据说话）；(b) per-agent config 标志 opt-in（破「零新配置键」但不算 alias 特判，声明式）——我倾向 (b) 门控到 abort-analyzer 一家，待拍。
+- **S1 挂载门（r1.6 用户已裁，覆盖 S1 待拍旧文）**：**硬编码角色门，不进配置**——runner 内置常量集合（形如 `_INTERRUPT_ROLES = frozenset({"abort-analyzer"})`），仅内置流水线角色挂 `InterruptSignalsSystemReminder`；consolidator/narrator 等停挂（不再白烧 token/产 reminder egress 行）。**通道二「挂点全局无 alias 特判」旧裁就此废止**（payload 膨胀后失效），法源=本条用户裁定；「无锚点信号」渲染分支随 S7 废止一并清理。
 - S3：entity_index 无 relatedness 式 pair_ignored 机械过滤器（人删段=人不要无硬约束）——挂账，7 天窗内靠防重②标注兜。
-- 未决点清单（r1.5 后仅剩）：**S1 挂载门** + 观察期两项（prompt_preview、窗口宽度）。其余全部已裁——条数·轮窗（user 全文+assistant 截 500/行+工具结果体不注入）、单进程、改名、双轨保持、DELETE=errata 复用、verbs 三值终值、白名单 读×6+propose、budget 义务值 5、注入字节硬帽。
+- 未决点清单（r1.6 后）：**全部决策点已清**，可派单实施。仅剩观察期两项（prompt_preview、归因窗口宽度）+ 长期挂账（物理删除面、S3、④层融合消费）。已裁终值速查：条数·轮窗（user 全文+assistant 截 500/行+工具结果体不注入）、单进程、改名 abort-analyzer、双轨保持、DELETE=errata 复用、verbs=[summary,entity_index,errata]、白名单 读×6+propose、budget 义务值 5（进 prompt 不进机制）、注入字节硬帽 ~24KB+降级顺序、S1 硬编码角色门。
