@@ -4,6 +4,16 @@ Cron: one asyncio task per enabled LLM agent. On each tick: non-blocking
 lock acquire — if the previous run is still going, log and skip (no
 queueing), then re-anchor from "now" (no catch-up bursts).
 
+Hot-reload contract (spec 2026-11-22 §5.4, load-bearing): config changes
+(``apply()``) are SYNCHRONOUS and run on the SAME event loop as the agent
+loops. The loop-top segment — ``reload.clear()`` → read cfg/retired/live
+aliases → enter ``wait_for(reload.wait(), delay)`` — contains ZERO await
+points in between, so an ``apply()`` can never interleave inside it: an
+update ``set`` before the ``clear`` is always read by the current cycle,
+one that lands during the sleep wakes the next cycle (re-anchor on the new
+cron). Break either half (clear after read, or an await inside the segment)
+and the cron loop can busy-spin or read a torn config.
+
 Memory-runtime v1 additions (trigger agents + executor role):
 
 - **Armed check** (event-wake (``change`` event), with the 30-min timer demoted to backstop — both paths run the same scan; on top of the cron): counts change events
@@ -27,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import logging
 import time
 from datetime import datetime
@@ -56,6 +67,47 @@ def _next_fire(cron: str, now: datetime | None = None) -> datetime:
     """Next cron trigger after ``now`` (local time, naive)."""
     now = now or datetime.now()
     return croniter(cron, now).get_next(datetime)
+
+
+# ── config slot (hot-reload surface, spec 2026-11-22 §5.4) ────────────────
+
+
+class AgentSlot:
+    """Per-agent mutable config slot. The loops re-read ``cfg`` at every
+    loop top, so a config swap takes effect on the NEXT beat — a run in
+    flight keeps the cfg it captured at loop top. ``retired`` is checked at
+    loop top (an in-flight tick finishes first, then the loop returns).
+    ``reload`` wakes the cron sleep for a re-anchor only (never an early
+    run); the armed loop does not consume it (review S1)."""
+
+    __slots__ = ("cfg", "retired", "reload")
+
+    def __init__(self, cfg: BackgroundAgentConfig, *, retired: bool = False) -> None:
+        self.cfg = cfg
+        self.retired = retired
+        self.reload = asyncio.Event()
+
+
+class _FrozenAliasSet:
+    """过渡期（Task 1）duck-typed 最小 supervisor：冻结别名集。Task 2 换
+    BgSupervisor（活别名集，apply 原地增删）。循环每圈经 current_aliases()
+    现取——闭包别名集已被废除。"""
+
+    def __init__(self, aliases) -> None:
+        self._aliases = set(aliases)
+
+    def current_aliases(self) -> set[str]:
+        return set(self._aliases)
+
+
+def _legacy_loop_args(first, second, third, fourth, fifth, sixth, seventh):
+    """过渡期兼容（Task 1，Task 2 接管即删）：旧位置参数形态
+    ``(cfg, vault, lock, hooks, run_fn, conn, all_aliases)`` 的既有直调
+    （test_trigger）归一为 ``(slot, sup, vault, lock, hooks, run_fn, conn)``。"""
+    if not isinstance(first, BackgroundAgentConfig):
+        return None
+    return (AgentSlot(first), _FrozenAliasSet(seventh),
+            second, third, fourth, fifth, sixth)
 
 
 # ── policy / idle floor ───────────────────────────────────────────────────
@@ -159,17 +211,33 @@ async def _handle_tick(cfg: BackgroundAgentConfig, vault_dir: Path,
             trigger_db.record_run(conn, cfg.alias)
 
 
-async def _agent_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
+async def _agent_loop(slot: AgentSlot, sup, vault: Path,
                       lock: asyncio.Lock, hooks: list[NotificationHook],
-                      run_fn: Callable, conn=None,
-                      all_aliases: set[str] | None = None) -> None:
-    alias = cfg.alias
+                      run_fn: Callable, conn=None) -> None:
+    """Cron loop over an AgentSlot. 圈首时序钉死（spec §5.4 评审 M2，防忙环）：
+    ``reload.clear()`` → 读 cfg/retired/别名集 → 进 ``wait_for``——此段零 await
+    （与同步 apply 同事件循环，无交错；模块头注承重契约）。TimeoutError = 正常
+    到点 → tick；reload 置位 = 回圈顶按新 cron 重锚（不提前跑，S1）；retired →
+    圈顶即退（进行中的 tick 已结束后才走到圈顶）。"""
+    legacy = _legacy_loop_args(slot, sup, vault, lock, hooks, run_fn, conn)
+    if legacy is not None:  # 过渡期兼容（Task 1）：旧 cfg 位置参数直调
+        slot, sup, vault, lock, hooks, run_fn, conn = legacy
     while True:
+        slot.reload.clear()
+        cfg = slot.cfg                    # 圈首现读（spawn 闭包已废除）
+        if slot.retired:
+            return
         fire = _next_fire(cfg.cron)
         delay = (fire - datetime.now()).total_seconds()
-        logger.info("[bg:%s] next run at %s (%.0fs)", alias, fire, delay)
-        await asyncio.sleep(max(delay, 0))
-        await _handle_tick(cfg, vault_dir, lock, hooks, run_fn, conn, all_aliases)
+        logger.info("[bg:%s] next run at %s (%.0fs)", cfg.alias, fire, delay)
+        try:
+            await asyncio.wait_for(slot.reload.wait(), max(delay, 0))
+        except asyncio.TimeoutError:
+            pass                          # 正常到点 → tick
+        else:
+            continue                      # reload 唤醒：仅重锚，不提前跑
+        await _handle_tick(cfg, vault, lock, hooks, run_fn, conn,
+                           sup.current_aliases())
         # loop top re-anchors from now — skipped/finished ticks never catch up
 
 
@@ -246,18 +314,28 @@ async def _armed_check(cfg: BackgroundAgentConfig, vault_dir: Path,
         trigger_db.record_run(conn, cfg.alias)
 
 
-async def _armed_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
+async def _armed_loop(slot: AgentSlot, sup, vault: Path,
                       lock: asyncio.Lock, hooks: list[NotificationHook],
-                      run_fn: Callable, conn, all_aliases: set[str],
+                      run_fn: Callable, conn,
                       interval_s: float = ARMED_CHECK_INTERVAL_S) -> None:
     """Event-wake armed check: a ``change`` event or the ``interval_s``
     backstop wakes the SAME authoritative scan (_armed_check) — lost-wake
     immune because both paths converge on it. No bus (tests / degraded) →
-    plain sleep loop, exactly the old behavior."""
-    alias = cfg.alias
+    plain sleep loop, exactly the old behavior.
+
+    S1（spec 2026-11-22 评审砍点）：armed 环不接 reload——圈首只现读
+    ``slot.cfg``（trigger 参数变更最晚下一拍生效），不引入 wake_wait/Event
+    双路合并；retired 同样圈顶退出。"""
+    legacy = _legacy_loop_args(slot, sup, vault, lock, hooks, run_fn, conn)
+    if legacy is not None:  # 过渡期兼容（Task 1）：旧 cfg 位置参数直调
+        slot, sup, vault, lock, hooks, run_fn, conn = legacy
     bus = events.get_bus()
     queue = bus.subscribe("change") if bus is not None else None
     while True:
+        cfg = slot.cfg                    # 圈首现读（不接 reload，S1）
+        if slot.retired:
+            return
+        alias = cfg.alias
         if queue is not None:
             await events.wake_wait(queue, interval_s)
             while True:  # drain: payloads are wake hints only (scan is authority)
@@ -268,7 +346,8 @@ async def _armed_loop(cfg: BackgroundAgentConfig, vault_dir: Path,
         else:
             await asyncio.sleep(interval_s)
         try:
-            await _armed_check(cfg, vault_dir, lock, hooks, run_fn, conn, all_aliases)
+            await _armed_check(cfg, vault, lock, hooks, run_fn, conn,
+                               sup.current_aliases())
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -395,9 +474,19 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
     hooks = hooks or []
     vault = Path(vault_dir).resolve()
     all_aliases = {a.alias for a in agents}
+    sup = _FrozenAliasSet(all_aliases)  # Task 1 过渡（Task 2 换真 supervisor）
     aliases = []
     tasks: list[asyncio.Task] = []
     executor_started = False
+
+    # 过渡期兼容（Task 1，Task 2 接管即删）：测试可把 _agent_loop monkeypatch
+    # 成旧 cfg 位置参数签名（test_executor_privacy 的 fake 只取 run_fn），且
+    # 两者同 arity——位置绑定区分不了，按首参名（cfg=旧 / slot=新）择形调用。
+    try:
+        _loop_first_param = next(iter(inspect.signature(_agent_loop).parameters), "")
+    except (TypeError, ValueError):
+        _loop_first_param = "slot"
+    _legacy_loop = _loop_first_param == "cfg"
 
     for cfg in agents:
         if not cfg.enabled:
@@ -405,13 +494,18 @@ def start_background_agents(agents: list[BackgroundAgentConfig], vault_dir: Path
         if cfg.is_executor:
             continue  # deterministic framework role, no LLM cron task
         aliases.append(cfg.alias)
+        slot = AgentSlot(cfg)
         lock = asyncio.Lock()
-        tasks.append(asyncio.create_task(
-            _agent_loop(cfg, vault, lock, hooks, run_fn, db_conn, all_aliases),
-            name=f"bgagent-{cfg.alias}"))
+        if _legacy_loop:
+            cron_coro = _agent_loop(cfg, vault, lock, hooks, run_fn,
+                                    db_conn, all_aliases)
+        else:
+            cron_coro = _agent_loop(slot, sup, vault, lock, hooks, run_fn,
+                                    db_conn)
+        tasks.append(asyncio.create_task(cron_coro, name=f"bgagent-{cfg.alias}"))
         if cfg.trigger is not None and db_conn is not None:
             tasks.append(asyncio.create_task(
-                _armed_loop(cfg, vault, lock, hooks, run_fn, db_conn, all_aliases),
+                _armed_loop(slot, sup, vault, lock, hooks, run_fn, db_conn),
                 name=f"bgagent-{cfg.alias}-armed"))
 
     # Executor conn: the proposals/proposal_transitions tables live in
