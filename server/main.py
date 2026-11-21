@@ -6,6 +6,7 @@ import logging
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
+from types import SimpleNamespace
 
 import uvicorn
 
@@ -16,6 +17,7 @@ from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import BgSupervisor, agent_caps
 from .config import load_background_agents, load_notifications, load_server_config
 from .config.core import lan_gate_check
+from .routes import SettingsDeps
 from .services.egress import log_model_endpoints
 from .core.privacy import PrivacyConfig
 from .vault.db.migrate_ledger import migrate_ledger, promote_sessions
@@ -230,9 +232,13 @@ def main(argv: list[str] | None = None) -> None:
     # 唯一 PrivacyConfig 实例（§2.2 活视图唯一性）：web 标注面（create_app
     # → /api/docs 标注、保存警告）与 scheduler/executor/runner 参数链共享。
     privacy = PrivacyConfig(config_path)
+    # 设置写面接线（spec 2026-11-22 §4.3）：config_path 用 main 现值（仅
+    # Path 化、不 resolve——与 doc_io.revision_of 的读法同语义）。runtime
+    # 槽是可变字段，build_runtime 完成后在 _run 里填充（之前路由 503 兜底）。
+    settings_deps = SettingsDeps(config_path=Path(config_path))
     app = create_app(vault_dir=vault_dir, db_conn=conn, ledger_conn=ledger_conn,
                      ai_config=config.ai, bg_targets=_agent_caps(bg_agents),
-                     privacy=privacy)
+                     privacy=privacy, settings=settings_deps)
 
     config_obj = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=config.log.level.lower()
@@ -246,6 +252,14 @@ def main(argv: list[str] | None = None) -> None:
         rt = await build_runtime(vault_dir, conn, ledger_conn, bg_agents,
                                  notifications_cfg,
                                  privacy=privacy)
+        # 热生效句柄槽（spec 2026-11-22 §4.3）：runtime 装配成功后、serve()
+        # 之前填充（这之前若有请求触达 /api/settings 由 503 兜底）。
+        # root_logger / file_handler / privacy 是 main() 局部（闭包引用）；
+        # duck-typed 属性集见 SettingsDeps 头注。
+        settings_deps.runtime = SimpleNamespace(
+            supervisor=rt.supervisor, notif_hook=rt.notif_hook,
+            root_logger=root_logger, file_handler=file_handler,
+            privacy=privacy)
         try:
             await server.serve()
         finally:

@@ -26,7 +26,7 @@ logger = logging.getLogger("md-vault.api")
 
 
 def _evict_stale_agents(
-    cache: dict[str, Agent],
+    cache: dict[str, tuple[Agent, int]],
     last_active: dict[str, float],
     locks: dict[str, asyncio.Lock],
     ttl: float = 1800,
@@ -38,6 +38,9 @@ def _evict_stale_agents(
     evicts session messages, not the cached Agent objects, so a long-lived
     server accumulated one Agent per historical session. Called from
     agent_chat next to that cleanup, with the cache's own last_active map.
+
+    Cache values are ``(Agent, gen)`` pairs (spec 2026-11-22 §5.1 generation
+    stamp) — the pending-confirm guard below reads the Agent half.
 
     A session whose per-session lock is currently held (stream in flight)
     is never evicted — the same rule SessionManager.cleanup applies to
@@ -57,7 +60,8 @@ def _evict_stale_agents(
         # session) — evicting that agent would 404 the user's later
         # /api/agent/confirm and force a re-ask. Same protection class as
         # the in-flight lock check.
-        if getattr(cache.get(sid), "pending_confirms", None):
+        agent, _gen = cache[sid]
+        if getattr(agent, "pending_confirms", None):
             continue
         if now - last_active.get(sid, 0.0) <= ttl:
             continue
@@ -130,27 +134,53 @@ def register(app, ctx) -> None:
     session_mgr = SessionManager(ctx.ledger_conn, ctx.vault_dir)
 
     # Agent instances per session (created on first chat, reused afterwards).
-    agent_cache: dict[str, Agent] = {}
+    # 值 = (Agent, 构造时刻的 settings 代际戳)（spec 2026-11-22 §5.1）：
+    # 设置路由保存成功只 ++ctx.settings_gen，失效只在本闭包 _get_agent 读侧
+    # 发生——承重红线 M1：任何代码路径不得从外部清空/pop 本缓存（RunHub 的
+    # persist 回调在持久化时刻经 _get_agent 取本轮 Agent 引用，引用漂移 =
+    # 从 DB 重建缺本轮消息后写回 = 丢对话）。会话 DELETE 的 pop 不在此列：
+    # 会话已死且 busy 409 前置，属既有生命周期面。
+    agent_cache: dict[str, tuple[Agent, int]] = {}
     # Last chat-entry timestamp per cached session — drives the TTL eviction
     # of agent_cache itself (F15b: the cache had no TTL; session_mgr.cleanup()
     # only evicts session messages, so Agents accumulated forever).
     _agent_last_active: dict[str, float] = {}
 
     def _get_agent(session_id: str) -> Agent:
-        agent = agent_cache.get(session_id)
-        if agent is None:
-            messages = session_mgr.get_or_create(session_id)
-            # session_id is stamped here (route layer) so the runtime can thread
-            # it into the ToolContext for recall-ledger attribution (spec §3.3 F3).
-            agent = Agent(_build_agent_spec(ctx), messages=messages,
-                          session_id=session_id)
-            # Backfill the session-level auto_approve switch from the DB so a
-            # TTL-evicted / post-restart rebuild keeps the user's setting (the
-            # Agent is built fresh from the static spec, which defaults False).
-            # db None → no persistence, skip.
-            if ctx.ledger_conn is not None:
-                agent.spec.auto_approve = get_auto_approve(ctx.ledger_conn, session_id)
-            agent_cache[session_id] = agent
+        """代际感知缓存读（spec 2026-11-22 §5.1 分级热生效）。
+
+        命中但条目代际落后于 ctx.settings_gen 且**不忙**（_evict_stale_agents
+        同款守卫：会话锁被持有 / 有 pending_confirms）→ 原位重建，与「TTL
+        驱逐后再派发」的既有 miss 路径逐点等价：messages 仍取
+        session_mgr.get_or_create 的共享 list（会话不断链）、auto_approve
+        从 DB 回灌。忙 → 原样返回旧 entry（进行中的 run 用旧配置跑完，
+        下一次派发再重建）。
+        """
+        entry = agent_cache.get(session_id)
+        if entry is not None:
+            agent, gen = entry
+            if gen == ctx.settings_gen:
+                return agent
+            # 代际落后——忙守卫先判（锁表是 session_mgr 私有一面，只读，
+            # 与 _evict_stale_agents 的调用面同款）。
+            lock = session_mgr._locks.get(session_id)
+            if ((lock is not None and lock.locked())
+                    or getattr(agent, "pending_confirms", None)):
+                return agent
+            # 空闲 + 代际落后：落到下方重建路径——等价 TTL 驱逐后的 miss，
+            # get_or_create 返回的还是那份共享消息 list。
+        messages = session_mgr.get_or_create(session_id)
+        # session_id is stamped here (route layer) so the runtime can thread
+        # it into the ToolContext for recall-ledger attribution (spec §3.3 F3).
+        agent = Agent(_build_agent_spec(ctx), messages=messages,
+                      session_id=session_id)
+        # Backfill the session-level auto_approve switch from the DB so a
+        # TTL-evicted / post-restart rebuild keeps the user's setting (the
+        # Agent is built fresh from the static spec, which defaults False).
+        # db None → no persistence, skip.
+        if ctx.ledger_conn is not None:
+            agent.spec.auto_approve = get_auto_approve(ctx.ledger_conn, session_id)
+        agent_cache[session_id] = (agent, ctx.settings_gen)
         return agent
 
     # ── RunHub（运行脱离连接，spec 2026-11-20 §2）─────────────────────────
@@ -345,9 +375,10 @@ def register(app, ctx) -> None:
         tool_call_id = body.get("id", "")
         approved = bool(body.get("approved", False))
 
-        agent = agent_cache.get(session_id)
-        if agent is None:
+        entry = agent_cache.get(session_id)
+        if entry is None:
             raise HTTPException(status_code=404, detail="session not found")
+        agent = entry[0]
 
         if not agent.confirm(tool_call_id, approved):
             raise HTTPException(status_code=404, detail="no pending confirm for this tool call")
@@ -380,9 +411,9 @@ def register(app, ctx) -> None:
         value = bool(body.get("auto_approve", False))
         if ctx.ledger_conn is not None:
             set_auto_approve(ctx.ledger_conn, session_id, value)
-        agent = agent_cache.get(session_id)
-        if agent is not None:
-            agent.spec.auto_approve = value
+        entry = agent_cache.get(session_id)
+        if entry is not None:
+            entry[0].spec.auto_approve = value
         return {"ok": True, "auto_approve": value}
 
     @app.post("/api/agent/new-session")
