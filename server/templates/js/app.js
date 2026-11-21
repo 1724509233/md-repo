@@ -18,6 +18,7 @@ import { ConflictBanner } from './components/ConflictBanner.js'
 import { MemoryConsole } from './components/MemoryConsole.js'
 import { DocRelated } from './components/DocRelated.js'
 import { MonitorPage } from './components/MonitorPage.js'
+import { SettingsPage } from './components/SettingsPage.js'
 import { ICONS } from './utils/icons.js'
 
 // 初始化 markdown 渲染器
@@ -52,6 +53,7 @@ const state = reactive({
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
+  settingsPage: false,    // 设置页（spec 2026-11-22 §6 整页模式：文档区/监控页/设置页三态互斥；入口监控页页头「设置」钮 + 深链 #settings）
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
@@ -99,6 +101,18 @@ function exitMonitorPage() {
   clearTimeout(monBackT)
   monBackT = setTimeout(() => { state.monitoring = false }, 190)
 }
+// 设置页返回：同款 .18s 溶解节奏（spec 2026-11-22 §6 复用监控页转场）；#settings-wrap 作用域
+// 防误选监控页 .mwrap（两页同族类，querySelector 取首个 = 监控页）。清 hash：#settings 深链
+// 退出即回无哈希路径（applyInitialHash 的对应侧；监控页不碰 hash 的先例不变）
+let stBackT = null
+function exitSettingsPage() {
+  history.replaceState(null, '', location.pathname)
+  const el = document.querySelector('#settings-wrap')
+  if (!el || reducedMotion()) { state.settingsPage = false; return }
+  el.classList.add('mp-out')
+  clearTimeout(stBackT)
+  stBackT = setTimeout(() => { state.settingsPage = false }, 190)
+}
 
 async function loadDocs() {
   const data = await api.getDocs()
@@ -112,8 +126,9 @@ async function loadDocs() {
 const navAttempt = createAttemptBox()
 
 async function openDoc(path, heading, fromLink) {
-  // 监控页深链（如失败报告行）：文档区在监控页下隐藏 → 离开监控页，否则用户看不到打开的结果
+  // 监控页/设置页深链（如失败报告行）：文档区在整页模式下隐藏 → 离开该页，否则用户看不到打开的结果
   if (state.monitoring) exitMonitorPage()
+  if (state.settingsPage) exitSettingsPage()
   // 丢保存守卫（P2 簇⑤，spec §5）：dirty 时先存，存败 → 中止切换（三态原样 +
   // hash 回写当前文档），toast「重试」在 token 未过期时自动续接本次切换（含 heading/fromLink）；
   // 其间任何新 openDoc 都 bump token 作废待发续接（决策核在 docNav.js，node 可直测）
@@ -449,8 +464,9 @@ async function handleToolResult(evt) {
   }
 }
 
-// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 设置页（spec 2026-11-22 §6）
 function applyInitialHash() {
+  if (location.hash === '#settings') { openSettingsPage(); return }
   const h = parseHash(location.hash)
   if (!h) return
   if (h.mode === 'edit') state.previewMode = false
@@ -601,9 +617,26 @@ function onMemoryOpenDoc(path) {
 //     互斥契约：开页 → L0 面板收起；「← 返回文档」→ 面板不自动重开（重入走 rail【记忆】）───
 function openMonitorPage() {
   clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
+  clearTimeout(stBackT)                        // 设置页退场同理（三态互斥：整页只留一页在场）
+  state.settingsPage = false                   // 互斥：设置页收起（不经溶解——整页直接交接）
   const el = document.querySelector('.mwrap')
   if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
   state.monitoring = true
+  state.memoryOpen = false
+  state.memoryDetail = null
+  state.memoryReport = null
+}
+
+// ─── 设置页（spec 2026-11-22 §6 整页模式）：入口 = 监控页页头「设置」钮 / 深链 #settings
+//     （applyInitialHash）。互斥三态照 openMonitorPage 先例：开页 → 监控页 + L0 各态收起；
+//     返回 → 文档区升起、面板不自动重开；转场复用监控页 mp-enter/mp-out 溶解节奏 ───
+function openSettingsPage() {
+  clearTimeout(stBackT)                        // 返回动画窗口内重入：取消挂起的收起
+  const el = document.querySelector('#settings-wrap')
+  if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
+  state.settingsPage = true
+  // 互斥：监控页收起（整页直接交接，不重放退场）；L0 面板收起同 openMonitorPage 契约
+  state.monitoring = false
   state.memoryOpen = false
   state.memoryDetail = null
   state.memoryReport = null
@@ -800,11 +833,14 @@ export function createApp() {
           else if (state.memoryOpen) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null }
           else if (state.aiOpen) toggleAI(false)
           else if (state.monitoring) exitMonitorPage()
+          else if (state.settingsPage) exitSettingsPage()
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
 
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
+        // 设置页入口（深链/控制台外链用；页面内入口 = 监控页页头「设置」钮）
+        window.openSettingsPage = openSettingsPage
 
         // 移动端 点击 overlay 关闭更多菜单 / 通知下拉
         document.addEventListener('click', (e) => {
@@ -941,7 +977,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
-        onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, pollMemory,
+        onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, exitSettingsPage, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession, onSessionActive,
@@ -1072,7 +1108,7 @@ export function createApp() {
                  文档区 = 横向 flex（spec §6.4 候选①）：滚动中栏（680px 列在剩余空间一次性重居中）
                  + 关联侧栏（右侧 280px，关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
                  ≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
-            <div v-show="!state.monitoring" class="doc-enter flex-1 flex overflow-hidden">
+            <div v-show="!state.monitoring && !state.settingsPage" class="doc-enter flex-1 flex overflow-hidden">
               <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
                 <ConflictBanner v-if="state.conflict"
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
@@ -1088,7 +1124,9 @@ export function createApp() {
             </div>
             <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
             <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc"
-              @restored="loadDocs()" />
+              @restored="loadDocs()" @settings="openSettingsPage()" />
+            <!-- 设置页（spec 2026-11-22 §6：整页模式，与文档区/监控页三态互斥；骨架复用监控页类族） -->
+            <SettingsPage v-show="state.settingsPage" @back="exitSettingsPage()" @open-doc="openDoc" />
           </main>
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
@@ -1191,6 +1229,7 @@ export function createApp() {
   app.component('MemoryConsole', MemoryConsole)
   app.component('DocRelated', DocRelated)
   app.component('MonitorPage', MonitorPage)
+  app.component('SettingsPage', SettingsPage)
 
   return app
 }

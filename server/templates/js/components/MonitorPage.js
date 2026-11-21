@@ -69,7 +69,7 @@ const RB_CONFLICT = 'rounded-[7px] border border-[color-mix(in_srgb,var(--st-err
 
 export const MonitorPage = {
   name: 'MonitorPage',
-  emits: ['back', 'open-doc', 'restored'],
+  emits: ['back', 'open-doc', 'restored', 'settings'],
   setup(props, { emit }) {
     const state = inject('state')
     const mwrapRef = ref(null)
@@ -430,6 +430,8 @@ export const MonitorPage = {
             <!-- 单出口：回文档视图；面板不自动重开（重入走 rail【记忆】） -->
             <button class="mp-back" type="button" title="返回文档视图（面板不自动重开，重入走 rail【记忆】）" aria-label="返回文档视图" @click="back">
               <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
+            <!-- 设置页入口（spec 2026-11-22 §6：设置属运维区，单一入口放监控页页头） -->
+            <button class="mp-back ml-2" type="button" title="打开设置页（编辑运行配置）" aria-label="打开设置页" @click="$emit('settings')">设置</button>
             <h1 class="mp-title">记忆运行时 · 后台监控</h1>
             <div class="mp-meta">更新于 {{ updatedAt || '…' }}</div>
           </div>

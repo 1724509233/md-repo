@@ -358,7 +358,33 @@ export const api = {
     const res = await fetch('/api/egress?limit=' + limit)
     if (!res.ok) throw new Error(`egress → ${res.status}`)
     return res.json()
+  },
+
+  // ── 设置页（spec 2026-11-22 §4：GET 掩码回显 + PUT 字段级写回）──
+  // 契约：非 2xx **不抛**——409（revision 冲突）/ 422（校验失败）/ 503（未接线）的 body
+  // 都是页面流程数据（重载按钮 / 页顶告警条文案），返回 {status, data}；仅网络失败 throw。
+
+  /** GET /api/settings — 五段可编辑配置 + _meta（api_key 恒掩码） */
+  async getSettings() {
+    return _settingsFetch('/api/settings', { method: 'GET' })
+  },
+
+  /** PUT /api/settings — {form 字段 + revision}；200 {revision, applied, restart_needed} */
+  async putSettings(body) {
+    return _settingsFetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
   }
+}
+
+/** 设置端点共用 fetch：解析 status + JSON body（非 JSON → null），非 2xx 不抛 */
+async function _settingsFetch(url, init) {
+  const res = await fetch(url, init)
+  let data = null
+  try { data = await res.json() } catch (e) { /* 非 JSON 响应体 → null */ }
+  return { status: res.status, data }
 }
 
 /** 提案 URL：relpath 形如 suggestions/2026-10-21_x.md，逐段编码；suffix 省略 = 记录读取端点 */
