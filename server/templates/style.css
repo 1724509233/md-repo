@@ -1716,3 +1716,58 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (max-width: 479px) { .priv-badge-label { display: none; } } /* 窄屏收纳文案，锁本体常驻（同顶栏图标化口径） */
 /* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
 .eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+
+/* ============ 设置页（spec 2026-11-22 §6 · st- 族）============
+   复用面 = .mwrap/.m-scroll/.mpage 骨架、.mcard/.mc-h 卡族、.zline 零态、.mp-back 小钮、
+   .mp-enter 转场（动效层零新增）。本分节只长出表单面最小件：
+   .st-cols 双列体（≥640 左锚列 sticky / ≤639 折顶部分段钮行）· .st-nav-* 分段导航（mode-btn 激活态先例）
+   · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
+   · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族）· .st-tag(s) 隐私目录标签
+   · .st-banner(.ok/.err/.warn) 保存反馈条 · .st-foot/.st-save 保存行 · .st-footnote 页底说明。 */
+.st-cols { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 18px; align-items: start; }
+.st-nav { position: sticky; top: 4px; display: flex; flex-direction: column; gap: 4px; }
+.st-nav-btn { text-align: left; width: 100%; border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 12px; font-weight: 500; color: var(--ink-soft); transition: background-color .15s ease, color .15s ease; }
+.st-nav-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.st-nav-btn.active { background: var(--brass); color: var(--paper); } /* 激活态黄铜实心（mode-btn 同款规格） */
+.st-body { min-width: 0; }
+.st-fields { display: flex; flex-direction: column; gap: 12px; }
+.st-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.st-lbl { font-size: 11px; font-weight: 600; color: var(--ink); }
+.st-input { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-family: var(--sans); font-size: 12px; padding: 6px 9px; }
+.st-input:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; }
+.st-hint { font-size: 10.5px; color: var(--ink-soft); }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; }
+.st-keyrow { display: flex; align-items: stretch; gap: 6px; }
+.st-keyrow .st-input { flex: 1; }
+.st-keyrow .mp-back { align-self: center; }
+.st-seg { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.st-seg-btn { border: 0; border-radius: 6px; padding: 5px 12px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; font-weight: 500; color: var(--ink-soft); transition: background-color .15s ease, color .15s ease; }
+.st-seg-btn.on { background: var(--surface); color: var(--brass); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent); }
+.st-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.st-chip:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-chip.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.st-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--ink) 3%, transparent); font-family: var(--sans); font-size: 11px; color: var(--ink); }
+.st-tag-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 999px; transition: color .15s ease; }
+.st-tag-x:hover { color: var(--st-error); }
+.st-banner { border-radius: 8px; padding: 9px 12px; font-size: 11.5px; border: 1px solid; margin-bottom: 12px; }
+.st-banner.ok { border-color: color-mix(in srgb, var(--st-ok) 35%, var(--line)); background: color-mix(in srgb, var(--st-ok) 6%, transparent); }
+.st-banner.warn { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-banner.err { border-color: color-mix(in srgb, var(--st-error) 40%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); }
+.st-banner-btn { margin: 0 8px; }
+.st-banner-hint { display: inline; }
+.st-berrs { margin: 4px 0 0 16px; font-size: 10.5px; }
+.st-berrs li { word-break: break-all; overflow-wrap: anywhere; }
+.st-retry { display: flex; justify-content: center; padding-top: 8px; }
+.st-foot { margin-top: 14px; }
+.st-save { border: 0; border-radius: 999px; padding: 8px 22px; background: var(--brass); color: var(--paper); font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer; transition: background-color .15s ease; }
+.st-save:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
+.st-save:disabled { opacity: .55; cursor: default; }
+.st-footnote { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 10.5px; line-height: 1.7; color: var(--ink-soft); }
+@media (max-width: 639px) {
+  /* 窄屏：左锚列折成顶部分段钮行（mode-btn 横排形态）；body 归单列 */
+  .st-cols { grid-template-columns: 1fr; gap: 12px; }
+  .st-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .st-nav-btn { width: auto; padding: 6px 12px; }
+}
