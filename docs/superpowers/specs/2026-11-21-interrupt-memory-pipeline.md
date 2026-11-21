@@ -46,7 +46,7 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 2. **卡 B（P1）归因+沉淀闭环**：abort-analyzer prompt 重写（四操作 taxonomy + entities.md 对齐纪律 + errata=DELETE 语义 + 报告分层）、bgagent 白名单挂 propose（example :212-213 已含 get_related_docs，读×5+propose 即终值）、`verbs` 扩 `entity_index`；r1「人审轨门控」选型**随双轨保持撤销**，零门控开发。
    - **防重三件套（r1.1 补，快照重叠窗的提案幂等问题）**：① interrupt 源提案 `source_refs` 必含 `abort_log:{id}` 盖章（provenance 锚即此职；propose 不验 source_refs 存在性的挂账缺口对本用途无害）；② reminder 渲染查 proposals（`source_refs LIKE 'abort_log:%'` ∧ actor=abort-analyzer）在注入文本上标注「已出提案#N/已拒」——结构性查询非裁决，只装饰不裁窗（通道二「无消费水位线」裁的是报告，不破例）；③ prompt 对账纪律：产出前 `list_proposals` 核对积压（回读节 `readback.py:56` 只有计数摘要+rejected top N，实体级明细归工具查询，consolidator.md:41 先例）。回读节随 propose 上白名单自动激活，零开发。
 3. **卡 C（P2→已并入卡 B）**：DELETE=errata 复用（r1.4 裁），不再有独立盘点卡——卡 B 的 prompt 方法论含「废弃/矛盾→errata 卡写法」即可；物理删除面挂账。
-4. **启用**：config.yaml `background_agents:` 取消注释 abort-analyzer 条目（example :193-207）——卡 A/B 落地后；`budget_max_proposals` 现 3/周，建议放 5（宁紧勿松——上限=单次 run 提案预算闸门，防复盘质量上来后刷屏人审面；拒多自然会松）。
+4. **启用**：config.yaml `background_agents:` 取消注释 abort-analyzer 条目（example :193-207）——卡 A/B 落地后；`budget_max_proposals` **r1.4 裁 5**（原 3——上限=单次 run 提案预算闸门，宁紧勿松，拒多自然会松）。
 
 ## 6. 挂起与备案
 

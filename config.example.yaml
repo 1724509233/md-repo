@@ -208,7 +208,7 @@ background_agents:
 #   max_rounds: 20
 #   timeout_s: 1800
 #   budget_runs_per_day: 1
-#   budget_max_proposals: 3
+#   budget_max_proposals: 5
 #   tools: [read_doc, search_docs, list_files, get_related_docs,
 #           recent_changes, propose]  # 读×5 + propose；不持 write_doc（分界线，ADR-0004）
 #   verbs: [summary]                 # 提示词改进 = summary 型提案
