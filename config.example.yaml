@@ -190,7 +190,7 @@ background_agents:
 #     base_url: "http://localhost:11434/v1"
 #     api_key: ""
 #
-# ── 记忆运行时：中断复盘（interrupt-review，示例，取消注释启用）────────────
+# ── 记忆运行时：中断分析（abort-analyzer，示例，取消注释启用）────────────
 # 通道二消费闭环（spec 2026-11-20-stop-signals §4）：周频读近 7 天取消信号
 # （chat_abort_log，用户取消意图的行为事实）+ sessions blob join（中断轮原文/
 # 思考、停后补发），评审「哪份提示词正被用户的中断压测」；框架仿提案回读把
@@ -198,13 +198,13 @@ background_agents:
 # 零出域台账行）。具体改进 → propose（summary 型，人审闸门）；评审报告 =
 # 运行报告（_write_report_and_prune，30 份留存）。报告纪律：行为事实与
 # 模型宣称（中断轮思考非证据）分开表述。
-# - name: "中断复盘"
-#   alias: interrupt-review
+# - name: "中断分析"
+#   alias: abort-analyzer
 #   enabled: true
 #   cron: "0 4 * * 6"                # 周六 04:00 周频（低频——信号本就稀疏）
 #   target_dir: index                # 写边界 = 机器区（propose 零文件落，此值为名义 scope）
-#   prompt: server/prompts/interrupt-review.md
-#   report_dir: .reports/interrupt-review
+#   prompt: server/prompts/abort-analyzer.md
+#   report_dir: .reports/abort-analyzer
 #   max_rounds: 20
 #   timeout_s: 1800
 #   budget_runs_per_day: 1

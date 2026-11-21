@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 
 ## 4. bgagent 消费闭环
 
-- **新 bgagent `interrupt-review`**（普通 `background_agents:` 条目，取值实施时填）：cron 建议低频（周频）；target_dir 指 vault 评审归档区；`prompt: server/prompts/interrupt-review.md`；**模型建议本地档**——r6 后 reminder 含思考全文，选云端=中断轮完整思考出域（egress 台账兜底，红线 7 知情决策）；工具只给写报告所需白名单。
+- **新 bgagent `abort-analyzer`**（普通 `background_agents:` 条目，取值实施时填）：cron 建议低频（周频）；target_dir 指 vault 评审归档区；`prompt: server/prompts/abort-analyzer.md`；**模型建议本地档**——r6 后 reminder 含思考全文，选云端=中断轮完整思考出域（egress 台账兜底，红线 7 知情决策）；工具只给写报告所需白名单。
 - **数据注入**：仿 `ReadbackSystemReminder` 先例（`runner.py:387`）新增 reminder，读**近 7 天** chat_abort_log + 从 sessions join 每个 stopped run 的下一条 user 消息与 interrupted 行原文——**单库**（sessions 已随升格迁移住 ledger.db），拼成文本注入 system reminder。**快照式报告**（每次读窗口重叠、报告名含日期即可），不做消费水位线。
   - **join 契约（r8 修订：message_id 等值 join）**：`chat_abort_log.message_id == messages[i]["message_id"]` 锚定中断边界行——补丁卡的 chat_run_id 锚被替换，通道一实施重做（见其 spec）；「停后补发」= 锚行之后第一条 `role:"user"` 行（相对位置，身份戳保证不错位）。blob 永不 sort（数组序即因果序）；信号行会话内定序用 `ORDER BY session_id, id`（自增 id = 因果序；ts 仅人读，NTP 并列不参与排序）。
   - **残留边界（备案）**：`message_id` NULL = 无锚行——**空白停止**（空正文进历史是非法 API 形状）或**等锁期取消**（run 未启动），reminder 如实标注「无锚点信号」不猜。
@@ -93,7 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 
 ## 6. 配置面（r7 用户裁：零新增配置键）
 
-**capture 侧零配置**：无开关、无参数段——写点常开、fail-open 即兜底（要停 = revert）。**消费侧零新结构**：interrupt-review 就是一条普通 `background_agents:` 条目（alias/cron/model/prompt/target_dir 全用既有 schema，config.yaml:93-117 先例），具体取值实施时填，不构成 spec 参数。**不加 config.py 任何缺省值**；`ai.confirm_timeout` 既有项不动。
+**capture 侧零配置**：无开关、无参数段——写点常开、fail-open 即兜底（要停 = revert）。**消费侧零新结构**：abort-analyzer 就是一条普通 `background_agents:` 条目（alias/cron/model/prompt/target_dir 全用既有 schema，config.yaml:93-117 先例），具体取值实施时填，不构成 spec 参数。**不加 config.py 任何缺省值**；`ai.confirm_timeout` 既有项不动。
 
 ## 7. 事件表 / 接口
 
@@ -118,7 +118,7 @@ CREATE INDEX IF NOT EXISTS idx_chat_abort_log_ts ON chat_abort_log(ts);
 10. reminder 注入产生 `via='reminder'` egress 台账行（每 run 一行）。
 
 **bgagent**
-11. interrupt-review 条目经既有 bgagent config schema 加载即可运行（零新键断言）；reminder 注入挂点仿 `ReadbackSystemReminder` 先例测试。
+11. abort-analyzer 条目经既有 bgagent config schema 加载即可运行（零新键断言）；reminder 注入挂点仿 `ReadbackSystemReminder` 先例测试。
 12. reminder 注入文本含近期信号 + join 出的停后首条消息；报告写盘走既有 `_write_report_and_prune`。
 13. **反馈契约反转（r8）**：interrupted 行带 message_id → 反馈入口可用（前端 `!msg.streaming && msg.messageId` 守卫放行中断轮——「中断轮可点赞点踩」），recall_feedback 接受 interrupted message_id 入台账；streaming 守卫仍拦住流进行中；**旧「中断轮不配反馈键」测试家族方向翻转**（重做项，见通道一 spec）。
 

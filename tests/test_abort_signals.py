@@ -17,7 +17,7 @@ Capture side (RunHub ``_drive``, two immediate write points):
    (run start + per-dequeue reset).
 Consumption side (bgagent): reminder text carries the signals + the
 sessions-join material (§4), the ``via='reminder'`` synthetic egress row
-(redline 7 / spec 评审 M2), and the config.example.yaml interrupt-review
+(redline 7 / spec 评审 M2), and the config.example.yaml abort-analyzer
 entry loads through the existing schema (zero new keys).
 
 Repo convention: async scenarios via asyncio.run() inside sync tests
@@ -524,7 +524,7 @@ def test_reminder_renders_signals_with_join_material(ledger_conn):
     from server.bgagent.interrupts import InterruptSignalsSystemReminder
 
     _seed_signals(ledger_conn)
-    rem = InterruptSignalsSystemReminder("interrupt-review",
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
                                          ledger_conn=ledger_conn)
     out = rem.render()
     assert out is not None
@@ -553,7 +553,7 @@ def test_reminder_silent_without_signals(ledger_conn):
     render() None → 不注入 → 零 egress 台账行."""
     from server.bgagent.interrupts import InterruptSignalsSystemReminder
 
-    rem = InterruptSignalsSystemReminder("interrupt-review",
+    rem = InterruptSignalsSystemReminder("abort-analyzer",
                                          ledger_conn=ledger_conn)
     assert rem.render() is None
     assert rem.last_bytes == 0 and rem.last_signals == 0
@@ -571,9 +571,9 @@ def _bg_cfg(tmp_path: Path, **kw):
     prompt = tmp_path / "prompt.md"
     prompt.write_text("test interrupt reviewer", encoding="utf-8")
     cfg = BackgroundAgentConfig(
-        name="中断复盘", alias="interrupt-review", enabled=True,
+        name="中断分析", alias="abort-analyzer", enabled=True,
         cron="0 4 * * 6", target_dir=target, prompt=prompt.resolve(),
-        report_dir=(target / ".reports" / "interrupt-review").resolve(),
+        report_dir=(target / ".reports" / "abort-analyzer").resolve(),
         max_rounds=5, timeout_s=10,
         model=ModelConfig(model_id="m", provider="openai",
                           base_url="http://api.example.test/v1"),
@@ -616,8 +616,8 @@ def test_reminder_injection_writes_egress_row_per_run(tmp_path, ledger_conn):
     assert len(rows) == 2, rows  # exactly one per run
     for r in rows:
         assert r["channel"] == "bgagent"
-        assert r["actor"] == "interrupt-review"
-        assert r["run_id"].startswith("interrupt-review-")
+        assert r["actor"] == "abort-analyzer"
+        assert r["run_id"].startswith("abort-analyzer-")
         assert r["model"] == "m"
         assert re.match(r"^reminder:bytes=\d+:signals=2$", r["path"]), r["path"]
 
@@ -666,7 +666,7 @@ def test_reminder_egress_silent_for_loopback_model(tmp_path, ledger_conn):
         "SELECT count(*) FROM egress_log").fetchone()[0] == 0
 
 
-# ── §8-11 config.example interrupt-review 条目经既有 schema 加载 ───────────
+# ── §8-11 config.example abort-analyzer 条目经既有 schema 加载 ───────────
 
 EXAMPLE_ALLOWED_KEYS = {
     "name", "alias", "enabled", "cron", "target_dir", "prompt", "report_dir",
@@ -681,7 +681,7 @@ EXAMPLE_ALLOWED_MODEL_KEYS = {
 
 
 def _extract_example_entry() -> dict:
-    """Pull the commented interrupt-review example block out of
+    """Pull the commented abort-analyzer example block out of
     config.example.yaml (from its ``# - name:`` line to the first
     non-comment line) and parse the de-commented block as YAML."""
     import yaml
@@ -689,7 +689,7 @@ def _extract_example_entry() -> dict:
     src = Path(__file__).resolve().parents[1] / "config.example.yaml"
     lines = src.read_text(encoding="utf-8").splitlines()
     start = next(i for i, l in enumerate(lines)
-                 if "alias: interrupt-review" in l)
+                 if "alias: abort-analyzer" in l)
     begin = next(i for i in range(start, -1, -1)
                  if re.match(r"\s*#\s*-\s+name:", lines[i]))
     end = next(i for i in range(start, len(lines))
@@ -698,11 +698,11 @@ def _extract_example_entry() -> dict:
                       for i in range(begin, end))
     loaded = yaml.safe_load(block)
     entry = loaded[0] if isinstance(loaded, list) else loaded
-    assert isinstance(entry, dict) and entry["alias"] == "interrupt-review"
+    assert isinstance(entry, dict) and entry["alias"] == "abort-analyzer"
     return entry
 
 
-def test_config_example_interrupt_review_loads_through_schema(tmp_path):
+def test_config_example_abort_analyzer_loads_through_schema(tmp_path):
     """零新配置键：示例条目的每个键都是既有 bgagent schema 的键；整条经
     load_background_agents 加载成功；prompt 文件真实存在（相对 config
     目录的 server/prompts/ 形态）。"""
@@ -734,4 +734,4 @@ def test_config_example_interrupt_review_loads_through_schema(tmp_path):
                                        allow_unicode=True), encoding="utf-8")
     agents = load_background_agents(str(cfg_path), vault)
     assert len(agents) == 1
-    assert agents[0].alias == "interrupt-review"
+    assert agents[0].alias == "abort-analyzer"
