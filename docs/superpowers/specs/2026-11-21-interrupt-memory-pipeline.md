@@ -22,7 +22,7 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 
 - **分类法**：对每条注入的中断记录，agent 判定四类记忆操作之一；NONE 不出提案、只进报告计数。
 - **实体锚定（r1 用户裁）**：实体提取参照 vault 现有实体索引 `index/entities.md`（机器区 `## entity` 段）——agent 读它做去重/对齐，新增不重名、改动指向既有 entity 名。读面走 bgagent 工具白名单既有读工具，不新开读径。
-- **个人记忆读面契约（r1.2 盘点，`executor.py` handler 实况）**：可读投影 = `index/entities.md`（entity_index replace-upsert，attrs+source 行）、`index/summaries/`（summary cache/report 双形态）、`index/errata/`（矛盾卡，appenditive 只读）——皆 FTS 索引、`read_doc`/`search_docs` 直达，归因层对照「改/矛盾」时 errata 卡是现成可见面。**例外：relatedness 零文件落**（ledger.db 表状态，FTS 不可见）——归因要核对已有边须 `get_related_docs` 上白名单（per-doc 查询，全局边账仍归回读节/人工面；**r1.4 定稿**：example :212 已含，即终值）。`reminder` 无投影。此盘点同时二次确认 §3 DELETE 缺口：entities.md 段落 upsert 只能覆盖不能移除，errata 非删除。
+- **个人记忆读面契约（r1.2 盘点，r1.7 勘误——`EXCLUDED_INDEX_DIRS` 实查）**：机器区三投影 = `index/entities.md`（entity_index replace-upsert）、`index/summaries/`（summary 双形态）、`index/errata/`（矛盾卡 appenditive）——但 `index/` 顶层**被 v1 索引排除**（`vault_ops.py:17`，全库扫描/`list_files`/console 树/relatedness_rank 共用排除，防机器输出反馈污染）：**`search_docs` 恒不可见、`list_files` 恒不可枚举（含显式 dir="index"）——读面唯一路 = `read_doc` 精确路径**。`reminder` 无投影。DELETE 缺口二次确认：upsert 只覆盖不移除，errata 非删除。
 - **实体提取目标口径**：只提取**可沉淀的可复用对象**（偏好/术语/路径/人物/项目），一次性任务主题留在报告不进实体操作。
 - **纪律沿用通道二 §4**：ts/phase/tool_name 是行为事实；join 出的 reasoning 是**模型宣称非证据**；标签随注入文本走，报告不得洗混。
 - **模型档**：本地档建议维持（reminder 含思考全文，云端=完整思考出域，红线 7 知情决策）；egress 合成 `via='reminder'` 台账行机制已落地，照用。
@@ -33,7 +33,7 @@ mem0 对齐（r1 用户裁）：归因层的输出分类法 = mem0 四记忆操�
 - 操作映射：增/改 → `entity_index` 提案（payload `{entity, attrs}` upsert 语义）；冲突修改 = mem0 UPDATE 语义，同一映射。
 - **双轨保持（r1.4 用户裁，撤销 r1「一律人审」）**：沉淀轨沿用提案系统既有分轨——`entity_index`/`relatedness` 保持 auto 免鉴权直融，`summary`/`errata`/`reminder` 天然 awaiting_review 人审。理由（用户口径）：**pull 消费透明可审计**——机器区文件人眼恒可见、proposal_transitions 全量状态账，错了可由后续提案或人工修正；auto 轨免鉴权缺口（安全红线节挂账）维持现状不扩不修，本流水线不得以它为由改轨。
 - **entity_index 承重契约（r1.5 评审 S8 钉，进卡 B prompt 义务）**：upsert **整段替换**含 source 行（`executor.py:180-191`）——mem0「改」= **全量重发 attrs**（漏字段即丢字段）；旧 provenance 被新提案 refs 整体顶替（历史仍在 proposals 表）；**单 run 同实体两提案 = 后者整吞前者**（按 id 序 merge），prompt 须先在 run 内合并再出提案。
-- **errata 操作契约（r1.5 评审 S4/M4 钉）**：同 stem 第二张卡 → 「slot occupied」failed（`executor.py:409-415`）——翻案路径=人工删旧卡再 re-adopt；卡 B prompt 纪律=产卡前先 `search_docs` 查 `index/errata/`。双摘录（entities.md 段摘录 + 用户笔记摘录）**可构造**：excerpts 的 path 不验存在性（`propose.py:179-185`）。**`source_refs[0]` 承重**：errata 的 stem=`refs[0]` 的文件名（`executor.py:384`）、summary 的 refs[0] 必须是存活 vault 路径（`executor.py:294-296`）——**abort_log 章恒非首位**（见 §5 防重①）。配套防御（附卡 B）：executor errata stem 含非法文件名字符 → `_MergeFailed` park（堵 `abort_log:123` 冒号名 → OSError → adopted 毒环永久重报错，评审 M4）。
+- **errata 操作契约（r1.5 评审 S4/M4 钉，r1.7 勘误预检方法）**：产卡前预检 = **`read_doc("index/errata/<预测stem>.md")`**（stem=refs[0] 文件名，agent 自预测，精确路径探测）——**禁用 search_docs 查该目录**（机器区 FTS 盲区，恒查空）。同 stem 第二张卡 → 「slot occupied」failed（`executor.py:409-415`）——翻案路径=人工删旧卡再 re-adopt；**`source_refs[0]` 承重**：errata 的 stem=`refs[0]` 的文件名（`executor.py:384`）、summary 的 refs[0] 必须是存活 vault 路径（`executor.py:294-296`）——**abort_log 章恒非首位**（见 §5 防重①）。配套防御（附卡 B）：executor errata stem 含非法文件名字符 → `_MergeFailed` park（堵 `abort_log:123` 冒号名 → OSError → adopted 毒环永久重报错，评审 M4）。双摘录（entities.md 段摘录 + 用户笔记摘录）**可构造**：excerpts 的 path 不验存在性（`propose.py:179-185`）。
 - **DELETE 承接形态（r1.4 用户裁）**：**errata 复用**——废弃/矛盾判定出 errata 型提案（`## 矛盾` 卡，天然人审轨），物理删除段落的缺口保留挂账不阻塞（entities.md 的 upsert 只覆盖不移除，errata 非删除——矛盾卡在案即语义在案）。
 
 ## 4. ④ 召回：散落消费 → 融合消费（r1.3 命题定义，方案另立）

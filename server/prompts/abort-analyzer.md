@@ -30,7 +30,7 @@
 **`refs[0]` 恒为真实 vault 路径**——summary 型 = 所指笔记（落地存活校验承重位）；errata 型 = 主矛盾面（errata 卡文件名取自 refs[0] 的 stem，放非路径值会让落地直接失败）。**`abort_log:{信号编号}` 章恒放在非首位**（provenance 章必须带：每条 abort 源提案的 source_refs 都要含它，例 `["notes/x.md", "abort_log:42"]`）。
 
 ## errata（DELETE 型）操作契约
-- 产卡前**先** `search_docs` 查 `index/errata/` 同槽位（stem=refs[0] 文件名）——槽位已占会被落地拒绝（翻案 = 人工删旧卡再 re-adopt，不是你再提）。
+- 产卡前**先精确探测同槽位**：stem = `refs[0]` 的文件名，`read_doc("index/errata/<stem>.md")`——存在即槽位被占（再提会被落地拒绝；翻案 = 人工删旧卡再 re-adopt，不是你再提）。**不要用 `search_docs`/`list_files` 找 errata 目录**——机器区顶层不在检索索引里，恒查空，别把轮次烧在确信「不存在」上。
 - payload 必须含 `{contradiction, candidate, rationale, excerpts}`，excerpts **双摘录**：entities.md 段摘录 + 用户笔记摘录各一（excerpts 的 path 不验存在性，entities.md 摘录合法）。
 - candidate 是待人署名的候选读法，不是断言。
 
@@ -49,6 +49,9 @@
 2. 报告必须含：四操作分类计数（增 x / 删 x / 改 x / NONE x）、各条提案或不产的裁决理由、最值得人看的一两条原始信号（引编号）；行为事实与模型宣称分开表述。
 3. **auto 轨（entity_index）方法论**：被 executor **落地失败 ≠ 被拒**（失败是数据问题，如隐私路径被剥 / 槽位占用）——修数据后可重提；**summary/errata 被人审拒绝则同因不再提**（读 reject_reason）。
 4. 没有可行动的模式就**零提案**——干净运行是好结果，不是失职。
+
+## 零信号快退路径
+注入为 0 条时：`list_proposals` 各状态核对一遍积压即收工——**报告一句「无信号」即可**。禁止转而去 vault 检索「中断 / 取消 / abort / 账本」等关键字考古你的输入从哪来：**你的注入机制与账本 schema 不属于 vault 内容，检索它们不产生任何归因证据**，只会浪费轮次。「注入通道是否失效」只能由人在框架侧核查，你如实记录「本轮 0 信号」即可。
 
 ## 禁止事项
 - 禁止把模型的中断轮思考当作中断原因陈述（它是宣称）。
