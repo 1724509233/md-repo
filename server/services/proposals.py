@@ -418,13 +418,19 @@ def list_trails(ledger_conn, index_conn, items: list[dict]) -> list[list[dict]]:
     out: list[list[dict]] = []
     for it in items:
         rel = it["relpath"]
-        merged = list(tr_map.get(rel, []))
+        # 排序键 (ts, domain, seq) 降序——与 trail() 同一平票裁决（见其注释：
+        # seq 跨 id 空间不可比，batch 行生命周期恒晚于状态迁移行，同 tick 压后）。
+        merged: list[tuple[tuple[float, int, int], dict]] = [
+            ((x["ts"], 0, x["seq"]), x) for x in tr_map.get(rel, [])
+        ]
         if it.get("run_id"):
             # Legacy (pre-D25) projection-file rows are the coalesced shadow
             # of the record's transitions (never a source); keep other paths.
-            merged += [d for d in batch_map.get(it["run_id"], [])
+            merged += [((d["ts"], 1, d["seq"]), d)
+                       for d in batch_map.get(it["run_id"], [])
                        if d["path"] != rel]
-        out.append(sorted(merged, key=lambda x: x["ts"], reverse=True))
+        merged.sort(key=lambda x: x[0], reverse=True)
+        out.append([d for _, d in merged])
     return out
 
 
@@ -446,24 +452,34 @@ def trail(ledger_conn, index_conn, relpath: str) -> list[dict]:
     the two-conn signature). The route layer calls in.
     """
     rec = record_by_relpath(ledger_conn, relpath)
-    rows: list[dict] = []
+    # 排序键 (ts, domain, seq) 降序。Windows 时钟 tick（~15.6ms）下同一串状态
+    # 迁移常落同 ts——只按 ts 平票即乱序（r8/r9 裁定同族：never sort NTP ties）。
+    # domain 处理跨 id 空间平票：seq 在 change_log.seq 与 proposal_transitions.id
+    # 两空间不可比（test_list_trail_fields 注释在案），而 batch 行只可能是
+    # executor 对 adopted 记录的落地（adopt 之后才存在），同 tick 时恒晚于
+    # 状态迁移行 → domain 1（batch）压过 domain 0（transitions）。同域内 seq
+    # 各自是因果序，平票裁决精确。
+    rows: list[tuple[tuple[float, int, int], dict]] = []
     if rec is not None:
         for t in proposal_records.get_transition_rows_for_proposal(
             ledger_conn, rec["id"]
         ):
-            rows.append({"seq": t["id"], "ts": t["ts"],
-                         "source": t["actor"], "op": t["to_status"],
-                         "path": relpath})
+            rows.append(((t["ts"], 0, t["id"]),
+                         {"seq": t["id"], "ts": t["ts"],
+                          "source": t["actor"], "op": t["to_status"],
+                          "path": relpath}))
         if rec["run_id"]:
             for r in proposal_records.get_change_log_rows_by_batch_excluding_path(
                 index_conn, rec["run_id"], relpath
             ):
-                rows.append(dict(r))
+                d = dict(r)
+                rows.append(((d["ts"], 1, d["seq"]), d))
     else:
         for r in proposal_records.get_change_log_rows_by_path(index_conn, relpath):
-            rows.append(dict(r))
-    rows.sort(key=lambda d: d["ts"], reverse=True)
-    return rows
+            d = dict(r)
+            rows.append(((d["ts"], 1, d["seq"]), d))
+    rows.sort(key=lambda x: x[0], reverse=True)
+    return [d for _, d in rows]
 
 
 def status_summary(conn, now: float | None = None) -> dict:
