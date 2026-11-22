@@ -127,6 +127,29 @@ def test_drawer_wiring_pins():
                for b in blocks), "mwrap 桌面宽抽屉重塑缺失"
 
 
+def _css_rules(css: str):
+    """扁平规则抽取：[(selector, body), ...]（注释剔除；嵌套 @media 外壳不产条目）。"""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    return [(m.group(1).strip(), m.group(2)) for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def test_fan_hover_hit_stack():
+    # FAB 扇弧 hover 抖动钉（2026-11-22）：.fab-fan 根恒 pointer-events:none——
+    # open 态若把根改回 auto，48×48 容器罩在主钮上，指针微动主钮即收 pointerleave
+    # 而扇弧根无任何 enter/leave 处理器可取消 armClose timer → 开合循环。
+    # 命中分层：容器根 none，子钮 .fab-sub 自接 auto（父 none 子 auto 合法命中模式）。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    rules = _css_rules(css)
+    fan_open = [b for s, b in rules if s == ".fab-fan.open"]
+    assert fan_open, ".fab-fan.open 规则缺失"
+    for b in fan_open:
+        assert "pointer-events: auto" not in b, \
+            ".fab-fan.open 不得恢复根 pointer-events:auto（罩主钮致 hover 抖动）"
+    sub_base = [b for s, b in rules if s == ".fab-sub"]
+    assert any("pointer-events: auto" in b for b in sub_base), \
+        ".fab-sub 须显式 pointer-events:auto（根 none 下子钮自接指针）"
+
+
 def test_mobile_flags_untouched():
     # 移动端零改动红线（Global Constraints）：移动旗标消费者数量不降、
     # 移动 panel-shell/search-drawer 原位规则原样、监控移动整页接管形态（flex:1）保留。

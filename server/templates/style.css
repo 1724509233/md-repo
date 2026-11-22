@@ -2010,13 +2010,16 @@ details.d-sec .body { padding: 8px 12px 14px; }
   clip-path: polygon(0 100%, 100% 100%, 96.6% 74.1%, 86.6% 50%, 70.7% 29.3%, 50% 13.4%, 25.9% 3.4%, 0 0); }
 .fab-bridge.open { pointer-events: auto; }
 /* 子钮容器：折叠壳家族（同 st-modal 纪律）——收起 visibility:hidden 出 Tab 序、
-   delay 挂开合时长（滑出收尾才隐，防中途隐身）；.open 合并 transition delay 0s 即刻可见 */
+   delay 挂开合时长（滑出收尾才隐，防中途隐身）；.open 合并 transition delay 0s 即刻可见。
+   命中分层（hover 抖动修复 2026-11-22）：根恒 pointer-events:none——开态容器不得罩主钮
+   （主钮 pointerleave 只在指针真离开时发生），主钮→子钮路径由 .fab-bridge 桥接；子钮自接 auto */
 .fab-fan { position: absolute; inset: 0; z-index: 55; pointer-events: none; visibility: hidden;
   transition: visibility 0s .22s; }
-.fab-fan.open { pointer-events: auto; visibility: visible; transition: visibility 0s 0s; }
+.fab-fan.open { visibility: visible; transition: visibility 0s 0s; }
 /* 旋转三件套：--a 逐钮硬编码（组件内联）；收起态半径 0 + scale .2 = 自圆心缩没 */
 .fab-sub { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px;
   display: flex; align-items: center; justify-content: center; border-radius: 9999px; cursor: pointer;
+  pointer-events: auto;
   background: var(--surface); border: 1px solid var(--line);
   box-shadow: 0 8px 20px -8px rgba(33, 29, 24, .30), 0 1px 4px rgba(33, 29, 24, .10);
   color: var(--ink-soft);
