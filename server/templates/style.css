@@ -1082,11 +1082,26 @@ details.d-sec .body { padding: 8px 12px 14px; }
   #memory-console-backdrop { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #memory-console-shell > .c-face.anim { animation: none; }
+  #memory-console-shell > .c-face.anim,
+  .st-pane-memory > .c-face.anim { animation: none; }
   .console-shell, .console-shell.open { transition: none; }
   .spill.awaiting::before { animation: none; }
   .done { animation: none; }
 }
+
+/* ============ 设置浮窗 · 记忆 pane（沉浸式壳 T6，plan 2026-11-22-immersive-shell Task 6；spec §6）
+   MemoryConsole 三面整体迁入 st-body：宽度随 pane、卡壳圆角沿 mcard 视觉语言；
+   面 = 流内静态（非 #memory-console-shell 的 absolute inset 面），滚动归 st-modal-body，
+   pane 本体 overflow:auto 兜底。st-nav「记忆」段徽标 = badgeParts.total（>0 才画，
+   激活态反色保可读）。组件 scoped ref 双实例隔离（Review Focus 3），数据 app 30s 轮询下传。 ============ */
+.st-pane-memory { overflow: auto; }
+.st-pane-memory > .c-face { display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.st-pane-memory > .c-face.anim { animation: cFaceIn .2s cubic-bezier(.32,.72,0,1) both; }
+.st-nav-btn { display: flex; align-items: center; gap: 6px; }
+.st-nav-ic { display: inline-flex; flex-shrink: 0; }
+.st-nav-ic svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.st-nav-badge { margin-left: auto; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--brass); color: var(--paper); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.st-nav-btn.active .st-nav-badge { background: var(--paper); color: var(--brass); } /* 激活态黄铜实心 → 徽标反色 */
 
 /* ============ 后台监控页 L1（定稿 design/console-v4-watch.html 场景 02 · 非对称网格 02E；
    组件 CSS 自设计稿原样移植，类名与设计稿一致；既有类零改动，.rcl-stats/.rcl-stat/.tchip/.spill
@@ -1365,9 +1380,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .rpt-md .code-block { margin: 8px 0; }
 .rpt-md .code-block pre { font-size: 11px; padding: 9px 10px; }
 /* 报告面深链 sweep：JS 同详情面口径在 [data-face="report"] 上挂 .mp-deep（MemoryConsole rptDeepT），
-   既有规则（动效层 ⑤）作用域仅 detail → 报告面标题（同构 .d-title）在此补齐同一 sweep */
-#memory-console-shell [data-face="report"].mp-deep .d-title { position: relative; }
-#memory-console-shell [data-face="report"].mp-deep .d-title::after {
+   既有规则（动效层 ⑤）作用域仅 detail → 报告面标题（同构 .d-title）在此补齐同一 sweep。
+   T6：去 #memory-console-shell 前缀升为属性级全局选择器——data-face 仅 MemoryConsole 面根使用，
+   双实例（移动 console-shell + 设置浮窗记忆 pane）同吃同一 sweep */
+[data-face="report"].mp-deep .d-title { position: relative; }
+[data-face="report"].mp-deep .d-title::after {
   content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
   background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
   border-radius: 2px; transform-origin: left center;
@@ -1376,7 +1393,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 动效降级（本分节新增件：L0 降级 chip 增长脉冲 + 报告面深链 sweep） */
 @media (prefers-reduced-motion: reduce) {
   .l0-deg.fresh { animation: none; }
-  #memory-console-shell [data-face="report"].mp-deep .d-title::after { animation: none; }
+  [data-face="report"].mp-deep .d-title::after { animation: none; }
 }
 
 /* ============ 记忆控制台 · 文档面（v2b② spec §6.4：控制台呈现面，2026-11-14）
@@ -1505,9 +1522,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .notif-dropdown .notif-item:active { background: color-mix(in srgb, var(--brass) 14%, transparent); }
 
 /* ── 5) 通知 → L0 深链接力：下拉退场（.14s）先行 → 面板宽度直切（既有纪律）+ 详情面 cFaceIn 滑入（既有 .2s）→
-   详情头标题黄铜下划线 sweep 一次（marker-sweep 家族，~.4s 后自清；非深链的队内钻取不加）─── */
-#memory-console-shell [data-face="detail"].mp-deep .d-title { position: relative; }
-#memory-console-shell [data-face="detail"].mp-deep .d-title::after {
+   详情头标题黄铜下划线 sweep 一次（marker-sweep 家族，~.4s 后自清；非深链的队内钻取不加）。
+   T6：去容器前缀升属性级全局选择器（同报告面 sweep 口径，双实例同吃）─── */
+[data-face="detail"].mp-deep .d-title { position: relative; }
+[data-face="detail"].mp-deep .d-title::after {
   content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
   background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
   border-radius: 2px; transform-origin: left center;
@@ -1533,7 +1551,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .mcard.mp-fresh-alert, .alert-pill.mp-pill-pop { animation: none; }
   .notif-dropdown .notif-item { animation: none; transition: none; }
   .notif-dropdown.notif-closing { animation: none; }
-  #memory-console-shell [data-face="detail"].mp-deep .d-title::after { animation: none; }
+  [data-face="detail"].mp-deep .d-title::after { animation: none; }
 }
 
 /* ============ 选区 → 源码编辑（spec 2026-11-09-select-to-source-editing）============

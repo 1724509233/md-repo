@@ -47,6 +47,16 @@ export const MemoryConsole = {
   setup(props, { emit }) {
     const state = inject('state')
 
+    /* 双实例隔离（沉浸式壳 T6，Review Focus 3）：移动 console-shell overlay + 设置浮窗记忆 pane
+       两实例可并存，原按容器 id 的文档级全局选择器只会命中 DOM 首位实例 = 串数据
+       → 一律改组件自身 scoped ref（queueScrollEl/detailFaceEl/detailScrollEl/
+       reportFaceEl/reportScrollEl，模板 ref 绑定，per-instance 天然隔离）。 */
+    const queueScrollEl = ref(null)
+    const detailFaceEl = ref(null)
+    const detailScrollEl = ref(null)
+    const reportFaceEl = ref(null)
+    const reportScrollEl = ref(null)
+
     // ─── 数据（app 30s 轮询写入；byRel 供详情面 / 队列富化查表）───
     const byRel = computed(() => {
       const m = {}
@@ -462,11 +472,12 @@ export const MemoryConsole = {
       async (rel) => {
         if (!rel) {
           await nextTick()
-          const qel = document.querySelector('#memory-console-shell [data-face="queue"] .c-scroll')
+          const qel = queueScrollEl.value
           if (qel) qel.scrollTop = queueScroll
           return
         }
-        const qel = document.querySelector('#memory-console-shell [data-face="queue"] .c-scroll')
+        // watch 先于渲染：此刻队列面仍在 DOM，queueScrollEl 即队列滚动位（scoped ref，双实例不串）
+        const qel = queueScrollEl.value
         if (qel) queueScroll = qel.scrollTop
         pillStatus.value = ''
         doneView.value = false
@@ -515,9 +526,9 @@ export const MemoryConsole = {
       async (rel) => {
         if (!rel) return
         await nextTick()
-        const el = document.querySelector('#memory-console-shell .c-scroll')
+        const el = detailScrollEl.value
         if (el) el.scrollTop = 0
-        const face = document.querySelector('#memory-console-shell [data-face="detail"]')
+        const face = detailFaceEl.value
         if (face) {
           face.classList.add('mp-deep')
           clearTimeout(deepT)
@@ -561,9 +572,9 @@ export const MemoryConsole = {
       async (rel) => {
         if (!rel) return
         await nextTick()
-        const el = document.querySelector('#memory-console-shell .c-scroll')
+        const el = reportScrollEl.value
         if (el) el.scrollTop = 0
-        const face = document.querySelector('#memory-console-shell [data-face="report"]')
+        const face = reportFaceEl.value
         if (face) {
           face.classList.add('mp-deep')
           clearTimeout(rptDeepT)
@@ -610,6 +621,7 @@ export const MemoryConsole = {
       trailLoading, trailCount, onTrailToggle,
       pillStatus, reasonOk, landedFile, doneMeta, doneLabel,
       reportItem, reportContent, reportError, reportBodyEl, onReportCopyClick,
+      queueScrollEl, detailFaceEl, detailScrollEl, reportFaceEl, reportScrollEl,
       adopt, reject, pick, back, close, openSrc, toggleRsn, pickReport, backReport,
       renderMarkdown, CAR,
       TYPE_ICONS, TYPE_ICON_DEFAULT
@@ -630,7 +642,7 @@ export const MemoryConsole = {
         <span class="l0-status"><span>{{ l0.awaiting }} 待审</span><span class="ld">·</span><span>{{ l0.adopted }} 待落地</span><span class="ld">·</span><span :class="{ err: l0.failed > 0 }">{{ l0.failed }} 失败</span><span v-if="degraded > 0" class="l0-deg" :class="{ fresh: degradedFresh }" title="运行期内快照捕捉降级计数（进程内，重启归零）">{{ degraded }} 快照降级</span></span>
         <button class="l0-go" type="button" title="后台监控页 L1（面板收起，监控页接管主区域）" @click="openMonitor"><span v-if="l0.failed > 0" class="dot" aria-hidden="true"></span>后台<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
       </div>
-      <div class="c-scroll">
+      <div class="c-scroll" ref="queueScrollEl">
         <div class="feed">
           <template v-if="feedLen">
             <template v-for="(grp, gi) in feedGroups.groups" :key="'g' + grp.key">
@@ -684,13 +696,13 @@ export const MemoryConsole = {
 
     <!-- 报告详情面（第三面）：只读 advisory 全文（markdown 经 renderMarkdown 助手；无动作行——报告无状态机可移，
          回退出口 = 返回队列；深链 state.memoryReport 直达，mp-deep 黄铜下划线 sweep 同详情面口径） -->
-    <div v-else-if="report" :key="'report-' + report" data-face="report" class="c-face anim">
+    <div v-else-if="report" :key="'report-' + report" data-face="report" class="c-face anim" ref="reportFaceEl">
       <div class="p-head">
         <button class="ibtn" title="返回队列" aria-label="返回队列" @click="backReport"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">报告</span>
         <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
-      <div class="c-scroll" @click="onReportCopyClick">
+      <div class="c-scroll" ref="reportScrollEl" @click="onReportCopyClick">
         <div v-if="reportContent === null && !reportError" class="q-empty" style="padding-top: 40px">
           <div class="t1">读取中…</div>
           <div class="t2">首次读取后显示全文</div>
@@ -715,14 +727,14 @@ export const MemoryConsole = {
     </div>
 
     <!-- 详情面：五段材料按判断顺序 + 粘性动作行 + 确认之后子视图 -->
-    <div v-else-if="detail" :key="'detail-' + detail" data-face="detail" class="c-face anim">
+    <div v-else-if="detail" :key="'detail-' + detail" data-face="detail" class="c-face anim" ref="detailFaceEl">
       <div class="p-head">
         <button class="ibtn" title="返回队列" aria-label="返回队列" @click="back"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
         <span class="ptitle">终审</span>
         <span class="pcount" v-if="queueIndex > 0">{{ queueIndex }}/{{ queueCount }}</span>
         <span class="pacts"><button class="ibtn" title="关闭" aria-label="关闭" @click="close"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button></span>
       </div>
-      <div class="c-scroll">
+      <div class="c-scroll" ref="detailScrollEl">
         <div v-if="!detailItem" class="q-empty" style="padding-top: 40px">
           <template v-if="!proposalsLoaded">
             <div class="t1">加载提案数据…</div>

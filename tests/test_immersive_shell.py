@@ -322,6 +322,77 @@ def test_docactions_single_surface():
     assert "confirm(" not in ft and "prompt(" not in ft
 
 
+def test_memory_in_settings():
+    # Task 6 静态钉（plan Step 2 断言集 + Review Focus 3 双实例）。
+    # Step 1 排雷结论（2026-11-23 grep MemoryConsole.js）：命中 6 处全局 id 选择器
+    # document.querySelector('#memory-console-shell …')——原 465/469/518/520/564/566 行，
+    # 双实例（移动 console-shell + 设置浮窗记忆 pane）并存时全局选择器只命中第一份 = 串数据，
+    # 本任务已改组件 scoped ref（queueScrollEl/detailFaceEl/detailScrollEl/reportFaceEl/reportScrollEl）；
+    # 下方钉「零全局查询」防回归。pollMemory 单一轮询在 app 层，组件不自建轮询、数据 props 下传。
+    mc = (TPL / "js/components/MemoryConsole.js").read_text(encoding="utf-8")
+    sp = (TPL / "js/components/SettingsPage.js").read_text(encoding="utf-8")
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    # ① 双实例隔离（Review Focus 3）：MemoryConsole 零全局 id / document 级查询
+    #   （element 级 block.querySelector / e.target.closest 不在钉内——本就 scoped）
+    assert "#memory-console-shell" not in mc
+    assert "document.querySelector" not in mc
+    assert "getElementById" not in mc
+
+    # ② SettingsPage：st-nav「记忆」段 + MemoryConsole import/挂载 + 新 props + pane
+    assert re.search(r"import \{ MemoryConsole \} from '\./MemoryConsole\.js'", sp)
+    assert re.search(r"components:\s*\{[^}]*MemoryConsole", sp)
+    assert "<memory-console" in sp
+    assert "initialTab" in sp and "memoryBadge" in sp
+    assert "section === 'memory'" in sp, "nav 记忆段 + 记忆 pane 双消费缺"
+    # 关闭守卫边界（plan Step 3）：记忆段不进 dirty 指纹、settingsCloseSeq 链零改动——注释钉
+    assert "记忆段不进 dirty" in sp
+
+    # ③ app.js：openSettingsPage(tab) 扩参 + settingsTab 旗标 + #memory 深链（boot + hashchange）
+    assert re.search(r"function openSettingsPage\(tab\)", app)
+    assert re.search(r"settingsTab:", app)
+    assert app.count("#memory") >= 2, "#memory 深链需 boot（applyInitialHash）与 hashchange 两处"
+    assert re.search(r"location\.hash === '#memory'\) \{ openSettingsPage\('memory'\); return \}", app)
+
+    # ④ 挂传口径：initialTab ← state.settingsTab；memoryBadge ← badgeParts.total（上齿轮/FAB 同口径）
+    assert ':initial-tab="state.settingsTab"' in app
+    assert ':memory-badge="badgeParts.total"' in app
+
+    # ⑤ 徽标 title 分解实值（T2 已留键，T6 核真值）：FAB 设置子钮 title「待审 N · 失败 M」
+    assert "memoryAwaiting: badgeParts.value.awaiting" in app
+    assert "memoryFailed: badgeParts.value.failed" in app
+
+    # ⑥ 样式面：记忆 pane 滚动容器
+    rules = _css_rules(css)
+    assert any(s == ".st-pane-memory" and "overflow" in b for s, b in rules), ".st-pane-memory 缺"
+
+
+def test_console_shell_mobile_only():
+    # Task 6 桌面 console-shell 退役钉（plan Step 2）：容器与 backdrop lg:hidden；
+    # 根脚本无桌面可触达的 memoryOpen=true（onMemoryRailClick 转移动分支：>860 早退设置记忆段；
+    # openNotif 桌面改道 openSettingsPage('memory')，报告深链仍可达；≤860 移动 overlay 逐条不动）。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+
+    # ① console-shell 容器与 backdrop 加 lg:hidden（移动全宽 overlay 原样）
+    assert re.search(r'<div id="memory-console-shell" class="console-shell lg:hidden"', app)
+    bd = app[app.index('id="memory-console-backdrop"'):]
+    assert "lg:hidden" in bd[:bd.index("</div>")]
+
+    # ② onMemoryRailClick 转移动分支：>860 走设置记忆段早退，memoryOpen 翻转只剩移动路径
+    seg = app[app.index("function onMemoryRailClick"):app.index("function openDocFace")]
+    assert "openSettingsPage('memory')" in seg
+    assert seg.index("openSettingsPage('memory')") < seg.index("state.memoryOpen = !state.memoryOpen")
+
+    # ③ 通知深链桌面改道（提案详情 + 报告两条通道都改道，移动分支保留）：
+    #    桌面 openSettingsPage('memory') + memoryDetail/memoryReport 经 state 下传 pane；
+    #    memoryOpen=true 仅剩移动分支（位于改道之后）
+    seg = app[app.index("async function openNotif"):app.index("function relativeTime")]
+    assert seg.count("openSettingsPage('memory')") >= 2
+    assert seg.index("openSettingsPage('memory')") < seg.index("state.memoryOpen = true")
+    assert "state.memoryReport = rpaths[0]" in seg
+
+
 def test_mobile_flags_untouched():
     # 移动端零改动红线（Global Constraints）：移动旗标消费者数量不降、
     # 移动 panel-shell/search-drawer 原位规则原样、监控移动整页接管形态（flex:1）保留。

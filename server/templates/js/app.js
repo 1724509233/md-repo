@@ -59,6 +59,8 @@ const state = reactive({
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
   settingsOpen: false,     // 设置浮层（spec 2026-11-22 §6 modal 改版：侧栏底部齿轮 + 深链 #settings；不占主页面，可与任何页面共存）
+  settingsTab: 'ai',       // 设置浮层开层段（T6）：'ai' 默认 / 'memory' = #memory 深链与记忆落点；
+                           // 与 memoryOpen（移动 overlay 专用）互不干涉
   settingsCloseSeq: 0,     // 关闭请求信号（Escape 链最高优先支发；dirty 守卫在组件内，取消即不关）
   settingsSavedSeq: 0,     // 保存成功信号（组件 200 后递增）——config 改动不产 change_log 行，树靠它即时刷新
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
@@ -554,9 +556,11 @@ async function handleToolResult(evt) {
   }
 }
 
-// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 打开设置浮层（spec 2026-11-22 §6 modal 改版）
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 打开设置浮层（spec 2026-11-22 §6 modal 改版）；
+// #memory → 浮窗 + 记忆段（沉浸式壳 T6，spec 2026-11-22-immersive-shell §6）
 function applyInitialHash() {
   if (location.hash === '#settings') { openSettingsPage(); return }
+  if (location.hash === '#memory') { openSettingsPage('memory'); return }
   const h = parseHash(location.hash)
   if (!h) return
   if (h.mode === 'edit') state.previewMode = false
@@ -695,6 +699,10 @@ const fabBadges = computed(() => ({
 function onMemoryRailClick() {
   state.memoryDetail = null   // 重新进入总是回队列面
   state.memoryReport = null   // 报告深链同口径（非 null = 应开在报告详情面）
+  // T6 转移动分支：console-shell 退 ≤860px 全宽 overlay 专属（lg:hidden），>860 已无
+  // in-flow 300px 面板可落（平板带 861–1023 一并改道，不留「按钮开了看不见」死区）——
+  // 走设置浮窗记忆段（桌面唯一入口 FAB→设置→记忆段）。≤860 移动 overlay 语义原样不动。
+  if (window.innerWidth > 860) { openSettingsPage('memory'); return }
   state.memoryOpen = !state.memoryOpen
 }
 
@@ -731,12 +739,18 @@ function openMonitorPage() {
 //     关闭（X / backdrop / Escape）一律经组件 requestClose——dirty 时组件内原生 confirm，
 //     取消即不关，app 只接组件 @close 落地。转场全归 CSS 折叠壳家族（style.css st-modal 族，
 //     MobileSheet/panel-shell 纪律），JS 无退场定时器。齿轮钮常驻可见，开态挂 .on ───
-function openSettingsPage() { state.settingsOpen = true }
+// T6 tab 扩参：'memory' = #memory 深链 / FAB 记忆落点 / 通知深链改道（经 state.settingsTab
+// 下传组件 initialTab，开层直落记忆段）；无参调用（齿轮 / window.openSettingsPage 外链 /
+// @click 原生事件对象）一律兜底默认段——既有调用方零破坏。
+function openSettingsPage(tab) {
+  state.settingsTab = (typeof tab === 'string' && tab) ? tab : 'ai'
+  state.settingsOpen = true
+}
 // Escape 链最高优先支只发关闭请求（dirty 判定与 confirm 归表单所在组件，app 不复制守卫）
 function requestCloseSettings() { state.settingsCloseSeq++ }
 function onSettingsClosed() {
-  // #settings 深链：关闭即清 hash 回无哈希路径（applyInitialHash 的对应侧）
-  if (location.hash === '#settings') history.replaceState(null, '', location.pathname)
+  // #settings / #memory 深链：关闭即清 hash 回无哈希路径（applyInitialHash 的对应侧）
+  if (location.hash === '#settings' || location.hash === '#memory') history.replaceState(null, '', location.pathname)
   state.settingsOpen = false
 }
 
@@ -924,6 +938,7 @@ export function createApp() {
       })
       window.addEventListener('hashchange', () => {
         if (location.hash === '#settings') { state.settingsOpen = true; return }  // 深链随时可达（boot 走 applyInitialHash，此为站内/手输路径）
+        if (location.hash === '#memory') { openSettingsPage('memory'); return }   // T6：浮窗 + 记忆段（与 boot 同口径）
         const h = parseHash(location.hash)
         if (!h) return
         if (h.path !== state.currentPath) {
@@ -1119,24 +1134,29 @@ export function createApp() {
         await api.markNotificationsRead({ ids: [n.id] })
         state.notifications = state.notifications.filter(x => x.id !== n.id)
         state.unreadCount = Math.max(0, state.unreadCount - 1)
-        // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 控制台开在首个提案的详情面
+        // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 记忆台开在首个提案的详情面
+        // （T6 桌面/平板带 >860 改道：设置浮窗 + 记忆段，memoryDetail 经 state 下传 pane 实例；
+        //   ≤860 移动 console overlay 原样）
         let paths = []
         try {
           paths = n.proposal_paths ? JSON.parse(n.proposal_paths) : []
         } catch (e) { /* 非 JSON → 退回报告路径 */ }
         if (Array.isArray(paths) && paths.length) {
-          state.memoryOpen = true
+          if (window.innerWidth > 860) openSettingsPage('memory')
+          else state.memoryOpen = true
           state.memoryDetail = paths[0]
           return
         }
-        // 深链：本次 run 写出的报告渠道文件（index/reports/**，JSON 字符串）→ 控制台报告面
-        // （proposal_paths 为空时才走到这里，由上方 return 保证；渲染归 L5）
+        // 深链：本次 run 写出的报告渠道文件（index/reports/**，JSON 字符串）→ 记忆台报告面
+        // （proposal_paths 为空时才走到这里，由上方 return 保证；渲染归 L5；T6 桌面改道同口径，
+        //   通知点报告深链仍可达报告面 = 浮窗记忆段第三面）
         let rpaths = []
         try {
           rpaths = n.report_paths ? JSON.parse(n.report_paths) : []
         } catch (e) { /* 非 JSON → 退回报告路径 */ }
         if (Array.isArray(rpaths) && rpaths.length) {
-          state.memoryOpen = true
+          if (window.innerWidth > 860) openSettingsPage('memory')
+          else state.memoryOpen = true
           state.memoryReport = rpaths[0]
           return
         }
@@ -1222,7 +1242,7 @@ export function createApp() {
             <!-- 底部锚定齿轮（spec 2026-11-22 §6 modal 改版：设置唯一入口；margin-top:auto 与
                  既有钮组不互挤，常驻可见；icon-only 照 rail 钮样式，aria-label 满足审计钉） -->
             <button id="settings-rail-btn" type="button" class="rbtn rail-gear" :class="{ on: state.settingsOpen }"
-              title="设置" aria-label="设置" @click="openSettingsPage">
+              title="设置" aria-label="设置" @click="openSettingsPage()">
               <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span>
               <span class="rlabel">设置</span>
             </button>
@@ -1267,9 +1287,10 @@ export function createApp() {
           </div>
         </div>
 
-        <!-- 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html；
-             关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css） -->
-        <div id="memory-console-shell" class="console-shell" :class="{ open: state.memoryOpen }">
+        <!-- 记忆控制台（T6 退移动专属）：≤860px 全宽 overlay 原样（design/memory-console-design.html，
+             关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css）；
+             桌面/平板带 lg:hidden 退役——记忆入口 = FAB→设置浮窗→记忆段（spec §6） -->
+        <div id="memory-console-shell" class="console-shell lg:hidden" :class="{ open: state.memoryOpen }">
           <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail" :report="state.memoryReport"
             @pick="state.memoryDetail = $event"
             @back="state.memoryDetail = null"
@@ -1280,9 +1301,10 @@ export function createApp() {
             @open-doc="onMemoryOpenDoc($event)" />
         </div>
 
-        <!-- 移动端（≤860px）记忆控制台 overlay backdrop（≥861px 由 style.css ID 规则隐藏） -->
+        <!-- 移动端（≤860px）记忆控制台 overlay backdrop（T6：lg:hidden 与容器同退；
+             ≥861px 另由 style.css ID 规则隐藏，双保险） -->
         <div id="memory-console-backdrop"
-          class="fixed inset-0 bg-black/30 z-40" aria-hidden="true"
+          class="fixed inset-0 bg-black/30 z-40 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.memoryOpen }"
           @click="state.memoryOpen = false"></div>
 
@@ -1478,8 +1500,11 @@ export function createApp() {
 
         <!-- 设置浮层（spec 2026-11-22 §6 modal 改版：backdrop + 居中对话框自持壳，
              fixed 顶层常驻，折叠态 visibility 归 CSS 壳家族；关闭统一经组件 dirty 守卫，
-             app 只接 @close 落地清 state 与深链 hash） -->
-        <SettingsPage @close="onSettingsClosed()" />
+             app 只接 @close 落地清 state 与深链 hash；T6：initialTab ← settingsTab（#memory 深链
+             直落记忆段）、memoryBadge ← badgeParts.total（与 FAB 设置子钮同口径）；
+             记忆段事件上抛：actioned → 立即重轮询、open-doc → 开原文（浮层不自动关，dirty 语义保持） -->
+        <SettingsPage :initial-tab="state.settingsTab" :memory-badge="badgeParts.total"
+          @close="onSettingsClosed()" @actioned="pollMemory()" @open-doc="onMemoryOpenDoc($event)" />
       </div>
     `,
     methods: {
