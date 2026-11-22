@@ -1790,7 +1790,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-save:disabled { opacity: .55; cursor: default; }
 .st-footnote { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 10.5px; line-height: 1.7; color: var(--ink-soft); }
 /* Task 9 后台 agent 段追加：.st-bg-list/.st-bg-row/.st-bg-main 条目行 · .st-badge 运行徽标
-   · .st-toggle 开关（role=switch 按钮）· .st-add/.st-danger 增删钮（删除两步武装）
+   · .st-toggle 滑动开关（role=switch 按钮，34×20 轨道 + 14px 圆钮，无文字）· .st-add/.st-danger 增删钮（删除两步武装）
    · .st-group 分组题 · .st-bg-form 条目表单 · .st-warn-inline 内联红字 · .st-input-mono/.st-val。
    动效只用颜色/边框过渡，无无限动画 → 无需 reduced-motion 降级规则。 */
 .st-bg-list { display: flex; flex-direction: column; gap: 6px; }
@@ -1807,8 +1807,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-badge.run { border-color: color-mix(in srgb, var(--st-ok) 40%, var(--line)); background: color-mix(in srgb, var(--st-ok) 8%, transparent); color: var(--st-ok); }
 .st-badge.idle { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 7%, transparent); color: var(--brass); }
 .st-badge.off { border-color: var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); }
-.st-toggle { flex-shrink: 0; align-self: center; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--ink-soft); transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
-.st-toggle.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.st-toggle { flex-shrink: 0; align-self: center; position: relative; width: 34px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: rgba(33, 29, 24, .06); cursor: pointer; transition: background-color .15s ease, border-color .15s ease; }
+.st-toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 999px; background: #fff; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); box-shadow: 0 1px 2px rgba(33, 29, 24, .18); transition: transform .15s ease, border-color .15s ease; }
+.st-toggle.on { border-color: var(--brass); background: rgba(154, 107, 50, .55); }
+.st-toggle.on::after { transform: translateX(14px); border-color: color-mix(in srgb, var(--brass) 40%, transparent); }
+.st-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 2px; }
 .st-bg-form { margin-top: 12px; }
 .st-group { font-size: 11px; font-weight: 700; color: var(--brass); padding-top: 6px; border-top: 1px dashed var(--line); }
 .st-group:first-child { border-top: 0; padding-top: 0; }

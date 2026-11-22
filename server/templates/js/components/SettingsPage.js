@@ -825,7 +825,7 @@ export const SettingsPage = {
                         <span class="st-badge" :class="bgBadge(e).cls" :title="bgBadge(e).tip">{{ bgBadge(e).label }}</span>
                         <button class="st-toggle" :class="{ on: e.enabled }" type="button" role="switch"
                           :aria-checked="e.enabled" :aria-label="(e.enabled ? '停用 ' : '启用 ') + bgTitle(e)"
-                          @click="e.enabled = !e.enabled">{{ e.enabled ? '启用' : '停用' }}</button>
+                          @click="e.enabled = !e.enabled"></button>
                       </div>
                     </div>
                     <div v-else class="zline">暂无后台智能体，可点「添加后台智能体」新建</div>
@@ -872,7 +872,7 @@ export const SettingsPage = {
                         <span class="st-lbl">启用</span>
                         <button class="st-toggle" :class="{ on: bgForm.enabled }" type="button" role="switch"
                           :aria-checked="bgForm.enabled" aria-label="启用此条目"
-                          @click="bgForm.enabled = !bgForm.enabled">{{ bgForm.enabled ? '启用' : '停用' }}</button>
+                          @click="bgForm.enabled = !bgForm.enabled"></button>
                         <span class="st-hint">停用后保存：该任务从调度中退出，进行中的一轮跑完即停</span>
                       </div>
 
@@ -893,7 +893,7 @@ export const SettingsPage = {
                           <span class="st-lbl">事件触发</span>
                           <button class="st-toggle" :class="{ on: bgForm.trigger }" type="button" role="switch"
                             :aria-checked="!!bgForm.trigger" aria-label="开启事件触发"
-                            @click="bgToggleTrigger(bgEditing)">{{ bgForm.trigger ? '开' : '关' }}</button>
+                            @click="bgToggleTrigger(bgEditing)"></button>
                         </div>
                         <span class="st-hint">关闭 = 仅按计划定时运行</span>
                         <template v-if="bgForm.trigger">
@@ -946,7 +946,7 @@ export const SettingsPage = {
                           <span class="st-lbl">复用主智能体模型</span>
                           <button class="st-toggle" :class="{ on: bgForm.fromAi }" type="button" role="switch"
                             :aria-checked="bgForm.fromAi" aria-label="复用主智能体模型"
-                            @click="bgForm.fromAi = !bgForm.fromAi">{{ bgForm.fromAi ? '开' : '关' }}</button>
+                            @click="bgForm.fromAi = !bgForm.fromAi"></button>
                         </div>
                         <span v-if="bgForm.fromAi" class="st-hint">保存时把主智能体的服务地址、模型名、参数与密钥同步进本条目；之后主模型改动不会自动跟随——重新勾选并保存即再次同步。</span>
                       </div>
