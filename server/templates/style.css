@@ -1829,7 +1829,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-modal-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 28px; }
 .st-m-save { display: none; margin-left: auto; padding: 6px 16px; }  /* 移动头部保存（桌面页内保存行在场） */
 /* rail 底部锚定齿轮（margin-top:auto 自成一端，不挤占既有钮组） */
-.rail-gear { margin-top: auto; }
+/* 设置入口：rail 柱底部锚定（margin-top:auto 吃掉剩余高度）。特异性必须 ≥
+   `.rail > .rbtn + .rbtn`（0,3,0，line 762 的 6px 顶距会压过裸 .rail-gear）。 */
+.rail > .rbtn.rail-gear { margin-top: auto; }
 @media (max-width: 639px) {
   /* 全屏浮层：壳高走 fixed inset-0（布局视口链，键盘压视口型内核随收缩——100vh/h-screen 红线）；
      保存升头部、页内保存行隐（单一保存动作不双留）；meta 让位给钮 */
