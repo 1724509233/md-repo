@@ -1074,7 +1074,9 @@ export const SettingsPage = {
     return {
       state, panelRef, requestClose,
       SECTIONS, AI_PARAMS, LOG_LEVELS, section, ICONS,
-      memoryBadge, onMemActioned, onMemOpenDoc,
+      // memoryBadge 是 prop——模板经 props 自动解包可达，setup return 里禁裸标识符
+      //（T6 回归 2026-11-23：裸 memoryBadge 塞 return = setup ReferenceError，整树崩）
+      onMemActioned, onMemOpenDoc,
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
       toolsMode, toolsSel, setToolsMode, toggleTool, toolLabel, toolCls, toolTitle,

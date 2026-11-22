@@ -527,3 +527,15 @@ import(%r).then(m=>{
     assert "run_id" in win, "runDone id 须锚 run 戳（重放去重地基）"
     # 流中禁发：token/reasoning/tool_result 各支体零 runDone（done 分支外全文件只 emits 声明与单点 emit）
     assert ai.count("emit('runDone'") == 1
+
+
+def test_setup_return_no_bare_props():
+    # T6 回归钉（2026-11-23 浏览器实炸）：SettingsPage setup = `setup(props, {emit})`，
+    # prop 不是 setup 作用域的裸变量——裸 memoryBadge 塞进 return 对象字面量 =
+    # ReferenceError，setup 即炸整树崩（静态面钉抓不到运行时，此钉补位）。
+    # 模板经 props 自动解包本就可达 prop，return 里出现 prop 名裸简写即为雷。
+    src = (TPL / "js/components/SettingsPage.js").read_text(encoding="utf-8")
+    i = src.index("return {\n      state, panelRef, requestClose,")
+    block = src[i : src.index("\n    }", i)]
+    for prop in ("memoryBadge", "initialTab"):
+        assert f"{prop}," not in block, f"prop {prop} 裸简写混入 setup return（作用域雷）"
