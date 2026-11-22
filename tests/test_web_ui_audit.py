@@ -349,6 +349,19 @@ def test_settings_template_bindings_are_returned():
                 f" (expr: {expr.strip()[:60]!r})")
 
 
+def test_settings_422_goes_inline_not_top_banner():
+    # 2026-11-22 用户改版：422 校验错误全部下沉表单项（字段红框+红小字 → 卡片顶兜底 → toast 三级），
+    # 顶部告警区只留 409 并发冲突与热生效族（非字段校验）——422 处理路径不得再引用顶部告警条形态。
+    # 'invalid' 是旧顶部告警条的 report.kind 键：整个文件零出现 = 告警条承接校验错误的路径已死。
+    sp = _templates()["SettingsPage.js"]
+    assert "'invalid'" not in sp and '"invalid"' not in sp
+    assert re.search(r"res\.status === 422\) \{\s*\n\s*apply422", sp), \
+        "422 必须走 apply422（字段级落点），不得回挂顶部告警条"
+    # 三级兜底面与预检不得空白的工具组在场（拍板 6：工具不准空）
+    assert "fieldErrors" in sp and "cardErrors" in sp and "showToast" in sp
+    assert "'至少选择一个工具'" in sp
+
+
 def test_p2_search_card_button():
     # 搜索面板结果卡键盘可达（待办 e96cf4ed）：卡内勘察无嵌套交互元素（renderSnippet 契约
     # = escapeHtml + <mark>，见 SearchPanel.js:24 注释）→ 原生 <button type="button">；

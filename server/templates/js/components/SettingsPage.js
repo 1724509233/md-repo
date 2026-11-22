@@ -15,7 +15,16 @@
  * 保存状态徽标（取代旧成功反馈条，spec §6）：三张设置卡右上角 + 后台列表逐条目右上角，两态
  *   「已保存（中性）/ 未保存（高亮）」；dirty = 分段指纹（ai 段含密钥 touched/toolsMode/toolsSel、
  *   bg 段逐条目、misc 段=通知+日志+隐私）与 hydrate 基线比对，保存成功/409 重载重取基线即归零。
- *   错误条（409/422/500）固定于浮层头部下方、滚动区之外（必现）；成功不再有条——徽标归零即信号。
+ *   顶部告警区（2026-11-22 用户改版：非字段校验族专席）只留 409 并发冲突与热生效/其它保存失败；
+ *   成功不再有条——徽标归零即信号。
+ * 表单项级校验（2026-11-22 用户改版，替代页顶 422 告警条）：422 与保存预检错误全部下沉字段级——
+ *   出错字段红框 + 字段下红小字（--st-error 配色族）；预检 = 点保存时统一跑（无 blur 逐字段校验），
+ *   有错不发 PUT，跳出错字段所在分段 + 滚动定位 + focus({preventScroll:true})（键盘红线）；
+ *   字段被修改即清该字段错误，下次保存全量重算。预检规则只实现服务端已有规则（加载器 raise 点
+ *   为法源，服务端仍是权威；文案本地化中文，422 回显 = 加载器原文剥实现 meta 前缀）。
+ *   三级兜底（错误不可见是红线）：message 定位不到字段 → 所属卡片顶一行；section 也定不了 → toast；
+ *   bg 条目字段错误在折叠态不可见 → 条目行涉错红标 + 自动展开首个涉错条目。
+ *   工具不准空（用户拍板）：主智能体与 bg 条目 tools 均不得空选（加载器拒空列表 / v2 法层必填）。
  * 工具权限三态（meta.tool_perms = 注册表单一真相，前端零镜像常量）：勾选+allow=允许（实心）、
  *   勾选+ask=询问（描边+后缀）、未勾选=拒绝（虚线弱样式）；aria-pressed 恒为「是否授权」，
  *   三态语义进 title（英文原名开头，对账 config 用）。
@@ -45,6 +54,8 @@
  * 文案纪律（AGENTS Frontend Rule 2）：正文零字段名/端点路径/设计概念名；
  *   命名口径统一「主智能体 / 后台智能体 / 杂项」（2026-11-22 用户拍板，与监控页「智能体」措辞对齐）。
  */
+import { showToast } from '../utils/toast.js'
+
 const { ref, computed, watch, nextTick, inject, onBeforeUnmount } = Vue
 
 // 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源；命名口径 2026-11-22 用户拍板，与监控页对齐）
@@ -239,6 +250,72 @@ function toNum(v) {
 const numOrEmpty = v => (v == null ? '' : v)
 const strOrEmpty = v => (v == null ? '' : String(v))
 
+// ─── 表单项级校验基建（2026-11-22 改版；法源 = 加载器各 raise 点，服务端仍是权威）───
+const MSG_INT = '需为整数'
+const MSG_NUM = '需为数字'
+const MSG_TOOLS = '至少选择一个工具'
+const isIntVal = v => v !== '' && v != null && Number.isInteger(Number(v))
+const isNumVal = v => v !== '' && v != null && Number.isFinite(Number(v))
+// cron 5 段形 + 数值域粗检（最终合法性归服务端 croniter：字母形态——月/周日名、L/W/# 等——放行）
+const CRON_RANGE = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]]
+function checkCron(cron) {
+  const fields = String(cron).trim().split(/\s+/)
+  if (fields.length !== 5) return '定时计划需为 5 段（分 时 日 月 周）'
+  for (let f = 0; f < 5; f++) {
+    for (let part of fields[f].split(',')) {
+      if (part.includes('/')) {
+        const cut = part.indexOf('/')
+        const step = part.slice(cut + 1)
+        part = part.slice(0, cut)
+        if (!/^\d+$/.test(step) || Number(step) < 1) return '定时计划格式有误'
+      }
+      if (part === '*') continue
+      if (part === '') return '定时计划格式有误'
+      const m = /^(\d+)(?:-(\d+))?$/.exec(part)
+      if (!m) continue // 字母/生僻形态交服务端 croniter 终判（不硬拦 = 不误杀合法值）
+      const a = Number(m[1])
+      const b = m[2] == null ? a : Number(m[2])
+      if (a < CRON_RANGE[f][0] || b > CRON_RANGE[f][1] || a > b) return '定时计划格式有误'
+    }
+  }
+  return ''
+}
+// 回车成标签即时校验（法源 = core.privacy.parse_privacy_dirs）：非空/非绝对/无 .. /无斜杠/非系统目录
+function checkPrivacyDir(v) {
+  const norm = String(v).replace(/\\/g, '/')
+  if (/^[A-Za-z]:/.test(norm) || norm.startsWith('/')) return '需为库内相对目录名，不能是绝对路径'
+  if (norm.split('/').includes('..')) return '不能包含 ..'
+  if (norm.includes('/')) return '只填顶层目录名，不要带斜杠'
+  if (['.sync', '.trash', 'suggestions'].includes(norm.casefold())) return '系统目录不能设为隐私目录'
+  return ''
+}
+// 422 message → 字段键启发式（已知键词表；定位不了走卡片顶兜底，不硬猜。词表序 = 具体优先，
+// 如 verbs 先于 tools——「verbs is required when tools contains 'propose'」归 verbs）
+const AI_FIELD_MAP = [
+  [/tools/, 'tools'],
+  ...AI_PARAMS.map(p => [new RegExp(p.key), p.key])
+]
+const BG_FIELD_MAP = [
+  [/invalid cron/i, 'cron'],
+  [/target_dir/, 'target_dir'],
+  [/report_dir/, 'report_dir'],
+  [/prompt/, 'prompt'],
+  [/arm_count/, 'trigger.arm_count'],
+  [/low_score/, 'trigger.low_score'],
+  [/min_interval_h/, 'trigger.min_interval_h'],
+  [/trigger\./, 'trigger'],
+  [/verbs/, 'verbs'],
+  [/model_id/, 'model.model_id'],
+  [/'propose' and 'write_doc'/, 'tools'],
+  [/\btools\b/, 'tools'],
+  [/\balias\b/, 'alias']
+]
+const MISC_FIELD_MAP = [
+  [/daily_cap/, 'daily_cap'],
+  [/log_retention_days/, 'log.retention_days'],
+  [/log_level/, 'log.level']
+]
+
 export const SettingsPage = {
   name: 'SettingsPage',
   emits: ['close'],
@@ -282,6 +359,28 @@ export const SettingsPage = {
     const toolsMode = ref('all')         // 'all'=全量（payload tools:null）| 'custom'=白名单
     const toolsSel = ref([])
     let loadedOnce = false
+
+    // ═══ 表单项级错误态（2026-11-22 改版）：fieldErrors 一个响应式对象（键 = 'ai.<字段>' |
+    //     'bg.<条目下标>.<字段路径>' | 'misc.<字段>'，值 = 红小字文案），不给每字段加独立 ref；
+    //     cardErrors = message 定位不到字段时的卡片顶兜底（键 = 分段 id）；dirErr = 隐私目录回车错。
+    //     预检错误 = 本地化中文（给用户行动用）；422 错误 = 加载器原文（剥「Config file …: 」与
+    //     「background_agents[i] (alias)」实现 meta 前缀后落位）───
+    const fieldErrors = ref({})
+    const cardErrors = ref({})
+    const dirErr = ref('')
+    const err = key => fieldErrors.value[key] || ''
+    const cardErrs = sec => cardErrors.value[sec] || []
+    function clearErr(key) {
+      if (!fieldErrors.value[key]) return
+      const m = { ...fieldErrors.value }
+      delete m[key]
+      fieldErrors.value = m
+    }
+    function clearAllErrors() {
+      fieldErrors.value = {}
+      cardErrors.value = {}
+      dirErr.value = ''
+    }
 
     // ═══ 分段保存状态徽标 + 关闭守卫（spec §6：X / backdrop / Escape 任一路径先过 requestClose）═══
     // dirty 分段切指纹（徽标逐卡/逐条目点亮）：ai 段 = ai 表单 + 密钥 touched/input + toolsMode/toolsSel；
@@ -355,7 +454,7 @@ export const SettingsPage = {
     }
     async function saveAndClose() {
       const ok = await save()
-      confirmOpen.value = false   // 422/409：确认浮层收起、设置浮层不关、错误条照报（固定头部下方区）
+      confirmOpen.value = false   // 预检/422/409：确认浮层收起、设置浮层不关、错误照报（字段级/卡顶/toast）
       if (ok) emit('close')
     }
     // app Escape 链最高优先支 /（其余关闭路径模板直连）→ settingsCloseSeq 递增 = 关闭请求
@@ -420,9 +519,10 @@ export const SettingsPage = {
         toolsMode.value = 'all'
         toolsSel.value = [...(meta.value.tools || [])]
       }
-      // 服务端真相回填 = 条目编辑态归零（保存后重载同路径：折叠列表、解武装）
+      // 服务端真相回填 = 条目编辑态归零（保存后重载同路径：折叠列表、解武装、清校验错误态）
       bgEditing.value = -1
       disarmBgDelete()
+      clearAllErrors()
       // 分段徽标基线：hydrate 末尾重取各段指纹（保存成功/409 重载同路径 → dirty 自动清零）
       resetBaselines()
     }
@@ -460,9 +560,11 @@ export const SettingsPage = {
     function setToolsMode(mode) {
       if (toolsMode.value === mode) return
       toolsMode.value = mode
+      clearErr('ai.tools') // 切回全量后白名单不再进 payload，残留红字失义
       if (mode === 'custom' && !toolsSel.value.length) toolsSel.value = [...(meta.value.tools || [])]
     }
     function toggleTool(t) {
+      clearErr('ai.tools') // 字段修改即清该字段错误（下次保存全量重算）
       const i = toolsSel.value.indexOf(t)
       if (i >= 0) toolsSel.value.splice(i, 1)
       else toolsSel.value.push(t)
@@ -483,15 +585,20 @@ export const SettingsPage = {
     // ═══ 隐私目录标签（输入 + 回车成标签、× 删；重复即忽略）───
     const dirDraft = ref('')
     const dirInputRef = ref(null)
+    // 回车成标签即时校验：出错输入框就地红 + 小字，不入库不生成标签（法源 = parse_privacy_dirs）
     function addDir() {
       const v = String(dirDraft.value).trim()
       if (!v) return
+      const bad = checkPrivacyDir(v)
+      if (bad) { dirErr.value = bad; return }
+      dirErr.value = ''
       if (!form.value.privacy.dirs.includes(v)) form.value.privacy.dirs.push(v)
       dirDraft.value = ''
       // 键盘聚焦红线（AGENTS Gotchas）：preventScroll 防键盘弹起时视口被程序化平移
       if (dirInputRef.value) dirInputRef.value.focus({ preventScroll: true })
     }
     function removeDir(i) { form.value.privacy.dirs.splice(i, 1) }
+    function clearDirErr() { if (dirErr.value) dirErr.value = '' }
     function onDirKeydown(e) {
       if (e.key === 'Enter') { e.preventDefault(); addDir() }
     }
@@ -520,6 +627,16 @@ export const SettingsPage = {
       if (bgLive.value.has(String(e.alias || '').trim())) return { cls: 'run', label: '运行', tip: '服务端在册（有运行或触发登记）' }
       return { cls: 'idle', label: '待命', tip: '已启用；服务端尚未登记（新建/改名后待下一拍）' }
     }
+    // 条目行涉错标记（错误可见性兜底：字段错误挂在折叠表单里不可见，列表行恒可见）
+    function bgHasErr(i) {
+      const pre = 'bg.' + i + '.'
+      return Object.keys(fieldErrors.value).some(k => k.startsWith(pre))
+    }
+    function bgErrTip(i) {
+      const pre = 'bg.' + i + '.'
+      const k = Object.keys(fieldErrors.value).find(x => x.startsWith(pre))
+      return k ? String(fieldErrors.value[k]) : ''
+    }
     // 本段首次打开且脉搏尚未到货 → 静默补拉一次（失败吞掉，不阻塞表单加载）
     function ensureBgStatus() {
       if (state.memoryStatus || bgStatusPending.value) return
@@ -536,6 +653,7 @@ export const SettingsPage = {
       bgEditing.value = i
     }
     function bgAdd() {
+      clearAllErrors() // 条目下标即错误键前缀，列表增删后旧键全部失配——结构变化即清，下次保存重算
       form.value.background_agents.push(bgBlankEntry())
       disarmBgDelete()
       bgEditing.value = form.value.background_agents.length - 1
@@ -552,6 +670,7 @@ export const SettingsPage = {
         return
       }
       disarmBgDelete()
+      clearAllErrors() // 同 bgAdd：下标位移使旧错误键失配
       form.value.background_agents.splice(i, 1)
       if (bgEditing.value === i) bgEditing.value = -1
       else if (bgEditing.value > i) bgEditing.value -= 1
@@ -560,6 +679,10 @@ export const SettingsPage = {
 
     function bgToggleTrigger(i) {
       const e = form.value.background_agents[i]
+      clearErr('bg.' + i + '.trigger') // 触发组开关即清本组校验错误
+      clearErr('bg.' + i + '.trigger.arm_count')
+      clearErr('bg.' + i + '.trigger.low_score')
+      clearErr('bg.' + i + '.trigger.min_interval_h')
       if (e) e.trigger = e.trigger ? null : bgBlankTrigger()
     }
     function bgToggleEvent(i, op) {
@@ -572,6 +695,7 @@ export const SettingsPage = {
     function bgToggleTool(i, t) {
       const e = form.value.background_agents[i]
       if (!e) return
+      clearErr('bg.' + i + '.tools') // 字段修改即清该字段错误（下次保存全量重算）
       const k = e.tools.indexOf(t)
       if (k >= 0) e.tools.splice(k, 1)
       else e.tools.push(t)
@@ -579,9 +703,18 @@ export const SettingsPage = {
     function bgToggleVerb(i, v) {
       const e = form.value.background_agents[i]
       if (!e) return
+      clearErr('bg.' + i + '.verbs')
       const k = e.verbs.indexOf(v)
       if (k >= 0) e.verbs.splice(k, 1)
       else e.verbs.push(v)
+    }
+    // 复用主智能体模型开关（勾选态整组模型字段隐藏，model_id 必填预检只查非勾选态 → 切换即清残留红字）
+    function bgToggleFromAi() {
+      const i = bgEditing.value
+      const e = form.value.background_agents[i]
+      if (!e) return
+      clearErr('bg.' + i + '.model.model_id')
+      e.fromAi = !e.fromAi
     }
     function bgClearKey(i) {
       const e = form.value.background_agents[i]
@@ -591,10 +724,203 @@ export const SettingsPage = {
     }
     const bgKeyHint = e => (String(e.model.keyInput) === '' ? '保存后将清除密钥' : '保存后将写入新密钥')
 
-    // ═══ 保存（单一「保存全部」；成功无条——分段徽标归零即信号；409/422/500 错误条固定头部
-    //     下方区必现；500 {saved:true} 的 apply 失败窗口如实报——spec §4.2 步 6）═══
+    // ═══ 保存（单一「保存全部」；成功无条——分段徽标归零即信号；顶部告警区只留 409/热生效族，
+    //     422 校验错误全部下沉表单项；500 {saved:true} 的 apply 失败窗口如实报——spec §4.2 步 6）═══
     const saving = ref(false)
-    const report = ref(null)  // {kind:'conflict'|'invalid'|'savedapply'|'error', ...}
+    const report = ref(null)  // {kind:'conflict'|'savedapply'|'error', ...}——非字段校验族专属
+
+    // ─── 保存预检（点保存时统一跑，无 blur 逐字段校验；规则全集只实现服务端已有规则，
+    //     法源 = 加载器各 raise 点；返回 [{key, sec, msg}]，有错 = 不发 PUT）───
+    function precheck() {
+      const out = []
+      const add = (key, sec, msg) => out.push({ key, sec, msg })
+      if (!form.value) return out
+      // 主智能体：数值键可空、非空类型判（int 族 / 数字族——服务端无范围检查，此处同不加）
+      const a = form.value.ai
+      for (const p of AI_PARAMS) {
+        const v = a[p.key]
+        if (v === '' || v == null) continue
+        if (p.key === 'temperature' || p.key === 'confirm_timeout') {
+          if (!isNumVal(v)) add('ai.' + p.key, 'ai', MSG_NUM)
+        } else if (!isIntVal(v)) add('ai.' + p.key, 'ai', MSG_INT)
+      }
+      // 工具不准空（用户拍板）：自定义白名单空选 = 非法（加载器拒 ai.tools 空列表）
+      if (toolsMode.value === 'custom' && !toolsSel.value.length) add('ai.tools', 'ai', MSG_TOOLS)
+      // 后台条目（执行器只读条目不进编辑面，跳过）
+      const seenAlias = {}
+      for (let i = 0; i < form.value.background_agents.length; i++) {
+        const e = form.value.background_agents[i]
+        if (e.readOnly) continue
+        const pfx = 'bg.' + i + '.'
+        const al = String(e.alias || '').trim()
+        if (!al) add(pfx + 'alias', 'bg', '标识不能为空')
+        else if (al === 'agent') add(pfx + 'alias', 'bg', '「agent」为保留标识，请换一个')
+        if (al && Object.prototype.hasOwnProperty.call(seenAlias, al)) {
+          add('bg.' + seenAlias[al] + '.alias', 'bg', '标识与其他条目重复') // 跨条目判重：涉事条目同时标红
+          add(pfx + 'alias', 'bg', '标识与其他条目重复')
+        } else if (al) seenAlias[al] = i
+        const cron = String(e.cron || '').trim()
+        if (!cron) add(pfx + 'cron', 'bg', '定时计划不能为空')
+        else { const cm = checkCron(cron); if (cm) add(pfx + 'cron', 'bg', cm) }
+        if (!String(e.target_dir || '').trim()) add(pfx + 'target_dir', 'bg', '工作目录不能为空')
+        if (!String(e.prompt || '').trim()) add(pfx + 'prompt', 'bg', '提示词文件不能为空')
+        // 预算/调度数值键：仅拦非整数，不加范围（服务端无范围检查）
+        for (const p of BG_SCHED) if (e[p.key] !== '' && e[p.key] != null && !isIntVal(e[p.key])) add(pfx + p.key, 'bg', MSG_INT)
+        if (e.trigger) {
+          const ac = e.trigger.arm_count
+          if (ac !== '' && ac != null && (!isIntVal(ac) || Number(ac) < 1)) add(pfx + 'trigger.arm_count', 'bg', '需为不小于 1 的整数')
+          const ls = e.trigger.low_score
+          if (ls !== '' && ls != null && (!isNumVal(ls) || !(Number(ls) > 0 && Number(ls) < 1))) add(pfx + 'trigger.low_score', 'bg', '需为 0 到 1 之间的数字')
+          const mi = e.trigger.min_interval_h
+          if (mi !== '' && mi != null && !isNumVal(mi)) add(pfx + 'trigger.min_interval_h', 'bg', MSG_NUM)
+        }
+        // 工具不准空（v2 法层必填非空）；取消复用后 model_id 必填；模型数值键同 ai 类型预检
+        if (!e.tools.length) add(pfx + 'tools', 'bg', MSG_TOOLS)
+        if (!e.fromAi) {
+          if (!String(e.model.model_id || '').trim()) add(pfx + 'model.model_id', 'bg', '模型名称不能为空')
+          for (const p of BG_MODEL_NUMS) {
+            const v = e.model[p.key]
+            if (v === '' || v == null) continue
+            if (p.key === 'temperature' ? !isNumVal(v) : !isIntVal(v)) add(pfx + 'model.' + p.key, 'bg', p.key === 'temperature' ? MSG_NUM : MSG_INT)
+          }
+        }
+      }
+      // 杂项：daily_cap / log_retention_days 整数 ≥1（可空 = 省略键回缺省）
+      const cap = form.value.notifications.daily_cap
+      if (cap !== '' && cap != null && (!isIntVal(cap) || Number(cap) < 1)) add('misc.daily_cap', 'misc', '需为不小于 1 的整数')
+      const ret = form.value.log.retention_days
+      if (ret !== '' && ret != null && (!isIntVal(ret) || Number(ret) < 1)) add('misc.log.retention_days', 'misc', '需为不小于 1 的整数')
+      return out
+    }
+    function groupFields(list) {
+      const fe = {}
+      for (const p of list) fe[p.key] = fe[p.key] ? fe[p.key] + '；' + p.msg : p.msg
+      return fe
+    }
+    // 预检失败定位：跳所在分段 → 涉错 bg 条目自动展开 → 滚动定位 → 键盘红线焦点
+    async function locateFirst(list) {
+      const first = list[0]
+      section.value = first.sec
+      const m = /^bg\.(\d+)\./.exec(first.key)
+      if (m) bgEditing.value = Number(m[1])
+      await nextTick()
+      if (!panelRef.value) return
+      const el = panelRef.value.querySelector('[data-fk="' + first.key + '"]')
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      const target = el.matches('input,select,textarea,button') ? el : el.querySelector('input,select,textarea,button')
+      if (target) target.focus({ preventScroll: true })
+    }
+
+    // ─── 422 回显（section 定卡片 + message 键词/alias 定位字段；三级兜底 = 字段红字 →
+    //     卡片顶一行 → toast，错误不可见是红线）───
+    function clean422(msg) {
+      return String(msg)
+        .replace(/^Config file .*?: /, '')            // 临时校验文件路径前缀 = 实现 meta，剥
+        .replace(/^background_agents\[\d+(?: \([^)]*\))?\]\.?/, '') // 条目定位前缀已用于落位，剥
+        .trim()
+    }
+    function entryIndexes(message) {
+      // 主定位 = payload 下标（PUT 条目序 = 表单序，天然可靠）；跨条目消息（重叠/判重）无下标形，
+      // 按涉事 alias 匹配（涉事条目同时标红）
+      const list = form.value.background_agents || []
+      const m = /background_agents\[(\d+)\]/.exec(message)
+      if (m) { const i = Number(m[1]); return i < list.length ? [i] : [] }
+      const hits = []
+      list.forEach((e, i) => { const a = String(e.alias || '').trim(); if (a && message.includes(a)) hits.push(i) })
+      return hits
+    }
+    function bgFieldOf(message) {
+      for (const [re, k] of BG_FIELD_MAP) if (re.test(message)) return k
+      return null
+    }
+    function apply422(errors) {
+      const fe = {}
+      const ce = {}
+      const card = (sec, msg) => { (ce[sec] || (ce[sec] = [])).push(msg) }
+      let expand = -1
+      for (const e of errors) {
+        const msg = String((e && e.message) || '')
+        const sec = e && e.section
+        const clean = clean422(msg) || '配置校验未通过，请检查后重试'
+        if (msg.includes('主智能体模型未配置')) { fe['ai.model'] = clean; continue } // 复用引用缺失 → 挂主模型字段
+        if (sec === 'ai') {
+          const hit = AI_FIELD_MAP.find(([re]) => re.test(msg))
+          if (hit) fe['ai.' + hit[1]] = clean
+          else card('ai', clean)
+          continue
+        }
+        if (sec === 'background_agents') {
+          const idxs = entryIndexes(msg)
+          const fk = idxs.length ? bgFieldOf(msg) : null
+          if (fk) {
+            for (const i of idxs) {
+              const key = 'bg.' + i + '.' + fk
+              fe[key] = fe[key] ? fe[key] + '；' + clean : clean
+            }
+            if (expand < 0) expand = idxs[0]
+          } else card('bg', clean) // 条目定不到或键词表映射不了 → bg 卡顶兜底
+          continue
+        }
+        if (sec === 'notifications' || sec === 'log' || sec === 'privacy') {
+          const hit = MISC_FIELD_MAP.find(([re]) => re.test(msg))
+          if (hit) fe['misc.' + hit[1]] = clean
+          else card('misc', clean)
+          continue
+        }
+        showToast(clean, 'error') // section 都定不了 → toast 兜底
+      }
+      fieldErrors.value = fe
+      cardErrors.value = ce
+      // 折叠条目字段错误不可见是红线：自动展开首个涉错条目（列表行另有涉错红标兜底）
+      if (expand >= 0 && bgEditing.value !== expand) bgEditing.value = expand
+    }
+
+    // 返回 true = 已保存（保存并关闭据此放行）；false = 未保存，错误已按字段/卡顶/toast 就位
+    async function save() {
+      if (saving.value || !form.value) return false
+      report.value = null
+      clearAllErrors()
+      const problems = precheck() // 预检有错 → 不发 PUT（服务端仍是权威，下次保存全量重算）
+      if (problems.length) {
+        fieldErrors.value = groupFields(problems)
+        await locateFirst(problems)
+        return false
+      }
+      saving.value = true
+      try {
+        const res = await api.putSettings(buildPayload())
+        if (res.status === 200) {
+          // 保存成功后重载 GET：按新 revision 回填全表单（与后端真相一致，api_key 掩码同步刷新，
+          // 分段徽标随 hydrate 基线重取归零）
+          await load()
+          return true
+        }
+        if (res.status === 409) {
+          report.value = { kind: 'conflict' }
+        } else if (res.status === 422) {
+          apply422((res.data && res.data.errors) || [])
+        } else if (res.status === 500 && res.data && res.data.saved) {
+          report.value = { kind: 'savedapply', message: '配置已保存，但部分即时生效失败，建议重启服务' }
+        } else if (res.status === 503) {
+          report.value = { kind: 'error', message: '设置管理未接线' }
+        } else {
+          report.value = { kind: 'error', message: '保存失败，可稍后重试' }
+        }
+      } catch (e) {
+        report.value = { kind: 'error', message: '保存失败，可稍后重试' }
+      } finally {
+        saving.value = false
+      }
+      return false
+    }
+
+    // 409「重载」：丢弃本页未保存编辑，回到服务端真相（与保存成功后的重载同一语义）
+    function reloadFromServer() {
+      report.value = null
+      clearAllErrors()
+      load()
+    }
 
     function buildPayload() {
       const f = form.value
@@ -629,44 +955,6 @@ export const SettingsPage = {
       return p
     }
 
-    // 返回 true = 已保存（保存并关闭据此放行）；false = 未保存，错误条已就位
-    async function save() {
-      if (saving.value || !form.value) return false
-      saving.value = true
-      report.value = null
-      try {
-        const res = await api.putSettings(buildPayload())
-        if (res.status === 200) {
-          // 保存成功后重载 GET：按新 revision 回填全表单（与后端真相一致，api_key 掩码同步刷新，
-          // 分段徽标随 hydrate 基线重取归零）
-          await load()
-          return true
-        }
-        if (res.status === 409) {
-          report.value = { kind: 'conflict' }
-        } else if (res.status === 422) {
-          report.value = { kind: 'invalid', errors: (res.data && res.data.errors) || [] }
-        } else if (res.status === 500 && res.data && res.data.saved) {
-          report.value = { kind: 'savedapply', message: '配置已保存，但部分即时生效失败，建议重启服务' }
-        } else if (res.status === 503) {
-          report.value = { kind: 'error', message: '设置管理未接线' }
-        } else {
-          report.value = { kind: 'error', message: '保存失败，可稍后重试' }
-        }
-      } catch (e) {
-        report.value = { kind: 'error', message: '保存失败，可稍后重试' }
-      } finally {
-        saving.value = false
-      }
-      return false
-    }
-
-    // 409「重载」：丢弃本页未保存编辑，回到服务端真相（与保存成功后的重载同一语义）
-    function reloadFromServer() {
-      report.value = null
-      load()
-    }
-
     // 分段导航（单一在场段；≤639 由 CSS 折成顶部分段钮行）
     const section = ref('ai')
     // 打开本段且全站脉搏未到货 → 静默补拉徽标数据（immediate 覆盖直落本段的后续打开路径）
@@ -678,6 +966,8 @@ export const SettingsPage = {
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
       toolsMode, toolsSel, setToolsMode, toggleTool, toolLabel, toolCls, toolTitle,
+      // 表单项级校验呈现（红框判定 + 红小字 + 修改即清 + 卡顶兜底）
+      err, clearErr, cardErrs, dirErr, clearDirErr,
       // 分段徽标 + 关闭确认浮层
       dirtyAi, dirtyBg, dirtyMisc, bgEntryDirty,
       confirmOpen, confirmRef, cancelBtnRef, cancelConfirm, discardAndClose, saveAndClose, onConfirmKeydown,
@@ -685,6 +975,7 @@ export const SettingsPage = {
       // 后台 agent 段
       BG_TRIG_OPS, BG_TRIG_OP_CN, BG_TRIG_SOURCES, BG_SCHED, BG_TRIG_NUMS, BG_MODEL_NUMS,
       bgEditing, bgForm, bgDelArmed, bgBadge, bgTitle, bgRenamed, bgConflict, bgKeyHint,
+      bgHasErr, bgErrTip, bgToggleFromAi,
       bgSelect, bgAdd, onBgDelete, bgToggleTrigger, bgToggleEvent, bgToggleTool, bgToggleVerb, bgClearKey,
       saving, save, report, reloadFromServer
     }
@@ -707,20 +998,14 @@ export const SettingsPage = {
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
-      <!-- 错误条固定区（头部下方、滚动区之外——错误必现）：409 冲突 / 422 校验 / 500 如实报；
-           aria-live=polite 保存结果不抢读屏。成功无条 = 分段徽标归零即信号 -->
+      <!-- 告警固定区（头部下方、滚动区之外——非字段校验族必现）：409 冲突 / 500 热生效与保存失败；
+           422 校验错误已下沉表单项内联（本区不再承接字段校验）。aria-live=polite 保存结果不抢读屏。
+           成功无条 = 分段徽标归零即信号 -->
       <div class="st-alerts" aria-live="polite">
         <div v-if="report && report.kind === 'conflict'" class="st-banner warn">
           配置已被页面外修改，本次保存未生效。
           <button class="mp-back st-banner-btn" type="button" title="重新载入服务端最新配置" @click="reloadFromServer()">重载</button>
           <span class="st-hint st-banner-hint">重载后本页未保存的修改将丢弃</span>
-        </div>
-        <div v-else-if="report && report.kind === 'invalid'" class="st-banner err">
-          未保存——配置校验未通过：
-          <ul v-if="report.errors.length" class="st-berrs">
-            <li v-for="(e, i) in report.errors" :key="i">{{ e.message }}</li>
-          </ul>
-          <span v-else class="st-hint">服务端未返回具体原因</span>
         </div>
         <div v-else-if="report && report.kind === 'savedapply'" class="st-banner warn">{{ report.message }}</div>
         <div v-else-if="report && report.kind === 'error'" class="st-banner err">{{ report.message }}</div>
@@ -751,6 +1036,10 @@ export const SettingsPage = {
                     <span class="st-sv" :class="{ dirty: dirtyAi }" :title="dirtyAi ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtyAi ? '未保存' : '已保存' }}</span>
                   </div>
                   <div class="st-fields">
+                    <!-- 卡片顶兜底行（422 message 定位不到具体字段时；字段级红字为主呈现） -->
+                    <div v-if="cardErrs('ai').length" class="st-card-err">
+                      <span v-for="(m, i) in cardErrs('ai')" :key="i">{{ m }}</span>
+                    </div>
                     <label class="st-field">
                       <span class="st-lbl">服务地址</span>
                       <input class="st-input" type="text" autocomplete="off" placeholder="例如 http://127.0.0.1:11434/v1"
@@ -758,8 +1047,10 @@ export const SettingsPage = {
                     </label>
                     <label class="st-field">
                       <span class="st-lbl">模型名称</span>
-                      <input class="st-input" type="text" autocomplete="off" placeholder="例如 qwen2.5:14b"
-                        v-model="form.ai.model">
+                      <input class="st-input" data-fk="ai.model" :class="{ 'is-err': err('ai.model') }"
+                        type="text" autocomplete="off" placeholder="例如 qwen2.5:14b"
+                        v-model="form.ai.model" @input="clearErr('ai.model')">
+                      <span v-if="err('ai.model')" class="st-field-err">{{ err('ai.model') }}</span>
                     </label>
                     <div class="st-field">
                       <label class="st-lbl" for="st-api-key">密钥</label>
@@ -775,8 +1066,10 @@ export const SettingsPage = {
                     <div class="st-grid">
                       <label v-for="p in AI_PARAMS" :key="p.key" class="st-field">
                         <span class="st-lbl">{{ p.label }}</span>
-                        <input class="st-input" type="number" :min="p.min" :max="p.max" :step="p.step"
-                          v-model="form.ai[p.key]">
+                        <input class="st-input" :data-fk="'ai.' + p.key" :class="{ 'is-err': err('ai.' + p.key) }"
+                          type="number" :min="p.min" :max="p.max" :step="p.step"
+                          v-model="form.ai[p.key]" @input="clearErr('ai.' + p.key)">
+                        <span v-if="err('ai.' + p.key)" class="st-field-err">{{ err('ai.' + p.key) }}</span>
                       </label>
                     </div>
                     <div class="st-field" role="group" aria-labelledby="st-tools-lbl">
@@ -788,14 +1081,15 @@ export const SettingsPage = {
                           :aria-pressed="toolsMode === 'custom'" @click="setToolsMode('custom')">自定义</button>
                       </div>
                       <template v-if="toolsMode === 'custom'">
-                        <div v-if="meta.tools.length" class="st-chips">
+                        <div v-if="meta.tools.length" class="st-chips" data-fk="ai.tools">
                           <button v-for="t in meta.tools" :key="t" class="st-chip st-toolchip" type="button"
                             :class="toolCls(t, toolsSel.includes(t))" :aria-pressed="toolsSel.includes(t)"
                             :title="toolTitle(t, toolsSel.includes(t))" @click="toggleTool(t)">{{ toolLabel(t) }}<span
                               v-if="toolCls(t, toolsSel.includes(t)).ask" class="st-chip-ask" aria-hidden="true">询问</span></button>
                         </div>
                         <div v-else class="zline">工具清单暂不可用</div>
-                        <span class="st-hint">点选启用；全不选 = 主智能体不开放任何工具</span>
+                        <span v-if="err('ai.tools')" class="st-field-err">{{ err('ai.tools') }}</span>
+                        <span class="st-hint">点选启用工具，至少保留一项</span>
                         <span class="st-hint">允许 = 自动执行 · 询问 = 执行前需你确认 · 拒绝 = 未授权</span>
                       </template>
                       <span v-else class="st-hint">当前开放全部工具</span>
@@ -819,6 +1113,8 @@ export const SettingsPage = {
                           <span class="st-bg-meta">
                             <span class="st-bg-alias">{{ e.alias || '未填标识' }}</span>
                             <span v-if="e.readOnly" class="st-bg-tag">执行器</span>
+                            <!-- 涉错红标：折叠条目的字段错误不可见是红线，列表行兜底可见（title=首条错误） -->
+                            <span v-if="bgHasErr(i)" class="st-bg-err" :title="bgErrTip(i)">需修正</span>
                           </span>
                         </button>
                         <span class="st-sv" :class="{ dirty: bgEntryDirty(i) }" :title="bgEntryDirty(i) ? '此条目有未保存的修改' : '此条目已与服务端一致'">{{ bgEntryDirty(i) ? '未保存' : '已保存' }}</span>
@@ -837,6 +1133,10 @@ export const SettingsPage = {
                   <div v-if="bgForm" class="mcard st-bg-form">
                     <div class="mc-h"><span class="mc-t">{{ bgTitle(bgForm) }}</span></div>
                     <div v-if="!bgForm.readOnly" class="st-fields">
+                      <!-- 卡片顶兜底行（422 message 定不到条目/字段时） -->
+                      <div v-if="cardErrs('bg').length" class="st-card-err">
+                        <span v-for="(m, i) in cardErrs('bg')" :key="i">{{ m }}</span>
+                      </div>
                       <div class="st-group">基本</div>
                       <div class="st-grid">
                         <label class="st-field">
@@ -846,26 +1146,34 @@ export const SettingsPage = {
                         </label>
                         <label class="st-field">
                           <span class="st-lbl">标识</span>
-                          <input class="st-input st-input-mono" type="text" autocomplete="off"
-                            placeholder="例如 organizer" v-model="bgForm.alias">
+                          <input class="st-input st-input-mono" :data-fk="'bg.' + bgEditing + '.alias'"
+                            :class="{ 'is-err': err('bg.' + bgEditing + '.alias') }" type="text" autocomplete="off"
+                            placeholder="例如 organizer" v-model="bgForm.alias" @input="clearErr('bg.' + bgEditing + '.alias')">
+                          <span v-if="err('bg.' + bgEditing + '.alias')" class="st-field-err">{{ err('bg.' + bgEditing + '.alias') }}</span>
                         </label>
                       </div>
                       <span v-if="bgRenamed(bgForm)" class="st-warn-inline">改名将清空该条已存密钥（需重填），且触发计权从零开始</span>
                       <label class="st-field">
                         <span class="st-lbl">工作目录</span>
-                        <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="例如 notes" v-model="bgForm.target_dir">
+                        <input class="st-input st-input-mono" :data-fk="'bg.' + bgEditing + '.target_dir'"
+                          :class="{ 'is-err': err('bg.' + bgEditing + '.target_dir') }" type="text" autocomplete="off"
+                          placeholder="例如 notes" v-model="bgForm.target_dir" @input="clearErr('bg.' + bgEditing + '.target_dir')">
+                        <span v-if="err('bg.' + bgEditing + '.target_dir')" class="st-field-err">{{ err('bg.' + bgEditing + '.target_dir') }}</span>
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">提示词文件</span>
-                        <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="例如 server/prompts/x.md" v-model="bgForm.prompt">
+                        <input class="st-input st-input-mono" :data-fk="'bg.' + bgEditing + '.prompt'"
+                          :class="{ 'is-err': err('bg.' + bgEditing + '.prompt') }" type="text" autocomplete="off"
+                          placeholder="例如 server/prompts/x.md" v-model="bgForm.prompt" @input="clearErr('bg.' + bgEditing + '.prompt')">
+                        <span v-if="err('bg.' + bgEditing + '.prompt')" class="st-field-err">{{ err('bg.' + bgEditing + '.prompt') }}</span>
                         <span class="st-hint">相对配置文件的路径</span>
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">报告目录</span>
-                        <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="例如 notes/reports" v-model="bgForm.report_dir">
+                        <input class="st-input st-input-mono" :data-fk="'bg.' + bgEditing + '.report_dir'"
+                          :class="{ 'is-err': err('bg.' + bgEditing + '.report_dir') }" type="text" autocomplete="off"
+                          placeholder="例如 notes/reports" v-model="bgForm.report_dir" @input="clearErr('bg.' + bgEditing + '.report_dir')">
+                        <span v-if="err('bg.' + bgEditing + '.report_dir')" class="st-field-err">{{ err('bg.' + bgEditing + '.report_dir') }}</span>
                         <span class="st-hint">留空 = 工作目录下的默认报告区</span>
                       </label>
                       <div class="st-field">
@@ -879,22 +1187,28 @@ export const SettingsPage = {
                       <div class="st-group">调度与预算</div>
                       <label class="st-field">
                         <span class="st-lbl">定时计划</span>
-                        <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="例如 0 2 * * *（每日 02:00）" v-model="bgForm.cron">
+                        <input class="st-input st-input-mono" :data-fk="'bg.' + bgEditing + '.cron'"
+                          :class="{ 'is-err': err('bg.' + bgEditing + '.cron') }" type="text" autocomplete="off"
+                          placeholder="例如 0 2 * * *（每日 02:00）" v-model="bgForm.cron" @input="clearErr('bg.' + bgEditing + '.cron')">
+                        <span v-if="err('bg.' + bgEditing + '.cron')" class="st-field-err">{{ err('bg.' + bgEditing + '.cron') }}</span>
                       </label>
                       <div class="st-grid">
                         <label v-for="p in BG_SCHED" :key="p.key" class="st-field">
                           <span class="st-lbl">{{ p.label }}</span>
-                          <input class="st-input" type="number" :min="p.min" :step="p.step" v-model="bgForm[p.key]">
+                          <input class="st-input" :data-fk="'bg.' + bgEditing + '.' + p.key"
+                            :class="{ 'is-err': err('bg.' + bgEditing + '.' + p.key) }" type="number" :min="p.min" :step="p.step"
+                            v-model="bgForm[p.key]" @input="clearErr('bg.' + bgEditing + '.' + p.key)">
+                          <span v-if="err('bg.' + bgEditing + '.' + p.key)" class="st-field-err">{{ err('bg.' + bgEditing + '.' + p.key) }}</span>
                         </label>
                       </div>
-                      <div class="st-field" role="group" aria-label="事件触发">
+                      <div class="st-field" role="group" aria-label="事件触发" :data-fk="'bg.' + bgEditing + '.trigger'">
                         <div class="st-trg-head">
                           <span class="st-lbl">事件触发</span>
                           <button class="st-toggle" :class="{ on: bgForm.trigger }" type="button" role="switch"
                             :aria-checked="!!bgForm.trigger" aria-label="开启事件触发"
                             @click="bgToggleTrigger(bgEditing)"></button>
                         </div>
+                        <span v-if="err('bg.' + bgEditing + '.trigger')" class="st-field-err">{{ err('bg.' + bgEditing + '.trigger') }}</span>
                         <span class="st-hint">关闭 = 仅按计划定时运行</span>
                         <template v-if="bgForm.trigger">
                           <select class="st-input" aria-label="触发来源" v-model="bgForm.trigger.source">
@@ -909,15 +1223,17 @@ export const SettingsPage = {
                           <div class="st-grid">
                             <label v-for="p in BG_TRIG_NUMS" :key="p.key" class="st-field">
                               <span class="st-lbl">{{ p.label }}</span>
-                              <input class="st-input" type="number" :min="p.min" :max="p.max" :step="p.step"
-                                v-model="bgForm.trigger[p.key]">
+                              <input class="st-input" :data-fk="'bg.' + bgEditing + '.trigger.' + p.key"
+                                :class="{ 'is-err': err('bg.' + bgEditing + '.trigger.' + p.key) }" type="number" :min="p.min" :max="p.max" :step="p.step"
+                                v-model="bgForm.trigger[p.key]" @input="clearErr('bg.' + bgEditing + '.trigger.' + p.key)">
+                              <span v-if="err('bg.' + bgEditing + '.trigger.' + p.key)" class="st-field-err">{{ err('bg.' + bgEditing + '.trigger.' + p.key) }}</span>
                             </label>
                           </div>
                         </template>
                       </div>
 
                       <div class="st-group">工具</div>
-                      <div class="st-field" role="group" aria-label="工具授权">
+                      <div class="st-field" role="group" aria-label="工具授权" :data-fk="'bg.' + bgEditing + '.tools'">
                         <div v-if="meta.tools.length" class="st-chips">
                           <button v-for="t in meta.tools" :key="t" class="st-chip st-toolchip" type="button"
                             :class="toolCls(t, bgForm.tools.includes(t))" :aria-pressed="bgForm.tools.includes(t)"
@@ -925,14 +1241,16 @@ export const SettingsPage = {
                               v-if="toolCls(t, bgForm.tools.includes(t)).ask" class="st-chip-ask" aria-hidden="true">询问</span></button>
                         </div>
                         <div v-else class="zline">工具清单暂不可用</div>
-                        <span class="st-hint">允许 = 自动执行 · 询问 = 执行前需你确认 · 拒绝 = 未授权</span>
+                        <span v-if="err('bg.' + bgEditing + '.tools')" class="st-field-err">{{ err('bg.' + bgEditing + '.tools') }}</span>
+                        <span class="st-hint">点选启用工具，至少保留一项 · 允许 = 自动执行 · 询问 = 执行前需你确认 · 拒绝 = 未授权</span>
                         <span v-if="bgConflict(bgForm)" class="st-warn-inline">提案与直写工具不可同时启用，保存会被拒绝</span>
                         <template v-if="bgForm.tools.includes('propose')">
-                          <div v-if="meta.verbs.length" class="st-chips">
+                          <div v-if="meta.verbs.length" class="st-chips" :data-fk="'bg.' + bgEditing + '.verbs'">
                             <button v-for="v in meta.verbs" :key="v" class="st-chip" type="button"
                               :class="{ on: bgForm.verbs.includes(v) }" :aria-pressed="bgForm.verbs.includes(v)"
                               @click="bgToggleVerb(bgEditing, v)">{{ v }}</button>
                           </div>
+                          <span v-if="err('bg.' + bgEditing + '.verbs')" class="st-field-err">{{ err('bg.' + bgEditing + '.verbs') }}</span>
                           <span class="st-hint">选择该任务可提交的提案类型</span>
                         </template>
                         <span v-else class="st-hint">启用提案工具后可在此限定提案类型</span>
@@ -946,7 +1264,7 @@ export const SettingsPage = {
                           <span class="st-lbl">复用主智能体模型</span>
                           <button class="st-toggle" :class="{ on: bgForm.fromAi }" type="button" role="switch"
                             :aria-checked="bgForm.fromAi" aria-label="复用主智能体模型"
-                            @click="bgForm.fromAi = !bgForm.fromAi"></button>
+                            @click="bgToggleFromAi()"></button>
                         </div>
                         <span v-if="bgForm.fromAi" class="st-hint">保存时把主智能体的服务地址、模型名、参数与密钥同步进本条目；之后主模型改动不会自动跟随——重新勾选并保存即再次同步。</span>
                       </div>
@@ -959,8 +1277,10 @@ export const SettingsPage = {
                         </label>
                         <label class="st-field">
                           <span class="st-lbl">模型名称</span>
-                          <input class="st-input" type="text" autocomplete="off" placeholder="例如 qwen2.5:14b"
-                            v-model="bgForm.model.model_id">
+                          <input class="st-input" :data-fk="'bg.' + bgEditing + '.model.model_id'"
+                            :class="{ 'is-err': err('bg.' + bgEditing + '.model.model_id') }" type="text" autocomplete="off"
+                            placeholder="例如 qwen2.5:14b" v-model="bgForm.model.model_id" @input="clearErr('bg.' + bgEditing + '.model.model_id')">
+                          <span v-if="err('bg.' + bgEditing + '.model.model_id')" class="st-field-err">{{ err('bg.' + bgEditing + '.model.model_id') }}</span>
                         </label>
                       </div>
                       <label class="st-field">
@@ -984,8 +1304,10 @@ export const SettingsPage = {
                       <div class="st-grid">
                         <label v-for="p in BG_MODEL_NUMS" :key="p.key" class="st-field">
                           <span class="st-lbl">{{ p.label }}</span>
-                          <input class="st-input" type="number" :min="p.min" :max="p.max" :step="p.step"
-                            v-model="bgForm.model[p.key]">
+                          <input class="st-input" :data-fk="'bg.' + bgEditing + '.model.' + p.key"
+                            :class="{ 'is-err': err('bg.' + bgEditing + '.model.' + p.key) }" type="number" :min="p.min" :max="p.max" :step="p.step"
+                            v-model="bgForm.model[p.key]" @input="clearErr('bg.' + bgEditing + '.model.' + p.key)">
+                          <span v-if="err('bg.' + bgEditing + '.model.' + p.key)" class="st-field-err">{{ err('bg.' + bgEditing + '.model.' + p.key) }}</span>
                         </label>
                       </div>
                       </template>
@@ -1014,14 +1336,22 @@ export const SettingsPage = {
                     <span class="st-sv" :class="{ dirty: dirtyMisc }" :title="dirtyMisc ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtyMisc ? '未保存' : '已保存' }}</span>
                   </div>
                   <div class="st-fields">
+                    <!-- 卡片顶兜底行（422 message 定位不到具体字段时） -->
+                    <div v-if="cardErrs('misc').length" class="st-card-err">
+                      <span v-for="(m, i) in cardErrs('misc')" :key="i">{{ m }}</span>
+                    </div>
                     <div class="st-grid">
                       <label class="st-field">
                         <span class="st-lbl">每日通知上限</span>
-                        <input class="st-input" type="number" min="0" step="1" v-model="form.notifications.daily_cap">
+                        <input class="st-input" data-fk="misc.daily_cap" :class="{ 'is-err': err('misc.daily_cap') }"
+                          type="number" min="1" step="1" v-model="form.notifications.daily_cap" @input="clearErr('misc.daily_cap')">
+                        <span v-if="err('misc.daily_cap')" class="st-field-err">{{ err('misc.daily_cap') }}</span>
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">日志保留天数</span>
-                        <input class="st-input" type="number" min="1" step="1" v-model="form.log.retention_days">
+                        <input class="st-input" data-fk="misc.log.retention_days" :class="{ 'is-err': err('misc.log.retention_days') }"
+                          type="number" min="1" step="1" v-model="form.log.retention_days" @input="clearErr('misc.log.retention_days')">
+                        <span v-if="err('misc.log.retention_days')" class="st-field-err">{{ err('misc.log.retention_days') }}</span>
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">日志级别</span>
@@ -1036,8 +1366,9 @@ export const SettingsPage = {
                         <span v-for="(d, i) in form.privacy.dirs" :key="d" class="st-tag">{{ d }}<button
                           class="st-tag-x" type="button" :aria-label="'移除隐私目录 ' + d" @click="removeDir(i)">×</button></span>
                       </div>
-                      <input ref="dirInputRef" class="st-input" type="text" autocomplete="off"
-                        placeholder="输入目录名，回车添加" v-model="dirDraft" @keydown="onDirKeydown">
+                      <input ref="dirInputRef" class="st-input" :class="{ 'is-err': dirErr }" type="text" autocomplete="off"
+                        placeholder="输入目录名，回车添加" v-model="dirDraft" @keydown="onDirKeydown" @input="clearDirErr">
+                      <span v-if="dirErr" class="st-field-err">{{ dirErr }}</span>
                       <span class="st-hint">名单内目录的内容受隐私保护</span>
                     </label>
                   </div>
@@ -1063,8 +1394,8 @@ export const SettingsPage = {
     <!-- 关闭确认浮层（spec §6 三选，替代原生 confirm）：role=alertdialog；层级 = 设置浮层(81)
          之上、toast(100) 之下（style.css st-confirm 族）；折叠壳家族照 st-modal 纪律（visibility
          出 Tab 序 + 转场仅 opacity/transform + RM 两态同杀）；默认焦点 = 取消钮，Escape = 取消，
-         设置浮层 inert 时自然 Tab 困于本层。保存并关闭失败（409/422）：本层收起、设置浮层不关、
-         错误条照报（头部下方固定区）；放弃修改 = 重拉服务端真相后关闭 -->
+         设置浮层 inert 时自然 Tab 困于本层。保存并关闭失败（预检/409/422）：本层收起、设置浮层不关、
+         错误照报（字段级红字/卡片顶兜底/toast）；放弃修改 = 重拉服务端真相后关闭 -->
     <div class="st-confirm-backdrop" :class="{ show: confirmOpen }" aria-hidden="true" @click="cancelConfirm"></div>
     <div ref="confirmRef" class="st-confirm" :class="{ open: confirmOpen }" :inert="!confirmOpen"
       role="alertdialog" aria-modal="true" aria-labelledby="st-confirm-t" aria-describedby="st-confirm-d"

@@ -1726,8 +1726,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
    · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
    · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族；.st-toolchip 权限三态 =
      允许（实心黄铜）/ 询问（描边 + 后缀）/ 拒绝（虚线弱化），勾选与否仍由 .on 承载）
-   · .st-tag(s) 隐私目录标签 · .st-alerts 错误条固定区（浮层头部下方、滚动区之外）
-   · .st-banner(.err/.warn) 错误反馈条 · .st-sv 保存状态徽标（已保存中性 / 未保存高亮）
+   · .st-tag(s) 隐私目录标签 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
+   · .st-banner(.err/.warn) 告警反馈条 · .st-sv 保存状态徽标（已保存中性 / 未保存高亮）
+   · 内联校验族（2026-11-22 改版）：.st-input.is-err 出错红框 · .st-field-err 字段红小字 ·
+     .st-card-err 卡片顶兜底 · .st-bg-err 条目行涉错标记
    · .st-foot/.st-save 保存行 · .st-footnote 页底说明。 */
 .st-cols { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 18px; align-items: start; }
 .st-nav { position: sticky; top: 4px; display: flex; flex-direction: column; gap: 4px; }
@@ -1765,8 +1767,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--ink) 3%, transparent); font-family: var(--sans); font-size: 11px; color: var(--ink); }
 .st-tag-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 999px; transition: color .15s ease; }
 .st-tag-x:hover { color: var(--st-error); }
-/* 错误条固定区（改版：从 st-modal-body 滚动区上移到头部下方 flex 段——错误必现，滚不滚都可见；
-   成功无条 = 分段徽标归零即信号，kind:'ok' 与 .ok 形态已退役）。空容器零高：banner 自带
+/* 告警固定区（非字段校验族专席：409 并发冲突 / 热生效与保存失败；422 校验错误已下沉表单项内联，
+   2026-11-22 用户改版；从 st-modal-body 滚动区上移到头部下方 flex 段——告警必现，滚不滚都可见；
+   成功无条 = 分段徽标归零即信号）。空容器零高：banner 自带
    水平/顶部 margin，容器不占位 */
 .st-alerts { flex-shrink: 0; }
 .st-banner { border-radius: 8px; padding: 9px 12px; font-size: 11.5px; border: 1px solid; margin: 12px 20px 0; }
@@ -1774,8 +1777,13 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-banner.err { border-color: color-mix(in srgb, var(--st-error) 40%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); }
 .st-banner-btn { margin: 0 8px; }
 .st-banner-hint { display: inline; }
-.st-berrs { margin: 4px 0 0 16px; font-size: 10.5px; }
-.st-berrs li { word-break: break-all; overflow-wrap: anywhere; }
+/* 表单项级校验（2026-11-22 用户改版：422/预检错误下沉字段级——出错字段红框 + 字段下红小字；
+   message 定位不到字段 → 卡片顶兜底行；折叠条目字段错误不可见 → 列表行涉错红标兜底。
+   配色全部复用 --st-error 既有错误色族，不造新色 */
+.st-input.is-err { border-color: var(--st-error); }
+.st-field-err { font-size: 10.5px; color: var(--st-error); }
+.st-card-err { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; line-height: 1.6; color: var(--st-error); }
+.st-card-err span { word-break: break-all; overflow-wrap: anywhere; }
 /* 保存状态徽标（改版：取代成功反馈条）：设置卡右上角 + 后台条目右上角，两态中性灰/高亮。
    mc-h 是监控页共用卡头（.mc-t 带大写转形——「主 AGENT」观感来源），转形只在设置浮层作用域内
    取消（中文本不受影响，取消后「主智能体」按书写原样呈现），监控页共用语义零改动 */
@@ -1803,6 +1811,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-bg-meta { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .st-bg-alias { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st-bg-tag { flex-shrink: 0; font-family: var(--mono); font-size: 9px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-soft); }
+.st-bg-err { flex-shrink: 0; font-size: 9.5px; color: var(--st-error); border: 1px solid color-mix(in srgb, var(--st-error) 45%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
 .st-badge { flex-shrink: 0; align-self: center; font-family: var(--mono); font-size: 9.5px; border-radius: 999px; padding: 2px 8px; border: 1px solid; }
 .st-badge.run { border-color: color-mix(in srgb, var(--st-ok) 40%, var(--line)); background: color-mix(in srgb, var(--st-ok) 8%, transparent); color: var(--st-ok); }
 .st-badge.idle { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 7%, transparent); color: var(--brass); }
