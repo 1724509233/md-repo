@@ -7,6 +7,7 @@ import { showToast } from '../utils/toast.js'
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows } from '../utils/search.js'
 import { isPrivacyScoped, isPrivacyDirHit } from '../utils/privacy.js'
+import { confirmMoveDoc, confirmDeleteDoc } from '../utils/docActions.js'
 
 const SEARCH_TOP_K = 8
 
@@ -338,29 +339,21 @@ export const FileTree = {
       }
     }
 
-    function confirmDelete() {
+    // 移动/删除 = docActions 单写面（T5，FileTree 与 RightDock 共用）：菜单上下文收口成参数，
+    // 确认后关菜单（行为等价原实现）；话术/写面/刷新零副本
+    async function confirmDelete() {
       const m = menu.value
       if (!m) return
       const count = fileState.files.filter(f => f.path === m.path || f.path.startsWith(m.path + '/')).length
-      // 回收站语义（P4-4）：删除 = 移入回收站（可恢复），文案同口径
-      const msg = m.isDir && count > 0
-        ? `将把该文件夹及其中 ${count} 个文档移入回收站，确定？`
-        : `确定将「${m.path.split('/').pop()}」移入回收站？`
-      if (confirm(msg)) {
-        manage('delete', { path: m.path })
-        menu.value = null
-      }
+      const ok = await confirmDeleteDoc(m.path, m.isDir, count, manage)
+      if (ok) menu.value = null
     }
 
-    function moveItem() {
+    async function moveItem() {
       const m = menu.value
       if (!m) return
-      const target = prompt('移动到哪个目录？（留空 = 根目录）', '')
-      menu.value = null
-      if (target === null) return
-      const dir = target.trim().replace(/\/+$/, '')
-      const name = m.path.split('/').pop()
-      manage('move', { from_path: m.path, to_path: (dir ? dir + '/' : '') + name })
+      const ok = await confirmMoveDoc(m.path, manage)
+      if (ok) menu.value = null
     }
 
     function onDragStart(e, path, isDir) {

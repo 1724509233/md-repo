@@ -67,10 +67,13 @@ export const TopBar = {
       emit('tocClick', item)
     }
 
-    // 点击外部关闭：委托到 document（同更多菜单模式）。顶栏内部（浮层、开关按钮、模式/铃铛等
-    // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理
+    // 点击外部关闭：委托到 document（同更多菜单模式）。顶栏内部（开关按钮、模式/铃铛等
+    // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理。
+    // T5：toc-dd 迁 app 根级单实例（桌面锚 dock 左缘），不再属顶栏子树——「点浮层不关」
+    // 改由 data-toc-dd 守卫解耦判定（移动浮层同款属性，行为逐字不变）。
     function onDocClick(e) {
       if (rootEl.value && rootEl.value.contains(e.target)) return
+      if (e.target.closest && e.target.closest('[data-toc-dd]')) return
       if (props.tocOpen) emit('toggleToc')
     }
     function onKeydown(e) {
@@ -214,19 +217,8 @@ export const TopBar = {
         </div>
       </div>
 
-      <!-- 目录浮层（P4-3）：锚内容区右缘（right:8px），260px / 移动 min(260px,100vw−48px)；
-           过渡与层级见 style.css .toc-dd（z-50 与通知下拉/更多菜单同层，AI 面板 15 / ai-btn 40 之下） -->
-      <div v-show="tocOpen" class="toc-dd" data-toc-dd>
-        <div class="toc-head">本文目录</div>
-        <div class="toc-list" data-toc-list>
-          <button v-for="it in tocItems" :key="it.id" type="button"
-            class="toc-item" :class="'lv' + it.level"
-            :data-id="it.id" :title="it.text" @click="onTocClick(it)">
-            {{ it.text }}
-          </button>
-          <div v-if="!tocItems.length" class="toc-empty">本文档没有标题</div>
-        </div>
-      </div>
+      <!-- 目录浮层已迁 app.js 根级单实例（沉浸式壳 T5：桌面锚 dock 左缘、移动锚顶栏下，
+           随 .toc-dd 分节）；本组件保留「目录」开关钮（移动）与 toggleToc/tocClick 通道 -->
     </div>
   `
 }

@@ -21,6 +21,7 @@ import { MonitorPage } from './components/MonitorPage.js'
 import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
 import { FabMenu } from './components/FabMenu.js'
+import { RightDock } from './components/RightDock.js'
 import { ICONS } from './utils/icons.js'
 import { isPrivacyScoped } from './utils/privacy.js'
 import { drawerNext, escTarget, loadSlots, saveSlots } from './utils/shellState.js'
@@ -150,6 +151,9 @@ const panelWidth = computed(() => {
 const docHeadSegs = computed(() => (state.currentPath || '').split('/'))
 const docPrivate = computed(() =>
   !!state.currentPath && isPrivacyScoped(state.privacyDirs, state.currentPath))
+// 沉浸式壳 T5：dock 渲染口径 = 存在文档（含 docMissing 加载失败态——「加载失败」文案与
+// 「文档缺失」锁钮同属该态，复用既有 docMissing 旗标，不另立新态）；Home 态 false → 零 chrome
+const hasDoc = computed(() => !!state.currentPath)
 // 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
 let notifCloseT = null
 function closeNotifDropdown() {
@@ -785,6 +789,26 @@ function onSearchPick(path, heading) {
   })
 }
 
+// ─── 沉浸式壳 T5：dock → 文件抽屉定位（V1 定位口径）───
+// 重命名/移动/删除钮：开文件抽屉（桌面抽屉唯一源 state.drawer）+ 树内展开祖先前缀并滚到当前行，
+// 行内 ⋯ 菜单执行操作（重命名逻辑留树内不动）。演进位：dock 直出重命名对话框/命令面板
+// （spec §12），V1 不做——写面唯一（docActions 单写面，dock 移动/删除钮直调同款函数，禁第二实现）。
+// revealActive/expandToPath = FileTree setup return 既有方法（fileTreeRef 经模板 ref 直取，
+// collapseAll 先例同形）；滚动走组件既有实现，不新写（preventScroll 红线口径归组件）。
+function onRevealTree(kind) {
+  // kind（rename|move|delete）V1 暂不分流——三动作同为「开抽屉 + 定位当前行」；
+  // 留参为演进位（直出对话框时按 kind 分派）
+  activePanel.value = 'file'
+  state.drawer = 'file'
+  nextTick(() => {
+    const t = fileTreeRef.value
+    if (t && state.currentPath) {
+      t.expandToPath(state.currentPath)
+      t.revealActive()
+    }
+  })
+}
+
 // ─── 移动端搜索抽屉拖拽（移植 MobileSheet.js 逻辑，P2-8）───
 let searchDrawerDragging = false
 let searchDrawerStartY = 0
@@ -977,6 +1001,27 @@ export function createApp() {
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
 
+        // 快捷键（Task 5，spec §5）：Ctrl+S 保存 / Ctrl+E 预览⇄编辑 / F2 重命名定位。
+        // settings 浮层链首放行（浮层开着时快捷键归浮层自身，同 Esc 链 settings 居首纪律）；
+        // 编辑器输入框不豁免（Ctrl+S/E 无输入语义冲突；F2 在 rename 输入行被组件
+        // onEditKeydown 就地吞掉且不冒泡——行内改名不被抢）。
+        // Ctrl+E 按 spec §5 默认值实现（Chromium/Edge 可 preventDefault，理论不占键）；
+        // §13 实测项移交 W2 波闸目检——用户真机若被地址栏吃掉，退 Ctrl+Shift+E（spec §5 表同步改）。
+        document.addEventListener('keydown', (e) => {
+          if (state.settingsOpen) return
+          if (e.ctrlKey && e.key.toLowerCase() === 's') {
+            // Ctrl+S 保存（Shift 变体同收——preventDefault 顺带吃掉浏览器「另存为」）
+            e.preventDefault()
+            saveWithRetry()
+          } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'e') {
+            e.preventDefault()
+            setMode(state.previewMode ? 'edit' : 'preview')
+          } else if (e.key.toLowerCase() === 'f2') {
+            e.preventDefault()
+            onRevealTree('rename')
+          }
+        })
+
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
         // 设置浮层入口（深链/控制台外链用；页面内入口 = rail 底部齿轮钮）
@@ -1132,7 +1177,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         panelDrawerOpen, panelWidth, treePinned, toggleTreeSlot,
-        docHeadSegs, docPrivate,
+        docHeadSegs, docPrivate, hasDoc, onRevealTree,
         onRailClick, onTreeSelect, onSearchPick,
         onFabPick, fabBadges,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
@@ -1391,6 +1436,35 @@ export function createApp() {
                @home 复用既有 goHome（currentPath 置 null → hash watch null 支路 replaceState 清 hash，spec §3 B1） -->
           <fab-menu v-if="isDesktop" ref="fabRef" :badges="fabBadges" @pick="onFabPick" @home="goHome()"></fab-menu>
 
+          <!-- 沉浸式壳 W2（plan Task 5）：右缘文档操作条——桌面专属双保险（v-if=isDesktop + 根
+               hidden lg:flex），hasDoc（含 docMissing 缺失态：钮禁用但条在场，零跳变）驱动渲染，
+               Home 态零 chrome。移动零触达（≤1023px 顶栏「更多」菜单原样）。
+               重命名钮走 revealTree（定位树内行，⋯ 菜单执行）；移动/删除 = docActions 同款直调
+               + revealTree 定位（组件内零第二实现）。样式 .dock 分节 z-index:10（spec §7） -->
+          <right-dock v-if="isDesktop && hasDoc" class="hidden lg:flex"
+            :has-doc="hasDoc" :mode="state.previewMode ? 'preview' : 'edit'" :dirty="state.dirty"
+            :doc-missing="state.docMissing" :rel-open="state.relOpen" :toc-open="state.tocOpen"
+            :current-path="state.currentPath" :files="state.files"
+            @set-mode="setMode" @save="saveWithRetry" @download="downloadDoc"
+            @toggle-toc="toggleToc" @open-doc-face="openDocFace" @reveal-tree="onRevealTree" />
+
+          <!-- 本文目录浮层（P4-3 · T5 自 TopBar 迁入根级单实例）：桌面锚 dock 左缘、移动锚顶栏下
+               （style.css .toc-dd 两媒体态）。TopBar 的桌面「目录」钮与旧 toc-dd 随 TopBar 桌面隐身
+               （lg:hidden 下不渲染），移动「目录」钮与浮层消费路径原样不变——app 级滚动同步/scrollspy/
+               Esc/aiOpen 互斥各消费器本就在 app 层，仅 DOM 位从顶栏子树迁出（data-toc-dd 守卫
+               已把「点浮层不关」从 TopBar rootEl 归属解耦，见其 onDocClick）。 -->
+          <div v-show="state.tocOpen" class="toc-dd" data-toc-dd>
+            <div class="toc-head">本文目录</div>
+            <div class="toc-list" data-toc-list>
+              <button v-for="it in tocItems" :key="it.id" type="button"
+                class="toc-item" :class="'lv' + it.level"
+                :data-id="it.id" :title="it.text" @click="onTocClickItem(it)">
+                {{ it.text }}
+              </button>
+              <div v-if="!tocItems.length" class="toc-empty">本文档没有标题</div>
+            </div>
+          </div>
+
           <!-- AI 面板 -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
             :class="{ open: state.aiOpen }">
@@ -1438,6 +1512,7 @@ export function createApp() {
   app.component('Home', Home)
   app.component('SettingsPage', SettingsPage)
   app.component('FabMenu', FabMenu)
+  app.component('RightDock', RightDock)
 
   return app
 }

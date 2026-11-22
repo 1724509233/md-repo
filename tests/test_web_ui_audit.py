@@ -377,6 +377,18 @@ def test_no_python_string_apis_in_frontend_js():    # 家族钉（2026-11-22 真
             assert banned not in src, f"{name}: Python-only string API {banned!r} in frontend JS"
 
 
+def test_doc_actions_shortcut_wiring():
+    # 沉浸式壳 T5：docActions 纯函数面（零 Vue——禁 Vue/DOM 全局，只吃注入 + 原生对话框）+
+    # Ctrl+S 全局快捷键接线（settings 浮层开着时放行给浮层自身处理——链首 return）。
+    da = (TPL / "js/utils/docActions.js").read_text(encoding="utf-8")
+    for banned in ("Vue", "document.", "window."):
+        assert banned not in da, banned
+    app = _templates()["app.js"]
+    seg = app[app.index("// 快捷键（Task 5"):]
+    assert "if (state.settingsOpen) return" in seg
+    assert "saveWithRetry()" in seg
+
+
 def test_vault_dirs_uses_raw_docs_fetch():
     # 家族钉（2026-11-22 agent-browser 实证）：api.getDocs 的 ETag 304→null 契约专供树消费者；
     # 设置页目录候选若复用它会拿到 null → 空名单且守卫不再重试——必须走 getDocsRaw。
@@ -731,7 +743,7 @@ def test_p2_visual_round_js():
     assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）
     assert "docMissing: { type: Boolean, default: false }" in ep
     assert ':disabled="docMissing"' in ep       # textarea 双保险
-    assert app.count(':doc-missing="state.docMissing"') == 2  # TopBar + EditorPane 传通
+    assert app.count(':doc-missing="state.docMissing"') == 3  # TopBar + EditorPane + RightDock（T5 dock 传通）
     assert app.count("if (!state.currentPath || state.docMissing) return") == 2  # saveWithRetry + downloadDoc
     # ── B：Escape 关台对齐 @close 清理集合 ──
     # 原钉→新锚（T3）：原 [:900] 固定窗口——T3 在链首插桌面 escTarget/fan/drawer 分支后

@@ -185,14 +185,15 @@ input, textarea { -webkit-user-select: text; user-select: text; }
   .topbar-compact .topbar-logo .logo-word { max-width: 0; opacity: 0; }
 }
 
-/* ============ 目录浮层（P4-3）============
-   锚内容区右缘（顶栏右端之下）：AI 抽屉打开时顶栏随 main padding-right:50% 收缩，
-   浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / ai-btn 40 之下）。
+/* ============ 目录浮层（P4-3 · 沉浸式壳 T5 起为 app 根级单实例）============
+   移动锚顶栏下缘（fixed top:56 = 顶栏 48 + 8，right:8 视口右缘——与旧「顶栏子树 absolute」
+   视觉逐位同构，消费路径零改动）；桌面锚 dock 左缘（文末 T5 分节媒体覆盖）。
+   AI 抽屉打开时浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / ai-btn 40 之下）。
    开 = display 恢复时 animation 正向播放（opacity + translateY(4px→0) + scale(.98→1)，transform 路径零 reflow）；
    合 = v-show 直切（无退场，避免 display 切换的 JS 时序管理；浮层零常驻占用，代价可接受）。
    浮层本体不参与 flex 布局：开关不改内容区尺寸/居中，文档滚动位置不动。 */
 .toc-dd {
-  position: absolute; right: 8px; top: calc(100% + 8px);
+  position: fixed; right: 8px; top: 56px;
   width: 260px; max-height: min(420px, 52vh);
   z-index: 50;
   display: flex; flex-direction: column;
@@ -2130,4 +2131,51 @@ details.d-sec .body { padding: 8px 12px 14px; }
   /* display:block 是承重的：contents 不产盒，fixed 定位无所依附 */
   .notif-anchor { display: block; position: fixed; left: 24px; bottom: 88px; z-index: 50; }
   .notif-anchor .notif-dropdown { position: relative; top: auto; right: auto; width: 380px; }
+}
+
+/* ──── 沉浸式壳 W2 · Task 5：右缘操作条 RightDock + toc-dd 桌面锚 ────
+   dock（spec §5 / 预览稿场景 2）= 固定右缘纵向居中 40px 图标条（--dock-w 单源）；
+   z-index:10 = spec §7 层序首层（dock < fab 20 < 抽屉 30 < 下拉 50 < 桥区 54 < 扇弧 55）。
+   根挂 Tailwind hidden lg:flex 两态（display 交媒体类，本块不重复声明 display）；
+   纵向居中走 transform（GPU，红线：不动 top 逐帧）；钮观感沿 .fab-sub/.toc-btn-open
+   家族（透明底 + hover 黄铜浅底 + 激活 on 态只变色不变几何）。
+   doc-scroll/doc-head 桌面右侧给 dock 让位一个 --dock-w 槽（文本列 max-width 居中于剩余
+   空间，1024px 档最窄情形也不压字）。dock 在场时 AI 面板/edge tab 同步让出右缘槽
+   （过渡态——T7 消息面重做锚点时按 spec §4A 的 chatwin/slot 体系改写，本块为其前最小避让）。 */
+:root { --dock-w: 40px; --destructive: #b91c1c; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
+.dock {
+  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  width: var(--dock-w); z-index: 10;
+  flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
+  border-radius: 10px 0 0 10px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  backdrop-filter: blur(4px);
+  box-shadow: -1px 0 0 var(--line), -8px 0 24px -18px rgba(33, 29, 24, .30);
+}
+.dock-btn {
+  position: relative; width: 28px; height: 28px; padding: 0; border: none; border-radius: 8px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color .12s ease, color .12s ease;
+}
+.dock-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.dock-btn:hover { background: color-mix(in srgb, var(--brass) 9%, transparent); color: var(--ink); }
+.dock-btn.on { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.dock-btn.on:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.dock-btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+.dock-btn:disabled { opacity: .35; pointer-events: none; }
+.dock-danger { color: color-mix(in srgb, var(--destructive) 75%, var(--ink-soft)); }
+.dock-danger:hover { background: color-mix(in srgb, var(--destructive) 9%, transparent); color: var(--destructive); }
+.dock-dirty { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px;
+  border-radius: 9999px; background: var(--brass); box-shadow: 0 0 0 2px var(--surface); }
+@media (min-width: 1024px) {
+  /* toc-dd 桌面锚 = dock 左缘（top 贴顶栏退役后的行位；z-50 压过 dock 10） */
+  .toc-dd { top: 16px; right: calc(var(--dock-w) + 8px); }
+  /* 文档列让位：滚动容器与头行右侧各空一个 dock 槽（选择器列表与 .doc-head 基础视觉规则
+     分离——T4 钉只审基础态） */
+  .doc-scroll, .doc-head { padding-right: calc(24px + var(--dock-w)); }
+  /* AI 面避让 dock 槽（过渡态；T7 按 §4A 重写） */
+  #ai-panel { right: var(--dock-w); }
+  #ai-btn { right: var(--dock-w); }
+  #ai-btn.ai-open { right: calc(50% + var(--dock-w)); }
 }

@@ -104,7 +104,7 @@
 - 钮自上而下：编辑⇄预览（激活态=编辑）· 保存（dirty → 黄铜点）· 下载 · 目录 · 关联 · 重命名 · 移动 · 删除（告警色，两步确认）。
 - 禁用规则：docMissing → 钮禁用；无文档时 dock 整条隐藏（Home 态零 chrome）；**按钮恒定渲染零跳变**（现顶栏 D5 口径平移）。
 - 处理器复用：mode/save/download/toc/关联 = app.js 现有 handlers 直挂；rename/move/delete = FileTree「⋯」菜单同款（实施注记：处理器上提 app 层或抽 util，形态由实施期按 FileTree 现状定，**不得**在 dock 内另起一份实现——单一写面）。
-- **快捷键（本次只两条 + F2）**：`Ctrl+S` 保存；`Ctrl+E` 预览⇄编辑（Chromium 若占键 → 退 `Ctrl+Shift+E`，实施期实测后本表为唯一真源更新）；`F2` 重命名（文档区焦点时）。无命令面板（YAGNI，§12 演进位）。
+- **快捷键（本次只两条 + F2）**：`Ctrl+S` 保存；`Ctrl+E` 预览⇄编辑（**实施按默认值 Ctrl+E 接线；Chromium/Edge 占键实测移交 W2 波闸目检——真机若被地址栏吃掉则退 `Ctrl+Shift+E`，退键时本表同步改定稿值**）；`F2` 重命名（文档区焦点时）。无命令面板（YAGNI，§12 演进位）。
 - 移动端：dock 与 FAB 均 lg-only；≤1023px 用 TopBar「更多」菜单（现状不动）。
 
 ## 6. 记忆控制台 → 设置浮窗

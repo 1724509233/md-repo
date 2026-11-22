@@ -250,6 +250,78 @@ def test_desktop_topbar_retired():
                and "right: auto" in b for b in blocks), "桌面下拉本体脱锚规则缺"
 
 
+def test_dock_and_shortcut_pins():
+    # Task 5 静态钉（plan Step 1 断言集）：RightDock 八钮 title/aria-label 全集 + disabled
+    # 绑定（保存/下载/重命名/移动/删除 = docMissing 禁用、按钮恒渲染零跳变 D5）+ 三快捷键
+    # （小写比较——禁 casefold 红线）+ docActions 双消费 + app.js 挂 dock（lg-only 双保险）+
+    # 样式面 --dock-w 变量与 .dock z-index:10（spec §7 层序 dock < fab）。
+    rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
+    da = (TPL / "js/utils/docActions.js").read_text(encoding="utf-8")
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    ft = (TPL / "js/components/FileTree.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    # ① 八钮 title 文案（预览/编辑激活态同一钮双态 ternary → 动态 title/aria-label；
+    #    保存/下载/重命名/移动/删除 = docMissing 禁用、模式钮锁进编辑，按钮恒渲染零跳变 D5）
+    assert re.search(r":title=\"mode === 'edit' \? '切回预览' : '编辑'\"", rd), "预览⇄编辑双态 title 缺"
+    assert rd.count(':aria-label="mode === ') == 1
+    for label in ("保存", "下载", "目录", "关联", "重命名", "移动", "删除"):
+        assert f'title="{label}"' in rd, label
+        assert f'aria-label="{label}"' in rd, label
+    assert rd.count(":disabled=") >= 5
+    # aria-label 全集（audit icon-only button 钉会扫 RightDock——钮内全 icon 无文本）
+    assert rd.count("aria-label") >= 8
+    # 删除钮告警色（--destructive 弱红，spec §5）
+    assert "--destructive" in rd
+
+    # ② docActions 双消费：dock 只 import（confirm/api 单写面归 docActions，见单写面钉）；
+    #    FileTree import 且 move/delete 两路接上（confirmDelete/moveItem 改调）
+    for src, name in ((rd, "RightDock"), (ft, "FileTree")):
+        assert re.search(r"import \{[^}]*\} from '\.\./utils/docActions\.js'", src), name
+    assert "confirmMoveDoc(" in ft and "confirmDeleteDoc(" in ft
+
+    # ③ 三快捷键（小写比较；Ctrl+E = spec §5 默认值接线，占键实测移交 W2 目检，退路 Ctrl+Shift+E）
+    assert re.search(r"e\.ctrlKey && e\.key\.toLowerCase\(\) === 's'", app)
+    assert "saveWithRetry()" in app[app.index("// 快捷键（Task 5"):]
+    assert "e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'e'" in app
+    assert "e.key.toLowerCase() === 'f2'" in app
+    seg = app[app.index("// 快捷键（Task 5"):app.index("// 监控页 L1 入口")]
+    assert seg.index("state.settingsOpen") < seg.index("'s'")
+    assert "onRevealTree('rename')" in seg
+    assert "function onRevealTree(kind)" in app
+
+    # ④ app.js 挂 dock：hasDoc（含 docMissing 加载失败态）/ lg-only 双保险（v-if + hidden lg:flex）
+    assert re.search(r"<right-dock v-if=\"isDesktop && hasDoc\"\s+class=\"hidden lg:flex\"", app)
+
+    # ⑤ 样式面：--dock-w 变量（dock 本体 + toc-dd 桌面锚两处引用）/ .dock z-index:10 /
+    #    .dock-btn 基础态存在（.dock/.dock-btn 进沉浸式壳分节）
+    assert css.count("--dock-w") >= 2
+    assert "--dock-w: 40px" in css or "--dock-w:40px" in css
+    rules = _css_rules(css)
+    assert any(s == ".dock" and "z-index: 10" in b for s, b in rules), ".dock z-index:10 缺"
+    assert any(s == ".dock-btn" for s, b in rules), ".dock-btn 缺"
+
+
+def test_docactions_single_surface():
+    # Task 5 单写面钉：docActions.js = 确认/移动/删除唯一写面（零 Vue 零 DOM 纯 Promise，
+    # 返回 Promise<boolean>）；RightDock 不得含 confirm( 与 api 直调（只走 docActions）；
+    # FileTree 菜单 handler 薄壳化——无 confirm( 与裸 prompt 输入框（文案单源，防两路漂移）。
+    da = (TPL / "js/utils/docActions.js").read_text(encoding="utf-8")
+    rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
+    ft = (TPL / "js/components/FileTree.js").read_text(encoding="utf-8")
+    assert "export async function confirmMoveDoc(path, manage)" in da
+    assert "export async function confirmDeleteDoc(path, isDir, count, manage)" in da
+    assert not re.search(r"^\s*import\b", da, re.M), "docActions.js 必须零 import（零 Vue 零 DOM）"
+    # confirm 话术逐字（提取自 FileTree 原实现，两路共用）
+    for phrase in ("将把该文件夹及其中", "移入回收站？", "移动到哪个目录？（留空 = 根目录）"):
+        assert phrase in da, phrase
+    # dock 单写面：无 confirm 无 api 直调
+    assert "confirm(" not in rd
+    assert "api.move(" not in rd and "api.delete(" not in rd
+    # FileTree 薄壳：话术零副本
+    assert "confirm(" not in ft and "prompt(" not in ft
+
+
 def test_mobile_flags_untouched():
     # 移动端零改动红线（Global Constraints）：移动旗标消费者数量不降、
     # 移动 panel-shell/search-drawer 原位规则原样、监控移动整页接管形态（flex:1）保留。
