@@ -408,3 +408,122 @@ def test_mobile_flags_untouched():
                and "z-index: 40" in b for b in mob), "移动 panel-shell overlay 原位规则被动"
     assert any(".search-drawer" in b for b in mob)
     assert re.search(r"\.mwrap \{[^}]*flex: 1", css), "移动监控整页接管（flex:1）必须保留"
+
+
+def test_peek_feed_pure():
+    # Task 7 peekFeed node 行为钉：四模板逐字（proposals N=proposal_paths 长度；kind 标记无 paths 回落「有记忆提案…」）/
+    # 普通通知不入栈（要事优先——预览稿场景 8 算式：4 条通知（普通 1 剔除）+ 回复 2 → cap3、more2）/
+    # ts 降序 + 跨源 id 去重 / 无 summary 回落 name / 41 字截 40+省略号 / dedupeAppend 同 id 幂等 + cap 挤旧。
+    mod = (TPL / "js/utils/peekFeed.js").as_uri()
+    js = r"""
+import(%r).then(m=>{
+  const dq=(a,b,w)=>{if(a!==b){console.error(w,'got:',JSON.stringify(a),'want:',JSON.stringify(b));process.exit(1)}};
+  const nProp={id:11,name:'记忆整理',status:'ok',summary:'',ts:100,proposal_paths:'["a","b","c"]'};
+  const nConflict={id:12,name:'同步',status:'conflict',summary:'',ts:90};
+  const nFail={id:13,name:'周报生成',status:'error',summary:'boom',ts:80};
+  const nPlain={id:14,name:'实体索引',status:'ok',summary:'quiet run',ts:70};
+  const replies=[{id:'run-r1',kind:'reply',text:'您昨天问的三件事，我理出来了，要看吗。',dest:'chat',ts:95},
+                 {id:'run-r2',kind:'reply',text:'理好了。',dest:'chat',ts:75}];
+  // 四模板逐字
+  dq(m.peekText(nProp),'记忆提案有 3 条，等您拿主意。','proposals N');
+  dq(m.peekText({id:1,name:'记忆整理',status:'ok',kind:'review',proposal_paths:''}),'有记忆提案，等您拿主意。','proposals N-less');
+  dq(m.peekText(nConflict),'有处冲突，两版都留着，您看下。','conflict');
+  dq(m.peekText(nFail),'周报生成 自己碰了个钉，要看吗。','failed');
+  // 回落链 summary→name + 40 字截断
+  dq(m.peekText({name:'日报'}),'日报','fallback name');
+  dq(m.peekText({name:'日报',summary:'一二三四五'}),'一二三四五','fallback summary');
+  dq(m.peekText({name:'日报',summary:'文'.repeat(41)}),'文'.repeat(40)+'…','40 字截断');
+  // buildPeek：普通不入栈 / cap3 more2 / ts 降序 / dest 值域
+  const p=m.buildPeek([nProp,nConflict,nFail,nPlain],replies,3);
+  dq(p.items.length,3,'cap');
+  dq(p.more,2,'more');
+  dq(p.items[0].id,'notif-11','ts desc 1');
+  dq(p.items[0].dest,'memory','dest memory');
+  dq(p.items[0].text.indexOf('等您拿主意')>=0,true,'peek 摘要文案');
+  dq(p.items[1].id,'run-r1','ts desc 2（回复 95 居中）');
+  dq(p.items[1].dest,'chat','dest chat');
+  dq(p.items[2].id,'notif-12','ts desc 3');
+  dq(p.items[2].dest,'conflict','dest conflict');
+  dq(p.items.some(x=>x.id==='notif-14'),false,'普通通知不入栈');
+  // 缺省 cap=3
+  const p2=m.buildPeek([nProp,nConflict,nFail],[]);
+  dq(p2.items.length,3,'缺省 cap');
+  dq(p2.more,0,'缺省 cap more');
+  const p3=m.buildPeek([], [{id:'dup',text:'a',ts:1},{id:'dup',text:'b',ts:1}]);
+  dq(p3.items.length,1,'buildPeek 跨源 id 去重');
+  // dedupeAppend（Review Focus 4/6：同 id 二次追加长度不变 / cap 外挤最旧）
+  let l=m.dedupeAppend([],{id:'x',ts:1},5);
+  dq(l.length,1,'dedupe 首条');
+  l=m.dedupeAppend(l,{id:'x',ts:2,text:'重放'},5);
+  dq(l.length,1,'同 id 二次追加长度不变');
+  l=m.dedupeAppend(l,{id:'y',ts:3},5);
+  dq(l.length,2,'异 id 追加');
+  for(let i=0;i<6;i++) l=m.dedupeAppend(l,{id:'z'+i,ts:4+i},5);
+  dq(l.length,5,'cap 5 封顶');
+  dq(l.some(x=>x.id==='y'),false,'溢出挤最旧');
+  dq(l.some(x=>x.id==='z5'),true,'最新在场');
+  process.exit(0);
+},()=>process.exit(1))
+""" % mod
+    _run_node(js)
+
+
+def test_peek_surface_pins():
+    # Task 7 面静态钉：BubblePeek（gpill / bmore / bowtie 经 ICONS 单点 / aria-label /
+    # 栈数据源 = peekFeed.buildPeek 纯函数）/ app 接线（chatPinned + slots 读写 + peekReplies +
+    # 挂载）/ AIChatPanel runDone（emits 声明 + emit 调用）/ style.css 握把画谱（.grip 右缘半隐）。
+    bb = (TPL / "js/components/BubblePeek.js").read_text(encoding="utf-8")
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    ai = (TPL / "js/components/AIChatPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    assert "gpill" in bb, "未读 pill 缺"
+    assert "bmore" in bb, "溢出「还有 N 条」缺"
+    assert "ICONS.bowtie" in bb and "icons.js" in bb, "领结图标须经 ICONS 单点"
+    assert "aria-label" in bb
+    assert "buildPeek" in bb and "peekFeed.js" in bb, "气泡栈必须经 peekFeed 纯函数（禁组件内另起摘要逻辑）"
+    assert re.search(r"emits:\s*\[[^\]]*'expand'", bb) and re.search(r"emits:\s*\[[^\]]*'pick'", bb)
+
+    assert "chatPinned" in app
+    assert "loadSlots(" in app and "saveSlots(" in app
+    assert "peekReplies" in app
+    assert re.search(r"<bubble-peek[^>]*v-if=\"isDesktop\"", app), "握把桌面专属挂载（≤1023px 零触达红线）"
+
+    assert re.search(r"emits:\s*\[[^\]]*'runDone'", ai), "emits 声明缺 runDone"
+    assert "emit('runDone'" in ai
+
+    assert re.search(r"\.grip\s*\{", css), ".grip 画谱缺"
+    assert re.search(r"right:\s*-15px", css), "握把半隐 right:-15px 缺"
+
+
+def test_peek_summary_once():
+    # Review Focus 4/6「摘要只出一条」三层钉：
+    # ① 行为：dedupeAppend 同 id 幂等（onRunDone 唯一追加面——重放 second append 长度不变且首条内容不被覆写）
+    # ② id 稳定策略：runDone 的 id 钉 run 戳（evt.run_id || ctx.runId 兜底）——重放同 Run 必同 id → 幂等
+    # ③ emit 单点位：runDone 只在 done 分支发（applyEvent 收尾之后；doneTurn 引用收尾前抓取）、
+    #    流中间（token/reasoning/tool 支）零 runDone——静态顺序钉。
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    mod = (TPL / "js/utils/peekFeed.js").as_uri()
+    js = r"""
+import(%r).then(m=>{
+  const l1=m.dedupeAppend([],{id:'run-a',text:'第一次',ts:1},5);
+  const l2=m.dedupeAppend(l1,{id:'run-a',text:'游标重放帧',ts:99},5);
+  if(l2.length!==1)process.exit(2);
+  if(l2[0].text!=='第一次')process.exit(3);
+  process.exit(0);
+},()=>process.exit(1))
+""" % mod
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
+
+    ai = (TPL / "js/components/AIChatPanel.js").read_text(encoding="utf-8")
+    i_emit = ai.index("emit('runDone'")
+    i_apply = ai.index("const cmds = applyEvent(ctx, evt)")
+    i_guard = ai.rindex("evt.type === 'done'", 0, i_emit)
+    assert i_apply < i_guard < i_emit, "runDone 必须单点在 done 分支、applyEvent 之后"
+    assert ai.index("const doneTurn") < i_apply, "doneTurn 引用须 applyEvent 收尾前抓取（currentTurn 收尾即置 null）"
+    win = ai[max(0, i_emit - 400):i_emit + 200]
+    assert "run_id" in win, "runDone id 须锚 run 戳（重放去重地基）"
+    # 流中禁发：token/reasoning/tool_result 各支体零 runDone（done 分支外全文件只 emits 声明与单点 emit）
+    assert ai.count("emit('runDone'") == 1

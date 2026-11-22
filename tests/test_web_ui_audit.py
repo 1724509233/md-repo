@@ -743,7 +743,7 @@ def test_p2_visual_round_js():
     assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）
     assert "docMissing: { type: Boolean, default: false }" in ep
     assert ':disabled="docMissing"' in ep       # textarea 双保险
-    assert app.count(':doc-missing="state.docMissing"') == 3  # TopBar + EditorPane + RightDock（T5 dock 传通）
+    assert app.count(':doc-missing="state.docMissing"') == 4  # TopBar + EditorPane + RightDock（T5 dock 传通）+ BubblePeek（T7 契约保留位）
     assert app.count("if (!state.currentPath || state.docMissing) return") == 2  # saveWithRetry + downloadDoc
     # ── B：Escape 关台对齐 @close 清理集合 ──
     # 原钉→新锚（T3）：原 [:900] 固定窗口——T3 在链首插桌面 escTarget/fan/drawer 分支后

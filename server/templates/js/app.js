@@ -22,9 +22,11 @@ import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
 import { FabMenu } from './components/FabMenu.js'
 import { RightDock } from './components/RightDock.js'
+import { BubblePeek } from './components/BubblePeek.js'
 import { ICONS } from './utils/icons.js'
 import { isPrivacyScoped } from './utils/privacy.js'
 import { drawerNext, escTarget, loadSlots, saveSlots } from './utils/shellState.js'
+import { dedupeAppend } from './utils/peekFeed.js'
 
 // 初始化 markdown 渲染器
 setupMarkdown()
@@ -67,10 +69,13 @@ const state = reactive({
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: [],      // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
   homeRefreshSeq: 0,      // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
-  drawer: null            // 沉浸式壳 W1（plan 2026-11-22-immersive-shell）：桌面抽屉唯一源
+  drawer: null,           // 沉浸式壳 W1（plan 2026-11-22-immersive-shell）：桌面抽屉唯一源
                           //（T3 定稿值域 'file'|'search'|'trash'|null；monitor 不入抽屉态——
                           //  批准偏离：监控态由 state.monitoring 单实例承担，桌面 mwrap 重塑宽抽屉；
                           //  移动旗标另路不动）
+  chatPinned: false,      // 沉浸式壳 W5（T7，spec §4A）：聊天面板图钉态——false=右缘 .chatwin 浮窗 /
+                          // true=.chat-slot in-flow 右槽（并入 mdvault.shellSlots.right='ai' 持久化）
+  peekReplies: []         // 气泡栈「管家回话」源（浮窗不可见时完成的 assistant 行；cap5 同 run 戳去重）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -616,6 +621,59 @@ function toggleAI(open) {
   state.aiOpen = open
 }
 
+// ─── 沉浸式壳 W5 · 管家消息面（plan Task 7，spec §4A）────────────────────────
+// onRunDone：AIChatPanel done 终帧单点上抛（{id=run 戳, text=正文截 60 字}）。
+// 仅「桌面 && 聊天不可见」时入栈——可见态用户正看着流，不需要纸条；重开浮窗/游标回放
+// 重放同 Run done → dedupeAppend 按 id 幂等吞掉（Review Focus 4/6「摘要只出一条」，
+// RunHub 铁律零接触：只消费既有事件通道，服务端零改动）。移动 ≤1023px 零触达（红线）。
+function onRunDone(payload) {
+  if (!isDesktop.value || state.aiOpen) return
+  if (!payload || payload.id == null || !payload.text) return
+  state.peekReplies = dedupeAppend(state.peekReplies,
+    { id: payload.id, kind: 'reply', text: payload.text, dest: 'chat', ts: Date.now() / 1000 }, 5)
+}
+
+// pick 落点分派（dest ∈ memory|monitor|conflict|chat）：
+//   memory → 设置浮窗记忆段（T6 通道）；monitor → 监控页（run 健康/冲突计数所在）；
+//   chat → 开聊天浮窗并清该条（回复是一次性纸条）；
+//   conflict → 批准备案映射到监控页：ConflictBanner 是「编辑器写冲突」live 横幅（state.conflict
+//     由 tool_result 竞态注入，无通知行来源，peek 无从构造其载荷）；同步冲突以 .conflict- 文件
+//     形态存在、在监控页/Home 计数可见——通知化前 conflict 摘要走监控页（V1 口径，报告在案）。
+function onPeekPick(item) {
+  if (!item) return
+  if (item.dest === 'memory') { openSettingsPage('memory'); return }
+  if (item.dest === 'chat') {
+    toggleAI(true)
+    state.peekReplies = state.peekReplies.filter(r => r.id !== item.id)
+    return
+  }
+  openMonitorPage()
+}
+
+// 右槽持久化（T1 loadSlots/saveSlots 在此接 right 键）：AI 图钉与关联侧栏互斥共写一键
+//（spec §3 右槽二选一）；移动态不改写桌面槽位意图（跨断点红线：移动旗标另路，不擦桌面记忆）。
+function persistRightSlot() {
+  if (!isDesktop.value) return
+  slots.value.right = state.chatPinned ? 'ai' : (state.relOpen ? 'rel' : null)
+  persistSlots()
+}
+function toggleChatPin() {
+  state.chatPinned = !state.chatPinned
+  persistRightSlot()
+}
+// boot 回填只在无 hash 时（boot 与 hash 恢复不打架：#doc/ 走文档侧、#settings/#memory 走浮窗侧，
+// hash 在场即用户意图明确，槽位回填让位）。rel 回填需当前有文档（无 hash 即无文档，V1 自然让位——
+// 'ai' 是回填主路；'rel' 接线保留，供后续「无文档关联槽」形态直用）。
+function applyBootRightSlot() {
+  if (location.hash) return
+  if (slots.value.right === 'ai') {
+    state.chatPinned = true
+    state.aiOpen = true
+  } else if (slots.value.right === 'rel' && state.currentPath) {
+    state.relOpen = true
+  }
+}
+
 // 文件管理操作（FileTree 通过 inject('manage') 调用）
 async function manage(action, payload) {
   try {
@@ -912,6 +970,9 @@ export function createApp() {
         }
       )
 
+      // 沉浸式壳 T7：关联侧栏开合镜像进右槽持久化（与图钉互斥共写 slots.right，persistRightSlot 折算）
+      watch(() => state.relOpen, persistRightSlot)
+
       // 跨断点双旗标迁移（Review Focus 2）：state.drawer 桌面唯一源、移动旗标另路——
       // 两路各归各家，resize 跨断点不得出现两面板同开或全死。isDesktop 由 matchMedia 驱动，
       // 与上方 innerWidth 监听互补（后者管移动体系自身复位，本 watch 管桌面态不携出断点）。
@@ -951,7 +1012,10 @@ export function createApp() {
       })
 
       onMounted(() => {
-        loadDocs().then(applyInitialHash)
+        loadDocs().then(() => {
+          applyInitialHash()
+          applyBootRightSlot()   // T7 右槽回填（无 hash 才回填——与 hash 恢复不打架）
+        })
         bootRestoreSession()   // 会话启动恢复（spec §2.5）：非阻塞渲染，内部 catch 静默
         loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
@@ -1200,6 +1264,7 @@ export function createApp() {
         docHeadSegs, docPrivate, hasDoc, onRevealTree,
         onRailClick, onTreeSelect, onSearchPick,
         onFabPick, fabBadges,
+        onRunDone, onPeekPick, toggleChatPin,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
         goHome, openTrashFace,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
@@ -1418,17 +1483,8 @@ export function createApp() {
             </div>
           </div>
 
-          <!-- AI 面板切换按钮（桌面端：tab 形状，贴面板左边缘） -->
-          <button id="ai-btn" class="hidden lg:flex absolute top-1/2 -translate-y-1/2 items-center justify-center z-40"
-            :class="{ 'ai-open': state.aiOpen }"
-            @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-
-          <!-- AI 面板切换按钮（移动端：圆形，固定右下角） -->
+          <!-- AI 面板切换按钮（移动端：圆形，固定右下角。桌面端旧 #ai-btn tab 已退役——
+               入口升格为右缘暗金半隐握把 bubble-peek，spec §4A；移动 #ai-btn-mobile 原样） -->
           <button id="ai-btn-mobile" class="lg:hidden fixed right-4 flex items-center justify-center z-40"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
             <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
@@ -1470,6 +1526,13 @@ export function createApp() {
             @set-mode="setMode" @save="saveWithRetry" @download="downloadDoc"
             @toggle-toc="toggleToc" @open-doc-face="openDocFace" @reveal-tree="onRevealTree" />
 
+          <!-- 沉浸式壳 W5（plan Task 7，spec §4A）：右缘暗金半隐握把 + 管家气泡栈——桌面专属（红线：
+               ≤1023px 零触达）。visible=!aiOpen：聊天（浮窗/占槽）在场时握把让位；expand=点握把开聊天，
+               pick=点气泡按 dest 分派（onPeekPick）；pill 合计 = 铃铛未读 + 未读回话 -->
+          <bubble-peek v-if="isDesktop" :class="{ 'has-dock': hasDoc }" :visible="!state.aiOpen"
+            :unread="state.unreadCount" :replies="state.peekReplies" :doc-missing="state.docMissing"
+            @expand="toggleAI(true)" @pick="onPeekPick" />
+
           <!-- 本文目录浮层（P4-3 · T5 自 TopBar 迁入根级单实例）：桌面锚 dock 左缘、移动锚顶栏下
                （style.css .toc-dd 两媒体态）。TopBar 的桌面「目录」钮与旧 toc-dd 随 TopBar 桌面隐身
                （lg:hidden 下不渲染），移动「目录」钮与浮层消费路径原样不变——app 级滚动同步/scrollspy/
@@ -1487,14 +1550,16 @@ export function createApp() {
             </div>
           </div>
 
-          <!-- AI 面板 -->
+          <!-- AI 面板（T7 双态，spec §4A）：桌面 chatwin 浮窗（默认）⇄ chat-slot 图钉右槽（state.chatPinned 单源，
+               图钉钮在面板头部上抛 togglePin）；双态类仅 isDesktop 挂——移动 ≤1023px 既有 sheet 体系零改动。
+               握把/气泡栈见下方 bubble-peek（入口从右缘 #ai-btn tab 升格为暗金半隐握把，spec §4A） -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
-            :class="{ open: state.aiOpen }">
+            :class="{ open: state.aiOpen, chatwin: isDesktop && !state.chatPinned, 'chat-slot': isDesktop && state.chatPinned }">
             <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
-              :doc-path="state.currentPath || ''" :session-id="state.sessionId"
+              :doc-path="state.currentPath || ''" :session-id="state.sessionId" :chat-pinned="state.chatPinned"
               @tool-result="handleToolResult" @new-session="startNewSession"
-              @switchSession="onSwitchSession" @sessionActive="onSessionActive"
-              @close="toggleAI(false)" />
+              @switchSession="onSwitchSession" @sessionActive="onSessionActive" @runDone="onRunDone"
+              @togglePin="toggleChatPin" @close="toggleAI(false)" />
           </div>
         </div>
 
@@ -1538,6 +1603,7 @@ export function createApp() {
   app.component('SettingsPage', SettingsPage)
   app.component('FabMenu', FabMenu)
   app.component('RightDock', RightDock)
+  app.component('BubblePeek', BubblePeek)
 
   return app
 }

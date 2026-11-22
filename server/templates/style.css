@@ -311,16 +311,7 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 #ai-panel .font-ui, #ai-panel button, #ai-panel input, #ai-panel textarea { font-family: 'Inter', sans-serif; }
 #ai-messages { font-family: 'Source Serif 4', serif; }
 
-/* 桌面 toggle tab */
-@media (min-width: 1024px) {
-  /* 例外（ledger Task 7 Ruling）：贴边 tab 需骑乘面板边缘，transform % 相对本体
-     无法表达容器 50%；32px 小面 right 过渡 reflow 可忽略 */
-  #ai-btn { right: 0; z-index: 25; width: 32px; height: 64px; border-radius: 8px 0 0 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: right .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
-  #ai-btn.ai-open { right: 50%; }
-  #ai-btn:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
-  #ai-btn #ai-chevron { transform: rotate(-90deg); }
-  #ai-btn.open #ai-chevron { transform: rotate(90deg); }
-}
+/* 桌面 toggle tab —— 已退役（T7，spec §4A：右缘入口升格为暗金半隐握把 .grip；移动 #ai-btn-mobile 原样） */
 
 /* ============ 移动底部抽屉 (< lg) ============ */
 @media (max-width: 1023px) {
@@ -2162,7 +2153,8 @@ details.d-sec .body { padding: 8px 12px 14px; }
    （过渡态——T7 消息面重做锚点时按 spec §4A 的 chatwin/slot 体系改写，本块为其前最小避让）。 */
 :root { --dock-w: 40px; --destructive: #b91c1c; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
 .dock {
-  position: fixed; right: 0; top: 50%; transform: translateY(-50%);
+  position: fixed; right: 0; top: 64px; /* T7 几何：上锚定（原纵向居中与右缘居中握把同带相撞——
+    预览稿场景 2 画法：dock 上带、握把贴 dock 下缘；Home 无 dock 时握把回纵向居中） */
   width: var(--dock-w); z-index: 10;
   flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
   border-radius: 10px 0 0 10px;
@@ -2192,8 +2184,78 @@ details.d-sec .body { padding: 8px 12px 14px; }
   /* 文档列让位：滚动容器与头行右侧各空一个 dock 槽（选择器列表与 .doc-head 基础视觉规则
      分离——T4 钉只审基础态） */
   .doc-scroll, .doc-head { padding-right: calc(24px + var(--dock-w)); }
-  /* AI 面避让 dock 槽（过渡态；T7 按 §4A 重写） */
-  #ai-panel { right: var(--dock-w); }
-  #ai-btn { right: var(--dock-w); }
-  #ai-btn.ai-open { right: calc(50% + var(--dock-w)); }
+  /* AI 面 dock 槽避让由 T7 消息面块承接（chatwin 右锚含 dock 槽 / chat-slot in-flow 占位）；
+     旧「过渡态」#ai-panel/#ai-btn right 让位行已删（桌面 #ai-btn tab 退役，spec §4A 握把升格） */
+}
+
+/* ════ 沉浸式壳 W5 · Task 7：管家消息面——右缘暗金半隐握把 + 管家气泡栈 + 聊天浮窗/图钉槽（spec §4A/§7 / 预览稿场景 2·8·9）════
+   握把 = 30px 暗金圆钮一半探出右缘（right:-15px），纸色线性领结（ICONS.bowtie 单点）居可见半区；
+   pill = 铃铛未读 + 管家回话合计（纸底黄铜字）。hover 握把/气泡浮出气泡栈（peekFeed.buildPeek
+   纯函数：要事优先、最近 3 条 + 「还有 N 条」溢出）。chatwin 浮窗（默认）⇄ chat-slot 图钉右槽
+   （state.chatPinned 单源，右槽二选一持久化 slots.right，T1 shellState.right 键在此消费）。
+   几何取舍（预览稿场景 2 画法 + 短屏稳健）：dock 上锚（top:64px，高确定性 268px=8 钮×28+7 缝×4+
+   上下 pad×2 → --dock-h 常量）；dock 在场时握把/气泡栈贴 dock 下缘（避免与上锚 dock 同带相撞；
+   Home 无 dock 回纵向居中——spec §4A「右缘纵向居中」在零栏位态的字面兑现，预览稿 dock 下方带握把
+   正是此画法）。z 层（spec §7）：握把/气泡 40（抽屉 30 之上、下拉 50 之下），chatwin 45。
+   过渡只 transform/opacity（红线）；RM 降级直切；≤1023px 零触达——本块全部在 min-width:1024px 内。 */
+@media (min-width: 1024px) {
+  :root { --dock-h: 268px; } /* dock 确定性高（钮数导出）——dock 钮增减须同改（test_dock 钉钮数 8） */
+  .grip {
+    position: fixed; right: -15px; top: 50%; transform: translateY(-50%); z-index: 40;
+    width: 30px; height: 30px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
+    background: color-mix(in srgb, var(--brass) 82%, var(--ink));
+    box-shadow: 0 4px 12px -4px rgba(33, 29, 24, .35), inset 0 0 0 1px color-mix(in srgb, var(--paper) 16%, transparent);
+  }
+  .grip:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+  /* 领结居「可见半区」（左向 15px 实面）：绝对定位于钮体，出屏半侧不参与 */
+  .grip .grip-ic { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); width: 11px; height: 11px; }
+  .grip .grip-ic svg { width: 11px; height: 11px; fill: none; stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .grip .gpill {
+    position: absolute; top: -7px; left: -9px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px; background: var(--surface); color: var(--brass);
+    border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--line));
+    font-size: 10px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 2px var(--paper); font-variant-numeric: tabular-nums;
+  }
+  /* 气泡栈：贴握把左侧（右缘 18px，与握把出屏半侧不相压），纵列 ≤3 条 + 溢出计数 */
+  .bubbles {
+    position: fixed; right: 18px; top: 50%; transform: translateY(-50%); z-index: 40;
+    width: 272px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .bubble {
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+    box-shadow: 0 6px 18px -8px rgba(33, 29, 24, .22);
+  }
+  .bubble:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+  .bubble p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+  .bubble .bt { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .bmore { align-self: flex-end; font-size: 11px; color: var(--ink-soft); padding: 0 4px; }
+  /* dock 在场（.has-dock 由 app 模板 hasDoc 下挂 bubble-peek 根）：握把/气泡从居中改贴 dock 下缘
+     （dock 底 = 64+268，+8 缝 → 340）——任何屏高下零相撞（居中制在矮屏会压 dock 中段钮，取舍详见块头注） */
+  .has-dock .grip, .has-dock .bubbles { top: calc(72px + var(--dock-h)); transform: none; }
+  /* ── chatwin 浮窗态（默认）──：桌面覆盖基础 #ai-panel（right:0 / translateX(100%)）；
+     关闭态 translateX 加自身 dock 槽距完全藏入右缘外（plain 100% 会露 --dock-w+14 截边）。
+     顶底内缩 + 圆角阴影 = 预览稿场景 9「悬浮不占栏」画法 */
+  #ai-panel.chatwin {
+    top: 60px; bottom: 24px; right: calc(var(--dock-w) + 14px);
+    width: min(400px, calc(100% - 120px)); z-index: 45;
+    border: 1px solid var(--line); border-left: 1px solid var(--line); border-radius: 14px;
+    box-shadow: -18px 0 48px -22px rgba(33, 29, 24, .30), 0 16px 40px -18px rgba(33, 29, 24, .22);
+    transform: translateX(calc(100% + var(--dock-w) + 14px));
+  }
+  #ai-panel.chatwin.open { transform: none; }
+  /* ── chat-slot 图钉态 ──：作为 .flex-1 容器 in-flow 成员（右槽二选一，宽度复用现 50%）；
+     开合是一次性宽度变化（宽度逐帧过渡 = 重排红线 → transition:none），让位由 flex 完成 */
+  #ai-panel.chat-slot { position: static; right: auto; top: auto; bottom: auto; transform: none; transition: none; width: 0; flex-shrink: 0; border-left: 2px solid var(--brass); }
+  #ai-panel.chat-slot.open { width: 50%; max-width: 560px; }
+  /* 旧 overlay 面板的 main.ai-open padding-right:50% 补偿对两种新形态皆作废：chatwin 悬浮不占栏、
+     chat-slot in-flow 已挤压——保留即 doc 列错位（chatwin 平白左移 / chat-slot 双 squeeze 零宽） */
+  main.ai-open { padding-right: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 降级直切：chatwin 出入 transform 直切；气泡栈/握把无动效基线（hover 出栈经 display，本就直切） */
+  .grip, .bubbles { transition: none; }
+  #ai-panel.chatwin, #ai-panel.chatwin.open { transition: none; }
 }
