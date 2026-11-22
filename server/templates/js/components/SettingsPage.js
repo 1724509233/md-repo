@@ -599,7 +599,7 @@ export const SettingsPage = {
       SECTIONS, AI_PARAMS, LOG_LEVELS, section,
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
-      toolsMode, setToolsMode, toggleTool,
+      toolsMode, toolsSel, setToolsMode, toggleTool,
       dirDraft, dirInputRef, addDir, removeDir, onDirKeydown,
       // 后台 agent 段
       BG_TRIG_OPS, BG_TRIG_OP_CN, BG_TRIG_SOURCES, BG_SCHED, BG_TRIG_NUMS, BG_MODEL_NUMS,

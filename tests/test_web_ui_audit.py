@@ -317,6 +317,38 @@ def test_editor_template_refs_are_returned():
         assert name in returned, f"template ref {name} missing from setup return"
 
 
+def test_settings_template_bindings_are_returned():
+    # 「setup 漏 return 普通绑定」家族钉（2026-11-22 用户验收捕获真崩溃）：toolsSel 用于
+    # 模板 chip 渲染却漏出 setup return → 点「自定义」首渲染 undefined.includes 崩页。
+    # 规则：设置浮层模板所有绑定表达式（指令值 + 插值）的根标识符必须出自 setup return。
+    sp = _templates()["SettingsPage.js"]
+    tm = re.search(r"template:\s*`(.*?)`\s*\n\s*\}", sp, re.S)
+    assert tm, "SettingsPage template not found"
+    tpl = tm.group(1)
+    rm = re.search(r"return \{\n(.*?)\n    \}\n  \},\n  template:", sp, re.S)
+    assert rm, "SettingsPage setup return not found"
+    returned = set(re.findall(r"\w+", rm.group(1)))
+    # v-for 别名豁免
+    aliases: set[str] = set()
+    for m2 in re.finditer(r'v-for="\(?(\w+)(?:,\s*(\w+))?', tpl):
+        aliases.update(g for g in m2.groups() if g)
+    consts = {"true", "false", "null", "undefined", "in", "of", "typeof", "new",
+              "Math", "String", "Number", "Boolean", "Object", "Array", "JSON",
+              "Date", "window", "document", "$emit", "$event", "Set", "Map"}
+    exprs = (re.findall(r'(?:v-[\w:]+|:[\w.]+|@[\w.]+)="([^"]*)"', tpl)
+             + re.findall(r"\{\{(.*?)\}\}", tpl))
+    for expr in exprs:
+        stripped = re.sub(r"'[^']*'|\"[^\"]*\"", "", expr)
+        # 对象字面量键不是根标识符（:class="{ on: x }" 的 on/show）：按键位置剥掉
+        stripped = re.sub(r"([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)", r"\1\3", stripped)
+        for tok in re.findall(r"(?<![\w.$])([A-Za-z_$][\w$]*)", stripped):
+            if tok in returned or tok in aliases or tok in consts:
+                continue
+            raise AssertionError(
+                f"template binding {tok!r} missing from setup return"
+                f" (expr: {expr.strip()[:60]!r})")
+
+
 def test_p2_search_card_button():
     # 搜索面板结果卡键盘可达（待办 e96cf4ed）：卡内勘察无嵌套交互元素（renderSnippet 契约
     # = escapeHtml + <mark>，见 SearchPanel.js:24 注释）→ 原生 <button type="button">；
