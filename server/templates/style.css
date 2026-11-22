@@ -801,7 +801,9 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 顶栏 logo（spec §3.1：22px mark + 14px wordmark） */
 .topbar-logo .logo-mark--top { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
 /* 字标同 .tb-label 口径：max-width + opacity 平滑收纳（上限 60px ≈ "md-vault" 自然宽 + 余量） */
-.topbar-logo { transition: gap .2s ease; }
+.topbar-logo { transition: gap .2s ease; cursor: pointer; }
+/* logo 回首页（spec 2026-11-22）：role=button 的键盘焦点面可见（同 .tree-more:focus-visible 家族口径） */
+.topbar-logo:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; border-radius: 6px; }
 .topbar-logo .logo-word {
   font-size: 14px;
   max-width: 60px; overflow: hidden; white-space: nowrap;

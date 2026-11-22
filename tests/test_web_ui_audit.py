@@ -822,7 +822,10 @@ def test_session_persistence_pins():
     #   F5 → bootRestore 恢复回旧 sid/空态 → 面板空白；第三写点见 ③b。
     #   计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
     #   只能出现 1 次；按「写点=调用点」本意落钉。）
-    assert app.count("localStorage.setItem(") == 1
+    #   （2026-11-22 home-butler T4：app.js 出现第二枚 setItem——心跳写 mdvault.lastPresence，
+    #   封进 beatPresence 单点。口径随之收紧为「aiSession 键的 setItem 恰 1」；心跳键的
+    #   写点恰 1 + try/catch 由 test_home_landing_wired 钉。）
+    assert app.count("localStorage.setItem('mdvault.aiSession'") == 1
     ps = _fn_body(app, "function persistSessionId(")
     assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
     assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
@@ -1215,3 +1218,28 @@ def test_restored_thinking_block_pin():
     assert tb, "thinking 分支恢复态折叠枝（block.expanded 驱动）缺失"
     tl = re.search(r"<div class=\"thinking-line\" @click=\"toggleBlock\(msg, block\)\">", ai)
     assert tl, "thinking 行点击应走 toggleBlock（恢复/流式同一开合入口）"
+
+
+# ── 首页·管家日报（spec 2026-11-22-home-butler-landing §6/§8 钉家族）──────
+
+def test_home_landing_wired():
+    # 导航骨架全要素（Task 4）：Home 挂载、回首页清 hash（logo 回首页不清 hash
+    # 会让首页对「回首页→F5」永不可达——oracle 送审雷）、已读游标信号、
+    # lastPresence 心跳三写点、TopBar go-home 链
+    app = _templates()["app.js"]
+    for tok in ("'Home'",                                      # import/注册之一
+                "history.replaceState(null, '', location.pathname)",  # hash watch null 支路
+                'v-if="!state.currentPath"',                   # Home 挂载条件
+                "state.homeRefreshSeq",                        # 监控退页重取信号
+                "mdvault.lastPresence",                        # 心跳存储键
+                "pagehide", "visibilitychange",                # 心跳三写点之二
+                "@go-home"):                                   # TopBar → goHome 链
+        assert tok in app, tok
+    # 心跳写点单点封进 beatPresence（同 persistSessionId 纪律）：setItem(LS_LAST 恰 1 + try/catch
+    beat = _fn_body(app, "function beatPresence(")
+    assert beat.count("setItem(LS_LAST") == 1 and "try" in beat and "catch" in beat
+
+
+def test_home_component_registered():
+    app = _templates()["app.js"]
+    assert "app.component('Home', Home)" in app
