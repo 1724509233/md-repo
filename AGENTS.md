@@ -76,9 +76,13 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 - **锚点激活行为（2026-11-17 bug 4a2249fc 返工复盘，详见 `issues/2026-11-17-tree-anchor-activation-jump.md`）**: 文件树文件行是 `<a href="#doc/…">`（P1-4 深链），行内交互元素（rename input、⋯ 按钮）的 click 只写 `@click.stop` 仍会跳文档——点击链接后代元素照样激活祖先 `<a>` 默认行为（hash 变 → hashchange → openDoc），该旁路不经任何 Vue handler。必须 `@click.stop.prevent`。泛化红线：任何有默认行为的容器（`<a href>`/submit 按钮/label）内的交互子元素都要 `.prevent`；跳转/滚动类 bug 先按层列监听全集（Vue handler / 原生默认 action / window 级 hashchange-scroll）再看触发元素在每层之上还是之下。回归钉：`test_rename_row_click_guard`（双层断言，单层放行过半成品修复）。
 
+- **label 容器内禁放 labelable 后代（2026-11-22 设置页隐私目录误删）**：`<label>` 内空白/标签文字/hint 的点击会被浏览器**转发激活第一个 labelable 后代**（button/input/select/textarea 皆是）——不经任何 Vue handler，`.prevent` 救不了「点在 label 空白处」那一路。设置页字段（label.st-field）需含按钮时必须 `div.st-field` + `label[for]`/`aria-labelledby` 补语义（全页 15 处审计唯一漏网即隐私目录，点非×区域删标签）。回归钉：`test_web_ui_audit.py`（label.st-field 内禁 button 后代）。
+
 ### 平台与测试备忘
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.
+
+- **跨语言搬运校验规则：搬语义不搬函数名（2026-11-22 casefold 事故）**：把加载器（Python）的校验文案直译进前端 JS 会带出 `String.prototype.casefold()` 这类 Python 原生 API——语法合法、`node --check` 放行、**Vue computed 求值即抛**，功能全灭且页面无一表象（现场只在浏览器 console，静态检查与 pytest 全绿放行）。前端 JS 禁 Python 串 API（casefold/`in` 词组/rstrip/lstrip 等），等价语义用 toLowerCase/includes。回归钉：`test_no_python_string_apis_in_frontend_js`。
 
 - agent-browser CDP（Windows）：见文首同名节——全文已迁 `docs/superpowers/notes/2026-10-13-agent-browser-cdp-windows.md`，红线速记在彼处。
 
@@ -139,4 +143,5 @@ Web UI is a Vue 3 CDN SPA (no build step): `server/templates/index.html` is the 
 - Tailwind Play CDN generates styles at runtime — class names in JS `classList.add()` work, but dynamically constructed class strings must be complete (no partial matching).
 - Hidden containers (`v-show` → `display:none`) have `clientHeight === 0` — any scroll-to-bottom/into-view executed while hidden is a no-op (F5-restore lands before the panel opens). Fix: pending flag + ResizeObserver consuming on the 0→non-zero size transition; if the element can unmount under `v-if`, re-attach the observer via `watch(ref)`.
 - `v-show`-resident components mount at page load — `onMounted` may fire BEFORE boot-restore backfills props. Initialization that depends on restored state must be idempotent/retriggerable via `watch`, never a single `onMounted` pass.
+- **api.js 封装的 null 语义先查再用（2026-11-22 getDocs() 304→null 陷阱）**：该函数 ETag 三态契约是 304 时返回 null（专供文件树消费者 null=保持旧值）。第二个「每次都必须拿到数据」的消费者复用会把 null 当空数据吃，叠一次性拉取守卫后永久静默失效（无任何报错）。此类消费者用 getDocsRaw()（no-store 全量）。回归钉：test_vault_dirs_uses_raw_docs_fetch。
 
