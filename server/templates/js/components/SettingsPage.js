@@ -26,6 +26,10 @@
  *   未建模键（escalation 等）经条目 raw 副本直通：hydrate 存 raw → 保存时非建模键合并回条目，
  *   不可编辑、不可丢；is_executor 条目只读展示（raw 原样直通），不进编辑。
  *   api_key 每条目独立 touched（三态同 ai 段）；改名实时提示按 spec S3（api_key 清空 + 计权归零）。
+ *   复用主智能体模型（spec §6.2）：条目展示位 model_matches_ai → hydrate 落 fromAi 初值（该展示位
+ *   只进编辑镜像、绝不入 raw 直通面——新别名条目会把它原样落进 config）；勾选态隐藏模型字段组
+ *   （表单值原地保留，取消勾选即回显），payload 条目 = 其余键照常 + model_from_ai:true 且省略 model
+ *   （服务端以写回后的主模型段物化，瞬态键不落盘）；勾选计入条目 dirty 指纹。执行器条目 raw 直通不受扰。
  *
  * payload 构造契约（spec §4.1/§4.2，buildPayload 是本页唯一写面——四条铁律）：
  * ① api_key 三态：未触碰（touched 集合无此键）⇒ payload 省略该键（服务端回填原明文）；
@@ -85,9 +89,11 @@ const BG_MODEL_NUMS = [
   { key: 'max_tokens', label: '最大输出长度', min: 1, step: 1 },
   { key: 'temperature', label: '生成温度', min: 0, max: 2, step: 0.1 }
 ]
-// 建模键全集：raw 中其余键（escalation 等）保存时原样合并回条目（不可编辑不可丢）
+// 建模键全集：raw 中其余键（escalation 等）保存时原样合并回条目（不可编辑不可丢）。
+// model_matches_ai 是 GET 展示位（非 config 键），显式建模防其经非建模键直通面漏进 PUT。
 const BG_MODELED = new Set(['alias', 'name', 'enabled', 'cron', 'target_dir', 'prompt', 'report_dir',
-  'max_rounds', 'timeout_s', 'budget_runs_per_day', 'budget_max_proposals', 'trigger', 'tools', 'verbs', 'model'])
+  'max_rounds', 'timeout_s', 'budget_runs_per_day', 'budget_max_proposals', 'trigger', 'tools', 'verbs', 'model',
+  'model_matches_ai'])
 const BG_TRIG_KEYS = new Set(['source', 'events', 'metric', 'arm_count', 'min_interval_h', 'low_score'])
 const BG_MODEL_KEYS = new Set(['provider', 'model_id', 'base_url', 'api_key', 'context_window', 'max_tokens', 'temperature'])
 
@@ -105,17 +111,20 @@ function bgBlankEntry() {
     raw: {}, readOnly: false, name: '', alias: '', enabled: true,
     target_dir: '', prompt: '', report_dir: '', cron: '',
     max_rounds: '', timeout_s: '', budget_runs_per_day: '', budget_max_proposals: '',
-    tools: [], verbs: [], trigger: null, model: bgBlankModel()
+    tools: [], verbs: [], trigger: null, model: bgBlankModel(), fromAi: false
   }
 }
-// raw 条目（GET payload 形）→ 编辑镜像；api_key 止步掩码 {set,mask}，touched 每条目独立
+// raw 条目（GET payload 形）→ 编辑镜像；api_key 止步掩码 {set,mask}，touched 每条目独立；
+// 展示位 model_matches_ai 落 fromAi 初值后从 raw 副本摘除（spec §6.2：瞬态键，绝不回传）
 function bgEntryView(raw) {
   const r = raw && typeof raw === 'object' ? raw : {}
   const m = r.model && typeof r.model === 'object' ? r.model : {}
   const key = m.api_key && typeof m.api_key === 'object' ? m.api_key : null
   const trig = r.trigger && typeof r.trigger === 'object' ? r.trigger : null
+  const rawCopy = JSON.parse(JSON.stringify(r))
+  delete rawCopy.model_matches_ai
   return {
-    raw: JSON.parse(JSON.stringify(r)),
+    raw: rawCopy,
     readOnly: !!r.is_executor,
     name: strOrEmpty(r.name), alias: strOrEmpty(r.alias),
     enabled: r.enabled !== false, // 缺省 = 启用（加载器同语义）
@@ -139,7 +148,9 @@ function bgEntryView(raw) {
       temperature: numOrEmpty(m.temperature),
       keySet: !!(key && key.set), keyMask: strOrEmpty(key && key.mask),
       keyTouched: false, keyInput: ''
-    }
+    },
+    // 复用勾选初值 = 服务端展示位（保存成功/重载后随 hydrate 归真）
+    fromAi: r.model_matches_ai === true
   }
 }
 const bgTitle = e => String(e.name || '').trim() || String(e.alias || '').trim() || '（未命名条目）'
@@ -186,6 +197,12 @@ function buildBgEntry(vm) {
     const mi = toNum(vm.trigger.min_interval_h); if (mi !== null) t.min_interval_h = mi
     const ls = toNum(vm.trigger.low_score); if (ls !== null) t.low_score = ls
     e.trigger = t
+  }
+  // 复用主智能体模型（spec §6.2）：勾选态 = 瞬态键 model_from_ai + 省略 model 键
+  // （服务端以写回后的主模型段物化并剥除瞬态键）；表单已填的模型值原地保留——取消勾选即回显
+  if (vm.fromAi) {
+    e.model_from_ai = true
+    return e
   }
   const rawModel = raw.model && typeof raw.model === 'object' ? raw.model : {}
   const model = {}
@@ -741,7 +758,8 @@ export const SettingsPage = {
                     </label>
                     <label class="st-field">
                       <span class="st-lbl">模型名称</span>
-                      <input class="st-input" type="text" autocomplete="off" v-model="form.ai.model">
+                      <input class="st-input" type="text" autocomplete="off" placeholder="例如 qwen2.5:14b"
+                        v-model="form.ai.model">
                     </label>
                     <div class="st-field">
                       <label class="st-lbl" for="st-api-key">密钥</label>
@@ -823,30 +841,32 @@ export const SettingsPage = {
                       <div class="st-grid">
                         <label class="st-field">
                           <span class="st-lbl">名称</span>
-                          <input class="st-input" type="text" autocomplete="off" placeholder="界面显示名"
+                          <input class="st-input" type="text" autocomplete="off" placeholder="例如 日记每日整理"
                             v-model="bgForm.name">
                         </label>
                         <label class="st-field">
                           <span class="st-lbl">标识</span>
                           <input class="st-input st-input-mono" type="text" autocomplete="off"
-                            placeholder="英文短名，用于系统识别" v-model="bgForm.alias">
+                            placeholder="例如 organizer" v-model="bgForm.alias">
                         </label>
                       </div>
                       <span v-if="bgRenamed(bgForm)" class="st-warn-inline">改名将清空该条已存密钥（需重填），且触发计权从零开始</span>
                       <label class="st-field">
                         <span class="st-lbl">工作目录</span>
                         <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="知识库内目录，例如 notes" v-model="bgForm.target_dir">
+                          placeholder="例如 notes" v-model="bgForm.target_dir">
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">提示词文件</span>
                         <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="相对配置文件路径，例如 server/prompts/x.md" v-model="bgForm.prompt">
+                          placeholder="例如 server/prompts/x.md" v-model="bgForm.prompt">
+                        <span class="st-hint">相对配置文件的路径</span>
                       </label>
                       <label class="st-field">
                         <span class="st-lbl">报告目录</span>
                         <input class="st-input st-input-mono" type="text" autocomplete="off"
-                          placeholder="留空 = 工作目录下的默认报告区" v-model="bgForm.report_dir">
+                          placeholder="例如 notes/reports" v-model="bgForm.report_dir">
+                        <span class="st-hint">留空 = 工作目录下的默认报告区</span>
                       </label>
                       <div class="st-field">
                         <span class="st-lbl">启用</span>
@@ -919,6 +939,18 @@ export const SettingsPage = {
                       </div>
 
                       <div class="st-group">模型</div>
+                      <!-- 复用主智能体模型（spec §6.2）：勾选态隐藏整组字段（表单值原地保留，
+                           取消勾选即回显），保存条目只带 model_from_ai 瞬态键；文案 = 一次性复制的诚实语义 -->
+                      <div class="st-field">
+                        <div class="st-trg-head">
+                          <span class="st-lbl">复用主智能体模型</span>
+                          <button class="st-toggle" :class="{ on: bgForm.fromAi }" type="button" role="switch"
+                            :aria-checked="bgForm.fromAi" aria-label="复用主智能体模型"
+                            @click="bgForm.fromAi = !bgForm.fromAi">{{ bgForm.fromAi ? '开' : '关' }}</button>
+                        </div>
+                        <span v-if="bgForm.fromAi" class="st-hint">保存时把主智能体的服务地址、模型名、参数与密钥同步进本条目；之后主模型改动不会自动跟随——重新勾选并保存即再次同步。</span>
+                      </div>
+                      <template v-if="!bgForm.fromAi">
                       <div class="st-grid">
                         <label class="st-field">
                           <span class="st-lbl">接口协议</span>
@@ -927,7 +959,8 @@ export const SettingsPage = {
                         </label>
                         <label class="st-field">
                           <span class="st-lbl">模型名称</span>
-                          <input class="st-input" type="text" autocomplete="off" v-model="bgForm.model.model_id">
+                          <input class="st-input" type="text" autocomplete="off" placeholder="例如 qwen2.5:14b"
+                            v-model="bgForm.model.model_id">
                         </label>
                       </div>
                       <label class="st-field">
@@ -955,6 +988,7 @@ export const SettingsPage = {
                             v-model="bgForm.model[p.key]">
                         </label>
                       </div>
+                      </template>
                     </div>
                     <div v-else class="st-fields">
                       <div class="st-grid">
