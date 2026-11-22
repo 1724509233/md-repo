@@ -126,10 +126,12 @@ function toggleTreeSlot() {
   }
   persistSlots()
 }
-// 钉态 = 桌面 && slots.tree && 当前面为文件；搜索/回收站选中时脱离钉面走 overlay 抽屉
-//（单壳双态的 W1 简化：钉住只锁文件槽，多槽并存归 T7 槽位系统）
+// 钉态 = 桌面 && slots.tree && 当前面为文件 && 非监控页；搜索/回收站选中时脱离钉面走 overlay 抽屉
+//（单壳双态的 W1 简化：钉住只锁文件槽，多槽并存归 T7 槽位系统）。
+// 监控与树槽互斥（T3 用户拍板）：监控在场钉住槽渲染让位（panelDrawerOpen/panelWidth 皆经
+// treePinned 折算，宽抽屉独苗），slots.tree 持久值不动——退监控后钉槽自动复原，无需重钉。
 const treePinned = computed(() =>
-  isDesktop.value && slots.value.tree === true && activePanel.value === 'file')
+  isDesktop.value && slots.value.tree === true && activePanel.value === 'file' && !state.monitoring)
 const panelDrawerOpen = computed(() =>
   isDesktop.value
     ? (state.drawer === 'file' || state.drawer === 'search' || state.drawer === 'trash' || treePinned.value)
@@ -1045,6 +1047,9 @@ export function createApp() {
         if (id === 'notifications') { toggleNotifDropdown(); return }
         if (id === 'settings') { openSettingsPage(); return }
         if (id === 'monitor') { openMonitorPage(); return }
+        // 监控与树槽互斥（反向支）：监控页在场开子页抽屉先退监控——走 exitMonitorPage
+        // 保 homeRefreshSeq++ 首页重取语义（treePinned 已含 !state.monitoring，钉槽同步让位）
+        if (state.monitoring) exitMonitorPage()
         activePanel.value = id
         state.drawer = drawerNext(state.drawer, id)
       }

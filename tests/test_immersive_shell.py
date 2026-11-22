@@ -170,6 +170,26 @@ def test_pinned_slot_below_fab():
         assert m and int(m.group(1)) >= 56, f"{s} 让底 padding-bottom 须 ≥56px"
 
 
+def test_monitor_tree_slot_exclusion():
+    # 监控与树槽互斥（沉浸式壳 T3，2026-11-22 用户拍板）：
+    # ① 监控在场时钉住树槽渲染让位——treePinned computed 规则串含 !state.monitoring
+    #   （slots.tree 持久值不动：退监控后钉槽自动复原，用户无需重钉）。
+    # ② 反向互斥：桌面 FAB pick file/search/trash 时若在监控页，先走 exitMonitorPage()
+    #   （保 homeRefreshSeq++ 首页重取语义）再开抽屉；monitor 分支自身不动。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+
+    m = re.search(r"const treePinned = computed\(\(\) =>\s*(.*?)\)\n", app, re.S)
+    assert m, "const treePinned = computed(...) 段缺失"
+    assert "!state.monitoring" in m.group(1), \
+        "treePinned 缺 !state.monitoring（监控在场时钉住树槽须让位）"
+
+    seg = app[app.index("function onFabPick"):app.index("async function markAllRead")]
+    mon = re.search(r"if \(state\.monitoring\)\s*(?:exitMonitorPage\(|\{[^{}]*exitMonitorPage\()", seg)
+    assert mon, "onFabPick 缺 state.monitoring 分支（file/search/trash 须先退监控页再开抽屉）"
+    # monitor 分支自身不动：仍直连 openMonitorPage（其内既有 drawer=null 保留）
+    assert re.search(r"id === 'monitor'\) \{ openMonitorPage\(\); return \}", seg)
+
+
 def test_fan_order_preview():
     # 扇弧序改预览稿向（2026-11-22 用户拍板）：CSS rotate 正方向为顺时针，--a 0deg=正上、
     # 90deg=右缘。钟点序：文件 0（正上）→ 搜索 18 → 回收站 36 → 监控 54 → 通知 72 → 设置 90（右缘）。
