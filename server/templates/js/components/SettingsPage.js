@@ -7,9 +7,18 @@
  * 契约：props 无；inject('state') + inject('api')（api.getSettings/putSettings
  *   非 2xx 不抛，返回 {status,data}，仅网络失败 throw）；
  *   emits ['close']；开合源 = state.settingsOpen（app 置真），关闭（X/backdrop/Escape 任一路径）
- *   统一经 requestClose——dirty 时原生 confirm 二次确认，取消即不关；app 只接 @close 落地。
+ *   统一经 requestClose——dirty 时弹页内确认浮层（role=alertdialog 三选：保存并关闭 / 放弃修改 /
+ *   取消，spec §6 用户改版，原生 confirm 已废），取消即不关；app 只接 @close 落地。
  *   state.settingsCloseSeq++（app Escape 链最高优先支）= 关闭请求信号，本组件 watch 后代跑守卫。
- * 焦点：开层入面板首个可见可交互元素（preventScroll 红线），关层归位 rail 齿轮钮（#settings-rail-btn）。
+ * 焦点：开层入面板首个可见可交互元素（preventScroll 红线），关层归位 rail 齿轮钮（#settings-rail-btn）；
+ *   确认浮层弹出时设置浮层 inert（焦点自然困于确认浮层），默认焦点 = 取消钮，Escape = 取消。
+ * 保存状态徽标（取代旧成功反馈条，spec §6）：三张设置卡右上角 + 后台列表逐条目右上角，两态
+ *   「已保存（中性）/ 未保存（高亮）」；dirty = 分段指纹（ai 段含密钥 touched/toolsMode/toolsSel、
+ *   bg 段逐条目、misc 段=通知+日志+隐私）与 hydrate 基线比对，保存成功/409 重载重取基线即归零。
+ *   错误条（409/422/500）固定于浮层头部下方、滚动区之外（必现）；成功不再有条——徽标归零即信号。
+ * 工具权限三态（meta.tool_perms = 注册表单一真相，前端零镜像常量）：勾选+allow=允许（实心）、
+ *   勾选+ask=询问（描边+后缀）、未勾选=拒绝（虚线弱样式）；aria-pressed 恒为「是否授权」，
+ *   三态语义进 title（英文原名开头，对账 config 用）。
  * 表单内部逻辑（分段导航/三态密钥/保存流程/payload 铁律）与整页模式时代零改动（Task 7-9 产物）。
  * 后台 agent 段（spec §6.2 / §5.4）：卡片列表 = 名称 / 标识 / 启用开关（即表单字段）/ 运行徽标；
  *   徽标数据源 = 全站 30s 脉搏 state.memoryStatus.agents，打开本段时若尚未到货则静默补拉一次，
@@ -30,18 +39,18 @@
  * ④ GET ai 段缺位 ⇒ 表单照常空白渲染（页面可新建段）：用户整段零改动 ⇒ payload ai:null（幂等删段）；
  *    改动过任何字段 ⇒ 按填写内容整段提交。
  * 文案纪律（AGENTS Frontend Rule 2）：正文零字段名/端点路径/设计概念名；
- * applied/restart_needed 后端键经 FIELD_CN 翻成用户语言，未知键兜底「相关设置」。
+ *   命名口径统一「主智能体 / 后台智能体 / 杂项」（2026-11-22 用户拍板，与监控页「智能体」措辞对齐）。
  */
 const { ref, computed, watch, nextTick, inject, onBeforeUnmount } = Vue
 
-// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源）
+// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源；命名口径 2026-11-22 用户拍板，与监控页对齐）
 const SECTIONS = [
-  { id: 'ai', label: '主 agent' },
-  { id: 'bg', label: '后台 agent' },
+  { id: 'ai', label: '主智能体' },
+  { id: 'bg', label: '后台智能体' },
   { id: 'misc', label: '杂项' }
 ]
 
-// 主 agent 数值参数行：字段键 + 完整 label（label 即用户语言，min/step 进原生 input 属性）
+// 主智能体段数值参数行：字段键 + 完整 label（label 即用户语言，min/step 进原生 input 属性）
 const AI_PARAMS = [
   { key: 'max_tokens', label: '最大输出长度', min: 1, step: 1 },
   { key: 'temperature', label: '生成温度', min: 0, max: 2, step: 0.1 },
@@ -52,7 +61,7 @@ const AI_PARAMS = [
 ]
 const LOG_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
 
-// ─── 后台 agent 段（Task 9）───
+// ─── 后台智能体段（Task 9；UI 文案统一「后台智能体」，代码键名 background_agents 不动）───
 // 触发事件全集与后端 change_log 操作集对齐（服务端仍是权威：保存走加载器校验，422 原文回显）。
 // 契约缺口备案：/api/settings 的 _meta 只带 tools/verbs/restart_fields，trigger 事件集未随
 // payload 下发，此处前端镜像该闭合集（后端加事件须同步此行，漂移后果 = 422 提示而非静默错写）。
@@ -192,20 +201,17 @@ function buildBgEntry(vm) {
   return e
 }
 
-// applied / restart_needed 后端键 → 用户语言（未知键兜底，绝不在正文回显原始字段名）
-const FIELD_CN = {
-  ai: '主 agent 配置',
-  background_agents: '后台 agent',
-  notifications: '站内通知',
-  'notifications.daily_cap': '每日通知上限',
-  privacy: '隐私目录',
-  'privacy.dirs': '隐私目录',
-  log: '日志',
-  'log.level': '日志级别',
-  'log.dir': '日志存放位置',
-  'log.retention_days': '日志保留天数'
+// 工具 chip 中文短名（2026-11-22 用户拍板）：未知键兜底显英文原名；悬停 title 恒留英文原名对账 config
+const TOOL_CN = {
+  read_doc: '读文档', search_docs: '搜索文档', list_files: '文件列表', get_related_docs: '关联文档',
+  recent_changes: '近期变更', recall_stats: '召回统计', recall_feedback_stats: '召回反馈统计',
+  propose: '提交提案', list_proposals: '提案列表', get_proposal: '查看提案',
+  write_doc: '写文档', edit_doc: '编辑文档', delete_doc: '删除文档', move_docs: '移动文档',
+  adopt_proposal: '采纳提案', reject_proposal: '驳回提案'
 }
-const cnField = k => FIELD_CN[k] || '相关设置'
+const toolLabel = t => TOOL_CN[t] || t
+// 三态语义进 title（toolState 家族在 setup 内——要吃 meta.tool_perms）
+const TOOL_TRI_TIP = { allow: '允许（自动执行）', ask: '询问（执行前需你确认）', deny: '拒绝（未授权）' }
 
 /* ''/null/undefined/NaN → null（payload 组键时省略），其余 Number */
 function toNum(v) {
@@ -232,6 +238,7 @@ export const SettingsPage = {
       () => state.settingsOpen,
       async (open) => {
         if (!open) {
+          confirmOpen.value = false   // 兜底：设置浮层关死则确认浮层同收（正常路径已各自落定）
           const gear = document.getElementById('settings-rail-btn')
           if (gear) gear.focus({ preventScroll: true })
           return
@@ -259,31 +266,80 @@ export const SettingsPage = {
     const toolsSel = ref([])
     let loadedOnce = false
 
-    // ═══ 关闭守卫（spec §6：X / backdrop / Escape 任一路径先过 requestClose）═══
-    // dirty = 表单相对 hydrate 基线有差异，或任一字段的密钥 touched 态/已输入值非空——
-    // 两者统一折进一个指纹串比对：基线在每次 hydrate（首拉/保存成功后重载/409 重载）末尾
-    // 重取，保存成功与重载自然清零，无需逐字段维护 touched 集。
-    // apiKeyTouched 单独并入指纹：touched=真且 input 空的「清除」态与干净态串不同，不漏判。
-    const baselineFp = ref('')
-    function fingerprint() {
-      if (!form.value) return ''
-      return JSON.stringify({
-        f: form.value,  // 含 bg 条目全部建模键 + 每条目 model.keyTouched/keyInput（raw 不随用户改动）
-        ak: (apiKeyTouched.value ? '1' : '0') + '|' + String(apiKeyInput.value),
-        tm: toolsMode.value,
-        ts: toolsSel.value
-      })
-    }
-    const settingsDirty = computed(() => {
-      if (!form.value) return false
-      return fingerprint() !== baselineFp.value
+    // ═══ 分段保存状态徽标 + 关闭守卫（spec §6：X / backdrop / Escape 任一路径先过 requestClose）═══
+    // dirty 分段切指纹（徽标逐卡/逐条目点亮）：ai 段 = ai 表单 + 密钥 touched/input + toolsMode/toolsSel；
+    // bg 段 = 逐条目指纹（条目含每条目 keyTouched/keyInput，raw 不随用户改动），任一条目脏则段卡脏，
+    // 条目增删以长度失配兜底；misc 段 = 通知 + 日志 + 隐私。基线在每次 hydrate（首拉/保存成功后
+    // 重载/409 重载）末尾重取——保存成功与重载自然清零，无需逐字段维护 touched 集。
+    const baseAi = ref('')
+    const baseBg = ref([])
+    const baseMisc = ref('')
+    const aiFp = () => JSON.stringify({
+      f: form.value.ai,
+      ak: (apiKeyTouched.value ? '1' : '0') + '|' + String(apiKeyInput.value), // touched 且 input 空的「清除」态与干净态串不同，不漏判
+      tm: toolsMode.value,
+      ts: toolsSel.value
     })
+    const miscFp = () => JSON.stringify({ n: form.value.notifications, l: form.value.log, p: form.value.privacy })
+    const bgFps = () => (form.value.background_agents || []).map(e => JSON.stringify(e))
+    const dirtyAi = computed(() => !!form.value && aiFp() !== baseAi.value)
+    const dirtyMisc = computed(() => !!form.value && miscFp() !== baseMisc.value)
+    const dirtyBg = computed(() => {
+      if (!form.value) return false
+      const fps = bgFps()
+      return fps.length !== baseBg.value.length || fps.some((f, i) => f !== baseBg.value[i])
+    })
+    const bgEntryDirty = i => bgFps()[i] !== baseBg.value[i]
+    const settingsDirty = computed(() => dirtyAi.value || dirtyBg.value || dirtyMisc.value)
+    function resetBaselines() {
+      baseAi.value = aiFp()
+      baseBg.value = bgFps()
+      baseMisc.value = miscFp()
+    }
+
+    // ─── 关闭确认浮层（spec §6 三选，替代原生 confirm）：保存并关闭（成功才关）/ 放弃修改（重拉
+    //     服务端真相后关）/ 取消（留在页面，默认焦点钮）。确认浮层弹出时设置浮层 inert → Tab 自然
+    //     困于浮层内；Escape 由浮层 keydown 截停（stopPropagation 先于 app document 级 Escape 链）═══
+    const confirmOpen = ref(false)
+    const confirmRef = ref(null)
+    const cancelBtnRef = ref(null)
+    let confirmTrig = null   // 触发关闭的元素（取消后焦点归位）
+    watch(confirmOpen, async (open) => {
+      if (open) { await nextTick(); if (cancelBtnRef.value) cancelBtnRef.value.focus({ preventScroll: true }) }
+    })
+    function cancelConfirm() {
+      confirmOpen.value = false
+      if (confirmTrig && confirmTrig.isConnected) confirmTrig.focus({ preventScroll: true })
+      confirmTrig = null
+    }
     function requestClose() {
       if (!state.settingsOpen) return
-      // 原生 confirm 先例被 spec 容忍（替代家族 = toast 无阻塞语义，担不起「取消不关」）
-      if (settingsDirty.value &&
-          !window.confirm('有未保存的设置改动，关闭后这些改动将丢失。确定关闭吗？')) return
+      if (confirmOpen.value) { cancelConfirm(); return }   // 确认浮层已弹时，任何关闭请求都按取消收
+      if (settingsDirty.value) {
+        confirmTrig = document.activeElement
+        confirmOpen.value = true
+        return
+      }
       emit('close')
+    }
+    function onConfirmKeydown(e) {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelConfirm(); return }
+      if (e.key !== 'Tab' || !confirmRef.value) return
+      const list = Array.from(confirmRef.value.querySelectorAll('button')).filter(el => !el.disabled)
+      if (!list.length) return
+      const first = list[0], last = list[list.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus({ preventScroll: true }) }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus({ preventScroll: true }) }
+    }
+    async function discardAndClose() {
+      confirmOpen.value = false
+      reloadFromServer()   // 改错可直接离开：丢弃本页编辑，回服务端真相
+      emit('close')
+    }
+    async function saveAndClose() {
+      const ok = await save()
+      confirmOpen.value = false   // 422/409：确认浮层收起、设置浮层不关、错误条照报（固定头部下方区）
+      if (ok) emit('close')
     }
     // app Escape 链最高优先支 /（其余关闭路径模板直连）→ settingsCloseSeq 递增 = 关闭请求
     watch(() => state.settingsCloseSeq, () => { if (state.settingsOpen) requestClose() })
@@ -350,8 +406,8 @@ export const SettingsPage = {
       // 服务端真相回填 = 条目编辑态归零（保存后重载同路径：折叠列表、解武装）
       bgEditing.value = -1
       disarmBgDelete()
-      // 关闭守卫基线：hydrate 末尾重取指纹（保存成功/409 重载同路径 → dirty 自动清零）
-      baselineFp.value = fingerprint()
+      // 分段徽标基线：hydrate 末尾重取各段指纹（保存成功/409 重载同路径 → dirty 自动清零）
+      resetBaselines()
     }
 
     // 打开浮层首拉（深链/常开恢复均经此；此后 revision/409 机制负责新鲜度，重开不重复拉）
@@ -394,6 +450,18 @@ export const SettingsPage = {
       if (i >= 0) toolsSel.value.splice(i, 1)
       else toolsSel.value.push(t)
     }
+    // 工具三态展示（不可配置、必须展示，spec §6）：勾选态内按 meta.tool_perms 分允许/询问，
+    // 未勾选 = 拒绝（弱样式）；aria-pressed 语义恒为「是否授权」，三态只进 class/title
+    function toolState(t, granted) {
+      if (!granted) return 'deny'
+      const p = (meta.value && meta.value.tool_perms) || {}
+      return p[t] === 'ask' ? 'ask' : 'allow'
+    }
+    const toolCls = (t, granted) => {
+      const s = toolState(t, granted)
+      return { on: granted, allow: s === 'allow', ask: s === 'ask' }
+    }
+    const toolTitle = (t, granted) => t + ' · ' + TOOL_TRI_TIP[toolState(t, granted)]
 
     // ═══ 隐私目录标签（输入 + 回车成标签、× 删；重复即忽略）───
     const dirDraft = ref('')
@@ -506,20 +574,10 @@ export const SettingsPage = {
     }
     const bgKeyHint = e => (String(e.model.keyInput) === '' ? '保存后将清除密钥' : '保存后将写入新密钥')
 
-    // ═══ 保存（单一「保存全部」；三态反馈：200 生效报告 / 409 冲突重载 / 422 页顶告警，
-    //     外加 500 {saved:true} 的 apply 失败窗口如实报——spec §4.2 步 6）───
+    // ═══ 保存（单一「保存全部」；成功无条——分段徽标归零即信号；409/422/500 错误条固定头部
+    //     下方区必现；500 {saved:true} 的 apply 失败窗口如实报——spec §4.2 步 6）═══
     const saving = ref(false)
-    const report = ref(null)  // {kind:'ok'|'conflict'|'invalid'|'savedapply'|'error', ...}
-    const appliedText = computed(() => {
-      const r = report.value
-      return r && r.applied && r.applied.length
-        ? r.applied.map(cnField).join(' · ')
-        : '相关设置'
-    })
-    const restartText = computed(() => {
-      const r = report.value
-      return (r && r.restart ? r.restart.map(cnField).join('、') : '') + ' 需重启服务后生效'
-    })
+    const report = ref(null)  // {kind:'conflict'|'invalid'|'savedapply'|'error', ...}
 
     function buildPayload() {
       const f = form.value
@@ -554,18 +612,20 @@ export const SettingsPage = {
       return p
     }
 
+    // 返回 true = 已保存（保存并关闭据此放行）；false = 未保存，错误条已就位
     async function save() {
-      if (saving.value || !form.value) return
+      if (saving.value || !form.value) return false
       saving.value = true
       report.value = null
       try {
         const res = await api.putSettings(buildPayload())
         if (res.status === 200) {
-          const d = res.data || {}
-          report.value = { kind: 'ok', applied: d.applied || [], restart: d.restart_needed || [] }
-          // 保存成功后重载 GET：按新 revision 回填全表单（与后端真相一致，api_key 掩码同步刷新）
+          // 保存成功后重载 GET：按新 revision 回填全表单（与后端真相一致，api_key 掩码同步刷新，
+          // 分段徽标随 hydrate 基线重取归零）
           await load()
-        } else if (res.status === 409) {
+          return true
+        }
+        if (res.status === 409) {
           report.value = { kind: 'conflict' }
         } else if (res.status === 422) {
           report.value = { kind: 'invalid', errors: (res.data && res.data.errors) || [] }
@@ -581,6 +641,7 @@ export const SettingsPage = {
       } finally {
         saving.value = false
       }
+      return false
     }
 
     // 409「重载」：丢弃本页未保存编辑，回到服务端真相（与保存成功后的重载同一语义）
@@ -599,13 +660,16 @@ export const SettingsPage = {
       SECTIONS, AI_PARAMS, LOG_LEVELS, section,
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
-      toolsMode, toolsSel, setToolsMode, toggleTool,
+      toolsMode, toolsSel, setToolsMode, toggleTool, toolLabel, toolCls, toolTitle,
+      // 分段徽标 + 关闭确认浮层
+      dirtyAi, dirtyBg, dirtyMisc, bgEntryDirty,
+      confirmOpen, confirmRef, cancelBtnRef, cancelConfirm, discardAndClose, saveAndClose, onConfirmKeydown,
       dirDraft, dirInputRef, addDir, removeDir, onDirKeydown,
       // 后台 agent 段
       BG_TRIG_OPS, BG_TRIG_OP_CN, BG_TRIG_SOURCES, BG_SCHED, BG_TRIG_NUMS, BG_MODEL_NUMS,
       bgEditing, bgForm, bgDelArmed, bgBadge, bgTitle, bgRenamed, bgConflict, bgKeyHint,
       bgSelect, bgAdd, onBgDelete, bgToggleTrigger, bgToggleEvent, bgToggleTool, bgToggleVerb, bgClearKey,
-      saving, save, report, appliedText, restartText, reloadFromServer
+      saving, save, report, reloadFromServer
     }
   },
   template: `
@@ -614,40 +678,37 @@ export const SettingsPage = {
 
     <!-- 居中对话框（桌面 ≤880px×≤86vh：头部固定 + 体部内滚，主页面零 reflow；≤639px 全屏，
          壳高走 fixed 布局视口链；折叠态 visibility 出 Tab 序 + opacity/transform ≤.2s 转场，
-         折叠壳家族与 RM 两态同杀见 style.css st-modal 族） -->
-    <div ref="panelRef" class="st-modal" :class="{ open: state.settingsOpen }"
+         折叠壳家族与 RM 两态同杀见 style.css st-modal 族）。确认浮层弹出时 inert：焦点/点击
+         与自然 Tab 均困于确认浮层（alertdialog 层级在其之上） -->
+    <div ref="panelRef" class="st-modal" :class="{ open: state.settingsOpen }" :inert="confirmOpen"
       role="dialog" aria-modal="true" aria-label="设置">
       <div class="st-modal-head">
         <h1 class="st-modal-title">设置</h1>
-        <span class="st-modal-meta">保存即校验、即落盘</span>
         <!-- 移动头部保存（≤639px 专用，页内保存行 CSS 隐藏归一）；X 桌面移动恒在 -->
         <button class="st-save st-m-save" type="button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
         <button class="st-x" type="button" title="关闭设置" aria-label="关闭设置" @click="requestClose">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
       </div>
+      <!-- 错误条固定区（头部下方、滚动区之外——错误必现）：409 冲突 / 422 校验 / 500 如实报；
+           aria-live=polite 保存结果不抢读屏。成功无条 = 分段徽标归零即信号 -->
+      <div class="st-alerts" aria-live="polite">
+        <div v-if="report && report.kind === 'conflict'" class="st-banner warn">
+          配置已被页面外修改，本次保存未生效。
+          <button class="mp-back st-banner-btn" type="button" title="重新载入服务端最新配置" @click="reloadFromServer()">重载</button>
+          <span class="st-hint st-banner-hint">重载后本页未保存的修改将丢弃</span>
+        </div>
+        <div v-else-if="report && report.kind === 'invalid'" class="st-banner err">
+          未保存——配置校验未通过：
+          <ul v-if="report.errors.length" class="st-berrs">
+            <li v-for="(e, i) in report.errors" :key="i">{{ e.message }}</li>
+          </ul>
+          <span v-else class="st-hint">服务端未返回具体原因</span>
+        </div>
+        <div v-else-if="report && report.kind === 'savedapply'" class="st-banner warn">{{ report.message }}</div>
+        <div v-else-if="report && report.kind === 'error'" class="st-banner err">{{ report.message }}</div>
+      </div>
       <div class="st-modal-body">
-
-          <!-- 反馈条（aria-live=polite：保存结果不抢读屏）：200 生效报告 / 409 冲突 / 422 告警 -->
-          <div aria-live="polite">
-            <div v-if="report && report.kind === 'ok'" class="st-banner ok">
-              已保存 · 已生效：{{ appliedText }}<template v-if="report.restart.length">；{{ restartText }}</template>
-            </div>
-            <div v-else-if="report && report.kind === 'conflict'" class="st-banner warn">
-              配置已被页面外修改，本次保存未生效。
-              <button class="mp-back st-banner-btn" type="button" title="重新载入服务端最新配置" @click="reloadFromServer()">重载</button>
-              <span class="st-hint st-banner-hint">重载后本页未保存的修改将丢弃</span>
-            </div>
-            <div v-else-if="report && report.kind === 'invalid'" class="st-banner err">
-              未保存——配置校验未通过：
-              <ul v-if="report.errors.length" class="st-berrs">
-                <li v-for="(e, i) in report.errors" :key="i">{{ e.message }}</li>
-              </ul>
-              <span v-else class="st-hint">服务端未返回具体原因</span>
-            </div>
-            <div v-else-if="report && report.kind === 'savedapply'" class="st-banner warn">{{ report.message }}</div>
-            <div v-else-if="report && report.kind === 'error'" class="st-banner err">{{ report.message }}</div>
-          </div>
 
           <!-- 加载 / 错误态（503 = 设置管理未接线；表单缺席才成卡） -->
           <div v-if="loading && !form" class="mcard"><div class="zline">加载配置…</div></div>
@@ -666,9 +727,12 @@ export const SettingsPage = {
               </nav>
 
               <div class="st-body">
-                <!-- ═══ 主 agent ═══ -->
+                <!-- ═══ 主智能体（卡头右上角 = 分段保存状态徽标，下同）═══ -->
                 <div v-show="section === 'ai'" class="mcard">
-                  <div class="mc-h"><span class="mc-t">主 agent</span></div>
+                  <div class="mc-h">
+                    <span class="mc-t">主智能体</span>
+                    <span class="st-sv" :class="{ dirty: dirtyAi }" :title="dirtyAi ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtyAi ? '未保存' : '已保存' }}</span>
+                  </div>
                   <div class="st-fields">
                     <label class="st-field">
                       <span class="st-lbl">服务地址</span>
@@ -707,21 +771,27 @@ export const SettingsPage = {
                       </div>
                       <template v-if="toolsMode === 'custom'">
                         <div v-if="meta.tools.length" class="st-chips">
-                          <button v-for="t in meta.tools" :key="t" class="st-chip" type="button"
-                            :class="{ on: toolsSel.includes(t) }" @click="toggleTool(t)">{{ t }}</button>
+                          <button v-for="t in meta.tools" :key="t" class="st-chip st-toolchip" type="button"
+                            :class="toolCls(t, toolsSel.includes(t))" :aria-pressed="toolsSel.includes(t)"
+                            :title="toolTitle(t, toolsSel.includes(t))" @click="toggleTool(t)">{{ toolLabel(t) }}<span
+                              v-if="toolCls(t, toolsSel.includes(t)).ask" class="st-chip-ask" aria-hidden="true">询问</span></button>
                         </div>
                         <div v-else class="zline">工具清单暂不可用</div>
-                        <span class="st-hint">点选启用；全不选 = 主 agent 无工具</span>
+                        <span class="st-hint">点选启用；全不选 = 主智能体不开放任何工具</span>
+                        <span class="st-hint">允许 = 自动执行 · 询问 = 执行前需你确认 · 拒绝 = 未授权</span>
                       </template>
                       <span v-else class="st-hint">当前开放全部工具</span>
                     </div>
                   </div>
                 </div>
 
-                <!-- ═══ 后台 agent ═══ -->
+                <!-- ═══ 后台智能体 ═══ -->
                 <div v-show="section === 'bg'">
                   <div class="mcard">
-                    <div class="mc-h"><span class="mc-t">后台 agent</span></div>
+                    <div class="mc-h">
+                      <span class="mc-t">后台智能体</span>
+                      <span class="st-sv" :class="{ dirty: dirtyBg }" :title="dirtyBg ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtyBg ? '未保存' : '已保存' }}</span>
+                    </div>
                     <div v-if="form.background_agents.length" class="st-bg-list">
                       <div v-for="(e, i) in form.background_agents" :key="i" class="st-bg-row"
                         :class="{ sel: bgEditing === i }">
@@ -733,15 +803,16 @@ export const SettingsPage = {
                             <span v-if="e.readOnly" class="st-bg-tag">执行器</span>
                           </span>
                         </button>
+                        <span class="st-sv" :class="{ dirty: bgEntryDirty(i) }" :title="bgEntryDirty(i) ? '此条目有未保存的修改' : '此条目已与服务端一致'">{{ bgEntryDirty(i) ? '未保存' : '已保存' }}</span>
                         <span class="st-badge" :class="bgBadge(e).cls" :title="bgBadge(e).tip">{{ bgBadge(e).label }}</span>
                         <button class="st-toggle" :class="{ on: e.enabled }" type="button" role="switch"
                           :aria-checked="e.enabled" :aria-label="(e.enabled ? '停用 ' : '启用 ') + bgTitle(e)"
                           @click="e.enabled = !e.enabled">{{ e.enabled ? '启用' : '停用' }}</button>
                       </div>
                     </div>
-                    <div v-else class="zline">暂无后台 agent，可点「添加后台 agent」新建</div>
+                    <div v-else class="zline">暂无后台智能体，可点「添加后台智能体」新建</div>
                     <div class="st-bg-foot">
-                      <button class="st-add" type="button" @click="bgAdd()">添加后台 agent</button>
+                      <button class="st-add" type="button" @click="bgAdd()">添加后台智能体</button>
                     </div>
                   </div>
 
@@ -758,7 +829,7 @@ export const SettingsPage = {
                         <label class="st-field">
                           <span class="st-lbl">标识</span>
                           <input class="st-input st-input-mono" type="text" autocomplete="off"
-                            placeholder="英文短名，保存后作为该任务的身份" v-model="bgForm.alias">
+                            placeholder="英文短名，用于系统识别" v-model="bgForm.alias">
                         </label>
                       </div>
                       <span v-if="bgRenamed(bgForm)" class="st-warn-inline">改名将清空该条已存密钥（需重填），且触发计权从零开始</span>
@@ -828,16 +899,18 @@ export const SettingsPage = {
                       <div class="st-group">工具</div>
                       <div class="st-field" role="group" aria-label="工具授权">
                         <div v-if="meta.tools.length" class="st-chips">
-                          <button v-for="t in meta.tools" :key="t" class="st-chip" type="button"
-                            :class="{ on: bgForm.tools.includes(t) }"
-                            @click="bgToggleTool(bgEditing, t)">{{ t }}</button>
+                          <button v-for="t in meta.tools" :key="t" class="st-chip st-toolchip" type="button"
+                            :class="toolCls(t, bgForm.tools.includes(t))" :aria-pressed="bgForm.tools.includes(t)"
+                            :title="toolTitle(t, bgForm.tools.includes(t))" @click="bgToggleTool(bgEditing, t)">{{ toolLabel(t) }}<span
+                              v-if="toolCls(t, bgForm.tools.includes(t)).ask" class="st-chip-ask" aria-hidden="true">询问</span></button>
                         </div>
                         <div v-else class="zline">工具清单暂不可用</div>
+                        <span class="st-hint">允许 = 自动执行 · 询问 = 执行前需你确认 · 拒绝 = 未授权</span>
                         <span v-if="bgConflict(bgForm)" class="st-warn-inline">提案与直写工具不可同时启用，保存会被拒绝</span>
                         <template v-if="bgForm.tools.includes('propose')">
                           <div v-if="meta.verbs.length" class="st-chips">
                             <button v-for="v in meta.verbs" :key="v" class="st-chip" type="button"
-                              :class="{ on: bgForm.verbs.includes(v) }"
+                              :class="{ on: bgForm.verbs.includes(v) }" :aria-pressed="bgForm.verbs.includes(v)"
                               @click="bgToggleVerb(bgEditing, v)">{{ v }}</button>
                           </div>
                           <span class="st-hint">选择该任务可提交的提案类型</span>
@@ -890,7 +963,7 @@ export const SettingsPage = {
                         <div class="st-field"><span class="st-lbl">定时计划</span><span class="st-val st-val-mono">{{ bgForm.cron || '—' }}</span></div>
                         <div class="st-field"><span class="st-lbl">工作目录</span><span class="st-val st-val-mono">{{ bgForm.target_dir || '—' }}</span></div>
                       </div>
-                      <span class="st-hint">执行器条目请手改 yaml</span>
+                      <span class="st-hint">此条目不可在本页编辑</span>
                     </div>
                     <div class="st-bg-foot">
                       <button class="st-danger" :class="{ armed: bgDelArmed === bgEditing }" type="button"
@@ -902,7 +975,10 @@ export const SettingsPage = {
 
                 <!-- ═══ 杂项 ═══ -->
                 <div v-show="section === 'misc'" class="mcard">
-                  <div class="mc-h"><span class="mc-t">杂项</span></div>
+                  <div class="mc-h">
+                    <span class="mc-t">杂项</span>
+                    <span class="st-sv" :class="{ dirty: dirtyMisc }" :title="dirtyMisc ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtyMisc ? '未保存' : '已保存' }}</span>
+                  </div>
                   <div class="st-fields">
                     <div class="st-grid">
                       <label class="st-field">
@@ -942,12 +1018,29 @@ export const SettingsPage = {
               </div>
             </div>
 
-            <!-- 页底静态说明（spec §6）：页面外段的手工维护口径 + 安全承重字段刻意不页面化 -->
+            <!-- 页底静态说明（spec §6）：页面外段的手工维护口径（用户语言，Rule 2） -->
             <div class="st-footnote">
-              网络监听地址与端口、数据目录、出网开关与写通道凭证等设置不在本页，需手工编辑配置文件并重启服务——
-              这些安全承重字段刻意保持手改。
+              网络与端口、数据目录、出网开关与写通道凭证等设置请手工编辑配置文件（重启后生效）。
             </div>
           </template>
+      </div>
+    </div>
+
+    <!-- 关闭确认浮层（spec §6 三选，替代原生 confirm）：role=alertdialog；层级 = 设置浮层(81)
+         之上、toast(100) 之下（style.css st-confirm 族）；折叠壳家族照 st-modal 纪律（visibility
+         出 Tab 序 + 转场仅 opacity/transform + RM 两态同杀）；默认焦点 = 取消钮，Escape = 取消，
+         设置浮层 inert 时自然 Tab 困于本层。保存并关闭失败（409/422）：本层收起、设置浮层不关、
+         错误条照报（头部下方固定区）；放弃修改 = 重拉服务端真相后关闭 -->
+    <div class="st-confirm-backdrop" :class="{ show: confirmOpen }" aria-hidden="true" @click="cancelConfirm"></div>
+    <div ref="confirmRef" class="st-confirm" :class="{ open: confirmOpen }" :inert="!confirmOpen"
+      role="alertdialog" aria-modal="true" aria-labelledby="st-confirm-t" aria-describedby="st-confirm-d"
+      @keydown="onConfirmKeydown">
+      <h2 id="st-confirm-t" class="st-confirm-t">有未保存的修改</h2>
+      <p id="st-confirm-d" class="st-confirm-d">关闭设置后，这些改动会丢失。</p>
+      <div class="st-confirm-acts">
+        <button class="st-confirm-btn primary" type="button" :disabled="saving" @click="saveAndClose">{{ saving ? '保存中…' : '保存并关闭' }}</button>
+        <button class="st-confirm-btn" type="button" @click="discardAndClose">放弃修改</button>
+        <button ref="cancelBtnRef" class="st-confirm-btn" type="button" @click="cancelConfirm">取消</button>
       </div>
     </div>
   `
