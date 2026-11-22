@@ -144,6 +144,12 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
      **复用主智能体模型（2026-11-22 用户增项）**：模型组顶「复用主智能体模型」勾选，勾选态 = GET 条目展示位 `model_matches_ai`（条目模型与主智能体物化结果逐字段相等，键位级归一比较）。**语义 = 保存时代码复制，非持续联动**（loader 不变量：bgagent `model.model_id` 必填且刻意不复用 `ai:` 段——联动须动 loader/runner 契约，非本页范围），UI 必须言明「主模型之后改动不自动跟随，重新勾选保存即同步」。勾选后隐藏模型字段，payload 条目带瞬态键 `model_from_ai: true` 且省略 model；服务端以**写回后的 ai 段**物化 {model_id/base_url/api_key 明文/context_window/max_tokens/temperature} 进条目（provider 不写=缺省 openai；api_key 明文搬运不出服务端），瞬态键剥除永不落盘；主智能体模型缺位 → 422。取消勾选 = 字段回显可编辑（值=条目现值）。复用勾选计入 dirty。
   - **placeholder 示例值（2026-11-22 用户增项）**：文本类输入一律带示例值 placeholder（现状缺例者补齐）；数字输入不放示例占位（易被误读为当前值），缺省语义靠 hint 表达。
    - **启用开关定形（2026-11-22 用户拍板，方案 A mockup 二次改版）**：设置页 st-toggle 族开关（条目行启用 / 表单启用 / 事件触发 / 复用主智能体模型）统一改**无文字滑动开关**（34×20 轨道 + 14px 圆钮；on=黄铜底钮右、off=灰底钮左，仅 transform/背景过渡）——「启用/停用」文字被读成动作动词（状态表意与动作直觉冲突），去字后 role=switch + **aria-label 必须齐全**是唯一语义面。**徽标语义澄清（备案）**：行内徽标「运行/待命/停用」= trigger_state + 通知表的**在册**登记（有运行或触发记录），非「此刻在跑」——bgagent 在飞运行态当前无 API 暴露；**演进位**：supervisor per-alias in-flight 标志注入 `/api/memory/status`（设置页吃同一 30s 脉搏）以实现真·运行中，2026-11-22 用户拍板本轮不做。
+- **表单项级校验（2026-11-22 用户改版，替代页顶 422 告警条）**：
+  - **顶部告警区只留 409 并发冲突与热生效/重启告警**（非字段校验族）；422 校验错误全部下沉到表单项：出错字段红框 + 字段下中文红小字。
+  - **两级兜底（错误不可见是红线）**：422 message 定位不到字段 → 所属卡片顶一行；section 也定不了 → toast（既有 error 形态）。后端 payload `{errors:[{message,section}]}` 零改动，定位靠 section + message 键词/alias 启发式，映射不了走兜底不硬猜。
+  - **预检时机 = 保存时统一跑**（无 blur 校验）；预检有错不发 PUT，跳所在分段 + 滚动定位 + `focus({preventScroll:true})`。预检规则**只实现服务端已有规则**（防双向漂移，服务端仍是权威）；字段修改即清该字段错误，下次保存全量重算。
+  - **预检清单（法源=加载器各 raise 点）**：ai 数值键/温度/confirm_timeout 与 bg model 数值键=可空类型检查；bg alias 必填/保留名 `agent`/列表内判重、cron 必填+5 段形、target_dir/prompt 必填、tools ≥1、trigger arm_count≥1/low_score∈(0,1)；杂项 daily_cap 与 log_retention_days 整数 ≥1；privacy.dirs 回车成标签即校验（非空/非绝对/无 `..`/无斜杠/非系统目录名）。**max_rounds/timeout_s/预算键只拦非整数不加范围**（服务端无范围检查）。
+  - **工具不准空（用户拍板）**：主智能体与 bg 条目 tools 均不得空选（加载器拒空列表 / v2 法层必填）；旧文案「全不选 = 主智能体不开放任何工具」与加载器矛盾，已废。
   3. **杂项**：daily_cap / log_level（下拉）/ log_retention_days / privacy.dirs（标签式增删）。
 - 单一「保存全部」按钮 + revision 随行；保存后生效报告条（applied / restart_needed / 409 冲突提示重载）。
 - 非法保存（422）：错误消息展示在页顶告警条 + 按 section 定位高亮（错误 message 是加载器原文，含段名可字符串定位）。
