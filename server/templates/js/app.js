@@ -22,6 +22,7 @@ import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
 import { FabMenu } from './components/FabMenu.js'
 import { ICONS } from './utils/icons.js'
+import { isPrivacyScoped } from './utils/privacy.js'
 import { drawerNext, escTarget, loadSlots, saveSlots } from './utils/shellState.js'
 
 // 初始化 markdown 渲染器
@@ -142,6 +143,13 @@ const panelWidth = computed(() => {
   if (treePinned.value) return 260
   return DESKTOP_W[state.drawer] || 320
 })
+/* ─── 沉浸式壳 T4：桌面文档头行（doc-head，信息位非交互件 = T5 dock 的前置位）───
+   面包屑按 / 分段；隐私判定与文案口径照 TopBar 现稿（isPrivacyScoped + 「模型不可见」）；
+   渲染双条件 v-if="isDesktop && state.currentPath"（Home 态无路径不渲染、移动恒 false——
+   与 TopBar 根 lg:hidden 两路互不干扰，≤1023px 顶栏照旧承载全部信息）。 */
+const docHeadSegs = computed(() => (state.currentPath || '').split('/'))
+const docPrivate = computed(() =>
+  !!state.currentPath && isPrivacyScoped(state.privacyDirs, state.currentPath))
 // 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
 let notifCloseT = null
 function closeNotifDropdown() {
@@ -1124,6 +1132,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         panelDrawerOpen, panelWidth, treePinned, toggleTreeSlot,
+        docHeadSegs, docPrivate,
         onRailClick, onTreeSelect, onSearchPick,
         onFabPick, fabBadges,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
@@ -1283,13 +1292,22 @@ export function createApp() {
               <!-- 首页·管家日报（spec 2026-11-22）：未选文档即首页；与文档滚动列互斥占位
                    （Home 自带 hb-scroll 滚动层，样式层见 style.css hb- 分节；Task 4 = 挂载骨架） -->
               <Home v-if="!state.currentPath" @open-doc="openDoc" @open-memory="onMemoryRailClick()" @open-trash="openTrashFace()" />
-              <div v-show="!!state.currentPath" class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
-                <ConflictBanner v-if="state.conflict"
-                  :tool-name="state.conflict.toolName" :path="state.conflict.path"
-                  @accept="acceptConflict" @dismiss="state.conflict = null" />
-                <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
-                  :doc-missing="state.docMissing"
-                  @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
+              <!-- 文档列（T4）：桌面文档头行 + 滚动正文（doc-head 在 .doc-enter 内，随入场转场；
+                   ≤1023px doc-head v-if 恒 false——顶栏原样承载，红线零触达） -->
+              <div v-show="!!state.currentPath" class="flex-1 flex flex-col min-w-0 overflow-hidden">
+                <div v-if="isDesktop && state.currentPath" class="doc-head">
+                  <span class="doc-bp"><template v-for="(seg, di) in docHeadSegs" :key="di"><span v-if="di > 0" class="doc-sep">/</span><span :class="{ 'doc-cur': di === docHeadSegs.length - 1 }">{{ seg }}</span></template></span>
+                  <span v-if="docPrivate" class="doc-lock" title="此文档位于隐私目录，内容模型不可见"><span v-html="ICONS.lock"></span>模型不可见</span>
+                  <span v-if="state.dirty" class="doc-dirty" title="有未保存改动">未保存</span>
+                </div>
+                <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
+                  <ConflictBanner v-if="state.conflict"
+                    :tool-name="state.conflict.toolName" :path="state.conflict.path"
+                    @accept="acceptConflict" @dismiss="state.conflict = null" />
+                  <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+                    :doc-missing="state.docMissing"
+                    @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
+                </div>
               </div>
               <aside class="rel-side" :class="{ open: state.relOpen }">
                 <DocRelated v-if="state.relOpen" :path="state.currentPath"
@@ -1301,9 +1319,13 @@ export function createApp() {
               @restored="loadDocs()" />
           </main>
 
-          <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
-          <div v-show="state.notifOpen"
-            class="absolute max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown">
+          <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪）。
+               T4 锚层迁移：外层 .notif-anchor 唯一锚点切换面——移动 display:contents 零侵占
+               （下拉本体仍 absolute 锚主容器，top:48/right:8 原位逐字不变）；桌面 fixed 锚
+               扇区展开位上方（style.css 沉浸式壳 T4 分节）。下拉本体 DOM/动画/aria 零改动 -->
+          <div class="notif-anchor">
+            <div v-show="state.notifOpen"
+              class="absolute max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown">
             <div v-if="state.notifications.length > 0" class="flex items-center justify-between px-3.5 py-2.5 border-b border-border shrink-0">
               <span class="font-ui text-xs font-semibold text-text">{{ state.unreadCount }} 条未读</span>
               <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
@@ -1325,6 +1347,7 @@ export function createApp() {
                 <p v-if="n.ops_total || n.files_changed"
                    class="font-ui text-[10px] text-muted/50 mt-0.5">{{ n.ops_total }} 次操作 · {{ n.files_changed }} 个文件</p>
               </button>
+              </div>
             </div>
           </div>
 

@@ -2093,3 +2093,41 @@ details.d-sec .body { padding: 8px 12px 14px; }
   /* RM 直切：监控宽抽屉入场滑入杀掉（transform 类），mp-enter/mp-out 降级既有块已覆盖 */
   .mwrap { animation: none; }
 }
+
+/* ──── 沉浸式壳 W1 · Task 4：TopBar 退役的桌面补齐——文档头行 + 通知下拉迁锚 ────
+   文档头行 = 预览稿 .pathhead 画谱：一行弱色小字（12px 降级墨色），无背景无边框——
+   不成第二条顶栏。模板 v-if="isDesktop && state.currentPath"（Home 态无路径不渲染、
+   ≤1023px 恒 false——移动由 TopBar 原样承载全部信息，红线零触达；TopBar 根挂
+   lg:hidden 与之两路互不干扰）。面包屑 / 隐私徽标（文案口径照 TopBar「模型不可见」
+   + 锁）/ 未保存点均为信息位非交互件（T5 dock 的前置信息位）。
+   通知锚层（notif-anchor）= 唯一锚点切换面：移动 display:contents 零盒侵占
+   （下拉本体仍 absolute 锚主容器，top:48/right:8 原位逐字不变、width 342 媒体原样）；
+   桌面转 fixed 锚扇区展开位上方（FAB 顶缘 72px + 16 余量 = bottom:88）。下拉本体
+   脱锚自撑（relative + top/right auto）：本块在文件末位，同特异度按序覆盖前部
+   .ai-open right 让位规则——桌面已左下锚点，不再与 AI 面板对位。 */
+.doc-head {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  padding: 12px 24px 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
+}
+.doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.doc-bp .doc-sep { opacity: .5; }
+.doc-bp .doc-cur { color: var(--ink-soft); }
+.doc-lock {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border-radius: 999px; padding: 1px 8px 1px 6px;
+}
+.doc-lock .icon { width: 11px; height: 11px; }
+.doc-dirty { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft); }
+.doc-dirty::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brass); }
+/* 通知锚层默认态 = 移动零侵占（contents 无盒，下拉锚点/堆叠如前） */
+.notif-anchor { display: contents; }
+@media (min-width: 1024px) {
+  /* display:block 是承重的：contents 不产盒，fixed 定位无所依附 */
+  .notif-anchor { display: block; position: fixed; left: 24px; bottom: 88px; z-index: 50; }
+  .notif-anchor .notif-dropdown { position: relative; top: auto; right: auto; width: 380px; }
+}

@@ -201,6 +201,55 @@ def test_fan_order_preview():
                    "monitor": "54", "notifications": "72", "settings": "90"}, got
 
 
+def test_desktop_topbar_retired():
+    # Task 4 静态钉（plan Step 1 断言集）：TopBar 降级移动专属（根 lg:hidden，内部零改动）+
+    # 桌面文档头行 .doc-head（面包屑/隐私徽标/未保存点，信息位非交互）+ 通知下拉迁锚扇区上方。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    tb = (TPL / "js/components/TopBar.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    # ① TopBar 根元素 class 串含 lg:hidden（移动全保留；桌面整行隐身，内部零改动）
+    m = re.search(r'<div ref="rootEl"\s+class="([^"]*)"', tb)
+    assert m and "lg:hidden" in m.group(1), "TopBar 根元素 class 串缺 lg:hidden"
+
+    # ② doc-head 桌面条件渲染：v-if="isDesktop && state.currentPath"（Home 态不渲染；
+    #    与 TopBar 移动隐身互不干扰——模板 v-if 与 CSS lg:hidden 两路各自成立）
+    assert re.search(r'<div v-if="isDesktop && state\.currentPath" class="doc-head">', app), \
+        "doc-head 缺桌面+文档态双条件"
+    seg = app[app.index('class="doc-head">'):]
+    seg = seg[:seg.index("</div>")]  # doc-head 内只有 span/template（信息位无交互件）
+    assert "docHeadSegs" in seg, "面包屑（currentPath 按 / 分段）缺"
+    assert "docPrivate" in seg and "模型不可见" in seg, "隐私徽标缺（文案口径照 TopBar 现稿）"
+    assert "ICONS.lock" in seg, "隐私徽标锁图标缺"
+    assert 'v-if="state.dirty"' in seg, "dirty 未保存点缺"
+
+    # ③ 隐私判定复用 utils/privacy.js 现成函数（口径 = TopBar：isPrivacyScoped(privacyDirs, path)）
+    assert re.search(r"import \{ isPrivacyScoped \} from '\./utils/privacy\.js'", app)
+    assert "isPrivacyScoped(state.privacyDirs, state.currentPath)" in app
+
+    # ④ 通知下拉锚层：模板套 .notif-anchor 容器；aria-live 钉族保留（audit async-regions 引用）
+    assert 'class="notif-anchor"' in app
+    assert 'aria-live="polite"' in app
+
+    # ⑤ style.css：.doc-head 弱色小字一行（无边框无背景——不成第二条顶栏）
+    heads = [b for s, b in _css_rules(css) if s == ".doc-head"]
+    assert heads, ".doc-head 样式缺"
+    for b in heads:
+        assert "background" not in b and "border" not in b, ".doc-head 行本体不得有背景/边框"
+        assert re.search(r"font-size:\s*12px", b), ".doc-head 小字口径 12px（预览稿 .pathhead）"
+        assert "color-mix" in b, ".doc-head 弱色（color-mix 降级墨色）缺"
+
+    # ⑥ 桌面锚 = fixed 锚扇区展开位上方（bottom:88 left:24，min-width:1024 媒体内）；
+    #    下拉本体脱锚自撑（top/right 归 auto），移动 display:contents 零侵占原锚
+    assert re.search(r"\.notif-anchor \{ display: contents", css), "移动锚层零侵占（display:contents）缺"
+    blocks = _media_blocks(css, "@media (min-width: 1024px)")
+    assert any(".notif-anchor" in b and "position: fixed" in b
+               and "left: 24px" in b and "bottom: 88px" in b for b in blocks), \
+        "桌面 notif-anchor fixed 扇区锚缺"
+    assert any(".notif-anchor .notif-dropdown" in b and "top: auto" in b
+               and "right: auto" in b for b in blocks), "桌面下拉本体脱锚规则缺"
+
+
 def test_mobile_flags_untouched():
     # 移动端零改动红线（Global Constraints）：移动旗标消费者数量不降、
     # 移动 panel-shell/search-drawer 原位规则原样、监控移动整页接管形态（flex:1）保留。

@@ -94,7 +94,9 @@ export const TopBar = {
     return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, goHome, docPrivate }
   },
   template: `
-    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
+    <!-- 沉浸式壳 T4：降级移动专属——根挂 lg:hidden（内部零改动，移动更多菜单/目录/铃铛全保留）；
+         桌面文档头行由 app.js doc-head 承载（.doc-head 分节） -->
+    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative lg:hidden"
       :class="{ 'topbar-compact': aiOpen }">
       <!-- logo（spec §3.1：从 rail 迁入顶栏；spec 2026-11-22：点击回首页——div 挂
            role=button 同键盘 Enter/Space，泛化红线：可点元素给足键盘面） -->
