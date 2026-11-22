@@ -1726,7 +1726,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
    · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
    · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族；.st-toolchip 权限三态 =
      允许（实心黄铜）/ 询问（描边 + 后缀）/ 拒绝（虚线弱化），勾选与否仍由 .on 承载）
-   · .st-tag(s) 隐私目录标签 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
+   · .st-tag(s) 隐私目录标签 · .st-dir-* 隐私目录 combobox 候选面板 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
    · .st-banner(.err/.warn) 告警反馈条 · .st-sv 保存状态徽标（已保存中性 / 未保存高亮）
    · 内联校验族（2026-11-22 改版）：.st-input.is-err 出错红框 · .st-field-err 字段红小字 ·
      .st-card-err 卡片顶兜底 · .st-bg-err 条目行涉错标记
@@ -1767,6 +1767,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--ink) 3%, transparent); font-family: var(--sans); font-size: 11px; color: var(--ink); }
 .st-tag-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 999px; transition: color .15s ease; }
 .st-tag-x:hover { color: var(--st-error); }
+/* 隐私目录 combobox 候选面板（.st-dir-*）：流内展开（设置体内滚容器裁不住浮层）；视觉照卡族
+   surface+line+影，键盘活动项 .active 与 hover 同貌；钮本体走流内排布 */
+.st-dir-list { display: flex; flex-direction: column; gap: 2px; max-height: 184px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 10px 28px rgba(25, 22, 18, .14); }
+.st-dir-opt { border: 0; background: transparent; cursor: pointer; text-align: left; font-family: var(--mono); font-size: 12px; line-height: 1.4; color: var(--ink); padding: 5px 8px; border-radius: 6px; transition: background-color .12s ease, color .12s ease; }
+.st-dir-opt:hover, .st-dir-opt.active { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
 /* 告警固定区（非字段校验族专席：409 并发冲突 / 热生效与保存失败；422 校验错误已下沉表单项内联，
    2026-11-22 用户改版；从 st-modal-body 滚动区上移到头部下方 flex 段——告警必现，滚不滚都可见；
    成功无条 = 分段徽标归零即信号）。空容器零高：banner 自带

@@ -241,6 +241,22 @@ def test_rename_row_click_guard():
     assert ft.count('@click.stop.prevent="treeOps.openMenu') == 2  # 两处 ⋯ 按钮
 
 
+# label.st-field 容器扫描：label 会把空白/文字点击转发激活其第一个 labelable 后代——
+# 内含 button 时 = 点字段标题/提示/hint 误触第一个钮（设置页隐私目录 tag 点非 × 区域即删，
+# 根因复盘 2026-11-22）。AGENTS「锚点激活行为」泛化红线：含钮字段容器必须是 div.st-field
+# （标签语义 span.st-lbl for/aria-labelledby 补位），label.st-field 只许包 input/select。
+ST_FIELD_LABEL = re.compile(r'<label[^>]*class="st-field"[^>]*>[\s\S]*?</label>')
+
+
+def test_st_field_label_never_contains_button():
+    bad = {}
+    for name, src in _templates().items():
+        n = sum(1 for m in ST_FIELD_LABEL.findall(src) if "<button" in m)
+        if n:
+            bad[name] = n
+    assert bad == {}
+
+
 def test_anchorless_link_jump_forces_preview_top():
     # bug 83e7241f：软链无锚点跳转 → 强制预览 + 滚动至文档首部
     app = _templates()["app.js"]

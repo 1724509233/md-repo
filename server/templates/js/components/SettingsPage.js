@@ -333,10 +333,14 @@ export const SettingsPage = {
       async (open) => {
         if (!open) {
           confirmOpen.value = false   // 兜底：设置浮层关死则确认浮层同收（正常路径已各自落定）
+          dirOpen.value = false       // 候选下拉随手收起（重开不残留展开态）
+          dirActive.value = -1
           const gear = document.getElementById('settings-rail-btn')
           if (gear) gear.focus({ preventScroll: true })
           return
         }
+        // section 停留在杂项的后续打开路径不经 watch(section)——开层时补位拉一次目录候选
+        if (section.value === 'misc') ensureVaultDirs()
         await nextTick()
         if (!panelRef.value) return
         const first = Array.from(panelRef.value.querySelectorAll('button, input, select, textarea'))
@@ -582,26 +586,99 @@ export const SettingsPage = {
     }
     const toolTitle = (t, granted) => t + ' · ' + TOOL_TRI_TIP[toolState(t, granted)]
 
-    // ═══ 隐私目录标签（输入 + 回车成标签、× 删；重复即忽略）───
+    // ═══ 隐私目录标签（可选择 + 可输入组合控件 combobox：自由输入回车走既有校验成标签；
+    //     聚焦/输入即下拉 vault 一级目录候选，鼠标点选或 ↑↓+Enter 直接成标签；
+    //     chip 仅 × 可删——字段容器是 div 非 label（label 转发激活 = tag 误删根因，
+    //     AGENTS「锚点激活行为」泛化红线），chip 本体不响应点击；重复即忽略）───
     const dirDraft = ref('')
     const dirInputRef = ref(null)
-    // 回车成标签即时校验：出错输入框就地红 + 小字，不入库不生成标签（法源 = parse_privacy_dirs）
+    const dirListRef = ref(null)
+    const vaultDirs = ref([])        // vault 一级目录名集合（进杂项段首拉一次缓存复用；空 = 退化纯输入）
+    let vaultDirsFetched = false
+    const dirOpen = ref(false)
+    const dirActive = ref(-1)        // 键盘活动项（aria-activedescendant 指向，输入框全程保焦点）
+    // 候选 = 一级目录 − 已有标签 − 保留词表，按输入子串过滤；数据源 /api/docs dirs 来自 os.walk，
+    // 含无文档的空目录；后端已剪隐藏目录与系统目录，前端保留词表兜底二次过滤（与 checkPrivacyDir 同表）
+    const dirCandidates = computed(() => {
+      const taken = new Set(((form.value && form.value.privacy.dirs) || []).map(d => String(d).casefold()))
+      const q = String(dirDraft.value).trim().toLowerCase()
+      return vaultDirs.value.filter(d => !taken.has(d.casefold()) && (!q || d.toLowerCase().includes(q)))
+    })
+    function ensureVaultDirs() {
+      if (vaultDirsFetched) return
+      vaultDirsFetched = true        // 失败也只拉一次：静默退化纯输入，不反复打端点
+      api.getDocs()
+        .then(d => {
+          const first = new Set()
+          for (const p of ((d && d.dirs) || [])) {
+            const seg = String(p).split('/')[0]
+            if (seg) first.add(seg)
+          }
+          vaultDirs.value = [...first].sort((a, b) => a.localeCompare(b))
+        })
+        .catch(() => {})
+    }
+    function commitDir(v) {
+      if (!form.value.privacy.dirs.includes(v)) form.value.privacy.dirs.push(v)
+      dirDraft.value = ''
+      dirErr.value = ''
+      dirActive.value = -1
+    }
+    // 回车成标签即时校验（自由输入路径）：出错输入框就地红 + 小字，不入库不生成标签（法源 = parse_privacy_dirs）
     function addDir() {
       const v = String(dirDraft.value).trim()
       if (!v) return
       const bad = checkPrivacyDir(v)
       if (bad) { dirErr.value = bad; return }
-      dirErr.value = ''
-      if (!form.value.privacy.dirs.includes(v)) form.value.privacy.dirs.push(v)
-      dirDraft.value = ''
+      commitDir(v)
       // 键盘聚焦红线（AGENTS Gotchas）：preventScroll 防键盘弹起时视口被程序化平移
+      if (dirInputRef.value) dirInputRef.value.focus({ preventScroll: true })
+    }
+    // 候选本身就是一级目录名，天然过 checkPrivacyDir 契约；选后保焦点连选（已添项被过滤自动出列，名单空则面板收起）
+    function pickDir(v) {
+      commitDir(v)
       if (dirInputRef.value) dirInputRef.value.focus({ preventScroll: true })
     }
     function removeDir(i) { form.value.privacy.dirs.splice(i, 1) }
     function clearDirErr() { if (dirErr.value) dirErr.value = '' }
-    function onDirKeydown(e) {
-      if (e.key === 'Enter') { e.preventDefault(); addDir() }
+    function onDirInput() { clearDirErr(); dirOpen.value = true; dirActive.value = -1 }
+    function onDirOpenList() { dirOpen.value = true; dirActive.value = -1 }
+    function onDirBlurClose(e) {
+      // 候选钮 mousedown.prevent 拒收焦点（焦点从不进列表）→ 输入框 blur 且焦点未落在本字段内 = 真离开，关列表
+      const el = e.relatedTarget
+      if (el && el.closest && el.closest('.st-dir-field')) return
+      dirOpen.value = false
+      dirActive.value = -1
     }
+    function onDirKeydown(e) {
+      if (e.key === 'Escape') {
+        // 下拉开着时 Esc 只关下拉，不外溢关设置浮层（层级归位）
+        if (dirOpen.value) { e.stopPropagation(); dirOpen.value = false; dirActive.value = -1 }
+        return
+      }
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()           // 拒默认滚动（默认滚动 = 程序化平移滚动面，preventScroll 红线）
+        const n = dirCandidates.value.length
+        if (!n) return
+        dirOpen.value = true
+        const d = e.key === 'ArrowDown' ? 1 : -1
+        dirActive.value = dirActive.value < 0 ? (d > 0 ? 0 : n - 1) : (dirActive.value + d + n) % n
+        return
+      }
+      if (e.key === 'Tab') { dirOpen.value = false; return }
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        if (dirOpen.value && dirActive.value >= 0 && dirCandidates.value[dirActive.value]) { pickDir(dirCandidates.value[dirActive.value]); return }
+        addDir()
+      }
+    }
+    // 键盘活动项入视口：block:'nearest' 已可见即零操作，需要动也只滚候选面板自身容器（不外溢平移文档视口）
+    watch(dirActive, async () => {
+      if (dirActive.value < 0 || !dirListRef.value) return
+      await nextTick()
+      const el = dirListRef.value.children[dirActive.value]
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' })
+    })
 
     // ═══ 后台 agent 段（Task 9）：列表/条目编辑态 + 徽标 + 增删改交互 ═══
     const bgEditing = ref(-1)      // 展开编辑的条目下标（-1 = 仅列表）
@@ -958,7 +1035,7 @@ export const SettingsPage = {
     // 分段导航（单一在场段；≤639 由 CSS 折成顶部分段钮行）
     const section = ref('ai')
     // 打开本段且全站脉搏未到货 → 静默补拉徽标数据（immediate 覆盖直落本段的后续打开路径）
-    watch(section, (s) => { if (s === 'bg') ensureBgStatus() }, { immediate: true })
+    watch(section, (s) => { if (s === 'bg') ensureBgStatus(); if (s === 'misc') ensureVaultDirs() }, { immediate: true })
 
     return {
       state, panelRef, requestClose,
@@ -971,7 +1048,8 @@ export const SettingsPage = {
       // 分段徽标 + 关闭确认浮层
       dirtyAi, dirtyBg, dirtyMisc, bgEntryDirty,
       confirmOpen, confirmRef, cancelBtnRef, cancelConfirm, discardAndClose, saveAndClose, onConfirmKeydown,
-      dirDraft, dirInputRef, addDir, removeDir, onDirKeydown,
+      dirDraft, dirInputRef, dirListRef, dirOpen, dirActive, dirCandidates,
+      removeDir, onDirKeydown, onDirInput, onDirOpenList, onDirBlurClose, pickDir,
       // 后台 agent 段
       BG_TRIG_OPS, BG_TRIG_OP_CN, BG_TRIG_SOURCES, BG_SCHED, BG_TRIG_NUMS, BG_MODEL_NUMS,
       bgEditing, bgForm, bgDelArmed, bgBadge, bgTitle, bgRenamed, bgConflict, bgKeyHint,
@@ -1360,17 +1438,32 @@ export const SettingsPage = {
                         </select>
                       </label>
                     </div>
-                    <label class="st-field">
-                      <span class="st-lbl">隐私目录</span>
+                    <!-- 容器必须 div 不能 label：label 内空白/文字点击被浏览器转发激活第一个 labelable
+                         后代（button 家族下 = 第一个 tag 的 ×）→ 点标题/提示即误删标签（2026-11-22 根因
+                         复盘，AGENTS「锚点激活行为」泛化红线）；标签语义由 aria-labelledby 补位 -->
+                    <div class="st-field st-dir-field">
+                      <span class="st-lbl" id="st-privacy-lbl">隐私目录</span>
                       <div v-if="form.privacy.dirs.length" class="st-tags">
                         <span v-for="(d, i) in form.privacy.dirs" :key="d" class="st-tag">{{ d }}<button
                           class="st-tag-x" type="button" :aria-label="'移除隐私目录 ' + d" @click="removeDir(i)">×</button></span>
                       </div>
                       <input ref="dirInputRef" class="st-input" :class="{ 'is-err': dirErr }" type="text" autocomplete="off"
-                        placeholder="输入目录名，回车添加" v-model="dirDraft" @keydown="onDirKeydown" @input="clearDirErr">
+                        placeholder="输入目录名，回车添加" v-model="dirDraft"
+                        aria-labelledby="st-privacy-lbl" role="combobox" :aria-expanded="dirOpen"
+                        aria-controls="st-dir-list" aria-autocomplete="list"
+                        :aria-activedescendant="dirOpen && dirActive >= 0 ? 'st-dir-opt-' + dirActive : null"
+                        @keydown="onDirKeydown" @input="onDirInput" @focus="onDirOpenList" @blur="onDirBlurClose">
+                      <!-- 候选面板走流内展开而非 absolute 浮层：设置体是内滚容器（st-modal-body overflow-y），
+                           本字段近段尾，浮层会被底缘裁切；视觉仍走卡族 surface+line+影 -->
+                      <div v-if="dirOpen && dirCandidates.length" id="st-dir-list" ref="dirListRef" class="st-dir-list"
+                        role="listbox" aria-label="一级目录候选">
+                        <button v-for="(d, i) in dirCandidates" :key="d" class="st-dir-opt" type="button" role="option"
+                          tabindex="-1" :id="'st-dir-opt-' + i" :aria-selected="dirActive === i"
+                          :class="{ active: dirActive === i }" @mousedown.prevent @click="pickDir(d)">{{ d }}</button>
+                      </div>
                       <span v-if="dirErr" class="st-field-err">{{ dirErr }}</span>
-                      <span class="st-hint">名单内目录的内容受隐私保护</span>
-                    </label>
+                      <span class="st-hint">名单内目录的内容受隐私保护 · ↑↓ 可选库内一级目录</span>
+                    </div>
                   </div>
                 </div>
 
