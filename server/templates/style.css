@@ -1724,7 +1724,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
    信笺式低 chrome：窄栏居中、细竖线分组、G4 唯一盒子；token 全走 :root；
    中文衬线按 §9.7 维持现状（body 栈落雅黑，不加 CJK 衬线回退）。 */
 .hb-shell { flex: 1; min-width: 0; overflow-y: auto; background: var(--paper); }
-.hb-home { max-width: 560px; margin: 0 auto; padding: 54px 28px 40px; }
+.hb-home { max-width: 720px; margin: 0 auto; padding: 54px 28px 40px; }
 
 /* G1 叙事栈（大字 serif；缺席时长黄铜） */
 .hb-g1-hi { font-size: 27px; font-weight: 600; line-height: 1.4; margin: 0; }
