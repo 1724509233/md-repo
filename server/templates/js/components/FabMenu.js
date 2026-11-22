@@ -16,15 +16,16 @@ import { ICONS } from '../utils/icons.js'
 
 const { ref, computed, onBeforeUnmount } = Vue
 
-/* 扇弧钟点序（自正上起 --a 90°→0° 每 18°，预览稿场景 3 同款半径 92px）；
+/* 扇弧钟点序（预览稿向，2026-11-22 用户拍板）：CSS rotate 正方向为顺时针，--a 0°=正上、
+   90°=右缘——自正上起 0°→90° 每 18°（预览稿场景 3 同款半径 92px）；
    badgeKey = 聚合键（仅三枚挂数字徽标）；id = emit('pick', id) 值域 */
 const ITEMS = [
-  { id: 'file', label: '文件', icon: ICONS.folder, angle: '90deg', badgeKey: null },
-  { id: 'search', label: '搜索', icon: ICONS.search, angle: '72deg', badgeKey: null },
-  { id: 'trash', label: '回收站', icon: ICONS.trash, angle: '54deg', badgeKey: 'trash' },
-  { id: 'monitor', label: '监控', icon: ICONS.chart, angle: '36deg', badgeKey: null },
-  { id: 'notifications', label: '通知', icon: ICONS.bell, angle: '18deg', badgeKey: 'notif' },
-  { id: 'settings', label: '设置', icon: ICONS.gear, angle: '0deg', badgeKey: 'memory' },
+  { id: 'file', label: '文件', icon: ICONS.folder, angle: '0deg', badgeKey: null },
+  { id: 'search', label: '搜索', icon: ICONS.search, angle: '18deg', badgeKey: null },
+  { id: 'trash', label: '回收站', icon: ICONS.trash, angle: '36deg', badgeKey: 'trash' },
+  { id: 'monitor', label: '监控', icon: ICONS.chart, angle: '54deg', badgeKey: null },
+  { id: 'notifications', label: '通知', icon: ICONS.bell, angle: '72deg', badgeKey: 'notif' },
+  { id: 'settings', label: '设置', icon: ICONS.gear, angle: '90deg', badgeKey: 'memory' },
 ]
 
 export const FabMenu = {

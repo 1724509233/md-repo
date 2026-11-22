@@ -2061,11 +2061,17 @@ details.d-sec .body { padding: 8px 12px 14px; }
     transition: transform .38s cubic-bezier(.32, .72, 0, 1), visibility 0s 0s;
   }
   /* 图钉钉左槽（Self-Review 1）：.pinned 回归 in-flow flex 子项（根级位序保证在文档列左缘），
-     宽 260（panelWidth 同源）、无投影、直出不滑——「占栏」与「浮层」的形态分界（spec §3/§4） */
+     宽 260（panelWidth 同源）、无投影、直出不滑——「占栏」与「浮层」的形态分界（spec §3/§4）。
+     z-index 必须回落（2026-11-22 波闸目检）：基础态 z30 是浮层抽屉盖 FAB 的设计，钉住态是
+     in-flow 左槽，沿用 z30 会把 fixed FAB（.fab-main z20）整体盖死——回落 auto（level 0 < 20）。 */
   .panel-shell.pinned {
     position: relative; width: 260px; transform: none; visibility: visible;
+    z-index: auto;
     border-radius: 0; box-shadow: none; transition: none;
   }
+  /* 钉住态树列表底部给 FAB 让位（48 FAB + 8 余量 ≥56px），最后一行不被圆钮盖住；
+     选择器限定钉住态（特异度压过 .tree-scroll 的 pb-4），移动 overlay 态不受影响 */
+  .panel-shell.pinned .tree-scroll { padding-bottom: 56px; }
   /* 监控宽抽屉（批准偏离备案，T3）：state.monitoring 与 MonitorPage 单实例保留（双实例=双轮询；
      移动整页接管原样、Home「非监控态」契约不变），桌面仅重塑容器形态为 absolute 悬浮宽抽屉，
      宽 min(920px, calc(100vw - 96px))（预览稿 .drawer.wide 口径），开合 = display 切换 +

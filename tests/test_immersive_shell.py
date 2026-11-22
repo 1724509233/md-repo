@@ -150,6 +150,37 @@ def test_fan_hover_hit_stack():
         ".fab-sub 须显式 pointer-events:auto（根 none 下子钮自接指针）"
 
 
+def test_pinned_slot_below_fab():
+    # 钉住树槽盖 FAB 缺陷钉（2026-11-22 波闸目检）：min-width:1024px 的 .panel-shell 基础态
+    # z-index:30（浮层抽屉盖 FAB 是设计），.pinned 只改 position/宽/投影漏改 z → 钉住 in-flow
+    # 左槽仍带 z30，fixed FAB（.fab-main z20）被整体盖死。钉住态 z 必须回落（auto/10/缺省）。
+    # 另：钉住态树列表底部给 FAB 让位（48 FAB + 8 余量 ≥56px），仅桌面钉住态，移动 padding 不动。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    rules = _css_rules(css)
+    pinned = [b for s, b in rules if s == ".panel-shell.pinned"]
+    assert pinned, ".panel-shell.pinned 规则缺失"
+    for b in pinned:
+        assert "z-index: 30" not in b and "z-index:30" not in b, \
+            "钉住态不得沿用 z-index:30（in-flow 左槽盖死 FAB）"
+    give = [(s, b) for s, b in rules
+            if ".panel-shell.pinned" in s and "padding-bottom" in b]
+    assert give, "钉住态缺 FAB 让底 padding-bottom 规则"
+    for s, b in give:
+        m = re.search(r"padding-bottom:\s*(\d+)px", b)
+        assert m and int(m.group(1)) >= 56, f"{s} 让底 padding-bottom 须 ≥56px"
+
+
+def test_fan_order_preview():
+    # 扇弧序改预览稿向（2026-11-22 用户拍板）：CSS rotate 正方向为顺时针，--a 0deg=正上、
+    # 90deg=右缘。钟点序：文件 0（正上）→ 搜索 18 → 回收站 36 → 监控 54 → 通知 72 → 设置 90（右缘）。
+    fab = (TPL / "js/components/FabMenu.js").read_text(encoding="utf-8")
+    items = re.search(r"const ITEMS = \[(.*?)\n\]", fab, re.S)
+    assert items, "ITEMS 数组缺失"
+    got = dict(re.findall(r"id:\s*'(\w+)'.*?angle:\s*'(\d+)deg'", items.group(1)))
+    assert got == {"file": "0", "search": "18", "trash": "36",
+                   "monitor": "54", "notifications": "72", "settings": "90"}, got
+
+
 def test_mobile_flags_untouched():
     # 移动端零改动红线（Global Constraints）：移动旗标消费者数量不降、
     # 移动 panel-shell/search-drawer 原位规则原样、监控移动整页接管形态（flex:1）保留。
