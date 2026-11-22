@@ -169,6 +169,9 @@ def _get(ctx) -> dict:
         "log": log,
         "_meta": {
             "tools": sorted(TOOL_REGISTRY),
+            # 每工具权限级（allow/ask）：注册表单一真相，前端零镜像常量——
+            # 设置页展示「允许/询问/拒绝」三态（拒绝 = 不在白名单，非注册表属性）
+            "tool_perms": {n: TOOL_REGISTRY[n].permission for n in sorted(TOOL_REGISTRY)},
             "verbs": sorted(VALID_TYPES),
             # trigger 事件全集随 _meta 下发（Task 9 前端镜像常量的收口点）
             "trigger_ops": sorted(TRIGGER_OPS),

@@ -182,6 +182,10 @@ def test_get_shape_mask_and_meta(tmp_path, vault_dir, db_conn):
     # _meta（Task 9 契约收口：trigger_ops 随 payload 下发）
     meta = data["_meta"]
     assert meta["tools"] == sorted(TOOL_REGISTRY)
+    # 权限级三态展示契约：注册表 permission 直通（读=allow，写/人决策=ask）
+    assert meta["tool_perms"] == {n: TOOL_REGISTRY[n].permission for n in sorted(TOOL_REGISTRY)}
+    assert meta["tool_perms"]["read_doc"] == "allow"
+    assert meta["tool_perms"]["write_doc"] == "ask"
     assert meta["verbs"] == sorted(VALID_TYPES)
     assert meta["trigger_ops"] == sorted(TRIGGER_OPS)
     assert meta["restart_fields"] == ["log.dir"]
