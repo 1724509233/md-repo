@@ -1985,3 +1985,55 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .st-confirm-backdrop, .st-confirm-backdrop.show { transition: none; }
   .st-confirm, .st-confirm.open { transition: none; }
 }
+
+/* ──── 沉浸式壳（spec 2026-11-22-immersive-shell · plan 2026-11-22-immersive-shell）────
+   W1 = 左下 FAB 扇弧入口（FabMenu.js，桌面 v-if 挂载，移动端零渲染零样式触达）。
+   z 层序（spec §7 表）：dock 10（T5）< 主钮 20 < 抽屉 30（T3）< 下拉 50 < 桥区 54 < 扇弧
+   子钮 55 < st-modal 族 81（沿用现值）。根 fab-root 不设 z-index（不建堆叠上下文）——
+   子层 z 直接参与根层，扇弧才能力压 z-50 下拉族。
+   动效全 GPU（transform/opacity，零 reflow）；扇位定位 = --a 硬编码角度 + 旋转三件套
+   （rotate → translateY(-92px) → 反旋保持 upright），禁几何 JS。RM 降级直切（两态同杀，
+   同 st-modal 教训：RM 只杀基础态则收起态 visibility 延迟成孤儿）。 */
+.fab-root { position: fixed; left: 24px; bottom: 24px; width: 48px; height: 48px; }
+.fab-main { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  border-radius: 9999px; cursor: pointer; background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px -10px rgba(33, 29, 24, .32), 0 2px 8px rgba(33, 29, 24, .10);
+  font-family: 'Source Serif 4', serif; font-weight: 700; font-size: 20px; color: var(--brass);
+  transition: background-color .15s ease, border-color .15s ease; }
+.fab-main.fan { background: color-mix(in srgb, var(--brass) 8%, var(--surface)); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fab-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--brass); box-shadow: 0 0 0 2px var(--paper); }  /* 右上聚合徽标点：有待办才画（预览稿同款） */
+/* 指针桥（四分之一盘，圆心 = 主钮中心）：展开态接指针——主钮→子钮弧上移动零掉线；
+   收起态 pointer-events:none 对文档零侵占。clip-path = 150px 盒内四分之一盘多边形近似（15° 一采点） */
+.fab-bridge { position: absolute; left: 50%; bottom: 50%; width: 150px; height: 150px; z-index: 54;
+  pointer-events: none;
+  clip-path: polygon(0 100%, 100% 100%, 96.6% 74.1%, 86.6% 50%, 70.7% 29.3%, 50% 13.4%, 25.9% 3.4%, 0 0); }
+.fab-bridge.open { pointer-events: auto; }
+/* 子钮容器：折叠壳家族（同 st-modal 纪律）——收起 visibility:hidden 出 Tab 序、
+   delay 挂开合时长（滑出收尾才隐，防中途隐身）；.open 合并 transition delay 0s 即刻可见 */
+.fab-fan { position: absolute; inset: 0; z-index: 55; pointer-events: none; visibility: hidden;
+  transition: visibility 0s .22s; }
+.fab-fan.open { pointer-events: auto; visibility: visible; transition: visibility 0s 0s; }
+/* 旋转三件套：--a 逐钮硬编码（组件内联）；收起态半径 0 + scale .2 = 自圆心缩没 */
+.fab-sub { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  display: flex; align-items: center; justify-content: center; border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 8px 20px -8px rgba(33, 29, 24, .30), 0 1px 4px rgba(33, 29, 24, .10);
+  color: var(--ink-soft);
+  transform: rotate(var(--a)) translateY(0) rotate(calc(var(--a) * -1)) scale(.2); opacity: 0;
+  transition: transform .22s cubic-bezier(.32, .72, 0, 1), opacity .12s ease,
+              background-color .15s ease, color .15s ease, border-color .15s ease; }
+.fab-fan.open .fab-sub { transform: rotate(var(--a)) translateY(-92px) rotate(calc(var(--a) * -1)) scale(1); opacity: 1; }
+.fab-sub:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass);
+  border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fab-ic { display: inline-flex; }
+.fab-ic .icon { width: 15px; height: 15px; }
+.fab-badge { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 999px; background: var(--brass); color: #fff;
+  font-family: 'Inter', sans-serif; font-size: 9px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--surface); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  /* 两态同杀：RM 下扇弧直切展开/收起，收起态 visibility 无孤儿延迟 */
+  .fab-main, .fab-fan, .fab-fan.open, .fab-sub { transition: none; }
+}

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 
@@ -45,3 +46,20 @@ def test_shell_state_pure():
         "dq(m.loadSlots('{\"tree\":true,\"right\":\"bogus\"}').right,null,'loadSlots bogus right');"
         "process.exit(0)})") % mod
     _run_node(js)
+
+
+def test_fabmenu_contract_pins():
+    # FabMenu（plan Task 2 静态钉）：a11y 三件套 / 指针桥事件 / emits 契约 / closeIfOpen /
+    # 六子钮文案各恰一次（数据单源，禁散副本）/ 聚合徽标三键 / bowtie 图标单点入 icons。
+    fab = (TPL / "js/components/FabMenu.js").read_text(encoding="utf-8")
+    icons = (TPL / "js/utils/icons.js").read_text(encoding="utf-8")
+    for token in ("aria-expanded", 'role="menu"', 'role="menuitem"',
+                  "pointerenter", "pointerleave", "closeIfOpen"):
+        assert token in fab, token
+    assert re.search(r"emits:\s*\[[^\]]*'pick'[^\]]*\]", fab), "emits 缺 'pick'"
+    assert re.search(r"emits:\s*\[[^\]]*'home'[^\]]*\]", fab), "emits 缺 'home'"
+    for label in ("文件", "搜索", "回收站", "监控", "通知", "设置"):
+        assert fab.count(label) == 1, f"子钮文案 {label!r} 出现 {fab.count(label)} 次（须恰 1 次，单源）"
+    for key in ("trash", "notif", "memory"):
+        assert key in fab, f"聚合徽标键 {key!r} 缺"
+    assert "bowtie:" in icons

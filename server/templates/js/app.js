@@ -20,6 +20,7 @@ import { DocRelated } from './components/DocRelated.js'
 import { MonitorPage } from './components/MonitorPage.js'
 import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
+import { FabMenu } from './components/FabMenu.js'
 import { ICONS } from './utils/icons.js'
 
 // 初始化 markdown 渲染器
@@ -60,7 +61,9 @@ const state = reactive({
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: [],      // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
-  homeRefreshSeq: 0       // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
+  homeRefreshSeq: 0,      // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
+  drawer: null            // 沉浸式壳 W1（plan 2026-11-22-immersive-shell）：桌面抽屉唯一源
+                          //（'file'|'search'|'trash'|'monitor'|null；T2 只声明+占位写入，T3 生效；移动旗标另路不动）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -72,6 +75,8 @@ const editorPaneRef = ref(null)
 const fileTreeRef = ref(null)
 // ─── AIChatPanel ref（点击落账：ai 面 query 归因 = 会话内最近 search_docs query）───
 const aiChatRef = ref(null)
+// ─── FabMenu ref（沉浸式壳 W1）：T3 Esc 链经 closeIfOpen/isOpen 消费（defineExpose 面）───
+const fabRef = ref(null)
 // ─── 目录条目（P4-3）：文档重渲染后重建（flush post = v-html 已 patch，与 renderedHtml 同款时机）───
 const tocItems = ref([])
 
@@ -86,6 +91,12 @@ let lastChangeTs = Date.now() / 1000
 /* ─── 动效编排（GPU 路径：transform/opacity；reduced-motion 下全部降级为直切/纯 opacity，
    见 style.css 尾部「动效层」分节；互斥契约不变：开页→L0 收起、返回→面板不自动重开）─── */
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+// ─── 桌面/移动断点唯一 reactive 源（沉浸式壳 W1）：壳组件 v-if 挂载条件（FAB；T3 续用）───
+// 旧内函数形 `() => window.innerWidth >= 1024` 非 reactive 且函数对象在 v-if 恒真值——
+// 经排查全仓无模板消费者，原位换成 matchMedia 驱动的 ref（跨断点 v-if 自动翻，Review Focus 2 的地基）
+const desktopMq = window.matchMedia('(min-width: 1024px)')
+const isDesktop = ref(desktopMq.matches)
+desktopMq.addEventListener('change', (e) => { isDesktop.value = e.matches })
 // 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
 let notifCloseT = null
 function closeNotifDropdown() {
@@ -606,6 +617,16 @@ const badgeParts = computed(() => {
 // rail 回收站徽标 = 回收站文件总数（0 → 不渲染，同记忆徽标模式）
 const trashCount = computed(() => state.trashItems.reduce((n, b) => n + ((b.files || []).length), 0))
 
+// FAB 聚合徽标（沉浸式壳 W1，plan Task 2）：三键 = trash / notif / memory（memory = 待审 + failed，
+// T6 定口径）；memoryAwaiting/memoryFailed 为设置子钮 title 构成分解的额外键（组件越界防御读 0）
+const fabBadges = computed(() => ({
+  trash: trashCount.value,
+  notif: state.unreadCount,
+  memory: badgeParts.value.total,
+  memoryAwaiting: badgeParts.value.awaiting,
+  memoryFailed: badgeParts.value.failed,
+}))
+
 function onMemoryRailClick() {
   state.memoryDetail = null   // 重新进入总是回队列面
   state.memoryReport = null   // 报告深链同口径（非 null = 应开在报告详情面）
@@ -921,7 +942,7 @@ export function createApp() {
         // 初始欢迎消息由 AIChatPanel 内部处理
       })
 
-      const isDesktop = () => window.innerWidth >= 1024
+      // isDesktop：模块级 matchMedia 驱动 ref（动效层分节旁声明），setup 透传给模板
 
       function toggleNotifDropdown() {
         if (state.notifOpen) closeNotifDropdown()
@@ -933,6 +954,13 @@ export function createApp() {
           if (el) el.classList.remove('notif-closing')
           state.notifOpen = true
         }
+      }
+
+      // FAB 扇弧选择（Task 2 占位接线，T3 抽屉接管）：notifications → 既有下拉；
+      // 其余 id（file/search/trash/monitor/settings）暂存 state.drawer=id——T3 生效，当前无消费端
+      function onFabPick(id) {
+        if (id === 'notifications') { toggleNotifDropdown(); return }
+        state.drawer = id
       }
 
       async function markAllRead() {
@@ -1002,9 +1030,10 @@ export function createApp() {
       }
 
       return {
-        state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
+        state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
+        onFabPick, fabBadges,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
         goHome, openTrashFace,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
@@ -1228,6 +1257,11 @@ export function createApp() {
               @open-doc="onMemoryOpenDoc($event)" @close="state.relSheetOpen = false" />
           </div>
 
+          <!-- 沉浸式壳 W1（plan Task 2）：左下全局入口扇弧——桌面专属（isDesktop = matchMedia 1024px，
+               移动端零渲染零样式触达）；占位接线：notifications → 既有下拉，其余 → state.drawer（T3 生效）；
+               @home 复用既有 goHome（currentPath 置 null → hash watch null 支路 replaceState 清 hash，spec §3 B1） -->
+          <fab-menu v-if="isDesktop" ref="fabRef" :badges="fabBadges" @pick="onFabPick" @home="goHome()"></fab-menu>
+
           <!-- AI 面板 -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
             :class="{ open: state.aiOpen }">
@@ -1274,6 +1308,7 @@ export function createApp() {
   app.component('MonitorPage', MonitorPage)
   app.component('Home', Home)
   app.component('SettingsPage', SettingsPage)
+  app.component('FabMenu', FabMenu)
 
   return app
 }
