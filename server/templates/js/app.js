@@ -109,6 +109,16 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
 const desktopMq = window.matchMedia('(min-width: 1024px)')
 const isDesktop = ref(desktopMq.matches)
 desktopMq.addEventListener('change', (e) => { isDesktop.value = e.matches })
+// T8 清尾：记忆控制台挂载门（T6 备案 5 收口）。口径对齐深链改道阈值（openNotif 等
+// 均 `window.innerWidth > 860` → 设置浮窗记忆段）：console overlay 仅 ≤860 可达，
+// 故挂载门也用 matchMedia(≤860) 而非 isDesktop(1024)——861~1023 平板带同样退役，
+// 消除桌面/平板带 console-shell 与设置浮窗记忆 pane 的 MemoryConsole 双实例同 props 冗余取数。
+// 跨断点入宽带清 memoryOpen（跨断点清零规则同 watch(isDesktop) 口径）：壳卸载后旗标
+// 无人清 → 861~1023 带 backdrop（lg:hidden 不覆盖此带）悬空成不可关黑幕。
+const consoleMq = window.matchMedia('(max-width: 860px)')
+const isConsoleMobile = ref(consoleMq.matches)
+consoleMq.addEventListener('change', (e) => { isConsoleMobile.value = e.matches })
+watch(isConsoleMobile, (m) => { if (!m) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null } })
 
 /* ─── 沉浸式壳 W1 抽屉层（plan Task 3）───────────────────────────────────────
    桌面抽屉唯一源 = state.drawer（'file'|'search'|'trash'|null），计算属性统一喂模板；
@@ -1258,7 +1268,7 @@ export function createApp() {
       }
 
       return {
-        state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, ICONS,
+        state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, isConsoleMobile, ICONS,
         activePanel, panels, activePanelCfg,
         panelDrawerOpen, panelWidth, treePinned, toggleTreeSlot,
         docHeadSegs, docPrivate, hasDoc, onRevealTree,
@@ -1352,10 +1362,12 @@ export function createApp() {
           </div>
         </div>
 
-        <!-- 记忆控制台（T6 退移动专属）：≤860px 全宽 overlay 原样（design/memory-console-design.html，
+        <!-- 记忆控制台（T6 退移动专属 + T8 挂载门收口）：≤860px 全宽 overlay 原样（design/memory-console-design.html，
              关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css）；
-             桌面/平板带 lg:hidden 退役——记忆入口 = FAB→设置浮窗→记忆段（spec §6） -->
-        <div id="memory-console-shell" class="console-shell lg:hidden" :class="{ open: state.memoryOpen }">
+             桌面/平板带退役改 v-if="isConsoleMobile"（matchMedia ≤860，口径同 openNotif 的 >860 改道）——
+             原 lg:hidden 仅 CSS 隐身、组件仍常驻挂载，与设置浮窗记忆 pane 双实例冗余取数；
+             记忆入口 = FAB→设置浮窗→记忆段（spec §6） -->
+        <div id="memory-console-shell" class="console-shell" v-if="isConsoleMobile" :class="{ open: state.memoryOpen }">
           <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail" :report="state.memoryReport"
             @pick="state.memoryDetail = $event"
             @back="state.memoryDetail = null"

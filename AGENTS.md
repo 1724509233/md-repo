@@ -78,6 +78,14 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 - **label 容器内禁放 labelable 后代（2026-11-22 设置页隐私目录误删）**：`<label>` 内空白/标签文字/hint 的点击会被浏览器**转发激活第一个 labelable 后代**（button/input/select/textarea 皆是）——不经任何 Vue handler，`.prevent` 救不了「点在 label 空白处」那一路。设置页字段（label.st-field）需含按钮时必须 `div.st-field` + `label[for]`/`aria-labelledby` 补语义（全页 15 处审计唯一漏网即隐私目录，点非×区域删标签）。回归钉：`test_web_ui_audit.py`（label.st-field 内禁 button 后代）。
 
+- **沉浸式壳桌面/移动双旗标与跨断点清零（2026-11-23 沉浸式壳）**：桌面面板唯一源 = `state.drawer`（值域 file/search/trash/null；挂载/渲染门一律 `isDesktop`——matchMedia(1024) 驱动 ref，禁 innerWidth 非 reactive 形）；移动旗标另路（`filePanelOpen`/`searchDrawerOpen`/`memoryOpen`）。批准偏离：监控不进 drawer 值域，`state.monitoring` 单实例保留（双实例=双轮询），桌面靠 `.mwrap` 宽抽屉化承载。跨断点清零规则：**旗标所在壳被 v-if 卸载的同点必清零**——`watch(isDesktop)` 桌面→移动清 drawer+filePanelOpen；`watch(isConsoleMobile)`（matchMedia 860，口径对齐 openNotif 的 >860 深链改道而非 1024）入宽带清 memoryOpen/detail/report，违者旗标恒真时 backdrop 悬空成不可关黑幕。挂载集必须 = 可达集（console-shell 的 lg:hidden 教训：CSS 隐身 ≠ 不挂载，双实例同 props 冗余取数）。法源：`docs/superpowers/{specs,plans}/2026-11-22-immersive-shell*.md`。回归钉：`tests/test_immersive_shell.py` 家族。
+
+- **壳层 z 层序表（一行，违者盖错层）**：dock 10 < FAB 20 < 抽屉/监控 30 < 握把/气泡 40 < 聊天浮窗 45 < 下拉（通知/目录）50 < 桥区 54 < 扇弧子钮 55 < 设置浮窗 81（backdrop 80、confirm 90）。新浮层先照表对号（spec §7），钉：`test_pinned_slot_below_fab` 等层序家族。
+
+- **Vue setup return 禁裸 prop 简写**：`setup(props)` 作用域里 `return { foo, ... }` 解出的是不存在的局部变量 → ReferenceError **崩整棵组件树**，且页面无任何可读表象（scene 只在浏览器 console），静态扫描/pytest 全绿放行。props 一律 `foo: props.foo` 全写。回归钉：`tests/test_immersive_shell.py::test_setup_return_no_bare_props`。
+
+- **FAB/握把 hover 命中分层**：hover 驱动的悬浮容器根元素**恒 `pointer-events: none`、子钮各自接指针**——容器根自接会把主钮罩进子层命中区，指针在钮间微动即触发容器 pointerleave → 开合抖动。桥接区（.fan-bridge）同理只补空隙不抢命中。回归钉：`tests/test_immersive_shell.py::test_fab_hover_hit_stack`。
+
 ### 平台与测试备忘
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.

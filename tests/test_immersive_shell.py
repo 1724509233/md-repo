@@ -369,13 +369,21 @@ def test_memory_in_settings():
 
 
 def test_console_shell_mobile_only():
-    # Task 6 桌面 console-shell 退役钉（plan Step 2）：容器与 backdrop lg:hidden；
+    # Task 6 桌面 console-shell 退役钉（plan Step 2）+ T8 挂载门收口：
     # 根脚本无桌面可触达的 memoryOpen=true（onMemoryRailClick 转移动分支：>860 早退设置记忆段；
     # openNotif 桌面改道 openSettingsPage('memory')，报告深链仍可达；≤860 移动 overlay 逐条不动）。
     app = (TPL / "js/app.js").read_text(encoding="utf-8")
 
-    # ① console-shell 容器与 backdrop 加 lg:hidden（移动全宽 overlay 原样）
-    assert re.search(r'<div id="memory-console-shell" class="console-shell lg:hidden"', app)
+    # ① console-shell 挂载门 v-if="isConsoleMobile"（matchMedia ≤860）+ backdrop 仍 lg:hidden。
+    #   原钉→新锚（T8 清尾）：原锚 = 容器 class 串 `console-shell lg:hidden`（CSS 隐身但组件
+    #   仍挂载，桌面/861~1023 平板带与设置浮窗记忆 pane 双实例同 props 冗余取数）；
+    #   新锚 = v-if 结构门（不可达即不挂载），阈值口径对齐 openNotif 的 >860 改道而非
+    #   isDesktop(1024)——console overlay 仅 ≤860 可达，挂载集 = 可达集。
+    assert re.search(r'<div id="memory-console-shell" class="console-shell" v-if="isConsoleMobile"', app)
+    assert "window.matchMedia('(max-width: 860px)')" in app
+    # 跨断点清零（v-if 卸载后旗标无人清 → backdrop 悬空黑幕护栏）：
+    seg = app[app.index("watch(isConsoleMobile"):]
+    assert "state.memoryOpen = false" in seg[:seg.index("})")]
     bd = app[app.index('id="memory-console-backdrop"'):]
     assert "lg:hidden" in bd[:bd.index("</div>")]
 

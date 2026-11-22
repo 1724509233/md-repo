@@ -110,8 +110,11 @@ def test_compositor_only_transitions():
     css = (TPL / "style.css").read_text(encoding="utf-8")
     bad = [l.strip()[:90] for l in css.splitlines()
            if re.search(r"transition: *(right|bottom|padding)", l)
-           and "#ai-btn {" not in l and "main { " not in l]
-    # 双例外（ledger Task 7 Rulings）：桌面贴边 tab；main padding 同帧折叠 = 用户定型
+           and "main { " not in l]
+    # 单例外（ledger Task 7 Rulings）：main padding 同帧折叠 = 用户定型。
+    # 原钉→新锚（T8）：旧第二例外 `#ai-btn {`（桌面贴边 tab）随 T7 桌面 tab 退役从
+    # style.css 删净（全文件仅存退役注释提及），例外子句失去所指——删除即收紧：
+    # 再有任何 right/bottom/padding 过渡直接红，无需重新登记。
     assert bad == []
 
 
@@ -739,8 +742,9 @@ def test_p2_visual_round_js():
     for fn in ("function landOn", "function landCell"):
         assert "if (state?.docMissing) return" in ep[ep.index(fn):][:200], fn
     assert "docMissing: { type: Boolean, default: false }" in tb
-    assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 桌面 编辑/下载/保存 + 移动菜单同三项
-    assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）
+    assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 退役态钉：TopBar 整壳已 lg:hidden 移动专属——
+    # 原「桌面三项 + 移动菜单三项」现全为移动形态（内部零改动原则保留），钉数与口径不变
+    assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（另三项走 .topbar-btn:disabled CSS，移动在用到）
     assert "docMissing: { type: Boolean, default: false }" in ep
     assert ':disabled="docMissing"' in ep       # textarea 双保险
     assert app.count(':doc-missing="state.docMissing"') == 4  # TopBar + EditorPane + RightDock（T5 dock 传通）+ BubblePeek（T7 契约保留位）

@@ -152,6 +152,8 @@
 | W4 清尾 | 死样式/死 flag（桌面 `monitoring`/`filePanelOpen`/rail 路径）、审计钉家族整体翻新、AGENTS.md Gotchas 沉淀 | 全局 |
 | W5 AI 消息面（rev3） | 半隐把手 + 气泡栈 + 聊天浮窗（AIChatPanel 换壳）+ 图钉升右槽 | 新 BubblePeek.js、app.js、AIChatPanel.js 壳层 |
 
+> 实装偏离（T3 批准，2026-11-22）：监控**未**并入 drawer 值域、`state.monitoring` 旗标保留——MonitorPage 单实例（双实例 = 双轮询），桌面由 style.css min-width:1024px 把 `.mwrap` 重塑为 absolute 宽抽屉（视觉=抽屉，实现=旗标），移动整页接管原样；W4「死 flag」清单中桌面 `monitoring` 一项按此豁免（详见 plan Task 3 备案与 app.js 分节注释）。
+
 ## 12. 演进位（不做，但承重）
 
 - **命令面板**（Ctrl+K 跳转+操作统一）：与 FAB 不互斥，叠加即可。

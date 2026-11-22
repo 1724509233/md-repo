@@ -188,7 +188,7 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 /* ============ 目录浮层（P4-3 · 沉浸式壳 T5 起为 app 根级单实例）============
    移动锚顶栏下缘（fixed top:56 = 顶栏 48 + 8，right:8 视口右缘——与旧「顶栏子树 absolute」
    视觉逐位同构，消费路径零改动）；桌面锚 dock 左缘（文末 T5 分节媒体覆盖）。
-   AI 抽屉打开时浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / ai-btn 40 之下）。
+   AI 抽屉打开时浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / 移动 ai 抽屉 40 / 聊天浮窗 45 之下；旧桌面 #ai-btn 40 已随 T7 tab 退役）。
    开 = display 恢复时 animation 正向播放（opacity + translateY(4px→0) + scale(.98→1)，transform 路径零 reflow）；
    合 = v-show 直切（无退场，避免 display 切换的 JS 时序管理；浮层零常驻占用，代价可接受）。
    浮层本体不参与 flex 布局：开关不改内容区尺寸/居中，文档滚动位置不动。 */
