@@ -161,3 +161,140 @@ def test_actions_no_bg_targets(vault_dir, db_conn, ledger_conn):
 
 def _max_seq(conn) -> int:
     return conn.execute("SELECT max(seq) FROM change_log").fetchone()[0]
+
+
+# ── POST /api/home/summary（§5.2：缓存/单飞/退避 + egress 行级台账）──────
+
+import asyncio  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+import pytest  # noqa: E402  (already imported above; kept for section clarity)
+
+from server.core.privacy import PrivacyConfig  # noqa: E402
+
+
+def _install_fake_summary_client(monkeypatch, results: list):
+    """非流式单发 stub；create 里留 sleep 制造并发窗口（单飞测试用）。"""
+    state = {"i": 0, "calls": []}
+
+    class _Completions:
+        async def create(self, **kwargs):
+            state["calls"].append(kwargs)
+            await asyncio.sleep(0.005)
+            item = results[min(state["i"], len(results) - 1)]
+            state["i"] += 1
+            if isinstance(item, Exception):
+                raise item
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content=item))])
+
+    class _Client:
+        def __init__(self, **kw):
+            self.chat = SimpleNamespace(completions=_Completions())
+
+    monkeypatch.setattr("server.routes.home.AsyncOpenAI", _Client)
+    return state
+
+
+def _egress_rows(ledger_conn):
+    return [tuple(r) for r in ledger_conn.execute(
+        "SELECT path, via, channel, actor, run_id, endpoint_host, model "
+        "FROM egress_log ORDER BY path").fetchall()]
+
+
+@pytest.fixture
+def cloud_ai():
+    from server.config.ai import AIConfig
+    return AIConfig(base_url="http://model.test/v1", api_key="t", model="m-test")
+
+
+@pytest.fixture
+def cloud_app(vault_dir, db_conn, ledger_conn, cloud_ai, tmp_path):
+    cfg = tmp_path / "cfg.yaml"
+    # server 段必带：缺 server 的 yaml 会被 PrivacyConfig 判为截断写瞬态而保留旧值（§2.2）
+    cfg.write_text("server:\n  host: localhost\nprivacy:\n  dirs: [日记]\n",
+                   encoding="utf-8")
+    return create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn,
+                      ai_config=cloud_ai, privacy=PrivacyConfig(cfg),
+                      bg_targets={ALIAS: {"armed_target": None, "runs_cap": None}})
+
+
+@pytest.fixture
+def cloud_client(cloud_app):
+    return TestClient(cloud_app)
+
+
+def test_summary_requires_model(client):
+    r = client.post("/api/home/summary")
+    assert r.status_code == 400
+    assert r.json()["error"] == "model_not_configured"
+
+
+def test_summary_cache_digest_and_egress(cloud_client, db_conn, ledger_conn, monkeypatch):
+    """当日一次调用；digest 打码隐私路径；egress 行级 = 真实非隐私路径。"""
+    now = time.time()
+    log_change(db_conn, "notes/x.md", "update", source="agent", ts=now)
+    log_change(db_conn, "日记/hidden.md", "update", source=ALIAS, ts=now)
+    state = _install_fake_summary_client(monkeypatch, ["一切安好。"])
+
+    r1 = cloud_client.post("/api/home/summary")
+    assert r1.status_code == 200 and r1.json()["text"] == "一切安好。"
+    r2 = cloud_client.post("/api/home/summary")
+    assert r2.json()["text"] == "一切安好。"
+    assert len(state["calls"]) == 1  # 当日缓存
+
+    user = state["calls"][0]["messages"][1]["content"]
+    assert "notes/x.md" in user
+    assert "日记/hidden.md" not in user and "〈私密〉" in user
+    assert "我自己动手的" in user and "我让守夜人办的" in user  # 组头在场（§5.2 digest 含组头）
+
+    assert _egress_rows(ledger_conn) == [
+        ("notes/x.md", "digest", "home", "agent", "", "model.test", "m-test"),
+    ]
+
+
+def test_summary_failure_flushes_then_cooldown(cloud_client, db_conn, ledger_conn, monkeypatch):
+    """失败也先落台账（红线 7）；随后冷却拒绝（M4：重试连击不得是无上限云调用）。"""
+    log_change(db_conn, "notes/y.md", "update", source="agent", ts=time.time())
+    state = _install_fake_summary_client(monkeypatch, [RuntimeError("boom"), "ok"])
+
+    r = cloud_client.post("/api/home/summary")
+    assert r.status_code == 502
+    assert [row[0] for row in _egress_rows(ledger_conn)] == ["notes/y.md"]  # 失败先记账
+    r2 = cloud_client.post("/api/home/summary")
+    assert r2.status_code == 429 and r2.json()["error"] == "cooldown"
+    assert len(state["calls"]) == 1  # 冷却内不再触模型
+
+
+def test_summary_singleflight(cloud_app, db_conn, monkeypatch):
+    """并发双发共用一次真实调用（缓存只覆盖成功后，in-flight 去重必须另有）。"""
+    log_change(db_conn, "notes/z.md", "update", source="agent", ts=time.time())
+    state = _install_fake_summary_client(monkeypatch, ["一句话。"])
+    ctx = cloud_app.state.ctx
+    from server.routes.home import SummaryCtl, generate_summary
+    ctl = SummaryCtl()
+
+    async def two():
+        return await asyncio.gather(generate_summary(ctx, ctl), generate_summary(ctx, ctl))
+
+    texts = asyncio.run(two())
+    assert texts == ["一句话。", "一句话。"]
+    assert len(state["calls"]) == 1
+
+
+def test_summary_loopback_zero_rows(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch):
+    """本地模型（回环）→ should_record False → 零台账行是正确行为。"""
+    log_change(db_conn, "notes/w.md", "update", source="agent", ts=time.time())
+    _install_fake_summary_client(monkeypatch, ["行。"])
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn,
+                     ai_config=ai_config)
+    with TestClient(app) as tc:
+        assert tc.post("/api/home/summary").status_code == 200
+    assert _egress_rows(ledger_conn) == []
+
+
+def test_summary_empty_window_digest(cloud_client, monkeypatch):
+    """零活动窗也要调模型，digest 明示「没有动静」（Review Focus 5）。"""
+    state = _install_fake_summary_client(monkeypatch, ["安静。"])
+    assert cloud_client.post("/api/home/summary").status_code == 200
+    assert "这段时间没有动静" in state["calls"][0]["messages"][1]["content"]
