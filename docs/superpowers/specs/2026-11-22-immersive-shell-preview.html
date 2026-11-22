@@ -8,11 +8,13 @@
   沉浸式壳重构 静态预览稿（评审用 mockup，非应用代码）spec 2026-11-22-immersive-shell
   二修定稿：常驻 rail 退役，全局入口 = 左下悬浮圆钮（hover 右上 90° 扇弧展开六枚子钮）。
   token 与语汇逐字取自 server/templates/style.css；与 2026-11-22-home-butler-landing-preview.html 同语言。
-  给实现者的两句话：
+  给实现者的三句话：
   ① 子页抽屉开合过渡一律走 transform（translateX），勿动 width——宽度参与 flex 布局会挤压文档列，
      「浮层不挤压」是本稿核心卖点。
   ② hover 扇弧要做指针桥：从圆钮圆心到各子钮的扇形路径上不得中途收起（指针沿弧移动零掉线），
      reduced-motion 时扇弧降级为直切展开，弹性过渡整体豁免。
+  ③ 管家气泡栈悬浮走 absolute+transform（勿动文档列任何盒属性）；
+     把手徽标计数与圆钮扇弧里铃铛的未读是两套独立游标（V1 分立，勿并）。
 -->
 <style>
 /* ================================================================
@@ -370,6 +372,56 @@ a { color: inherit; }
 .day .d { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); flex-shrink: 0; }
 .day .sum { font-family: var(--serif); font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
 
+/* ---------- 管家摘要面：半隐把手（所有文档场景常驻，Home 也在——管家总在书房） ---------- */
+.grip {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%); z-index: 20;
+  width: 10px; height: 120px; border-radius: 6px 0 0 6px;
+  background: color-mix(in srgb, var(--ink-soft) 28%, var(--paper));
+}
+.grip .gpill {
+  position: absolute; top: -8px; left: -10px; min-width: 17px; height: 17px; padding: 0 5px;
+  border-radius: 999px; background: var(--brass); color: #fff;
+  font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--paper); font-variant-numeric: tabular-nums;
+}
+/* 气泡栈：悬浮于把手旁，纵向叠最多 3 条；左缘圆角，与左侧浮层的右缘圆角成镜像语系 */
+.bubbles {
+  position: absolute; right: 18px; top: 64px; z-index: 21; width: 272px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.bubble {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px 0 0 12px;
+  box-shadow: 0 10px 26px -12px rgba(33,29,24,.28), 0 2px 6px rgba(33,29,24,.08);
+  padding: 9px 14px 8px 13px;
+}
+.bubble p { margin: 0; font-family: var(--serif); font-size: 14px; line-height: 1.65; color: var(--ink); }
+.bubble .bt { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); text-align: right; }
+.bmore {
+  align-self: flex-end; font-family: var(--ui); font-size: 11px; color: var(--ink-soft);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px 0 0 999px;
+  padding: 2px 10px 2px 12px; box-shadow: 0 6px 16px -10px rgba(33,29,24,.25);
+}
+/* 聊天窗浮窗：停靠右缘、与 dock 错位（右侧留缝表达「悬浮」不是「占栏」），图钉=升级右槽常驻 */
+.chatwin {
+  position: absolute; right: 54px; top: 60px; bottom: 24px; z-index: 26;
+  width: min(400px, calc(100% - 120px));
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: -18px 0 48px -22px rgba(33,29,24,.30), 0 16px 40px -18px rgba(33,29,24,.22);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.msg-usr {
+  align-self: flex-end; font-family: var(--ui); font-size: 13px; color: var(--ink);
+  padding: 2px 2px 2px 12px; max-width: 88%; text-align: right;
+}
+.didrow {
+  display: flex; align-items: center; gap: 7px; align-self: flex-start; cursor: pointer;
+  font-family: var(--ui); font-size: 11.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); border-radius: 8px; padding: 5px 10px;
+  transition: color .15s ease, border-color .15s ease;
+}
+.didrow:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); }
+.didrow .car { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
 /* ---------- 窄窗口收纳（评审在任意宽度可开，不横向溢出） ---------- */
 @media (max-width: 960px) {
   .slot-l { width: 220px; }
@@ -389,7 +441,7 @@ a { color: inherit; }
 <body>
 <header class="pv-head">
   <p class="pv-title">沉浸式壳重构（左下圆钮修订版）—— 设计预览稿</p>
-  <p class="pv-sub">spec 2026-11-22-immersive-shell · 二修定稿 · 仅供浏览器视觉评审，非应用代码 · 常驻侧栏退役：日常默认<b>单栏文档</b>（零其它 chrome），全局入口收敛为<b>左下悬浮圆钮</b>，悬停在右上扇弧展开六枚子钮；子页抽屉悬浮覆盖、不挤压文档。</p>
+  <p class="pv-sub">spec 2026-11-22-immersive-shell · 二修定稿 · 仅供浏览器视觉评审，非应用代码 · 常驻侧栏退役：日常默认<b>单栏文档</b>（零其它 chrome），全局入口收敛为<b>左下悬浮圆钮</b>，悬停在右上扇弧展开六枚子钮；子页抽屉悬浮覆盖、不挤压文档；管家摘要在右缘（半隐握把 + 气泡栈），系统详情台账在左下圆钮的通知里——摘要归摘要、详情归详情。</p>
 </header>
 
 <nav class="segbar" aria-label="场景切换">
@@ -401,6 +453,8 @@ a { color: inherit; }
   <button class="segb" type="button" data-go="5">5 · 文件抽屉浮层</button>
   <button class="segb" type="button" data-go="6">6 · 监控宽抽屉</button>
   <button class="segb" type="button" data-go="7">7 · 设置浮窗</button>
+  <button class="segb" type="button" data-go="8">8 · 管家气泡栈</button>
+  <button class="segb" type="button" data-go="9">9 · 聊天浮窗</button>
 </nav>
 <!-- ==================== 场景 1 · 单栏 Home ==================== -->
 <section class="scene" id="sc1">
@@ -428,6 +482,7 @@ a { color: inherit; }
         </div>
       </div>
     </div>
+    <div class="grip" title="管家在书房——点开聊天浮窗"></div>
     <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
@@ -488,6 +543,7 @@ a { color: inherit; }
         <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
       </div>
     </div>
+    <div class="grip" style="right:34px" title="管家在书房——点开聊天浮窗"></div>
     <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
@@ -540,7 +596,7 @@ a { color: inherit; }
 </section>
 <!-- ==================== 场景 4 · 三栏全开 ==================== -->
 <section class="scene" id="sc4">
-  <p class="pv-cap"><b>场景 4 · 三栏全开 —— 按需全开态，日常默认是场景 2</b> —— 左槽文件树 260px 与右槽管家对话均为 in-flow 槽位（挤压主区），从扇弧里点开才存在；此态是栏位的<b>上限</b>，不是首页。文档头行与 dock 与场景 2 完全一致。</p>
+  <p class="pv-cap"><b>场景 4 · 三栏全开 —— 按需全开态，日常默认是场景 2</b> —— 左槽文件树 260px 与右槽管家对话均为 in-flow 槽位（挤压主区），从扇弧里点开才存在；此态是栏位的<b>上限</b>，不是首页。文档头行与 dock 与场景 2 完全一致。右槽管家对话 = 聊天浮窗图钉升级而来（场景 9）；此时右缘握把让位，不再叠画。</p>
   <div class="app">
     <aside class="slot-l">
       <div class="p-head">
@@ -713,6 +769,7 @@ a { color: inherit; }
         <div class="tfile" style="padding-left:38px"><span class="fname">读书 · 明史的早晨.md</span><span class="mtime">上周五</span></div>
       </div>
     </aside>
+    <div class="grip" style="right:34px" title="管家在书房——点开聊天浮窗"></div>
     <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
@@ -774,6 +831,7 @@ a { color: inherit; }
         </div>
       </div>
     </aside>
+    <div class="grip" title="管家在书房——点开聊天浮窗"></div>
     <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
@@ -830,6 +888,91 @@ a { color: inherit; }
         </div>
       </div>
     </div>
+  </div>
+</section>
+<!-- ==================== 场景 8 · 管家气泡栈（摘要面） ==================== -->
+<section class="scene" id="sc8">
+  <p class="pv-cap"><b>场景 8 · 管家气泡栈 —— 摘要在右缘</b> <span class="hot">（摘要归摘要、详情归详情）</span>管家有事不喊页面，在书房门口别纸条：半隐握把上叠最近 <b>3 条摘要</b>（「+2」表示还有），第一人称一句话、点了直达落点。数量分解、状态明细、历史台账都在左下圆钮的「通知」里。气泡悬浮于文档之上，不挤一栏一字——握把上的「5」是未读消息数，与铃铛未读是两套独立游标（V1 分立）。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="grip" style="right:34px" title="管家留言 5 条"><span class="gpill">5</span></div>
+    <div class="bubbles" style="right:48px">
+      <div class="bubble"><p>您昨天问的三件事，我理出来了，要看吗。</p><span class="bt">刚才</span></div>
+      <div class="bubble"><p>收了 3 篇，一处对不上，您看下。</p><span class="bt">14:20</span></div>
+      <div class="bubble"><p>记忆提案有 2 条，等您拿主意。</p><span class="bt">昨天 22:31</span></div>
+      <span class="bmore">+2</span>
+    </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 9 · 聊天浮窗（图钉升级） ==================== -->
+<section class="scene" id="sc9">
+  <p class="pv-cap"><b>场景 9 · 聊天浮窗 —— 问完即关，图钉升级</b> 点握把展开：约 400px 聊天窗悬浮停靠右缘，与 dock 错位留缝——<span class="hot">悬浮不是占栏</span>。头部图钉 = 升级为右槽常驻（即场景 4 的形态）；工具行是管家「去办了」的折叠汇报，正文衬线、出处随行。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="chatwin" role="dialog" aria-label="管家">
+      <div class="ai-head">
+        <span class="ai-brand"><svg viewBox="0 0 16 16"><path d="M8 2.2l1.5 4.3 4.3 1.5-4.3 1.5L8 13.8 6.5 9.5 2.2 8l4.3-1.5Z"/></svg></span>
+        <span class="ai-name">管家</span>
+        <span class="ai-acts">
+          <button class="ibtn" type="button" title="钉到右栏（升级为常驻栏位）"><svg viewBox="0 0 16 16"><path d="M8 9.5V14"/><path d="M5 3h6l-.8 3.5h.8a1 1 0 0 1 1 1v.5H4V8a1 1 0 0 1 1-1h.8Z"/></svg></button>
+          <button class="ibtn" type="button" title="关闭"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </span>
+      </div>
+      <div class="msgs">
+        <div class="msg-usr">这周笔记里提到「守夜人」的地方，都给我列一下。</div>
+        <div class="didrow"><svg class="car" viewBox="0 0 16 16"><path d="m5.5 3.5 4.5 4.5-4.5 4.5"/></svg>去办了 · 翻了三处书架，取回 3 句</div>
+        <div class="msg msg-ai">都在：《周记 · 第 47 周》两处、《归档整理说明》一处，三处都指夜间归档任务，口径是一致的。<span class="cite">引自：notes/周记 · 第 47 周.md</span></div>
+      </div>
+      <div class="ai-foot">
+        <div class="ai-in">想问什么，就说……</div>
+        <button class="ai-send" type="button" title="发送"><svg viewBox="0 0 16 16"><path d="M2.6 8h10.8M9.6 4l4 4-4 4"/></svg></button>
+      </div>
+    </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
 <script>
