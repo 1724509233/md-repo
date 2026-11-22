@@ -1243,3 +1243,62 @@ def test_home_landing_wired():
 def test_home_component_registered():
     app = _templates()["app.js"]
     assert "app.component('Home', Home)" in app
+
+
+def test_home_voice_module():
+    # homeVoice = 文案单点存放（spec §4.3）：分级/量词/问候纯函数 + 定稿语料常量。
+    # 行为面走 node 直 import（同 chatRestore/format 先例）：S0–S4 边界、
+    # 缺席量词（<15min 无数字 / 15min–2d 报小时 / ≥24h「一天」级 / ≥2d「N 天又 M 小时」）、时段四界。
+    f = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    assert "mdvault.lastSeenChangeSeq" in f and "mdvault.lastPresence" in f
+    for tok in ("'S0'", "'S1'", "'S2'", "'S3'", "'S4'"):
+        assert tok in f, tok
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const H=3600e3, D=86400e3, now=1763000000000;
+  const t=o=>m.tierOf(Object.assign({now},o));
+  if(t({bootedOnce:false,lastPresence:undefined})!=='nostorage')process.exit(1);
+  if(t({bootedOnce:false,lastPresence:null})!=='first')process.exit(2);
+  if(t({bootedOnce:true,lastPresence:now-9*H})!=='S0')process.exit(3);
+  if(t({bootedOnce:false,lastPresence:now-(15*60e3-1)})!=='S1')process.exit(4);
+  if(t({bootedOnce:false,lastPresence:now-15*60e3})!=='S2')process.exit(5);
+  if(t({bootedOnce:false,lastPresence:now-6*H+1})!=='S2')process.exit(6);
+  if(t({bootedOnce:false,lastPresence:now-6*H})!=='S3')process.exit(7);
+  if(t({bootedOnce:false,lastPresence:now-2*D+1})!=='S3')process.exit(8);
+  if(t({bootedOnce:false,lastPresence:now-2*D})!=='S4')process.exit(9);
+  if(m.absentPhrase(899)!=='')process.exit(10);
+  if(m.absentPhrase(900)!=='1 个小时')process.exit(11);
+  if(m.absentPhrase(4*3600)!=='4 个小时')process.exit(12);
+  if(m.absentPhrase(24*3600)!=='一天')process.exit(13);
+  if(m.absentPhrase(30*3600)!=='一天又 6 小时')process.exit(14);
+  if(m.absentPhrase(2*86400)!=='2 天')process.exit(15);
+  if(m.absentPhrase(3*86400+14*3600)!=='3 天又 14 小时')process.exit(16);
+  if(m.greetingOf(new Date(2026,0,1,11,59).getTime())!=='早上好')process.exit(17);
+  if(m.greetingOf(new Date(2026,0,1,12,0).getTime())!=='午后好')process.exit(18);
+  if(m.greetingOf(new Date(2026,0,1,22,59).getTime())!=='晚上好')process.exit(19);
+  if(m.greetingOf(new Date(2026,0,1,23,0).getTime())!=='夜深了')process.exit(20);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/homeVoice.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"homeVoice case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_home_render_pins():
+    # 渲染面钉（spec §8）：G1 LLM 文本走 Vue 插值（禁 v-html——防线是 LLM 无渲染权）；
+    # S0/S1 短窗 G2 收束不渲段题（shortStay 守卫）；定稿语料在位（文案单点=homeVoice，
+    # Home.js 与 homeVoice 并查）；样式 hb- 分节存在。
+    home = _templates()["Home.js"]
+    assert "v-html" not in home
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    both = home + voice
+    for tok in ("您刚离开，还没有新的事", "我做不了主的事",
+                "这段时间安安静静，我只看了看房子的四周", "都打理好了，不急"):
+        assert tok in both, tok
+    assert "shortStay" in home
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert ".hb-home" in css and ".hb-g4" in css
