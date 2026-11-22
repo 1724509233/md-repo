@@ -45,7 +45,7 @@ export const Home = {
     const groups = computed(() => (data.value && data.value.system_groups) || [])
     const myDays = computed(() => (data.value && data.value.my_days) || [])
     const over7d = computed(() => !!data.value &&
-      (data.value.window.until - data.value.window.since) >= 7 * 86400 - 60)
+      (data.value.window.until - data.value.window.since) >= 7 * 86400)
 
     /* ── G1 组装（hi = 段落数组，a=true 段落黄铜；LLM 摘要整句替换）── */
     const g1 = computed(() => {
@@ -137,8 +137,9 @@ export const Home = {
         data.value = d
         loadFailed.value = false
         expanded.value = d.my_days.length ? new Set([d.my_days[0].date]) : new Set()
-        // 已读游标（§6.3）：G2 渲出非空内容才落笔——「看过」即看过，免疫窗钳制
-        if (d.system_groups.length) {
+        // 已读游标（§6.3）：G2 渲出非空内容才落笔——「看过」即看过，免疫窗钳制。
+        // S0/S1 收束态列表根本没露脸，「看过」不成立，绝不推进游标（终审 M2）。
+        if (d.system_groups.length && !shortStay.value) {
           const maxSeq = Math.max(...d.system_groups.flatMap((g) => g.ops.map((op) => op.seq)))
           try { localStorage.setItem(LS_KEYS.seenSeq, String(maxSeq)) } catch (e) { /* 无存储：下次重报，设计内 */ }
         }

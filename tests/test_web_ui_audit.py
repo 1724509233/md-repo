@@ -1323,5 +1323,7 @@ def test_home_render_pins():
                 "这段时间安安静静，我只看了看房子的四周", "都打理好了，不急"):
         assert tok in both, tok
     assert "shortStay" in home
+    # 游标落笔守卫（终审 M2）：S0/S1 收束态列表未渲，游标绝不推进
+    assert "system_groups.length && !shortStay" in home
     css = (TPL / "style.css").read_text(encoding="utf-8")
     assert ".hb-home" in css and ".hb-g4" in css

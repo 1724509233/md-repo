@@ -75,7 +75,7 @@ export const HOME_COPY = {
     nostorageSaid: '这边一切如常。有什么需要，随时叫我。',
     btn: '让我说说这几天的事',
     noteNoModel: '管家还没接上模型',
-    noteCooldown: '我刚才说过了，容我再想想。',
+    noteCooldown: '我刚试过了，让我缓缓再开口。',
     noteFailed: '没接通，稍后再试。',
   },
   g2: {

@@ -801,8 +801,10 @@ export function createApp() {
         pollMemory()
 
         // lastPresence 心跳（spec 2026-11-22-home-butler-landing §6.3）：加载即记一笔，
-        // 5min 心跳仅 visible 续写（后台标签不冒充在场），hidden/pagehide 各兜一笔离场时刻
-        beatPresence()
+        // 5min 心跳仅 visible 续写（后台标签不冒充在场），hidden/pagehide 各兜一笔离场时刻。
+        // boot 笔同样受 visible 门控（终审 M1）：浏览器重启恢复的后台标签不得续锚——
+        // 「在场」的定义是看得见的标签，boot 兜底只是给前台首屏补锚。
+        if (document.visibilityState === 'visible') beatPresence()
         setInterval(() => { if (document.visibilityState === 'visible') beatPresence() }, 300000)
         document.addEventListener('visibilitychange', () => {
           if (document.visibilityState === 'hidden') beatPresence()
