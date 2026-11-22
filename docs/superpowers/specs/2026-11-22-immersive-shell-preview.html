@@ -3,12 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>沉浸式壳重构 — 设计预览 · md-vault</title>
+<title>沉浸式壳重构 · 左下圆钮修订版 — 设计预览 · md-vault</title>
 <!--
   沉浸式壳重构 静态预览稿（评审用 mockup，非应用代码）spec 2026-11-22-immersive-shell
+  二修定稿：常驻 rail 退役，全局入口 = 左下悬浮圆钮（hover 右上 90° 扇弧展开六枚子钮）。
   token 与语汇逐字取自 server/templates/style.css；与 2026-11-22-home-butler-landing-preview.html 同语言。
-  给实现者的一句话：子页抽屉开合过渡一律走 transform（translateX），勿动 width——
-  宽度参与 flex 布局会挤压文档列，「浮层不挤压」正是本稿的核心卖点。
+  给实现者的两句话：
+  ① 子页抽屉开合过渡一律走 transform（translateX），勿动 width——宽度参与 flex 布局会挤压文档列，
+     「浮层不挤压」是本稿核心卖点。
+  ② hover 扇弧要做指针桥：从圆钮圆心到各子钮的扇形路径上不得中途收起（指针沿弧移动零掉线），
+     reduced-motion 时扇弧降级为直切展开，弹性过渡整体豁免。
 -->
 <style>
 /* ================================================================
@@ -74,57 +78,42 @@ a { color: inherit; }
   overflow: hidden; display: flex; height: 780px; position: relative;
 }
 
-/* ---------- 64px 图标 rail（唯一全局入口） ---------- */
-.rail {
-  width: 64px; flex-shrink: 0;
-  display: flex; flex-direction: column; align-items: center;
-  padding: 10px 0 12px;
-  background: var(--surface); border-right: 1px solid var(--line);
-  z-index: 40;
-}
-.rlogo {
-  display: flex; flex-direction: column; align-items: center; gap: 3px;
-  width: 52px; padding: 6px 0 4px; margin-bottom: 8px; border-radius: 9px;
-  text-decoration: none; color: var(--ink);
-  transition: background-color .15s ease;
-}
-.rlogo:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
-.rlogo .logo-mark {
-  width: 30px; height: 30px; border: 1px solid var(--brass); border-radius: 8px;
+/* ---------- 左下悬浮圆钮（唯一全局入口；生产实现 fixed 距左/下 24px，本框内 absolute 等效） ---------- */
+.fab {
+  position: absolute; left: 24px; bottom: 24px; width: 48px; height: 48px; z-index: 50;
+  border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px -10px rgba(33,29,24,.32), 0 2px 8px rgba(33,29,24,.10);
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--serif); font-weight: 700; font-size: 15px; color: var(--brass);
+  font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--brass);
 }
-.rlogo .rlabel { font-size: 10px; line-height: 1; color: var(--ink-soft); letter-spacing: .02em; }
-.rail > .rbtn + .rbtn { margin-top: 6px; }
-.rbtn {
-  border: none; background: transparent; cursor: pointer;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
-  width: 52px; height: 44px; border-radius: 9px;
-  color: var(--ink-soft); position: relative;
-  transition: background-color .15s ease, color .15s ease;
+.fab .adot {  /* 右上聚合徽标点：有待办才画 */
+  position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--brass); box-shadow: 0 0 0 2px var(--paper);
 }
-.rbtn .ricon { display: inline-flex; }
-.rbtn .ricon svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.rbtn .rlabel { font-size: 10px; letter-spacing: .02em; line-height: 1; user-select: none; }
-.rbtn:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--ink); }
-.rbtn.on { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
-.rbtn.on::before {
-  content: ''; position: absolute; left: -6px; top: 9px; bottom: 9px;
-  width: 3px; border-radius: 0 3px 3px 0; background: var(--brass);
+/* 展开态（场景 3 静态呈现；生产 = hover 触发，扇弧过渡走 transform） */
+.fab.fan { background: color-mix(in srgb, var(--brass) 8%, var(--surface)); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fsub {
+  position: absolute; width: 34px; height: 34px; border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 8px 20px -8px rgba(33,29,24,.30), 0 1px 4px rgba(33,29,24,.10);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-soft);
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
 }
-.rbtn .badge {
-  position: absolute; top: 3px; right: 6px; min-width: 15px; height: 15px; padding: 0 4px;
+.fsub svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.fsub:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fsub .badge {
+  position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px;
   border-radius: 999px; background: var(--brass); color: #fff;
   font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center;
   box-shadow: 0 0 0 2px var(--surface); font-variant-numeric: tabular-nums;
 }
-.rail .gear-slot { margin-top: 6px; }
-.rail > .rbtn.gear-slot { margin-top: auto; padding-top: 12px; }
 
 /* ---------- 主区通用 ---------- */
 .main { flex: 1; min-width: 0; display: flex; position: relative; }
 
-/* ---------- 槽位（in-flow，挤压主区）：左槽文件树 260px / 右槽 AI 对话 ---------- */
+/* ---------- 槽位（in-flow，挤压主区）：左槽文件树 260px / 右槽 AI 对话；默认全关 ---------- */
 .slot-l {
   width: 260px; flex-shrink: 0; background: var(--paper);
   border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0;
@@ -277,23 +266,20 @@ a { color: inherit; }
 }
 .ai-send svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
-/* ---------- 子页抽屉：rail 浮层（悬浮覆盖，文档列不挤压） ---------- */
+/* ---------- 子页抽屉：悬浮浮层（不挤压，圆钮恒在最上层可随时换页） ---------- */
 .drawer {
-  position: absolute; left: 64px; top: 0; bottom: 0; z-index: 30;
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
   width: 320px; display: flex; flex-direction: column;
   background: var(--surface);
   border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
   /* 「悬浮」全靠投影落进文档列：双层阴影（远距扩散 + 近距贴边） */
   box-shadow: 22px 0 56px -20px rgba(33,29,24,.38), 8px 0 18px -8px rgba(33,29,24,.20);
 }
-.drawer.wide { width: min(920px, calc(100% - 96px)); }
-.drawer .p-head { background: var(--surface); }
+.drawer.wide { width: min(920px, calc(100% - 48px)); }
 .p-head .picon { width: 15px; height: 15px; color: var(--brass); display: flex; }
 .p-head .picon svg { width: 100%; height: 100%; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-
-/* 抽屉头部右侧：更新于 弱字 + 图标钮组（复制既有监控页口径） */
 .p-head .upd { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); margin-left: auto; margin-right: 4px; font-variant-numeric: tabular-nums; }
-.p-head .pacts + .upd, .p-head .upd + .pacts { margin-left: 0; }
+.p-head .upd + .pacts { margin-left: 0; }
 
 /* ---------- 监控抽屉内容：宽内容装进浮层 ---------- */
 .mgrid { flex: 1; overflow-y: auto; min-height: 0; padding: 16px 18px 24px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
@@ -319,7 +305,7 @@ a { color: inherit; }
 
 /* ---------- 设置浮窗（唯一有背衬压暗处） ---------- */
 .modal-bg {
-  position: absolute; inset: 0; z-index: 60;
+  position: absolute; inset: 0; z-index: 48; /* 背衬压全局（圆钮同层被压），浮窗在上 */
   background: rgba(33,29,24,.40);
   display: flex; align-items: center; justify-content: center;
 }
@@ -388,7 +374,7 @@ a { color: inherit; }
 @media (max-width: 960px) {
   .slot-l { width: 220px; }
   .slot-r { width: 300px; }
-  .drawer.wide { width: calc(100% - 80px); }
+  .drawer.wide { width: calc(100% - 32px); }
   .mgrid { grid-template-columns: 1fr; }
   .doc { padding: 14px 56px 40px 24px; }
   .mtabs { width: 110px; }
@@ -397,38 +383,29 @@ a { color: inherit; }
 @media (max-width: 720px) {
   .slot-l { display: none; }
   .slot-r { width: 240px; }
-  .rbtn .rlabel, .rlogo .rlabel { display: none; }
 }
 </style>
 </head>
 <body>
 <header class="pv-head">
-  <p class="pv-title">沉浸式壳重构 —— 设计预览稿</p>
-  <p class="pv-sub">spec 2026-11-22-immersive-shell · 仅供浏览器视觉评审，非应用代码 · 顶栏消失，64px 图标栏成为唯一全局入口；栏位=槽位；子页走悬浮抽屉。与首页「管家日报」预览稿同一纸墨语言。</p>
+  <p class="pv-title">沉浸式壳重构（左下圆钮修订版）—— 设计预览稿</p>
+  <p class="pv-sub">spec 2026-11-22-immersive-shell · 二修定稿 · 仅供浏览器视觉评审，非应用代码 · 常驻侧栏退役：日常默认<b>单栏文档</b>（零其它 chrome），全局入口收敛为<b>左下悬浮圆钮</b>，悬停在右上扇弧展开六枚子钮；子页抽屉悬浮覆盖、不挤压文档。</p>
 </header>
 
 <nav class="segbar" aria-label="场景切换">
   <span class="tag">评审稿工具条 · 非界面</span>
-  <button class="segb on" type="button" data-go="1">1 · 单栏首页</button>
-  <button class="segb" type="button" data-go="2">2 · 三栏沉浸</button>
-  <button class="segb" type="button" data-go="3">3 · 文件抽屉浮层</button>
-  <button class="segb" type="button" data-go="4">4 · 监控宽抽屉</button>
-  <button class="segb" type="button" data-go="5">5 · 设置浮窗</button>
+  <button class="segb" type="button" data-go="1">1 · 首页</button>
+  <button class="segb on" type="button" data-go="2">2 · 文档默认单栏</button>
+  <button class="segb" type="button" data-go="3">3 · 入口展开</button>
+  <button class="segb" type="button" data-go="4">4 · 三栏全开</button>
+  <button class="segb" type="button" data-go="5">5 · 文件抽屉浮层</button>
+  <button class="segb" type="button" data-go="6">6 · 监控宽抽屉</button>
+  <button class="segb" type="button" data-go="7">7 · 设置浮窗</button>
 </nav>
-
-<!-- ==================== 场景 1 · 单栏 Home 态 ==================== -->
-<section class="scene show" id="sc1">
-  <p class="pv-cap"><b>场景 1 · 单栏 Home 态</b> —— rail + 全宽信笺首页（管家日报轻量示意，全量见首页预览稿）。无顶栏、无图标条、无背衬；点 rail 顶部 logo 随时回这里。</p>
+<!-- ==================== 场景 1 · 单栏 Home ==================== -->
+<section class="scene" id="sc1">
+  <p class="pv-cap"><b>场景 1 · 单栏首页</b> —— 只剩两样东西：信笺日报 + 左下圆钮。零侧栏、零顶栏、零 dock。</p>
   <div class="app">
-    <div class="rail">
-      <a class="rlogo" href="#" title="回首页"><span class="logo-mark">M</span><span class="rlabel">md-vault</span></a>
-      <button class="rbtn" type="button" title="文件"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span><span class="rlabel">文件</span></button>
-      <button class="rbtn" type="button" title="搜索"><span class="ricon"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></span><span class="rlabel">搜索</span></button>
-      <button class="rbtn" type="button" title="回收站"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></span><span class="rlabel">回收站</span><span class="badge">5</span></button>
-      <button class="rbtn" type="button" title="监控"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span><span class="rlabel">监控</span></button>
-      <button class="rbtn" type="button" title="通知"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg></span><span class="rlabel">通知</span><span class="badge">3</span></button>
-      <button class="rbtn gear-slot" type="button" title="设置 · 记忆待审 3"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span><span class="rlabel">设置</span><span class="badge">3</span></button>
-    </div>
     <div class="main">
       <div class="home">
         <div class="home-in">
@@ -451,42 +428,14 @@ a { color: inherit; }
         </div>
       </div>
     </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
-<!-- ==================== 场景 2 · 三栏沉浸 ==================== -->
-<section class="scene" id="sc2">
-  <p class="pv-cap"><b>场景 2 · 三栏沉浸</b> —— 栏位=槽位：左槽文件树 260px、右槽管家对话，都是 in-flow 挤压主区；栏数由开启的面板数自然决定。顶栏已消失：文档列顶部只有一行弱色<b>路径头</b>（面包屑 + 锁形徽标 + 未保存点）。右缘常驻 <b>40px 操作图标条</b>（编辑/预览激活态、保存带黄铜脏点、下载、目录、重命名、移动、删除弱红）。</p>
+
+<!-- ==================== 场景 2 · 文档默认单栏（头号场景） ==================== -->
+<section class="scene show" id="sc2">
+  <p class="pv-cap"><b>场景 2 · 文档默认单栏 —— 95% 时间的样子</b> <span class="hot">（沉浸的兑现点：默认态零 chrome）</span>开文档只有三样：一行弱色<b>文档头行</b>（路径 + 锁标 + 未保存点）、居中衬线正文、右缘 <b>dock</b>（预览激活、保存带黄铜脏点、删除弱红），外加左下圆钮。没有侧栏、没有顶栏、没有常驻对话——对比旧版四栏一目了然。左槽树与右槽对话默认全关，按需再开（场景 4）。</p>
   <div class="app">
-    <div class="rail">
-      <a class="rlogo" href="#" title="回首页"><span class="logo-mark">M</span><span class="rlabel">md-vault</span></a>
-      <button class="rbtn on" type="button" title="文件"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span><span class="rlabel">文件</span></button>
-      <button class="rbtn" type="button" title="搜索"><span class="ricon"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></span><span class="rlabel">搜索</span></button>
-      <button class="rbtn" type="button" title="回收站"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></span><span class="rlabel">回收站</span><span class="badge">5</span></button>
-      <button class="rbtn" type="button" title="监控"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span><span class="rlabel">监控</span></button>
-      <button class="rbtn" type="button" title="通知"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg></span><span class="rlabel">通知</span><span class="badge">3</span></button>
-      <button class="rbtn gear-slot" type="button" title="设置 · 记忆待审 3"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span><span class="rlabel">设置</span><span class="badge">3</span></button>
-    </div>
-
-    <!-- 左槽 · 文件树 -->
-    <aside class="slot-l">
-      <div class="p-head">
-        <span class="ptitle">文档</span><span class="pcount">217</span>
-        <span class="pacts"><button class="ibtn" type="button" title="全部收起"><svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg></button></span>
-      </div>
-      <div class="tree">
-        <div class="trow"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">projects</span><span class="tcount">42</span></div>
-        <div class="trow" style="padding-left:20px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">md-repo</span><span class="tcount">18</span></div>
-        <div class="trow" style="padding-left:38px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">specs</span><span class="tcount">9</span></div>
-        <div class="tfile active"><span class="fname">同步通道设计说明.md</span><span class="mtime">14:20</span></div>
-        <div class="tfile"><span class="fname">回收站与恢复.md</span><span class="mtime">周四</span></div>
-        <div class="tfile"><span class="fname">设置页设计.md</span><span class="mtime">周三</span></div>
-        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">notes</span><span class="tcount">31</span></div>
-        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">私人</span><svg class="tlock" viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg></div>
-        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">review</span><span class="tcount">12</span></div>
-      </div>
-    </aside>
-
-    <!-- 文档列：路径头 + 正文 + 右缘图标条 -->
     <div class="doccol">
       <div class="pathhead">
         <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
@@ -528,7 +477,44 @@ a { color: inherit; }
           </div>
         </article>
       </div>
-      <!-- 右缘 dock：编辑/预览 · 保存 · 下载 · 目录 · 重命名 · 移动 · 删除 -->
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 3 · 入口展开（FAB 扇弧） ==================== -->
+<section class="scene" id="sc3">
+  <p class="pv-cap"><b>场景 3 · 入口展开</b> —— 悬停圆钮，六枚子钮沿右上 90° 扇弧（半径约 92px）弹性展开：文件 / 搜索 / 回收站（徽标 5）/ 监控 / 通知（徽标 3）/ 设置。子钮比主钮小一圈、投影更轻——<span class="hot">「hover 才存在」的临时感</span>靠间距与浮层厚度表达，不是又一条常驻栏。背后就是场景 2 的单栏文档，展开不打扰它。点文件/搜索/回收站/监控 → 左侧抽屉滑入（场景 5/6）；点设置 → 浮窗（场景 7）。离开即收拢，界面回到零 chrome。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+        </article>
+      </div>
       <div class="dock">
         <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
         <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
@@ -541,7 +527,90 @@ a { color: inherit; }
       </div>
     </div>
 
-    <!-- 右槽 · 管家对话 -->
+    <!-- FAB 展开态：六枚子钮沿右上 90° 扇弧（半径 ~92px，圆心=主钮中心） -->
+    <div class="fab fan" title="功能扇弧（悬停展开）">M
+      <button class="fsub" type="button" title="文件" style="left:7px; bottom:99px"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></button>
+      <button class="fsub" type="button" title="搜索" style="left:35px; bottom:95px"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></button>
+      <button class="fsub" type="button" title="回收站" style="left:61px; bottom:81px"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg><span class="badge">5</span></button>
+      <button class="fsub" type="button" title="监控" style="left:81px; bottom:61px"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></button>
+      <button class="fsub" type="button" title="通知" style="left:95px; bottom:35px"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg><span class="badge">3</span></button>
+      <button class="fsub" type="button" title="设置 · 记忆待审 3" style="left:99px; bottom:7px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></button>
+    </div>
+  </div>
+</section>
+<!-- ==================== 场景 4 · 三栏全开 ==================== -->
+<section class="scene" id="sc4">
+  <p class="pv-cap"><b>场景 4 · 三栏全开 —— 按需全开态，日常默认是场景 2</b> —— 左槽文件树 260px 与右槽管家对话均为 in-flow 槽位（挤压主区），从扇弧里点开才存在；此态是栏位的<b>上限</b>，不是首页。文档头行与 dock 与场景 2 完全一致。</p>
+  <div class="app">
+    <aside class="slot-l">
+      <div class="p-head">
+        <span class="ptitle">文档</span><span class="pcount">217</span>
+        <span class="pacts"><button class="ibtn" type="button" title="全部收起"><svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg></button></span>
+      </div>
+      <div class="tree">
+        <div class="trow"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">projects</span><span class="tcount">42</span></div>
+        <div class="trow" style="padding-left:20px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">md-repo</span><span class="tcount">18</span></div>
+        <div class="trow" style="padding-left:38px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">specs</span><span class="tcount">9</span></div>
+        <div class="tfile active"><span class="fname">同步通道设计说明.md</span><span class="mtime">14:20</span></div>
+        <div class="tfile"><span class="fname">回收站与恢复.md</span><span class="mtime">周四</span></div>
+        <div class="tfile"><span class="fname">设置页设计.md</span><span class="mtime">周三</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">notes</span><span class="tcount">31</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">私人</span><svg class="tlock" viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">review</span><span class="tcount">12</span></div>
+      </div>
+    </aside>
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+        <span class="unsaved">未保存</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+          <div class="code-block">
+            <div class="code-head"><span>python</span><span>sync.py</span></div>
+            <pre><span class="k">def</span> <span class="f">classify</span>(path, base, remote, local):
+    <span class="k">if</span> base <span class="k">is None</span> <span class="k">or</span> local != base:
+        <span class="k">return</span> <span class="s">"conflict"</span> <span class="k">if</span> remote != base <span class="k">else</span> <span class="s">"push"</span>
+    <span class="k">if</span> remote != base:
+        <span class="k">return</span> <span class="s">"pull"</span>          <span class="c"># 服务器有新版本</span>
+    <span class="k">return</span> <span class="s">"noop"</span></pre>
+          </div>
+          <div class="dia">
+            <div class="cap">图示</div>
+            <svg viewBox="0 0 640 110" role="img" aria-label="同步流程示意">
+              <g class="nd"><rect x="8" y="38" width="120" height="36" rx="8"/><text x="68" y="61" text-anchor="middle">本地清单</text></g>
+              <path class="ln" d="M128 56h64"/><path class="ar" d="m184 50 8 6-8 6"/>
+              <g class="nd act"><rect x="240" y="38" width="140" height="36" rx="8"/><text x="310" y="61" text-anchor="middle">三方对比 · 择级</text></g>
+              <path class="ln" d="M380 56h64"/><path class="ar" d="m436 50 8 6-8 6"/>
+              <g class="nd"><rect x="492" y="14" width="120" height="32" rx="8"/><text x="552" y="34" text-anchor="middle">上传 / 下载</text></g>
+              <g class="nd"><rect x="492" y="64" width="120" height="32" rx="8"/><text x="552" y="84" text-anchor="middle">冲突副本</text></g>
+              <path class="ln" d="M452 56h20v-30h20M452 56v40h20"/>
+            </svg>
+          </div>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
     <aside class="slot-r">
       <div class="ai-head">
         <span class="ai-brand"><svg viewBox="0 0 16 16"><path d="M8 2.2l1.5 4.3 4.3 1.5-4.3 1.5L8 13.8 6.5 9.5 2.2 8l4.3-1.5Z"/></svg></span>
@@ -560,23 +629,14 @@ a { color: inherit; }
         <button class="ai-send" type="button" title="发送"><svg viewBox="0 0 16 16"><path d="M2.6 8h10.8M9.6 4l4 4-4 4"/></svg></button>
       </div>
     </aside>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
-<!-- ==================== 场景 3 · 文件抽屉浮层（核心场景） ==================== -->
-<section class="scene" id="sc3">
-  <p class="pv-cap"><b>场景 3 · 文件抽屉浮层（核心场景）</b> —— 文件抽屉 320px 从 rail 右侧滑入，<span class="hot">悬浮覆盖</span>在文档区之上（双层投影落进纸面表达悬浮），文档列宽度与单栏态分毫不变、不被挤压。桌面态无背衬压暗。抽屉头部右侧的<b>图钉</b>：钉住即升级为左槽常驻（切到场景 2 的形态）。</p>
-  <div class="app">
-    <div class="rail">
-      <a class="rlogo" href="#" title="回首页"><span class="logo-mark">M</span><span class="rlabel">md-vault</span></a>
-      <button class="rbtn on" type="button" title="文件"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span><span class="rlabel">文件</span></button>
-      <button class="rbtn" type="button" title="搜索"><span class="ricon"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></span><span class="rlabel">搜索</span></button>
-      <button class="rbtn" type="button" title="回收站"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></span><span class="rlabel">回收站</span><span class="badge">5</span></button>
-      <button class="rbtn" type="button" title="监控"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span><span class="rlabel">监控</span></button>
-      <button class="rbtn" type="button" title="通知"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg></span><span class="rlabel">通知</span><span class="badge">3</span></button>
-      <button class="rbtn gear-slot" type="button" title="设置 · 记忆待审 3"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span><span class="rlabel">设置</span><span class="badge">3</span></button>
-    </div>
 
-    <!-- 单栏文档列（与场景 2 的文档正文完全同构，宽度不受抽屉影响） -->
+<!-- ==================== 场景 5 · 文件抽屉浮层（核心卖点保留） ==================== -->
+<section class="scene" id="sc5">
+  <p class="pv-cap"><b>场景 5 · 文件抽屉浮层</b> —— 入口：扇弧点「文件」。320px 抽屉从左侧滑入，<span class="hot">悬浮覆盖</span>在文档区之上（双层投影落进纸面），文档列宽度与场景 2 分毫不变。圆钮恒在浮层之上——随时能换页。头部图钉：钉住=升级为左槽常驻（切到场景 4 的形态）。</p>
+  <div class="app">
     <div class="doccol">
       <div class="pathhead">
         <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
@@ -630,7 +690,6 @@ a { color: inherit; }
       </div>
     </div>
 
-    <!-- 文件抽屉 · 悬浮浮层（left:64px，覆盖文档列，文档布局零变化） -->
     <aside class="drawer">
       <div class="p-head">
         <span class="picon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span>
@@ -654,23 +713,13 @@ a { color: inherit; }
         <div class="tfile" style="padding-left:38px"><span class="fname">读书 · 明史的早晨.md</span><span class="mtime">上周五</span></div>
       </div>
     </aside>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
-<!-- ==================== 场景 4 · 监控宽抽屉 ==================== -->
-<section class="scene" id="sc4">
-  <p class="pv-cap"><b>场景 4 · 监控宽抽屉</b> —— 宽内容（min(920px)）同样装进浮层：统计卡 + 事件流并排，投影悬浮在单栏文档之上，文档列依旧不挤压。页头只留一个刷新节奏：「更新于 HH:mm」。</p>
+<!-- ==================== 场景 6 · 监控宽抽屉 ==================== -->
+<section class="scene" id="sc6">
+  <p class="pv-cap"><b>场景 6 · 监控宽抽屉</b> —— 入口：扇弧点「监控」。宽内容（min(920px)）同样装进浮层：统计卡 + 事件流并排，投影悬浮在单栏文档之上，文档列依旧不挤压。页头只留一个刷新节奏：「更新于 HH:mm」。</p>
   <div class="app">
-    <div class="rail">
-      <a class="rlogo" href="#" title="回首页"><span class="logo-mark">M</span><span class="rlabel">md-vault</span></a>
-      <button class="rbtn" type="button" title="文件"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span><span class="rlabel">文件</span></button>
-      <button class="rbtn" type="button" title="搜索"><span class="ricon"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></span><span class="rlabel">搜索</span></button>
-      <button class="rbtn" type="button" title="回收站"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></span><span class="rlabel">回收站</span><span class="badge">5</span></button>
-      <button class="rbtn on" type="button" title="监控"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span><span class="rlabel">监控</span></button>
-      <button class="rbtn" type="button" title="通知"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg></span><span class="rlabel">通知</span><span class="badge">3</span></button>
-      <button class="rbtn gear-slot" type="button" title="设置 · 记忆待审 3"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span><span class="rlabel">设置</span><span class="badge">3</span></button>
-    </div>
-
-    <!-- 背后仍是完整单栏文档列（被浮层盖住，宽度未变） -->
     <div class="doccol">
       <div class="pathhead">
         <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
@@ -684,7 +733,6 @@ a { color: inherit; }
       </div>
     </div>
 
-    <!-- 监控宽抽屉 · 悬浮浮层 -->
     <aside class="drawer wide">
       <div class="p-head">
         <span class="picon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span>
@@ -726,23 +774,14 @@ a { color: inherit; }
         </div>
       </div>
     </aside>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
   </div>
 </section>
 
-<!-- ==================== 场景 5 · 设置浮窗 ==================== -->
-<section class="scene" id="sc5">
-  <p class="pv-cap"><b>场景 5 · 设置浮窗</b> —— 设置是浮窗（背衬压暗，全站唯一压暗处），入口只有 rail 底部齿轮（此处画 on 态 + 记忆待审徽标）。「记忆」不再占独立 rail 钮，并入设置页标签：提案队列在此裁决。</p>
+<!-- ==================== 场景 7 · 设置浮窗 ==================== -->
+<section class="scene" id="sc7">
+  <p class="pv-cap"><b>场景 7 · 设置浮窗</b> —— 入口：扇弧点「设置」。设置是浮窗（背衬压暗，全站唯一压暗处，连圆钮也一并被压住——浮窗是唯一模态）。「记忆」不占任何常驻位，并入设置页标签：提案队列在此裁决。</p>
   <div class="app">
-    <div class="rail">
-      <a class="rlogo" href="#" title="回首页"><span class="logo-mark">M</span><span class="rlabel">md-vault</span></a>
-      <button class="rbtn" type="button" title="文件"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span><span class="rlabel">文件</span></button>
-      <button class="rbtn" type="button" title="搜索"><span class="ricon"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></span><span class="rlabel">搜索</span></button>
-      <button class="rbtn" type="button" title="回收站"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></span><span class="rlabel">回收站</span><span class="badge">5</span></button>
-      <button class="rbtn" type="button" title="监控"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span><span class="rlabel">监控</span></button>
-      <button class="rbtn" type="button" title="通知"><span class="ricon"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg></span><span class="rlabel">通知</span><span class="badge">3</span></button>
-      <button class="rbtn gear-slot on" type="button" title="设置 · 记忆待审 3"><span class="ricon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span><span class="rlabel">设置</span><span class="badge">3</span></button>
-    </div>
-
     <!-- 背后单栏首页（被背衬压暗） -->
     <div class="main">
       <div class="home">
@@ -753,7 +792,6 @@ a { color: inherit; }
       </div>
     </div>
 
-    <!-- 设置浮窗 -->
     <div class="modal-bg">
       <div class="modal" role="dialog" aria-modal="true" aria-label="设置">
         <div class="mhead">
