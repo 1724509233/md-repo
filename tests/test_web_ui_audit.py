@@ -1288,6 +1288,29 @@ import(%r).then(m=>{
     assert r.returncode == 0, f"homeVoice case {r.returncode} failed:\n{r.stderr}"
 
 
+def test_home_template_bindings_resolve():
+    # prod 构建下模板引用未返回的 setup 标识符 = 静默白屏（实测 expanded 漏返 →
+    # Home 整支渲成空注释，零可见报错）。钉：模板全部绑定表达式引用的根标识符，
+    # 必须落在 setup return 键 ∪ v-for 别名 之内。
+    import re as _re
+    home = _templates()["Home.js"]
+    tmpl = home.split("template: `", 1)[1].rsplit("`", 1)[0]
+    exprs = [m.group(1) for m in _re.finditer(r"\{\{(.*?)\}\}", tmpl, _re.S)]
+    exprs += [m.group(1) for m in _re.finditer(r"""(?:v-(?:if|else-if|for|show)|:[\w-]+|@[\w.-]+)="([^"]*)""", tmpl)]
+    aliases = set()
+    for m in _re.finditer(r'v-for="\(?\s*([\w$]+)(?:\s*,\s*([\w$]+))?\s*(?:,\s*([\w$]+)\s*)?\)?\s+in', tmpl):
+        aliases.update(g for g in m.groups() if g)
+    ret = home.rsplit("return {", 1)[1].split("}", 1)[0]   # setup return 是文件最后一个 return {
+    keys = {k for k in _re.split(r"[,\s]+", ret) if k}
+    allowed = keys | aliases | {"true", "false", "null", "undefined", "in", "of"}
+    roots = set()
+    for e in exprs:
+        code = _re.sub(r"'[^']*'|\"[^\"]*\"", " ", e)  # 剥字面量再取标识符
+        roots.update(t for t in _re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*", code) if not t[0].isdigit())
+    missing = sorted(r for r in roots if r not in allowed)
+    assert not missing, f"Home 模板引用未返回: {missing}"
+
+
 def test_home_render_pins():
     # 渲染面钉（spec §8）：G1 LLM 文本走 Vue 插值（禁 v-html——防线是 LLM 无渲染权）；
     # S0/S1 短窗 G2 收束不渲段题（shortStay 守卫）；定稿语料在位（文案单点=homeVoice，

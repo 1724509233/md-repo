@@ -163,7 +163,7 @@ export const Home = {
     watch(() => state.homeRefreshSeq, load)   // 监控页退场 → 重取（§6.3）
 
     return {
-      state, HOME_COPY, groupHead, data, loadFailed, groups, myDays, g4Rows,
+      state, HOME_COPY, groupHead, data, loadFailed, groups, myDays, g4Rows, expanded,
       shortStay, g1, g2Title, g3Title, summary, summing, sumNote,
       hm, md, verb, daySummary, toggleDay, openPath, genSummary, load,
     }
