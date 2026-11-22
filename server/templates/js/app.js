@@ -53,7 +53,8 @@ const state = reactive({
   memoryProposals: null,  // GET /api/memory/proposals（null = 尚未轮询）
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
-  settingsPage: false,    // 设置页（spec 2026-11-22 §6 整页模式：文档区/监控页/设置页三态互斥；入口监控页页头「设置」钮 + 深链 #settings）
+  settingsOpen: false,     // 设置浮层（spec 2026-11-22 §6 modal 改版：侧栏底部齿轮 + 深链 #settings；不占主页面，可与任何页面共存）
+  settingsCloseSeq: 0,     // 关闭请求信号（Escape 链最高优先支发；dirty 守卫在组件内，取消即不关）
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
@@ -101,18 +102,6 @@ function exitMonitorPage() {
   clearTimeout(monBackT)
   monBackT = setTimeout(() => { state.monitoring = false }, 190)
 }
-// 设置页返回：同款 .18s 溶解节奏（spec 2026-11-22 §6 复用监控页转场）；#settings-wrap 作用域
-// 防误选监控页 .mwrap（两页同族类，querySelector 取首个 = 监控页）。清 hash：#settings 深链
-// 退出即回无哈希路径（applyInitialHash 的对应侧；监控页不碰 hash 的先例不变）
-let stBackT = null
-function exitSettingsPage() {
-  history.replaceState(null, '', location.pathname)
-  const el = document.querySelector('#settings-wrap')
-  if (!el || reducedMotion()) { state.settingsPage = false; return }
-  el.classList.add('mp-out')
-  clearTimeout(stBackT)
-  stBackT = setTimeout(() => { state.settingsPage = false }, 190)
-}
 
 async function loadDocs() {
   const data = await api.getDocs()
@@ -126,9 +115,9 @@ async function loadDocs() {
 const navAttempt = createAttemptBox()
 
 async function openDoc(path, heading, fromLink) {
-  // 监控页/设置页深链（如失败报告行）：文档区在整页模式下隐藏 → 离开该页，否则用户看不到打开的结果
+  // 监控页深链（如失败报告行）：文档区在整页模式下隐藏 → 离开该页，否则用户看不到打开的结果
+  // （设置浮层无需此守卫：不占主页面，关闭归浮层自身）
   if (state.monitoring) exitMonitorPage()
-  if (state.settingsPage) exitSettingsPage()
   // 丢保存守卫（P2 簇⑤，spec §5）：dirty 时先存，存败 → 中止切换（三态原样 +
   // hash 回写当前文档），toast「重试」在 token 未过期时自动续接本次切换（含 heading/fromLink）；
   // 其间任何新 openDoc 都 bump token 作废待发续接（决策核在 docNav.js，node 可直测）
@@ -464,7 +453,7 @@ async function handleToolResult(evt) {
   }
 }
 
-// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 设置页（spec 2026-11-22 §6）
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 打开设置浮层（spec 2026-11-22 §6 modal 改版）
 function applyInitialHash() {
   if (location.hash === '#settings') { openSettingsPage(); return }
   const h = parseHash(location.hash)
@@ -617,8 +606,6 @@ function onMemoryOpenDoc(path) {
 //     互斥契约：开页 → L0 面板收起；「← 返回文档」→ 面板不自动重开（重入走 rail【记忆】）───
 function openMonitorPage() {
   clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
-  clearTimeout(stBackT)                        // 设置页退场同理（三态互斥：整页只留一页在场）
-  state.settingsPage = false                   // 互斥：设置页收起（不经溶解——整页直接交接）
   const el = document.querySelector('.mwrap')
   if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
   state.monitoring = true
@@ -627,19 +614,18 @@ function openMonitorPage() {
   state.memoryReport = null
 }
 
-// ─── 设置页（spec 2026-11-22 §6 整页模式）：入口 = 监控页页头「设置」钮 / 深链 #settings
-//     （applyInitialHash）。互斥三态照 openMonitorPage 先例：开页 → 监控页 + L0 各态收起；
-//     返回 → 文档区升起、面板不自动重开；转场复用监控页 mp-enter/mp-out 溶解节奏 ───
-function openSettingsPage() {
-  clearTimeout(stBackT)                        // 返回动画窗口内重入：取消挂起的收起
-  const el = document.querySelector('#settings-wrap')
-  if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
-  state.settingsPage = true
-  // 互斥：监控页收起（整页直接交接，不重放退场）；L0 面板收起同 openMonitorPage 契约
-  state.monitoring = false
-  state.memoryOpen = false
-  state.memoryDetail = null
-  state.memoryReport = null
+// ─── 设置浮层（spec 2026-11-22 §6 modal 改版）：入口 = rail 底部齿轮钮 / 深链 #settings
+//     （applyInitialHash + hashchange）。与主页面零互斥（浮层不占位，可与监控页/L0 各态共存）；
+//     关闭（X / backdrop / Escape）一律经组件 requestClose——dirty 时组件内原生 confirm，
+//     取消即不关，app 只接组件 @close 落地。转场全归 CSS 折叠壳家族（style.css st-modal 族，
+//     MobileSheet/panel-shell 纪律），JS 无退场定时器。齿轮钮常驻可见，开态挂 .on ───
+function openSettingsPage() { state.settingsOpen = true }
+// Escape 链最高优先支只发关闭请求（dirty 判定与 confirm 归表单所在组件，app 不复制守卫）
+function requestCloseSettings() { state.settingsCloseSeq++ }
+function onSettingsClosed() {
+  // #settings 深链：关闭即清 hash 回无哈希路径（applyInitialHash 的对应侧）
+  if (location.hash === '#settings') history.replaceState(null, '', location.pathname)
+  state.settingsOpen = false
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
@@ -787,6 +773,7 @@ export function createApp() {
         if (location.hash !== url) history.replaceState(null, '', url)
       })
       window.addEventListener('hashchange', () => {
+        if (location.hash === '#settings') { state.settingsOpen = true; return }  // 深链随时可达（boot 走 applyInitialHash，此为站内/手输路径）
         const h = parseHash(location.hash)
         if (!h) return
         if (h.path !== state.currentPath) {
@@ -819,10 +806,11 @@ export function createApp() {
         }, { passive: true })
 
         // Escape 分层关闭（P1-5）：一次只关最上一层 app 持有的浮层；
-        // 组件自有浮层（FileTree 右键菜单 / TrashPanel 菜单 / SearchPanel popover）由各自 handler 关
+        // 组件自有浮层（FileTree/TrashPanel 菜单、SearchPanel popover）由各自 handler 关。
         document.addEventListener('keydown', (e) => {
           if (e.key !== 'Escape') return
-          if (state.notifOpen) closeNotifDropdown()
+          if (state.settingsOpen) requestCloseSettings()  // 设置浮层居链首（最高层，spec §6）：只发请求，dirty 守卫在组件内
+          else if (state.notifOpen) closeNotifDropdown()
           else if (state.moreMenuOpen) state.moreMenuOpen = false
           else if (state.relSheetOpen) state.relSheetOpen = false
           else if (state.relOpen) state.relOpen = false
@@ -833,13 +821,12 @@ export function createApp() {
           else if (state.memoryOpen) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null }
           else if (state.aiOpen) toggleAI(false)
           else if (state.monitoring) exitMonitorPage()
-          else if (state.settingsPage) exitSettingsPage()
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
 
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
-        // 设置页入口（深链/控制台外链用；页面内入口 = 监控页页头「设置」钮）
+        // 设置浮层入口（深链/控制台外链用；页面内入口 = rail 底部齿轮钮）
         window.openSettingsPage = openSettingsPage
 
         // 移动端 点击 overlay 关闭更多菜单 / 通知下拉
@@ -977,7 +964,7 @@ export function createApp() {
         state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
-        onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, exitSettingsPage, pollMemory,
+        onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession, onSessionActive,
@@ -1013,6 +1000,13 @@ export function createApp() {
               <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg></span>
               <span class="rlabel">记忆</span>
               <span v-if="badgeParts.total > 0" class="badge">{{ badgeParts.total > 99 ? '99+' : badgeParts.total }}</span>
+            </button>
+            <!-- 底部锚定齿轮（spec 2026-11-22 §6 modal 改版：设置唯一入口；margin-top:auto 与
+                 既有钮组不互挤，常驻可见；icon-only 照 rail 钮样式，aria-label 满足审计钉） -->
+            <button id="settings-rail-btn" type="button" class="rbtn rail-gear" :class="{ on: state.settingsOpen }"
+              title="设置" aria-label="设置" @click="openSettingsPage">
+              <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span>
+              <span class="rlabel">设置</span>
             </button>
           </div>
 
@@ -1108,7 +1102,7 @@ export function createApp() {
                  文档区 = 横向 flex（spec §6.4 候选①）：滚动中栏（680px 列在剩余空间一次性重居中）
                  + 关联侧栏（右侧 280px，关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
                  ≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
-            <div v-show="!state.monitoring && !state.settingsPage" class="doc-enter flex-1 flex overflow-hidden">
+            <div v-show="!state.monitoring" class="doc-enter flex-1 flex overflow-hidden">
               <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
                 <ConflictBanner v-if="state.conflict"
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
@@ -1124,9 +1118,7 @@ export function createApp() {
             </div>
             <!-- 后台监控页 L1（非对称网格 02E：1200px 双列 1:1.6，≤1023px 单列零重排） -->
             <MonitorPage v-show="state.monitoring" @back="exitMonitorPage()" @open-doc="openDoc"
-              @restored="loadDocs()" @settings="openSettingsPage()" />
-            <!-- 设置页（spec 2026-11-22 §6：整页模式，与文档区/监控页三态互斥；骨架复用监控页类族） -->
-            <SettingsPage v-show="state.settingsPage" @back="exitSettingsPage()" @open-doc="openDoc" />
+              @restored="loadDocs()" />
           </main>
 
           <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
@@ -1200,6 +1192,11 @@ export function createApp() {
               @close="toggleAI(false)" />
           </div>
         </div>
+
+        <!-- 设置浮层（spec 2026-11-22 §6 modal 改版：backdrop + 居中对话框自持壳，
+             fixed 顶层常驻，折叠态 visibility 归 CSS 壳家族；关闭统一经组件 dirty 守卫，
+             app 只接 @close 落地清 state 与深链 hash） -->
+        <SettingsPage @close="onSettingsClosed()" />
       </div>
     `,
     methods: {

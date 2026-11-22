@@ -1,12 +1,16 @@
-/* SettingsPage 组件：设置页（spec 2026-11-22 §6）——config.yaml 页面化编辑。
- * 整页模式照监控页先例：.mwrap/.m-scroll/.mpage 骨架 + mp-enter/mp-out 转场复用（style.css 动效层
- * 整族作用域于 .mwrap，本页零新增动效 CSS）；#settings-wrap id = app.js 互斥/转场选择器作用域
- * （两页同族类 .mwrap 并存，querySelector 类选择器会误选监控页）。
- * 契约（Task 7 交付面）：props 无；inject('state') + inject('api')（api.getSettings/putSettings
+/* SettingsPage 组件：设置浮层（spec 2026-11-22 §6，2026-11-22 modal 改版）——config.yaml 页面化编辑。
+ * 壳 = modal 浮层（用户拍板改版；原「整页接管」否决）：backdrop 点击关闭 + 居中对话框
+ *   （role=dialog aria-modal），桌面 ≤880px×≤86vh 头部固定体部内滚，≤639px 全屏（壳高走 fixed
+ *   布局视口链，禁 100vh）；折叠壳家族照 MobileSheet/panel-shell 纪律——常驻 DOM，折叠态
+ *   visibility:hidden 出 Tab 序，转场仅 opacity+transform（style.css st-modal 族，RM 两态同杀）。
+ * 入口 = app.js rail 底部齿轮钮 / 深链 #settings；与主页面零互斥（浮层不占位）。
+ * 契约：props 无；inject('state') + inject('api')（api.getSettings/putSettings
  *   非 2xx 不抛，返回 {status,data}，仅网络失败 throw）；
- *   emits ['back', 'open-doc']；挂载点 = app 模板 v-show="state.settingsPage"。
- * 互斥契约：文档区/监控页/设置页三态互斥（app 开页时收起其余两态；「← 返回文档」不自动重开面板）。
- * 本文件 = Task 8 + Task 9：分段导航 + 「主 agent」/「后台 agent」/「杂项」表单 + 共用保存流程。
+ *   emits ['close']；开合源 = state.settingsOpen（app 置真），关闭（X/backdrop/Escape 任一路径）
+ *   统一经 requestClose——dirty 时原生 confirm 二次确认，取消即不关；app 只接 @close 落地。
+ *   state.settingsCloseSeq++（app Escape 链最高优先支）= 关闭请求信号，本组件 watch 后代跑守卫。
+ * 焦点：开层入面板首个可见可交互元素（preventScroll 红线），关层归位 rail 齿轮钮（#settings-rail-btn）。
+ * 表单内部逻辑（分段导航/三态密钥/保存流程/payload 铁律）与整页模式时代零改动（Task 7-9 产物）。
  * 后台 agent 段（spec §6.2 / §5.4）：卡片列表 = 名称 / 标识 / 启用开关（即表单字段）/ 运行徽标；
  *   徽标数据源 = 全站 30s 脉搏 state.memoryStatus.agents，打开本段时若尚未到货则静默补拉一次，
  *   失败不报错不阻塞表单。条目表单四分组（基本 / 调度与预算 / 工具 / 模型）；
@@ -18,7 +22,7 @@
  * ① api_key 三态：未触碰（touched 集合无此键）⇒ payload 省略该键（服务端回填原明文）；
  *    「清除」小钮 ⇒ 发 ""（显式清空）；输入新值 ⇒ 发新值。GET 回的 {set,mask} 掩码形态永不回传。
  * ② background_agents 条目必须全量回传——PUT 按 alias 对账、payload 缺席即删条目；条目内
- *    model.api_key（掩码形态）未触碰一律剥除（缺省=保持，同①）。Task 9 起条目可编辑：
+ *    model.api_key（掩码形态）未触碰一律剥除（缺省=保持，同①）。条目可编辑：
  *    编辑面只建模表单可见键，raw 副本中的其余键（escalation 等）保存时原样合并回条目。
  * ③ 空标量省略键（不发 null——加载器 int(null) 即炸→422；省略 = 加载器缺省/服务端保持原值，
  *    两种后端解读下都零崩溃）；显式语义各有专职：tools null=全量、privacy.dirs []=空名单、
@@ -214,32 +218,31 @@ const strOrEmpty = v => (v == null ? '' : String(v))
 
 export const SettingsPage = {
   name: 'SettingsPage',
-  emits: ['back', 'open-doc'],
+  emits: ['close'],
   setup(props, { emit }) {
     const state = inject('state')
     const api = inject('api')
-    const wrapRef = ref(null)
-    // ─── 进入动效（监控页同款溶解节奏）：v-show display:none→block + mp-enter 类每次打开重放；
-    //     reduced-motion 降级由 style.css 既有 .mwrap.mp-enter 归零规则覆盖，JS 无需分支 ───
-    let enterT = null
-    let firstRendered = false
+    const panelRef = ref(null)
+    // ─── 开层/关层焦点（壳由 CSS 折叠态常驻 DOM，开合只切 class——无 JS 转场参与）：
+    //     开层焦点入面板首个「可见」可交互元素（桌面首件 = 头部 X；保存钮 display:none 时
+    //     不可聚焦，按 offsetParent 跳过——display:none 元素 focus() 静默失败家族）；
+    //     关层焦点归位 rail 齿轮钮（#settings-rail-btn，app 模板常驻 id，查询比 props 传 ref 稳）。
+    //     preventScroll 红线：focus 绝不允许程序化平移 visualViewport ───
     watch(
-      () => state.settingsPage,
+      () => state.settingsOpen,
       async (open) => {
-        if (!open) return
-        const el = wrapRef.value
-        if (!el) return
-        if (firstRendered) await nextTick() // 上一轮 v-show 隐藏态已提交 → 重放入场
-        else firstRendered = true
-        el.classList.remove('mp-enter')
-        void el.offsetWidth // 强制 reflow：连开两次也重放入场
-        el.classList.add('mp-enter')
-        clearTimeout(enterT)
-        enterT = setTimeout(() => el.classList.remove('mp-enter'), 950) // 序列最长 ~560ms，留尾
+        if (!open) {
+          const gear = document.getElementById('settings-rail-btn')
+          if (gear) gear.focus({ preventScroll: true })
+          return
+        }
+        await nextTick()
+        if (!panelRef.value) return
+        const first = Array.from(panelRef.value.querySelectorAll('button, input, select, textarea'))
+          .find(el => el.offsetParent !== null)
+        if (first) first.focus({ preventScroll: true })
       }
     )
-
-    function back() { emit('back') }
 
     // ═══ 取数与表单（打开页面时惰性首拉；revision = 乐观并发随行令牌，409 是唯一的过期信号）───
     const loading = ref(false)
@@ -255,6 +258,35 @@ export const SettingsPage = {
     const toolsMode = ref('all')         // 'all'=全量（payload tools:null）| 'custom'=白名单
     const toolsSel = ref([])
     let loadedOnce = false
+
+    // ═══ 关闭守卫（spec §6：X / backdrop / Escape 任一路径先过 requestClose）═══
+    // dirty = 表单相对 hydrate 基线有差异，或任一字段的密钥 touched 态/已输入值非空——
+    // 两者统一折进一个指纹串比对：基线在每次 hydrate（首拉/保存成功后重载/409 重载）末尾
+    // 重取，保存成功与重载自然清零，无需逐字段维护 touched 集。
+    // apiKeyTouched 单独并入指纹：touched=真且 input 空的「清除」态与干净态串不同，不漏判。
+    const baselineFp = ref('')
+    function fingerprint() {
+      if (!form.value) return ''
+      return JSON.stringify({
+        f: form.value,  // 含 bg 条目全部建模键 + 每条目 model.keyTouched/keyInput（raw 不随用户改动）
+        ak: (apiKeyTouched.value ? '1' : '0') + '|' + String(apiKeyInput.value),
+        tm: toolsMode.value,
+        ts: toolsSel.value
+      })
+    }
+    const settingsDirty = computed(() => {
+      if (!form.value) return false
+      return fingerprint() !== baselineFp.value
+    })
+    function requestClose() {
+      if (!state.settingsOpen) return
+      // 原生 confirm 先例被 spec 容忍（替代家族 = toast 无阻塞语义，担不起「取消不关」）
+      if (settingsDirty.value &&
+          !window.confirm('有未保存的设置改动，关闭后这些改动将丢失。确定关闭吗？')) return
+      emit('close')
+    }
+    // app Escape 链最高优先支 /（其余关闭路径模板直连）→ settingsCloseSeq 递增 = 关闭请求
+    watch(() => state.settingsCloseSeq, () => { if (state.settingsOpen) requestClose() })
 
     async function load() {
       if (loading.value) return
@@ -318,11 +350,13 @@ export const SettingsPage = {
       // 服务端真相回填 = 条目编辑态归零（保存后重载同路径：折叠列表、解武装）
       bgEditing.value = -1
       disarmBgDelete()
+      // 关闭守卫基线：hydrate 末尾重取指纹（保存成功/409 重载同路径 → dirty 自动清零）
+      baselineFp.value = fingerprint()
     }
 
-    // 打开页面首拉（深链/常开恢复均经此；此后 revision/409 机制负责新鲜度，重开不重复拉）
+    // 打开浮层首拉（深链/常开恢复均经此；此后 revision/409 机制负责新鲜度，重开不重复拉）
     watch(
-      () => state.settingsPage,
+      () => state.settingsOpen,
       (open) => {
         if (open && !loadedOnce) { loadedOnce = true; load() }
       },
@@ -561,7 +595,7 @@ export const SettingsPage = {
     watch(section, (s) => { if (s === 'bg') ensureBgStatus() }, { immediate: true })
 
     return {
-      wrapRef, back,
+      state, panelRef, requestClose,
       SECTIONS, AI_PARAMS, LOG_LEVELS, section,
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
@@ -575,16 +609,24 @@ export const SettingsPage = {
     }
   },
   template: `
-    <div ref="wrapRef" class="mwrap" id="settings-wrap">
-      <div class="m-scroll">
-        <div class="mpage">
-          <div class="mp-head">
-            <!-- 单出口：回文档视图（三态互斥；面板不自动重开，重入走 rail【记忆】） -->
-            <button class="mp-back" type="button" title="返回文档视图" aria-label="返回文档视图" @click="back">
-              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg>返回文档</button>
-            <h1 class="mp-title">设置</h1>
-            <div class="mp-meta">保存即校验、即落盘</div>
-          </div>
+    <!-- backdrop：压暗主页面，点击关闭（与 X/Escape 同经 requestClose——dirty 守卫唯一入口） -->
+    <div class="st-backdrop" :class="{ show: state.settingsOpen }" aria-hidden="true" @click="requestClose"></div>
+
+    <!-- 居中对话框（桌面 ≤880px×≤86vh：头部固定 + 体部内滚，主页面零 reflow；≤639px 全屏，
+         壳高走 fixed 布局视口链；折叠态 visibility 出 Tab 序 + opacity/transform ≤.2s 转场，
+         折叠壳家族与 RM 两态同杀见 style.css st-modal 族） -->
+    <div ref="panelRef" class="st-modal" :class="{ open: state.settingsOpen }"
+      role="dialog" aria-modal="true" aria-label="设置">
+      <div class="st-modal-head">
+        <h1 class="st-modal-title">设置</h1>
+        <span class="st-modal-meta">保存即校验、即落盘</span>
+        <!-- 移动头部保存（≤639px 专用，页内保存行 CSS 隐藏归一）；X 桌面移动恒在 -->
+        <button class="st-save st-m-save" type="button" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存' }}</button>
+        <button class="st-x" type="button" title="关闭设置" aria-label="关闭设置" @click="requestClose">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div class="st-modal-body">
 
           <!-- 反馈条（aria-live=polite：保存结果不抢读屏）：200 生效报告 / 409 冲突 / 422 告警 -->
           <div aria-live="polite">
@@ -906,7 +948,6 @@ export const SettingsPage = {
               这些安全承重字段刻意保持手改。
             </div>
           </template>
-        </div>
       </div>
     </div>
   `

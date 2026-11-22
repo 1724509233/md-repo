@@ -1717,9 +1717,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
 .eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
 
-/* ============ 设置页（spec 2026-11-22 §6 · st- 族）============
-   复用面 = .mwrap/.m-scroll/.mpage 骨架、.mcard/.mc-h 卡族、.zline 零态、.mp-back 小钮、
-   .mp-enter 转场（动效层零新增）。本分节只长出表单面最小件：
+/* ============ 设置浮层（spec 2026-11-22 §6 modal 改版 · st- 族）============
+   壳 = backdrop + 居中 dialog（st-modal 族在下方「浮层壳」分节；折叠态 visibility 家族照
+   MobileSheet/panel-shell 纪律）。复用面 = .mcard/.mc-h 卡族、.zline 零态、.mp-back 小钮
+   （监控页共用类，不动）。旧整页模式的 .mwrap/.m-scroll/.mpage 骨架与 mp-enter/mp-out 转场
+   归监控页独占，本页不再挂该类。本分节只长出表单面最小件：
    .st-cols 双列体（≥640 左锚列 sticky / ≤639 折顶部分段钮行）· .st-nav-* 分段导航（mode-btn 激活态先例）
    · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
    · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族）· .st-tag(s) 隐私目录标签
@@ -1804,4 +1806,42 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .st-cols { grid-template-columns: 1fr; gap: 12px; }
   .st-nav { position: static; flex-direction: row; flex-wrap: wrap; }
   .st-nav-btn { width: auto; padding: 6px 12px; }
+}
+
+/* ──── 设置浮层壳（spec 2026-11-22 §6 modal 改版 · st-modal 族）────
+   折叠壳家族照 panel-shell/rel-sheet 纪律：常驻 DOM，收起态 visibility:hidden 出 Tab 序
+   （视觉隐藏但可聚焦 = 焦点黑洞，P2 目检轮同教训），.open 合并 transition delay 0s 即刻可见；
+   转场仅 GPU 属性（backdrop opacity + 面板 transform，≤.2s）；RM 两态同杀（.open 自带合并
+   transition 特异度高于基础态，只杀基础态则 RM 滑入复活 + 收起态 visibility 孤儿延迟复活）。
+   z-index = 既有浮层族最高（> notif 下拉 z-50 / 移动抽屉 z-40-45），仍在 toast（z-100，
+   toast.js 内联）与 skip-link（z-200）之下——瞬时反馈与键盘直达永不被模态压住。 */
+.st-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(33, 29, 24, .42); opacity: 0; pointer-events: none; visibility: hidden; transition: opacity .18s ease, visibility 0s .18s; }
+.st-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .18s ease, visibility 0s 0s; }
+.st-modal { position: fixed; left: 50%; top: 50%; z-index: 81; display: flex; flex-direction: column; width: min(880px, calc(100vw - 32px)); max-height: 86vh; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(25, 22, 18, .3); opacity: 0; pointer-events: none; visibility: hidden; transform: translate(-50%, -46%) scale(.97); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s .18s; }
+.st-modal.open { opacity: 1; pointer-events: auto; visibility: visible; transform: translate(-50%, -50%) scale(1); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s 0s; }
+/* 头部固定（标题 + 移动保存钮 + X），体部 = 唯一滚动层 */
+.st-modal-head { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 20px; border-bottom: 1px solid var(--line); }
+.st-modal-title { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+.st-modal-meta { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent); }
+.st-x { margin-left: auto; flex-shrink: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; transition: color .15s ease, border-color .15s ease; }
+.st-x:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.st-x svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+.st-modal-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 28px; }
+.st-m-save { display: none; margin-left: auto; padding: 6px 16px; }  /* 移动头部保存（桌面页内保存行在场） */
+/* rail 底部锚定齿轮（margin-top:auto 自成一端，不挤占既有钮组） */
+.rail-gear { margin-top: auto; }
+@media (max-width: 639px) {
+  /* 全屏浮层：壳高走 fixed inset-0（布局视口链，键盘压视口型内核随收缩——100vh/h-screen 红线）；
+     保存升头部、页内保存行隐（单一保存动作不双留）；meta 让位给钮 */
+  .st-modal { left: 0; top: 0; inset: 0; width: auto; max-height: none; border: 0; border-radius: 0; transform: translateY(14px); }
+  .st-modal.open { transform: none; }
+  .st-modal-head { padding: 10px 12px 10px 16px; }
+  .st-modal-meta { display: none; }
+  .st-m-save { display: inline-flex; }
+  .st-modal-head .st-x { margin-left: 8px; }
+  .st-foot { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st-backdrop, .st-backdrop.show { transition: none; }
+  .st-modal, .st-modal.open { transition: none; }  /* 两态同杀：RM 直切 + 收起态 visibility 无孤儿延迟 */
 }
