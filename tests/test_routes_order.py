@@ -1,4 +1,4 @@
-"""Route-table order snapshot: the 48 routes' (methods, path) sequence,
+"""Route-table order snapshot: the 49 routes' (methods, path) sequence,
 the /static mount, and the no-duplicate invariant.
 
 Starlette matches the FIRST fully-matching route in registration order
@@ -17,8 +17,8 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
-# notifications → sync → recall → egress → memory → agent → trash).
-# 48 routes.
+# notifications → sync → recall → egress → memory → agent → trash → home).
+# 49 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -77,6 +77,9 @@ EXPECTED = (
     # trash (2).
     (("GET",), "/api/trash"),                           # 47 list
     (("POST",), "/api/trash"),                          # 48 restore/purge/empty
+    # home (1): 首页·管家日报（spec 2026-11-22-home-butler-landing；
+    # POST /api/home/summary 由 Task 3 注册时补第 50 位）。
+    (("GET",), "/api/home"),                            # 49 聚合
 )
 
 

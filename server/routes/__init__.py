@@ -39,13 +39,13 @@ class WebContext:
     privacy: object | None = None
 
 
-from . import agent, console, egress, memory, notifications, recall, sync, trash
+from . import agent, console, egress, home, memory, notifications, recall, sync, trash
 
 # Fixed order. Cross-domain URL prefixes do not overlap today, so this
 # tuple is an explicit freeze, not a functional requirement; the
 # order-sensitive registrations are within each module (see module docs).
 # Pinned by tests/test_routes_order.py.
-ROUTE_MODULES = (console, notifications, sync, recall, egress, memory, agent, trash)
+ROUTE_MODULES = (console, notifications, sync, recall, egress, memory, agent, trash, home)
 
 
 def register_all(app, ctx: WebContext) -> None:
