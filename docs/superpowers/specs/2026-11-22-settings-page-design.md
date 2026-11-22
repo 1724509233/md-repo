@@ -141,6 +141,8 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 - 页内分段导航（桌面左列锚点、移动端堆叠/分段控件，照监控页先例）：
   1. **主 agent**：base_url / model / api_key（password 型，显示「已设置（留空保持不变）」态——**UI 留空 = payload 中省略该键**（§4.2 步 2 的缺省保持语义），显式清空走「清除」小按钮 = payload 发 `""`）/ 数值参数 / tools 白名单多选（选项来自 `_meta.tools`）；
   2. **后台 agent**：卡片列表（名称 / alias / 启用开关 / cron / 运行状态徽标——复用 `/api/memory/status` 的 agents 数据），点开条目表单，内部分组：基本（name/alias/enabled/target_dir/prompt/report_dir）、调度与预算（cron/max_rounds/timeout_s/budget_*/trigger）、工具（tools checkbox、verbs checkbox、propose+write_doc 同持即时红字提示——服务端仍是权威）、模型（provider/model_id/base_url/api_key/参数）。「添加」= 空表单；「删除」= 确认框（文案含「若正在运行，本轮跑完即停」）；**alias 改名 = 删 + 增**：表单需提示「改名将清空已存 api_key（需重填）且 trigger 计权从零开始」（§5.4/S3）。
+     **复用主智能体模型（2026-11-22 用户增项）**：模型组顶「复用主智能体模型」勾选，勾选态 = GET 条目展示位 `model_matches_ai`（条目模型与主智能体物化结果逐字段相等，键位级归一比较）。**语义 = 保存时代码复制，非持续联动**（loader 不变量：bgagent `model.model_id` 必填且刻意不复用 `ai:` 段——联动须动 loader/runner 契约，非本页范围），UI 必须言明「主模型之后改动不自动跟随，重新勾选保存即同步」。勾选后隐藏模型字段，payload 条目带瞬态键 `model_from_ai: true` 且省略 model；服务端以**写回后的 ai 段**物化 {model_id/base_url/api_key 明文/context_window/max_tokens/temperature} 进条目（provider 不写=缺省 openai；api_key 明文搬运不出服务端），瞬态键剥除永不落盘；主智能体模型缺位 → 422。取消勾选 = 字段回显可编辑（值=条目现值）。复用勾选计入 dirty。
+  - **placeholder 示例值（2026-11-22 用户增项）**：文本类输入一律带示例值 placeholder（现状缺例者补齐）；数字输入不放示例占位（易被误读为当前值），缺省语义靠 hint 表达。
   3. **杂项**：daily_cap / log_level（下拉）/ log_retention_days / privacy.dirs（标签式增删）。
 - 单一「保存全部」按钮 + revision 随行；保存后生效报告条（applied / restart_needed / 409 冲突提示重载）。
 - 非法保存（422）：错误消息展示在页顶告警条 + 按 section 定位高亮（错误 message 是加载器原文，含段名可字符串定位）。

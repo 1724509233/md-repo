@@ -123,6 +123,51 @@ def _json(status: int, content: Any) -> JSONResponse:
     return JSONResponse(status_code=status, content=content)
 
 
+def _model_matches_ai(ai_plain: dict | None, entry_plain: dict) -> bool:
+    """复用态显示判定（spec §6.2）：条目 model 段与「复用主智能体后的物化结果」逐字段相等。
+
+    复用=保存时代码复制（loader 不变量：bgagent model.model_id 必填且不复用 ai 段，
+    持续联动须改 loader/runner 契约，非设置页范围）。比较用合并前键位级归一：
+    ''/None/缺键 等价；provider 只认缺省 openai。条目缺 context_window 而 ai 显式写
+    同默认值这类键位差会判否——用户重勾一次即物化归真，无害。
+    """
+    if not isinstance(ai_plain, dict) or not ai_plain.get("model"):
+        return False
+    m = entry_plain.get("model")
+    if not isinstance(m, dict):
+        return False
+
+    def n(v: Any) -> Any:
+        return None if v is None or v == "" else v
+
+    if str(m.get("provider", "openai")) != "openai":
+        return False
+    if n(str(m.get("model_id") or "")) != n(str(ai_plain.get("model") or "")):
+        return False
+    for k in ("base_url", "api_key", "context_window", "max_tokens", "temperature"):
+        if n(m.get(k)) != n(ai_plain.get(k)):
+            return False
+    return True
+
+
+def _model_from_ai(ai_node: Any) -> dict:
+    """model_from_ai 物化：主智能体模型段复制进条目 model（spec §6.2）。
+
+    读 **写回后的 doc.ai**——同次保存里主模型改动先落（_write_ai 先于 _write_bg），
+    条目拿到的即最新值。api_key 直接复制明文（服务端内搬运，永不出 GET/日志）。
+    provider 不写（加载器缺省 openai）。ai 段缺位/无模型 → 422。
+    """
+    ai = _plain(ai_node) if isinstance(ai_node, dict) else {}
+    if not ai.get("model"):
+        raise _Rejected("主智能体模型未配置，无法复用（请先填写主智能体的模型名称）",
+                        "background_agents")
+    m: dict = {"model_id": ai["model"]}
+    for k in ("base_url", "api_key", "context_window", "max_tokens", "temperature"):
+        if ai.get(k) not in (None, ""):
+            m[k] = ai[k]
+    return m
+
+
 # ── GET ────────────────────────────────────────────────────────────────────
 
 
@@ -134,14 +179,21 @@ def _get(ctx) -> dict:
 
     ai_raw = doc.get("ai")
     ai: dict | None = None
+    ai_cmp: dict | None = None  # 掩码前纯值副本：复用态判定专用（含明文 key 可比对）
     if isinstance(ai_raw, dict):
+        ai_cmp = _plain(ai_raw)  # 两份独立副本：掩码只落 ai，绝不污染比对料
         ai = _plain(ai_raw)
         ai["api_key"] = mask_api_key(ai.get("api_key"))  # 明文永不出 GET
 
     bgs_raw = doc.get("background_agents")
-    bgs = ([bgagent_to_payload(e, ctx.vault_dir)
-            for e in bgs_raw if isinstance(e, dict)]
-           if isinstance(bgs_raw, list) else [])
+    bgs: list = []
+    if isinstance(bgs_raw, list):
+        for e in bgs_raw:
+            if not isinstance(e, dict):
+                continue
+            entry = bgagent_to_payload(e, ctx.vault_dir)
+            entry["model_matches_ai"] = _model_matches_ai(ai_cmp, _plain(e))
+            bgs.append(entry)
 
     notifications = (_plain(doc.get("notifications"))
                      if isinstance(doc.get("notifications"), dict) else {})
@@ -231,6 +283,10 @@ def _write_bg(doc, payload) -> None:
         if not isinstance(entry, dict):
             raise _Rejected("background_agents entries must be objects",
                             "background_agents")
+        # 瞬态复用键（spec §6.2）：先物化为主智能体模型段的复制品（读写回后的
+        # doc.ai——同次保存的主模型改动已先落），再剥除键本身，永不落盘。
+        if entry.pop("model_from_ai", None):
+            entry["model"] = _model_from_ai(doc.get("ai"))
         alias = str(entry.get("alias") or "")
         old = by_alias.get(alias) if alias else None
         # 密钥回填三态（doc_io：缺省/null → 原明文；"" → 显式清除）在合并前完成。

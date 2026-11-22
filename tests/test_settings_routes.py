@@ -195,6 +195,46 @@ def test_get_shape_mask_and_meta(tmp_path, vault_dir, db_conn):
     assert AI_KEY not in raw and BG_KEY not in raw
 
 
+def test_get_model_matches_ai_false_by_default(tmp_path, vault_dir, db_conn):
+    # gardener 模型缺 base_url 且 api_key 异于主智能体 → 非复用态（spec §6.2 展示位）
+    w = _wire(tmp_path, vault_dir, db_conn)
+    data = TestClient(w.app).get("/api/settings").json()
+    assert data["background_agents"][0]["model_matches_ai"] is False
+
+
+def test_put_model_from_ai_materializes_copy(tmp_path, vault_dir, db_conn):
+    import yaml
+    w = _wire(tmp_path, vault_dir, db_conn)
+    c = TestClient(w.app)
+    rev = c.get("/api/settings").json()["revision"]
+    entry = _bg_payload(model_from_ai=True)
+    entry.pop("model")
+    r = c.put("/api/settings", json=_body(rev, background_agents=[entry]))
+    assert r.status_code == 200, r.text
+
+    doc = yaml.safe_load(w.config_path.read_bytes().decode("utf-8"))
+    saved = doc["background_agents"][0]
+    m = saved["model"]
+    assert m["model_id"] == "qwen2.5:14b"
+    assert m["base_url"] == "http://localhost:11434/v1"
+    assert m["api_key"] == AI_KEY  # 明文服务端内搬运：复用即与主智能体同 key
+    assert "model_from_ai" not in saved  # 瞬态键永不落盘
+    assert saved["escalation"] == {"zero_recall_candidate": "notify"}  # 未知键直通不受扰
+    # GET 翻回复用态（条目模型与主智能体逐字段一致）
+    assert c.get("/api/settings").json()["background_agents"][0]["model_matches_ai"] is True
+
+
+def test_put_model_from_ai_without_ai_model_is_422(tmp_path, vault_dir, db_conn):
+    w = _wire(tmp_path, vault_dir, db_conn, template=MINIMAL_TEMPLATE, name="reuse-noai")
+    c = TestClient(w.app)
+    rev = c.get("/api/settings").json()["revision"]
+    entry = _bg_payload(model_from_ai=True)
+    entry.pop("model")
+    r = c.put("/api/settings", json=_body(rev, ai=None, background_agents=[entry]))
+    assert r.status_code == 422
+    assert "主智能体模型未配置" in r.json()["errors"][0]["message"]
+
+
 def test_get_ai_section_absent_is_null(tmp_path, vault_dir, db_conn):
     w = _wire(tmp_path, vault_dir, db_conn, template=MINIMAL_TEMPLATE, name="min")
     data = TestClient(w.app).get("/api/settings").json()
