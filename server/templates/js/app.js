@@ -18,6 +18,7 @@ import { ConflictBanner } from './components/ConflictBanner.js'
 import { MemoryConsole } from './components/MemoryConsole.js'
 import { DocRelated } from './components/DocRelated.js'
 import { MonitorPage } from './components/MonitorPage.js'
+import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
 import { ICONS } from './utils/icons.js'
 
@@ -58,7 +59,8 @@ const state = reactive({
   settingsSavedSeq: 0,     // 保存成功信号（组件 200 后递增）——config 改动不产 change_log 行，树靠它即时刷新
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
-  rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
+  rollbackCalls: [],      // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
+  homeRefreshSeq: 0       // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -97,11 +99,29 @@ function closeNotifDropdown() {
 // 与进入的非对称取舍见 style.css 注）
 let monBackT = null
 function exitMonitorPage() {
+  state.homeRefreshSeq++   // 首页重取信号（spec 2026-11-22 §6.3）：监控页里的操作退场即进日报
   const el = document.querySelector('.mwrap')
   if (!el || reducedMotion()) { state.monitoring = false; return }
   el.classList.add('mp-out')
   clearTimeout(monBackT)
   monBackT = setTimeout(() => { state.monitoring = false }, 190)
+}
+
+// ─── 首页·管家日报（spec 2026-11-22-home-butler-landing §6.3）───────────────
+// 回首页 = currentPath 置 null：hash watch 的 null 支路以 replaceState 清掉 #doc/ 片段——
+// 不清 hash 则「回首页→F5」直落旧文档，首页对刷新路径永不可达（oracle 送审雷）；
+// 空路径 no-op，免多余 hash 抖动。
+function goHome() {
+  if (state.currentPath) state.currentPath = null
+}
+function openTrashFace() { activePanel.value = 'trash' }
+
+// lastPresence 心跳（S0–S4 分级依据）：**只在在场时写**——挂载即记 + 5min 心跳
+// （仅 visible，后台标签不冒充在场）+ hidden/pagehide 两兜底补「离场时刻」。
+// 隐私模式 localStorage 抛错 → 静默；Home 端 tierOf 读不到键走 'nostorage' 泛化文案。
+const LS_LAST = 'mdvault.lastPresence'
+function beatPresence() {
+  try { localStorage.setItem(LS_LAST, String(Date.now())) } catch (e) { /* 无存储 → 泛化分级，设计内 */ }
 }
 
 async function loadDocs() {
@@ -773,7 +793,12 @@ export function createApp() {
       // URL 状态同步（P1-4）：当前文档 + 编辑态进 hash；
       // replaceState 不产历史垃圾，前进/后退由 hashchange 兜底（markdown 软链 #doc/ 跳转同走此路）
       watch([() => state.currentPath, () => state.previewMode], ([p, preview]) => {
-        if (!p) return
+        // null 支路（spec 2026-11-22 §6.1）：回首页必须清 hash——replaceState 不产历史
+        // 条目也不触发 hashchange，后退键不会「弹回文档」
+        if (!p) {
+          if (location.hash) history.replaceState(null, '', location.pathname)
+          return
+        }
         const url = docHash(p, { edit: !preview })
         if (location.hash !== url) history.replaceState(null, '', url)
       })
@@ -799,6 +824,17 @@ export function createApp() {
         setInterval(() => { pollNotifications(); pollMemory() }, 30000)
         pollNotifications()
         pollMemory()
+
+        // lastPresence 心跳（spec 2026-11-22-home-butler-landing §6.3）：加载即记一笔，
+        // 5min 心跳仅 visible 续写（后台标签不冒充在场），hidden/pagehide 各兜一笔离场时刻。
+        // boot 笔同样受 visible 门控（终审 M1）：浏览器重启恢复的后台标签不得续锚——
+        // 「在场」的定义是看得见的标签，boot 兜底只是给前台首屏补锚。
+        if (document.visibilityState === 'visible') beatPresence()
+        setInterval(() => { if (document.visibilityState === 'visible') beatPresence() }, 300000)
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') beatPresence()
+        })
+        window.addEventListener('pagehide', beatPresence)
 
         // 未保存守卫（P1-3）：仅 dirty 时拦刷新/关标签；浏览器忽略自定义文案
         window.addEventListener('beforeunload', (e) => {
@@ -970,6 +1006,7 @@ export function createApp() {
         activePanel, panels, activePanelCfg,
         onRailClick, onTreeSelect, onSearchPick,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
+        goHome, openTrashFace,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession, onSessionActive,
@@ -1099,6 +1136,7 @@ export function createApp() {
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"
               @open-doc-face="openDocFace"
+              @go-home="goHome()"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
             <!-- 编辑器面：监控页 L1 打开时收起（v-show 保持 DOM 与编辑态；两面互斥，
@@ -1108,7 +1146,10 @@ export function createApp() {
                  + 关联侧栏（右侧 280px，关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
                  ≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
             <div v-show="!state.monitoring" class="doc-enter flex-1 flex overflow-hidden">
-              <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
+              <!-- 首页·管家日报（spec 2026-11-22）：未选文档即首页；与文档滚动列互斥占位
+                   （Home 自带 hb-scroll 滚动层，样式层见 style.css hb- 分节；Task 4 = 挂载骨架） -->
+              <Home v-if="!state.currentPath" @open-doc="openDoc" @open-memory="onMemoryRailClick()" @open-trash="openTrashFace()" />
+              <div v-show="!!state.currentPath" class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
                 <ConflictBanner v-if="state.conflict"
                   :tool-name="state.conflict.toolName" :path="state.conflict.path"
                   @accept="acceptConflict" @dismiss="state.conflict = null" />
@@ -1231,6 +1272,7 @@ export function createApp() {
   app.component('MemoryConsole', MemoryConsole)
   app.component('DocRelated', DocRelated)
   app.component('MonitorPage', MonitorPage)
+  app.component('Home', Home)
   app.component('SettingsPage', SettingsPage)
 
   return app

@@ -148,7 +148,7 @@ change_log 的 source 列是自由词表（bgagent 归因 = 别名原文直落�
 - 失败降级：G1 照常渲染（纯前端合成）；G2–G4 区显示「没打听到消息」+ 重试按钮。
 
 ### 6.3 缺席锚点（lastPresence）与已读游标
-- **`mdvault.lastPresence`**：只在 `document.visibilityState === 'visible'` 时写——写点恰三：心跳（回调内判 visible，5 分钟）、`visibilitychange → hidden`、`pagehide`。杜绝后台标签页整夜续锚导致次日缺席归零（throttle 是引擎恩赐不是契约，oracle 送审 M1）。
+- **`mdvault.lastPresence`**：只在 `document.visibilityState === 'visible'` 时写——写点共四：boot 补锚（回调即判 visible，兜 mobile pagehide 不可靠）、心跳（回调内判 visible，5 分钟）、`visibilitychange → hidden`、`pagehide`。全部受 visible 门控：杜绝后台标签页整夜续锚导致次日缺席归零（throttle 是引擎恩赐不是契约，oracle 送审 M1；boot 笔的门控是终审 M1 追补，boot 在后台恢复标签下也不得续锚）。
 - **分级判据在进入首页/boot 时算一次**（S0 用运行时标志，S1–S4 用 `now − lastPresence`），阈值 15min / 6h / 2d（可调量级，拍板记录 §9.8）。
 - **首次 vs 存储不可用分流**：`setItem` 抛 → 泛化文案（时段问候，无数字无首次句）；`getItem` 返回 null 且写入可用 → 真首次（首次文案 + 窗默认 7 天）。
 - **已读游标 `mdvault.lastSeenChangeSeq`**：G2 渲染非空时写入窗内最大 seq；`unseen_agent_changes` 由服务端按 `last_seen_seq` 参数过滤（§5.1）——「看过」即看过，免疫窗钳制与重复进首页。
@@ -179,7 +179,7 @@ change_log 的 source 列是自由词表（bgagent 归因 = 别名原文直落�
 5. 个人记忆：本次只留 reminder 与注入点（现状 vault 根目录文件条目 → 后续 DB 实体，每实体一条目）。
 6. 架构：方案 A——单聚合端点 + 单前端组件。
 7. 叙事字形：V1 中文维持现状（Source Serif 4 仅拉丁面，CJK 落雅黑/苹方无衬线），预览稿里的中文衬线视为愿景效果；CJK 衬线进 §10 演进位。预览稿：`2026-11-22-home-butler-landing-preview.html`（同目录）。
-8. 短期离开分级：S0–S4 全套采纳（阈值 15min/6h/2d 可调），S0/S1 不报数字；`lastPresence` 仅 visible 写（写点恰三）；「还没看过」改 seq 已读游标；G3 固定 3d 窗。备选「下次 boot 才结算」方案弃用。
+8. 短期离开分级：S0–S4 全套采纳（阈值 15min/6h/2d 可调），S0/S1 不报数字；`lastPresence` 仅 visible 写（写点共四，全受 visible 门控，含 boot 补锚）；「还没看过」改 seq 已读游标；G3 固定 3d 窗。备选「下次 boot 才结算」方案弃用。
 9. oracle 送审修订全套并入：logo 回首页清 hash（B1）、「代改」计数只数 agent+别名排除 watchdog（B2）、config 别名集为分桶唯一判据（M3）、summary 单飞+失败退避（M4）、egress 行级接线+失败先 flush（M5）、监控退出重取（M6）、其余 minor 全落正文。
 
 ## 10. 演进位（不做，但承重）

@@ -20,7 +20,7 @@ export const TopBar = {
     aiOpen: { type: Boolean, default: false },   // AI 面板展开 ⇔ 顶栏紧凑态（文字展示与面板展开互斥，2026-11-17 用户定稿）
     privacyDirs: { type: Array, default: () => [] }  // 隐私名单回显（spec 2026-11-18 §2.5）：当前文档首段命中 → 「模型不可见」徽标
   },
-  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face'],
+  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face', 'go-home'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
@@ -57,6 +57,12 @@ export const TopBar = {
       emit('open-doc-face')
     }
 
+    // 回首页（spec 2026-11-22-home-butler-landing §6.1）：清 currentPath 交 app 侧
+    // goHome（hash 清理由 watch null 支路完成，本组件只发意图）
+    function goHome() {
+      emit('go-home')
+    }
+
     function onTocClick(item) {
       emit('tocClick', item)
     }
@@ -85,13 +91,15 @@ export const TopBar = {
     // 隐私徽标（spec §2.5）：当前文档落在隐私目录（首段命中）→ 编辑器头「锁 · 模型不可见」
     const docPrivate = computed(() => !!props.currentPath && isPrivacyScoped(props.privacyDirs, props.currentPath))
 
-    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, docPrivate }
+    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, goHome, docPrivate }
   },
   template: `
     <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
       :class="{ 'topbar-compact': aiOpen }">
-      <!-- logo（spec §3.1：从 rail 迁入顶栏） -->
-      <div class="topbar-logo flex items-center gap-2">
+      <!-- logo（spec §3.1：从 rail 迁入顶栏；spec 2026-11-22：点击回首页——div 挂
+           role=button 同键盘 Enter/Space，泛化红线：可点元素给足键盘面） -->
+      <div class="topbar-logo flex items-center gap-2" role="button" tabindex="0" aria-label="返回首页"
+        @click="goHome" @keydown.enter.prevent="goHome" @keydown.space.prevent="goHome">
         <span class="logo-mark logo-mark--top">M</span>
         <span class="logo-word">md-vault</span>
       </div>

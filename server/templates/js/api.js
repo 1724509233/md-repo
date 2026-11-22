@@ -368,6 +368,31 @@ export const api = {
     return res.json()
   },
 
+  // ── 首页·管家日报（spec 2026-11-22-home-butler-landing §5）──
+
+  /** GET /api/home — 缺席窗聚合。since 传毫秒、服务端语义是 epoch 秒（floor 换算）；
+   *  lastSeenSeq = 已读游标（mdvault.lastSeenChangeSeq），驱动 unseen 代改计数 */
+  async getHome(sinceMs, lastSeenSeq = 0) {
+    const params = new URLSearchParams({
+      since: String(Math.floor(sinceMs / 1000)),
+      last_seen_seq: String(lastSeenSeq || 0)
+    })
+    const res = await fetch('/api/home?' + params.toString())
+    if (!res.ok) throw new Error(`GET /api/home → ${res.status}`)
+    return res.json()
+  },
+
+  /** POST /api/home/summary — 管家一句话（当日服务端缓存；单飞/退避在服务端）。
+   *  不抛错返回判别式：400 model_not_configured / 429 cooldown / 502 summary_failed
+   *  的 {error} 体直接给 UI 做分支（✨按钮旁提示，不打断分级文案） */
+  async genHomeSummary() {
+    const res = await fetch('/api/home/summary', { method: 'POST' })
+    let data = null
+    try { data = await res.json() } catch (e) { /* 空体 */ }
+    if (!res.ok) return { ok: false, error: (data && data.error) || String(res.status) }
+    return { ok: true, text: (data && data.text) || '' }
+  },
+
   // ── 设置页（spec 2026-11-22 §4：GET 掩码回显 + PUT 字段级写回）──
   // 契约：非 2xx **不抛**——409（revision 冲突）/ 422（校验失败）/ 503（未接线）的 body
   // 都是页面流程数据（重载按钮 / 页顶告警条文案），返回 {status, data}；仅网络失败 throw。

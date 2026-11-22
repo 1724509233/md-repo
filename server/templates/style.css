@@ -801,7 +801,9 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 顶栏 logo（spec §3.1：22px mark + 14px wordmark） */
 .topbar-logo .logo-mark--top { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
 /* 字标同 .tb-label 口径：max-width + opacity 平滑收纳（上限 60px ≈ "md-vault" 自然宽 + 余量） */
-.topbar-logo { transition: gap .2s ease; }
+.topbar-logo { transition: gap .2s ease; cursor: pointer; }
+/* logo 回首页（spec 2026-11-22）：role=button 的键盘焦点面可见（同 .tree-more:focus-visible 家族口径） */
+.topbar-logo:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; border-radius: 6px; }
 .topbar-logo .logo-word {
   font-size: 14px;
   max-width: 60px; overflow: hidden; white-space: nowrap;
@@ -1716,6 +1718,80 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (max-width: 479px) { .priv-badge-label { display: none; } } /* 窄屏收纳文案，锁本体常驻（同顶栏图标化口径） */
 /* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
 .eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+
+/* ============ 首页 · 管家日报（spec 2026-11-22-home-butler-landing）============
+   视觉基准 = docs/superpowers/specs/2026-11-22-home-butler-landing-preview.html（用户已认可）。
+   信笺式低 chrome：窄栏居中、细竖线分组、G4 唯一盒子；token 全走 :root；
+   中文衬线按 §9.7 维持现状（body 栈落雅黑，不加 CJK 衬线回退）。 */
+.hb-shell { flex: 1; min-width: 0; overflow-y: auto; background: var(--paper); }
+.hb-home { max-width: 720px; margin: 0 auto; padding: 54px 28px 40px; }
+
+/* G1 叙事栈（大字 serif；缺席时长黄铜） */
+.hb-g1-hi { font-size: 27px; font-weight: 600; line-height: 1.4; margin: 0; }
+.hb-absent { color: var(--brass); font-weight: 600; }
+.hb-g1-said { font-size: 17px; line-height: 1.85; color: var(--ink-soft); margin: 16px 0 0; }
+.hb-g1-act { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hb-g1-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 16px;
+  font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  cursor: pointer; transition: border-color .15s ease;
+}
+.hb-g1-btn:hover { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+.hb-g1-btn:disabled { opacity: .55; cursor: default; }
+.hb-star { color: var(--brass); }
+.hb-g1-note { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--ink-soft); }
+
+/* 段题（信笺抬头）与安静句 */
+.hb-sec { margin-top: 46px; }
+.hb-sec-title { font-size: 19px; font-weight: 600; margin: 0 0 16px; }
+.hb-quiet { font-size: 15.5px; color: var(--ink-soft); margin: 0; }
+
+/* G2 信笺式细竖线分组 */
+.hb-grp { border-left: 1px solid var(--line); padding: 2px 0 2px 16px; }
+.hb-grp + .hb-grp { margin-top: 20px; }
+.hb-grp-head { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); margin: 0 0 8px; }
+.hb-grp-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; min-width: 0; }
+.hb-grp-row .t { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.hb-grp-row .act { font-size: 15px; color: var(--ink); white-space: nowrap; }
+.hb-grp-row .mid { color: var(--ink-soft); flex-shrink: 0; }
+.hb-grp-row .path {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--ink-soft);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.hb-grp-row .path:hover { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
+
+/* G3 日行（展开明细 flex-basis:100% 换行挂回日行下） */
+.hb-day { display: flex; align-items: baseline; gap: 13px; padding: 8px 0; flex-wrap: wrap; }
+.hb-day + .hb-day { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.hb-day .d { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--ink-soft); flex-shrink: 0; }
+.hb-day .sum { font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hb-day .expand { margin-left: auto; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); text-decoration: none; flex-shrink: 0; }
+.hb-day .expand:hover { color: var(--brass); }
+.hb-day-ops { flex-basis: 100%; padding: 2px 0 4px; }
+
+/* G4 唯一盒子区 */
+.hb-g4 { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.hb-g4-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 18px; flex-wrap: wrap; padding: 15px 18px; }
+.hb-g4-row + .hb-g4-row { border-top: 1px solid var(--line); }
+.hb-g4-txt { font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hb-g4-link { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); text-decoration: none; white-space: nowrap; }
+.hb-g4-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 页脚 */
+.hb-foot { margin-top: 52px; text-align: center; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); }
+
+/* 窄屏（预览稿移动框口径：留白收紧、叙事字号降一档） */
+@media (max-width: 640px) {
+  .hb-home { padding: 30px 22px 36px; }
+  .hb-g1-hi { font-size: 24px; }
+  .hb-sec { margin-top: 38px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-g1-btn { transition: none; }
+}
 
 /* ============ 设置浮层（spec 2026-11-22 §6 modal 改版 · st- 族）============
    壳 = backdrop + 居中 dialog（st-modal 族在下方「浮层壳」分节；折叠态 visibility 家族照

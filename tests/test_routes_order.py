@@ -17,8 +17,8 @@ from server.api import create_app  # noqa: F401  (api 面 import 存活证明；
 
 
 # (methods, path) — in registration order (ROUTE_MODULES: console →
-# notifications → sync → recall → egress → memory → agent → trash →
-# settings). 50 routes.
+# notifications → sync → recall → egress → memory → agent → trash → home →
+# settings). 52 routes.
 EXPECTED = (
     # console (10): manage ⪯ upload, changes ⪯ get_doc (both order-sensitive).
     (("GET",), "/"),                                   # 1  index
@@ -77,10 +77,13 @@ EXPECTED = (
     # trash (2).
     (("GET",), "/api/trash"),                           # 47 list
     (("POST",), "/api/trash"),                          # 48 restore/purge/empty
+    # home (2): 首页·管家日报（spec 2026-11-22-home-butler-landing）。
+    (("GET",), "/api/home"),                            # 49 聚合
+    (("POST",), "/api/home/summary"),                   # 50 按需一句话
     # settings (2): config.yaml 页面化编辑（spec 2026-11-22 §4）——GET 掩码回显 /
-    # PUT 字段级写回，追加在域序末尾（trash 之后，计划 Global Constraints）。
-    (("GET",), "/api/settings"),                        # 49 masked echo + _meta
-    (("PUT",), "/api/settings"),                        # 50 校验即启动/热生效
+    # PUT 字段级写回，追加在域序末尾（home 之后，计划 Global Constraints）。
+    (("GET",), "/api/settings"),                        # 51 masked echo + _meta
+    (("PUT",), "/api/settings"),                        # 52 校验即启动/热生效
 )
 
 

@@ -906,7 +906,10 @@ def test_session_persistence_pins():
     #   F5 → bootRestore 恢复回旧 sid/空态 → 面板空白；第三写点见 ③b。
     #   计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
     #   只能出现 1 次；按「写点=调用点」本意落钉。）
-    assert app.count("localStorage.setItem(") == 1
+    #   （2026-11-22 home-butler T4：app.js 出现第二枚 setItem——心跳写 mdvault.lastPresence，
+    #   封进 beatPresence 单点。口径随之收紧为「aiSession 键的 setItem 恰 1」；心跳键的
+    #   写点恰 1 + try/catch 由 test_home_landing_wired 钉。）
+    assert app.count("localStorage.setItem('mdvault.aiSession'") == 1
     ps = _fn_body(app, "function persistSessionId(")
     assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
     assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
@@ -1299,3 +1302,112 @@ def test_restored_thinking_block_pin():
     assert tb, "thinking 分支恢复态折叠枝（block.expanded 驱动）缺失"
     tl = re.search(r"<div class=\"thinking-line\" @click=\"toggleBlock\(msg, block\)\">", ai)
     assert tl, "thinking 行点击应走 toggleBlock（恢复/流式同一开合入口）"
+
+
+# ── 首页·管家日报（spec 2026-11-22-home-butler-landing §6/§8 钉家族）──────
+
+def test_home_landing_wired():
+    # 导航骨架全要素（Task 4）：Home 挂载、回首页清 hash（logo 回首页不清 hash
+    # 会让首页对「回首页→F5」永不可达——oracle 送审雷）、已读游标信号、
+    # lastPresence 心跳三写点、TopBar go-home 链
+    app = _templates()["app.js"]
+    for tok in ("'Home'",                                      # import/注册之一
+                "history.replaceState(null, '', location.pathname)",  # hash watch null 支路
+                'v-if="!state.currentPath"',                   # Home 挂载条件
+                "state.homeRefreshSeq",                        # 监控退页重取信号
+                "mdvault.lastPresence",                        # 心跳存储键
+                "pagehide", "visibilitychange",                # 心跳三写点之二
+                "@go-home"):                                   # TopBar → goHome 链
+        assert tok in app, tok
+    # 心跳写点单点封进 beatPresence（同 persistSessionId 纪律）：setItem(LS_LAST 恰 1 + try/catch
+    beat = _fn_body(app, "function beatPresence(")
+    assert beat.count("setItem(LS_LAST") == 1 and "try" in beat and "catch" in beat
+
+
+def test_home_component_registered():
+    app = _templates()["app.js"]
+    assert "app.component('Home', Home)" in app
+
+
+def test_home_voice_module():
+    # homeVoice = 文案单点存放（spec §4.3）：分级/量词/问候纯函数 + 定稿语料常量。
+    # 行为面走 node 直 import（同 chatRestore/format 先例）：S0–S4 边界、
+    # 缺席量词（<15min 无数字 / 15min–2d 报小时 / ≥24h「一天」级 / ≥2d「N 天又 M 小时」）、时段四界。
+    f = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    assert "mdvault.lastSeenChangeSeq" in f and "mdvault.lastPresence" in f
+    for tok in ("'S0'", "'S1'", "'S2'", "'S3'", "'S4'"):
+        assert tok in f, tok
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const H=3600e3, D=86400e3, now=1763000000000;
+  const t=o=>m.tierOf(Object.assign({now},o));
+  if(t({bootedOnce:false,lastPresence:undefined})!=='nostorage')process.exit(1);
+  if(t({bootedOnce:false,lastPresence:null})!=='first')process.exit(2);
+  if(t({bootedOnce:true,lastPresence:now-9*H})!=='S0')process.exit(3);
+  if(t({bootedOnce:false,lastPresence:now-(15*60e3-1)})!=='S1')process.exit(4);
+  if(t({bootedOnce:false,lastPresence:now-15*60e3})!=='S2')process.exit(5);
+  if(t({bootedOnce:false,lastPresence:now-6*H+1})!=='S2')process.exit(6);
+  if(t({bootedOnce:false,lastPresence:now-6*H})!=='S3')process.exit(7);
+  if(t({bootedOnce:false,lastPresence:now-2*D+1})!=='S3')process.exit(8);
+  if(t({bootedOnce:false,lastPresence:now-2*D})!=='S4')process.exit(9);
+  if(m.absentPhrase(899)!=='')process.exit(10);
+  if(m.absentPhrase(900)!=='1 个小时')process.exit(11);
+  if(m.absentPhrase(4*3600)!=='4 个小时')process.exit(12);
+  if(m.absentPhrase(24*3600)!=='一天')process.exit(13);
+  if(m.absentPhrase(30*3600)!=='一天又 6 小时')process.exit(14);
+  if(m.absentPhrase(2*86400)!=='2 天')process.exit(15);
+  if(m.absentPhrase(3*86400+14*3600)!=='3 天又 14 小时')process.exit(16);
+  if(m.greetingOf(new Date(2026,0,1,11,59).getTime())!=='早上好')process.exit(17);
+  if(m.greetingOf(new Date(2026,0,1,12,0).getTime())!=='午后好')process.exit(18);
+  if(m.greetingOf(new Date(2026,0,1,22,59).getTime())!=='晚上好')process.exit(19);
+  if(m.greetingOf(new Date(2026,0,1,23,0).getTime())!=='夜深了')process.exit(20);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/homeVoice.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"homeVoice case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_home_template_bindings_resolve():
+    # prod 构建下模板引用未返回的 setup 标识符 = 静默白屏（实测 expanded 漏返 →
+    # Home 整支渲成空注释，零可见报错）。钉：模板全部绑定表达式引用的根标识符，
+    # 必须落在 setup return 键 ∪ v-for 别名 之内。
+    import re as _re
+    home = _templates()["Home.js"]
+    tmpl = home.split("template: `", 1)[1].rsplit("`", 1)[0]
+    exprs = [m.group(1) for m in _re.finditer(r"\{\{(.*?)\}\}", tmpl, _re.S)]
+    exprs += [m.group(1) for m in _re.finditer(r"""(?:v-(?:if|else-if|for|show)|:[\w-]+|@[\w.-]+)="([^"]*)""", tmpl)]
+    aliases = set()
+    for m in _re.finditer(r'v-for="\(?\s*([\w$]+)(?:\s*,\s*([\w$]+))?\s*(?:,\s*([\w$]+)\s*)?\)?\s+in', tmpl):
+        aliases.update(g for g in m.groups() if g)
+    ret = home.rsplit("return {", 1)[1].split("}", 1)[0]   # setup return 是文件最后一个 return {
+    keys = {k for k in _re.split(r"[,\s]+", ret) if k}
+    allowed = keys | aliases | {"true", "false", "null", "undefined", "in", "of"}
+    roots = set()
+    for e in exprs:
+        code = _re.sub(r"'[^']*'|\"[^\"]*\"", " ", e)  # 剥字面量再取标识符
+        roots.update(t for t in _re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*", code) if not t[0].isdigit())
+    missing = sorted(r for r in roots if r not in allowed)
+    assert not missing, f"Home 模板引用未返回: {missing}"
+
+
+def test_home_render_pins():
+    # 渲染面钉（spec §8）：G1 LLM 文本走 Vue 插值（禁 v-html——防线是 LLM 无渲染权）；
+    # S0/S1 短窗 G2 收束不渲段题（shortStay 守卫）；定稿语料在位（文案单点=homeVoice，
+    # Home.js 与 homeVoice 并查）；样式 hb- 分节存在。
+    home = _templates()["Home.js"]
+    assert "v-html" not in home
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    both = home + voice
+    for tok in ("您刚离开，还没有新的事", "我做不了主的事",
+                "这段时间安安静静，我只看了看房子的四周", "都打理好了，不急"):
+        assert tok in both, tok
+    assert "shortStay" in home
+    # 游标落笔守卫（终审 M2）：S0/S1 收束态列表未渲，游标绝不推进
+    assert "system_groups.length && !shortStay" in home
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert ".hb-home" in css and ".hb-g4" in css
