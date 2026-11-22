@@ -315,7 +315,7 @@ def test_stop_route(vault_dir, db_conn, ledger_conn, ai_config, monkeypatch):
         assert tc.post("/api/agent/stop",
                        json={"session_id": "nobody"}).json() == {"ok": True,
                                                                   "stopped": False}
-    assert captured["cache"]["s1"].pending_confirms == {}   # 僵尸面关闭
+    assert captured["cache"]["s1"][0].pending_confirms == {}   # 僵尸面关闭
 
 
 # ── 通道一：中断半截持久化（spec 2026-11-20 §5-6/7，runhub 集成 + 顺序钉）──────

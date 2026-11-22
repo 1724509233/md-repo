@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>首页 · 管家日报 — 设计预览 · md-vault</title>
+<style>
+/* ================================================================
+   管家日报 首页设计预览稿（评审用，非应用代码）
+   token 与字体栈逐字取自 server/templates/style.css :root；
+   全内联、零外部资源、零 JS。字体在本稿环境落到系统回退。
+   ================================================================ */
+:root {
+  color-scheme: light;
+  --paper: #F4EFE6;   /* 底色，暖纸白 */
+  --ink: #211D18;     /* 主文字，深墨 */
+  --ink-soft: #6E655A;/* 次要文字，灰墨 */
+  --brass: #9A6B32;   /* 唯一强调色，黄铜 */
+  --line: #D8CFBF;    /* 分隔线，浅木色 */
+  --surface: #FBF8F2; /* 卡片/面板，比底色亮一档 */
+  /* 仅预览衬底用：浅木线向纸色回掺一档，仍落在书房色域内 */
+  --pv-mat: color-mix(in srgb, var(--line) 45%, var(--paper));
+  /* 叙事衬线（spec 要求衬线回退链；CJK 见返回报告的字体注记） */
+  --serif: 'Source Serif 4', Georgia, 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
+  --ui: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--pv-mat); color: var(--ink);
+  font-family: var(--ui); font-size: 16px; line-height: 1.75;
+  padding: 36px 22px 72px;
+}
+a { color: inherit; }
+:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--brass); border-radius: 6px; }
+
+/* ---------- 预览衬页（非应用内容，与 frame 内正文语料视觉隔开） ---------- */
+.pv-head { max-width: 1400px; margin: 0 auto 30px; }
+.pv-title { font-family: var(--serif); font-size: 19px; font-weight: 600; margin: 0 0 4px; }
+.pv-sub { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+.pv-row {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: center; gap: 44px;
+}
+.pv-frame { min-width: 0; max-width: 100%; }
+.pv-frame--wide  { flex: 1 1 620px; }
+.pv-frame--narrow{ flex: 0 0 375px; }
+.pv-cap { font-size: 12px; color: var(--ink-soft); margin: 0 2px 10px; line-height: 1.6; }
+.pv-cap b { font-weight: 600; color: var(--ink); }
+
+/* ---------- 应用屏框 ---------- */
+.app {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; display: flex; height: 780px;
+}
+
+/* ---------- 侧栏（简化：logo + nav + 设置） ---------- */
+.sb {
+  width: 220px; flex-shrink: 0; background: var(--surface);
+  border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; padding: 18px 12px 14px;
+}
+.sb-logo { display: flex; align-items: center; gap: 10px; padding: 2px 8px 0; }
+.logo-mark {
+  width: 32px; height: 32px; flex-shrink: 0;
+  border: 1px solid var(--brass); border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-weight: 700; font-size: 15px; color: var(--brass);
+}
+.logo-word { font-family: var(--serif); font-weight: 600; font-size: 15px; letter-spacing: .02em; color: var(--ink); }
+.sb-nav { margin-top: 26px; display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 10px; border-radius: 8px;
+  font-size: 13px; color: var(--ink-soft); text-decoration: none;
+  transition: background-color .15s ease, color .15s ease;
+}
+.nav-item:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+.nav-item.active { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); font-weight: 500; }
+.nav-item svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.nav-count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
+.nav-badge {
+  margin-left: auto; min-width: 17px; height: 16px; padding: 0 5px;
+  border-radius: 999px; background: var(--brass); color: var(--paper);
+  font-size: 10px; font-weight: 500; line-height: 16px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.sb-foot { margin-top: auto; padding-top: 10px; }
+
+/* ---------- 主区窄栏 ---------- */
+.main { flex: 1; overflow-y: auto; }
+.home { max-width: 560px; margin: 0 auto; padding: 54px 28px 40px; }
+
+/* ---------- G1 管家一句话 ---------- */
+.g1-hi { font-family: var(--serif); font-size: 27px; font-weight: 600; line-height: 1.4; margin: 0; }
+.g1-hi .absent { color: var(--brass); font-weight: 600; }
+.g1-said { font-family: var(--serif); font-size: 17px; line-height: 1.85; color: var(--ink-soft); margin: 16px 0 0; }
+.g1-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin-top: 22px; padding: 9px 16px;
+  font-family: var(--ui); font-size: 13.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  cursor: pointer; text-decoration: none;
+  transition: border-color .15s ease;
+}
+.g1-btn:hover { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+.g1-btn .star { color: var(--brass); }
+
+/* ---------- 段题（G2/G3/G4，信笺抬头） ---------- */
+.sec { margin-top: 46px; }
+.sec-title { font-family: var(--serif); font-size: 19px; font-weight: 600; margin: 0 0 16px; }
+
+/* ---------- G2 信笺式细竖线分组 ---------- */
+.grp { border-left: 1px solid var(--line); padding: 2px 0 2px 16px; }
+.grp + .grp { margin-top: 20px; }
+.grp-head { font-family: var(--ui); font-size: 12px; color: var(--ink-soft); margin: 0 0 8px; }
+.grp-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; min-width: 0; }
+.grp-row .t { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.grp-row .act { font-family: var(--serif); font-size: 15px; color: var(--ink); white-space: nowrap; }
+.grp-row .mid { color: var(--ink-soft); flex-shrink: 0; }
+.grp-row .path {
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.grp-row .path:hover { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
+.grp-row.merge .mg { font-family: var(--serif); font-size: 15px; color: var(--ink-soft); }
+
+/* ---------- G3 您上次离开前做到哪 ---------- */
+.day { display: flex; align-items: baseline; gap: 13px; padding: 8px 0; }
+.day + .day { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.day .d { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); flex-shrink: 0; }
+.day .sum { font-family: var(--serif); font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.day .expand { margin-left: auto; font-family: var(--ui); font-size: 12px; color: var(--ink-soft); text-decoration: none; flex-shrink: 0; }
+.day .expand:hover { color: var(--brass); }
+
+/* ---------- G4 我做不了主的事（整页唯一盒子区） ---------- */
+.g4 { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.g4-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 18px; flex-wrap: wrap; padding: 15px 18px; }
+.g4-row + .g4-row { border-top: 1px solid var(--line); }
+.g4-txt { font-family: var(--serif); font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.g4-link { font-family: var(--ui); font-size: 12.5px; color: var(--brass); text-decoration: none; white-space: nowrap; }
+.g4-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---------- 页脚 ---------- */
+.home-foot { margin-top: 52px; text-align: center; font-family: var(--ui); font-size: 12px; color: var(--ink-soft); }
+
+/* ---------- 移动屏框 ---------- */
+.app--mobile { display: flex; flex-direction: column; width: 375px; max-width: 100%; height: 740px; }
+.mtop {
+  height: 46px; display: flex; align-items: center; gap: 10px; padding: 0 14px;
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.mtop svg { width: 18px; height: 18px; stroke: var(--ink-soft); fill: none; stroke-width: 1.5; stroke-linecap: round; flex-shrink: 0; }
+.app--mobile .home { padding: 30px 22px 36px; }
+.app--mobile .g1-hi { font-size: 24px; }
+.app--mobile .sec { margin-top: 38px; }
+
+/* ---------- 窄视口：预览页单列，桌面框收纳为图标 rail（不横向溢出） ---------- */
+@media (max-width: 880px) {
+  .pv-row { flex-direction: column; align-items: stretch; }
+  .pv-frame--narrow { align-self: center; }
+  .app { height: 720px; }
+  .sb { width: 56px; padding: 16px 8px; align-items: stretch; }
+  .sb-logo { justify-content: center; padding: 0; }
+  .logo-word, .nav-label, .nav-count, .sb-foot-label { display: none; }
+  .nav-item { justify-content: center; gap: 0; }
+  .nav-badge { position: absolute; margin-left: 0; transform: translate(14px, -8px); }
+  .nav-item { position: relative; }
+  .home { padding: 34px 20px 32px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+</head>
+<body>
+<header class="pv-head">
+  <p class="pv-title">首页 · 管家日报 —— 设计预览稿</p>
+  <p class="pv-sub">spec 2026-11-22-home-butler-landing · 仅供浏览器视觉评审，非应用代码 · 正文为定稿语料，frame 上方灰字为预览标注（非语料）</p>
+</header>
+<div class="pv-row">
+  <!-- ================= Frame A · 桌面 ================= -->
+  <section class="pv-frame pv-frame--wide">
+    <p class="pv-cap"><b>Frame A · 桌面宽度</b> —— 左侧栏（surface 底，md-vault 衬线 logo + 主页/文件/搜索/记忆 + 底部设置）；主区窄栏居中 ~560px；G2 细竖线信笺分组；G4 为整页唯一盒子区。</p>
+    <div class="app">
+      <aside class="sb" aria-label="侧栏">
+        <div class="sb-logo"><span class="logo-mark">m</span><span class="logo-word">md-vault</span></div>
+        <nav class="sb-nav">
+          <a class="nav-item active" href="#" aria-current="page">
+            <svg viewBox="0 0 16 16"><path d="M2.8 7 8 2.8 13.2 7v6a1 1 0 0 1-1 1H3.8a1 1 0 0 1-1-1Z"/><path d="M6.3 14v-3.2h3.4V14"/></svg>
+            <span class="nav-label">主页</span>
+          </a>
+          <a class="nav-item" href="#">
+            <svg viewBox="0 0 16 16"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.2l1.3 1.7h5.5A1.5 1.5 0 0 1 14 6.2v5.3A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5Z"/></svg>
+            <span class="nav-label">文件</span><span class="nav-count">217</span>
+          </a>
+          <a class="nav-item" href="#">
+            <svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg>
+            <span class="nav-label">搜索</span>
+          </a>
+          <a class="nav-item" href="#">
+            <svg viewBox="0 0 16 16"><path d="M4.2 2.5h7.6a1 1 0 0 1 1 1v10l-4.8-3.2-4.8 3.2v-10a1 1 0 0 1 1-1Z"/></svg>
+            <span class="nav-label">记忆</span><span class="nav-badge">3</span>
+          </a>
+        </nav>
+        <div class="sb-foot">
+          <a class="nav-item" href="#">
+            <svg viewBox="0 0 16 16"><path d="M2 4.5h12M2 8h12M2 11.5h12"/><circle cx="6" cy="4.5" r="1.6" fill="var(--surface)"/><circle cx="10.5" cy="8" r="1.6" fill="var(--surface)"/><circle cx="5" cy="11.5" r="1.6" fill="var(--surface)"/></svg>
+            <span class="sb-foot-label">设置</span>
+          </a>
+        </div>
+      </aside>
+      <main class="main" role="main">
+        <div class="home">
+          <section class="g1">
+            <h1 class="g1-hi">午后好。您离开了 <span class="absent">3 天</span> 又 <span class="absent">14 小时</span>。</h1>
+            <p class="g1-said">您不在的这几天，我把书房打理好了。有三件事我做不了主，给您留在桌上。</p>
+            <a class="g1-btn" href="#"><span class="star">✦</span>让我说说这几天的事</a>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">您不在时，我做了什么</h2>
+            <div class="grp">
+              <p class="grp-head">我自己动手的</p>
+              <div class="grp-row"><span class="t">08:47</span><span class="act">整理索引</span><span class="mid">·</span><a class="path" href="#">projects/md-repo/notes/…butler-landing.md</a></div>
+            </div>
+            <div class="grp">
+              <p class="grp-head">我让守夜人办的</p>
+              <div class="grp-row"><span class="t">22:04</span><span class="act">归档整理</span><span class="mid">·</span><a class="path" href="#">review/…-trash-actor.md</a></div>
+            </div>
+            <div class="grp">
+              <p class="grp-head">我从您设备上接的</p>
+              <div class="grp-row merge"><span class="mg">— 收了 3 篇，送上 6 篇；有 1 处对不上</span></div>
+            </div>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">您上次离开前做到哪</h2>
+            <div class="day"><span class="d">11-21</span><span class="sum">编辑 3 · 移动 1 · 会话 2 次</span><a class="expand" href="#">展开 ›</a></div>
+            <div class="day"><span class="d">11-20</span><span class="sum">编辑 1 · 会话 1 次</span><a class="expand" href="#">展开 ›</a></div>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">我做不了主的事</h2>
+            <div class="g4">
+              <div class="g4-row"><span class="g4-txt">3 条记忆提案，等您拿主意</span><a class="g4-link" href="#">去记忆控制台 →</a></div>
+              <div class="g4-row"><span class="g4-txt">5 处是我代您改的，您还没看过</span><a class="g4-link" href="#">看我改了什么 →</a></div>
+              <div class="g4-row"><span class="g4-txt">1 处同步冲突，两版我都留着没删</span><a class="g4-link" href="#">帮我看看 →</a></div>
+            </div>
+          </section>
+          <p class="home-foot">打开网站我就在这张桌前 · 点左上角字样随时回来</p>
+        </div>
+      </main>
+    </div>
+  </section>
+
+  <!-- ================= Frame B · 移动 375px ================= -->
+  <section class="pv-frame pv-frame--narrow">
+    <p class="pv-cap"><b>Frame B · 移动 375px</b> —— 单列、无侧栏（文件/搜索等入口走应用既有移动抽屉，此框顶栏 ☰ 即其示意占位）；G4 盒子仍为唯一盒子。</p>
+    <div class="app app--mobile">
+      <div class="mtop" aria-hidden="true">
+        <svg viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/></svg>
+        <span class="logo-word">md-vault</span>
+      </div>
+      <main class="main" role="main">
+        <div class="home">
+          <section class="g1">
+            <h1 class="g1-hi">午后好。您离开了 <span class="absent">3 天</span> 又 <span class="absent">14 小时</span>。</h1>
+            <p class="g1-said">您不在的这几天，我把书房打理好了。有三件事我做不了主，给您留在桌上。</p>
+            <a class="g1-btn" href="#"><span class="star">✦</span>让我说说这几天的事</a>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">您不在时，我做了什么</h2>
+            <div class="grp">
+              <p class="grp-head">我自己动手的</p>
+              <div class="grp-row"><span class="t">08:47</span><span class="act">整理索引</span><span class="mid">·</span><a class="path" href="#">projects/…/butler-landing.md</a></div>
+            </div>
+            <div class="grp">
+              <p class="grp-head">我让守夜人办的</p>
+              <div class="grp-row"><span class="t">22:04</span><span class="act">归档整理</span><span class="mid">·</span><a class="path" href="#">review/…-trash-actor.md</a></div>
+            </div>
+            <div class="grp">
+              <p class="grp-head">我从您设备上接的</p>
+              <div class="grp-row merge"><span class="mg">— 收了 3 篇，送上 6 篇；有 1 处对不上</span></div>
+            </div>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">您上次离开前做到哪</h2>
+            <div class="day"><span class="d">11-21</span><span class="sum">编辑 3 · 移动 1 · 会话 2 次</span><a class="expand" href="#">展开 ›</a></div>
+            <div class="day"><span class="d">11-20</span><span class="sum">编辑 1 · 会话 1 次</span><a class="expand" href="#">展开 ›</a></div>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">我做不了主的事</h2>
+            <div class="g4">
+              <div class="g4-row"><span class="g4-txt">3 条记忆提案，等您拿主意</span><a class="g4-link" href="#">去记忆控制台 →</a></div>
+              <div class="g4-row"><span class="g4-txt">5 处是我代您改的，您还没看过</span><a class="g4-link" href="#">看我改了什么 →</a></div>
+              <div class="g4-row"><span class="g4-txt">1 处同步冲突，两版我都留着没删</span><a class="g4-link" href="#">帮我看看 →</a></div>
+            </div>
+          </section>
+          <p class="home-foot">打开网站我就在这张桌前 · 点左上角字样随时回来</p>
+        </div>
+      </main>
+    </div>
+  </section>
+</div>
+</body>
+</html>

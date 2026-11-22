@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from .routes import WebContext, register_all
+from .routes import SettingsDeps, WebContext, register_all
 from .core.sync_lock import SyncLock
 
 
@@ -36,7 +36,7 @@ class CachedStatic(StaticFiles):
 
 def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
                bg_targets: dict[str, dict] | None = None,
-               privacy=None) -> FastAPI:
+               privacy=None, settings: SettingsDeps | None = None) -> FastAPI:
     """Create the FastAPI application.
 
     ``db_conn``: the index/file-ledger connection (``.sync/index.db``).
@@ -59,6 +59,10 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
     The web surface reads it only for display annotations (``/api/docs``
     ``privacy_dirs``, save ``privacy_refs``); None = unconfigured (keys
     still present, empty).
+
+    ``settings``: the ``/api/settings`` wiring (spec 2026-11-22 §4.3) —
+    config path + the mutable runtime slot. None = unwired → the route
+    answers 503 (the conftest ``app`` fixture covers that path).
     """
     app = FastAPI(title="md-sync server")
     app.mount("/static", CachedStatic(directory=str(Path(__file__).parent / "templates")), name="static")
@@ -70,6 +74,7 @@ def create_app(vault_dir: Path, db_conn, ledger_conn=None, ai_config=None,
         sync_lock=SyncLock(vault_dir / ".sync" / "sync.lock"),
         bg_targets=bg_targets,
         privacy=privacy,
+        settings=settings,
     )
     app.state.ctx = ctx
     register_all(app, ctx)

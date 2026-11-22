@@ -32,6 +32,10 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 > 本文件只留「违者必炸」的铁律句与法源指针；机制全文一律进 `docs/superpowers/` 或 README（内联链接即索引）。
 
+### 设置页（config 写面，2026-11-22）
+
+- **设置页热生效铁律（spec `docs/superpowers/specs/2026-11-22-settings-page-design.md`，设计/评审/计划全链在该文件与 plans 同名文件）**——违者必炸：① PUT 落盘前必须在 **config 同目录** tmp 上跑真加载器（bgagent prompt 校验锚 = config 目录；tmp 去 `%TEMP%` 即假阴性），校验不过零落盘；`os.replace` 成功后 apply 抛 **不得反滚文件**（500 `saved:true`，回滚只会造第三态）。② `agent_cache` 失效只许 **`_get_agent` 读侧代际重建**（gen 落后 + 不忙），**永不外部清缓存**——RunHub persist 在持久化时刻取引用，外清 = 丢本轮对话（M1）。③ `BgSupervisor.apply` 是 change 过滤器与活别名集**唯一写入点**；环圈首时序 `reload.clear()` → 读 cfg/retired/别名集 → 进 wait 之间**零 await**（apply 同步同环是承重契约），违反即忙环或丢更新（M2/M4）。④ per-alias `asyncio.Lock` 归 supervisor，**跨 slot 重建复用**——发新锁即让在跑 run 与新环双写同 target_dir（M3）。⑤ `tasks()` 恒含缓退中任务，`shutdown()` 后置死、死后 `apply()` raise（M5）。回归钉家族：`test_settings_routes.py`、`test_bgagent_scheduler.py`（M2-M5 系）、`test_settings_hotapply.py`、`test_settings_doc_io.py`。完整性新增面备案见 spec §7（LAN 访客可改 config——用户拍板；token 化列为演进位）。
+
 ### 同步
 
 - **Sync lock is a cross-process file lock**（`server/core/sync_lock.py`，挂 `app.state.ctx.sync_lock`）：原子 `os.open(O_CREAT|O_EXCL)` 排他（stdlib only——无 fcntl/msvcrt），同 vault 双进程不得并发 sync；锁龄 >300s 视为 stale 可接管（崩溃不得 wedge vault），内容不可读/空按 stale 处理（fail-open）。内存 `locked_at` 属性永远先查且是测试 seam：测试模拟持锁直接设它——拒绝路径不碰文件系统。文件内容格式等细节代码自明。

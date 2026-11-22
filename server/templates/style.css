@@ -1716,3 +1716,196 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (max-width: 479px) { .priv-badge-label { display: none; } } /* 窄屏收纳文案，锁本体常驻（同顶栏图标化口径） */
 /* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
 .eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+
+/* ============ 设置浮层（spec 2026-11-22 §6 modal 改版 · st- 族）============
+   壳 = backdrop + 居中 dialog（st-modal 族在下方「浮层壳」分节；折叠态 visibility 家族照
+   MobileSheet/panel-shell 纪律）。复用面 = .mcard/.mc-h 卡族、.zline 零态、.mp-back 小钮
+   （监控页共用类，不动）。旧整页模式的 .mwrap/.m-scroll/.mpage 骨架与 mp-enter/mp-out 转场
+   归监控页独占，本页不再挂该类。本分节只长出表单面最小件：
+   .st-cols 双列体（≥640 左锚列 sticky / ≤639 折顶部分段钮行）· .st-nav-* 分段导航（mode-btn 激活态先例）
+   · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
+   · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族；.st-toolchip 权限三态 =
+     允许（实心黄铜）/ 询问（描边 + 后缀）/ 拒绝（虚线弱化），勾选与否仍由 .on 承载）
+   · .st-tag(s) 隐私目录标签 · .st-dir-* 隐私目录 combobox 候选面板 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
+   · .st-banner(.err/.warn) 告警反馈条 · .st-sv 保存状态徽标（已保存中性 / 未保存高亮）
+   · 内联校验族（2026-11-22 改版）：.st-input.is-err 出错红框 · .st-field-err 字段红小字 ·
+     .st-card-err 卡片顶兜底 · .st-bg-err 条目行涉错标记
+   · .st-foot/.st-save 保存行 · .st-footnote 页底说明。 */
+.st-cols { display: grid; grid-template-columns: 116px minmax(0, 1fr); gap: 18px; align-items: start; }
+.st-nav { position: sticky; top: 4px; display: flex; flex-direction: column; gap: 4px; }
+.st-nav-btn { text-align: left; width: 100%; border: 1px solid transparent; border-radius: 8px; padding: 7px 10px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 12px; font-weight: 500; color: var(--ink-soft); transition: background-color .15s ease, color .15s ease; }
+.st-nav-btn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.st-nav-btn.active { background: var(--brass); color: var(--paper); } /* 激活态黄铜实心（mode-btn 同款规格） */
+.st-body { min-width: 0; }
+.st-fields { display: flex; flex-direction: column; gap: 12px; }
+.st-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.st-lbl { font-size: 11px; font-weight: 600; color: var(--ink); }
+.st-input { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-family: var(--sans); font-size: 12px; padding: 6px 9px; }
+.st-input:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; }
+.st-hint { font-size: 10.5px; color: var(--ink-soft); }
+.st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; }
+.st-keyrow { display: flex; align-items: stretch; gap: 6px; }
+.st-keyrow .st-input { flex: 1; }
+.st-keyrow .mp-back { align-self: center; }
+.st-seg { display: inline-flex; align-self: flex-start; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.st-seg-btn { border: 0; border-radius: 6px; padding: 5px 12px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; font-weight: 500; color: var(--ink-soft); transition: background-color .15s ease, color .15s ease; }
+.st-seg-btn.on { background: var(--surface); color: var(--brass); box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent); }
+.st-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-chip { display: inline-flex; align-items: center; max-width: 100%; padding: 3px 9px; border: 1px solid var(--line); border-radius: 999px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.st-chip:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-chip.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+/* 工具权限三态（spec §6 用户增项，2026-11-22）：勾选态内分允许/询问，未勾选 = 拒绝（明显弱于
+   勾选态）。层级三段 = 实心黄铜（允许）> 描边浅染（询问，.st-chip.on 旧形态）> 虚线降透明（拒绝）。
+   aria-pressed 语义恒为「是否授权」，三态只进 class/title；图例说明行由模板 st-hint 出正文 */
+.st-toolchip { border-style: dashed; opacity: .55; }
+.st-toolchip:hover { opacity: .8; }
+.st-toolchip.on { border-style: solid; opacity: 1; }
+.st-toolchip.on.allow { background: var(--brass); border-color: var(--brass); color: var(--paper); }
+.st-toolchip.on.allow:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); color: var(--paper); }
+.st-chip-ask { margin-left: 5px; padding: 0 5px; border-radius: 999px; font-size: 9.5px; background: color-mix(in srgb, var(--brass) 18%, transparent); }
+.st-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-tag { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; padding: 3px 6px 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--ink) 3%, transparent); font-family: var(--sans); font-size: 11px; color: var(--ink); }
+.st-tag-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); font-size: 13px; line-height: 1; padding: 1px 4px; border-radius: 999px; transition: color .15s ease; }
+.st-tag-x:hover { color: var(--st-error); }
+/* 隐私目录 combobox 候选面板（.st-dir-*）：流内展开（设置体内滚容器裁不住浮层）；视觉照卡族
+   surface+line+影，键盘活动项 .active 与 hover 同貌；钮本体走流内排布 */
+.st-dir-list { display: flex; flex-direction: column; gap: 2px; max-height: 184px; overflow-y: auto; overscroll-behavior: contain; padding: 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 10px 28px rgba(25, 22, 18, .14); }
+.st-dir-opt { border: 0; background: transparent; cursor: pointer; text-align: left; font-family: var(--mono); font-size: 12px; line-height: 1.4; color: var(--ink); padding: 5px 8px; border-radius: 6px; transition: background-color .12s ease, color .12s ease; }
+.st-dir-opt:hover, .st-dir-opt.active { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+/* 告警固定区（非字段校验族专席：409 并发冲突 / 热生效与保存失败；422 校验错误已下沉表单项内联，
+   2026-11-22 用户改版；从 st-modal-body 滚动区上移到头部下方 flex 段——告警必现，滚不滚都可见；
+   成功无条 = 分段徽标归零即信号）。空容器零高：banner 自带
+   水平/顶部 margin，容器不占位 */
+.st-alerts { flex-shrink: 0; }
+.st-banner { border-radius: 8px; padding: 9px 12px; font-size: 11.5px; border: 1px solid; margin: 12px 20px 0; }
+.st-banner.warn { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-banner.err { border-color: color-mix(in srgb, var(--st-error) 40%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); }
+.st-banner-btn { margin: 0 8px; }
+.st-banner-hint { display: inline; }
+/* 表单项级校验（2026-11-22 用户改版：422/预检错误下沉字段级——出错字段红框 + 字段下红小字；
+   message 定位不到字段 → 卡片顶兜底行；折叠条目字段错误不可见 → 列表行涉错红标兜底。
+   配色全部复用 --st-error 既有错误色族，不造新色 */
+.st-input.is-err { border-color: var(--st-error); }
+.st-field-err { font-size: 10.5px; color: var(--st-error); }
+.st-card-err { display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; line-height: 1.6; color: var(--st-error); }
+.st-card-err span { word-break: break-all; overflow-wrap: anywhere; }
+/* 保存状态徽标（改版：取代成功反馈条）：设置卡右上角 + 后台条目右上角，两态中性灰/高亮。
+   mc-h 是监控页共用卡头（.mc-t 带大写转形——「主 AGENT」观感来源），转形只在设置浮层作用域内
+   取消（中文本不受影响，取消后「主智能体」按书写原样呈现），监控页共用语义零改动 */
+.st-sv { flex-shrink: 0; align-self: center; font-family: var(--mono); font-size: 9px; border-radius: 999px; padding: 1px 7px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: color-mix(in srgb, var(--ink-soft) 80%, transparent); white-space: nowrap; }
+.st-sv.dirty { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); background: color-mix(in srgb, var(--brass) 14%, transparent); color: var(--brass); font-weight: 600; }
+.st-modal .mc-t { text-transform: none; }
+.st-modal .mc-h .st-sv { margin-left: auto; }
+.st-retry { display: flex; justify-content: center; padding-top: 8px; }
+.st-foot { margin-top: 14px; }
+.st-save { border: 0; border-radius: 999px; padding: 8px 22px; background: var(--brass); color: var(--paper); font-family: var(--sans); font-size: 12px; font-weight: 600; cursor: pointer; transition: background-color .15s ease; }
+.st-save:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); }
+.st-save:disabled { opacity: .55; cursor: default; }
+.st-footnote { margin-top: 18px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 10.5px; line-height: 1.7; color: var(--ink-soft); }
+/* Task 9 后台 agent 段追加：.st-bg-list/.st-bg-row/.st-bg-main 条目行 · .st-badge 运行徽标
+   · .st-toggle 滑动开关（role=switch 按钮，34×20 轨道 + 14px 圆钮，无文字）· .st-add/.st-danger 增删钮（删除两步武装）
+   · .st-group 分组题 · .st-bg-form 条目表单 · .st-warn-inline 内联红字 · .st-input-mono/.st-val。
+   动效只用颜色/边框过渡，无无限动画 → 无需 reduced-motion 降级规则。 */
+.st-bg-list { display: flex; flex-direction: column; gap: 6px; }
+.st-bg-row { display: flex; align-items: stretch; gap: 8px; border: 1px solid var(--line); border-radius: 8px; transition: border-color .15s ease, background-color .15s ease; }
+.st-bg-row:hover { border-color: color-mix(in srgb, var(--brass) 35%, var(--line)); }
+.st-bg-row.sel { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
+.st-bg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; border: 0; background: transparent; padding: 8px 10px; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.st-bg-main:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; border-radius: 7px; }
+.st-bg-name { font-size: 12px; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bg-meta { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.st-bg-alias { font-family: var(--mono); font-size: 10px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.st-bg-tag { flex-shrink: 0; font-family: var(--mono); font-size: 9px; border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; color: var(--ink-soft); }
+.st-bg-err { flex-shrink: 0; font-size: 9.5px; color: var(--st-error); border: 1px solid color-mix(in srgb, var(--st-error) 45%, var(--line)); background: color-mix(in srgb, var(--st-error) 5%, transparent); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+.st-badge { flex-shrink: 0; align-self: center; font-family: var(--mono); font-size: 9.5px; border-radius: 999px; padding: 2px 8px; border: 1px solid; }
+.st-badge.run { border-color: color-mix(in srgb, var(--st-ok) 40%, var(--line)); background: color-mix(in srgb, var(--st-ok) 8%, transparent); color: var(--st-ok); }
+.st-badge.idle { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 7%, transparent); color: var(--brass); }
+.st-badge.off { border-color: var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); }
+.st-toggle { flex-shrink: 0; align-self: center; position: relative; width: 34px; height: 20px; padding: 0; border: 1px solid var(--line); border-radius: 999px; background: rgba(33, 29, 24, .06); cursor: pointer; transition: background-color .15s ease, border-color .15s ease; }
+.st-toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 999px; background: #fff; border: 1px solid color-mix(in srgb, var(--ink) 10%, var(--line)); box-shadow: 0 1px 2px rgba(33, 29, 24, .18); transition: transform .15s ease, border-color .15s ease; }
+.st-toggle.on { border-color: var(--brass); background: rgba(154, 107, 50, .55); }
+.st-toggle.on::after { transform: translateX(14px); border-color: color-mix(in srgb, var(--brass) 40%, transparent); }
+.st-toggle:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 2px; }
+.st-bg-form { margin-top: 12px; }
+.st-group { font-size: 11px; font-weight: 700; color: var(--brass); padding-top: 6px; border-top: 1px dashed var(--line); }
+.st-group:first-child { border-top: 0; padding-top: 0; }
+.st-warn-inline { font-size: 10.5px; color: var(--st-error); }
+.st-input-mono { font-family: var(--mono); }
+.st-val { font-size: 12px; color: var(--ink); word-break: break-all; }
+.st-val-mono { font-family: var(--mono); font-size: 11px; }
+.st-trg-head { display: flex; align-items: center; gap: 10px; }
+.st-bg-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.st-add { border: 1px dashed color-mix(in srgb, var(--brass) 45%, var(--line)); border-radius: 999px; padding: 6px 14px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; font-weight: 600; color: var(--brass); transition: background-color .15s ease; }
+.st-add:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.st-danger { border: 1px solid color-mix(in srgb, var(--st-error) 40%, var(--line)); border-radius: 999px; padding: 6px 14px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 11.5px; color: var(--st-error); transition: background-color .15s ease, color .15s ease; }
+.st-danger:hover { background: color-mix(in srgb, var(--st-error) 8%, transparent); }
+.st-danger.armed { background: var(--st-error); border-color: var(--st-error); color: var(--paper); }
+@media (max-width: 639px) {
+  /* 窄屏：左锚列折成顶部分段钮行（mode-btn 横排形态）；body 归单列 */
+  .st-cols { grid-template-columns: 1fr; gap: 12px; }
+  .st-nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  .st-nav-btn { width: auto; padding: 6px 12px; }
+}
+
+/* ──── 设置浮层壳（spec 2026-11-22 §6 modal 改版 · st-modal 族）────
+   折叠壳家族照 panel-shell/rel-sheet 纪律：常驻 DOM，收起态 visibility:hidden 出 Tab 序
+   （视觉隐藏但可聚焦 = 焦点黑洞，P2 目检轮同教训），.open 合并 transition delay 0s 即刻可见；
+   转场仅 GPU 属性（backdrop opacity + 面板 transform，≤.2s）；RM 两态同杀（.open 自带合并
+   transition 特异度高于基础态，只杀基础态则 RM 滑入复活 + 收起态 visibility 孤儿延迟复活）。
+   z-index = 既有浮层族最高（> notif 下拉 z-50 / 移动抽屉 z-40-45），仍在 toast（z-100，
+   toast.js 内联）与 skip-link（z-200）之下——瞬时反馈与键盘直达永不被模态压住。 */
+.st-backdrop { position: fixed; inset: 0; z-index: 80; background: rgba(33, 29, 24, .42); opacity: 0; pointer-events: none; visibility: hidden; transition: opacity .18s ease, visibility 0s .18s; }
+.st-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .18s ease, visibility 0s 0s; }
+.st-modal { position: fixed; left: 50%; top: 50%; z-index: 81; display: flex; flex-direction: column; width: min(880px, calc(100vw - 32px)); max-height: 86vh; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(25, 22, 18, .3); opacity: 0; pointer-events: none; visibility: hidden; transform: translate(-50%, -46%) scale(.97); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s .18s; }
+.st-modal.open { opacity: 1; pointer-events: auto; visibility: visible; transform: translate(-50%, -50%) scale(1); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s 0s; }
+/* 头部固定（标题 + 移动保存钮 + X），其下 = 错误条固定区（st-alerts，滚动区之外），再下 = 唯一滚动层 */
+.st-modal-head { flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 20px; border-bottom: 1px solid var(--line); }
+.st-modal-title { font-size: 16px; font-weight: 700; margin: 0; letter-spacing: .01em; }
+.st-x { margin-left: auto; flex-shrink: 0; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink-soft); cursor: pointer; transition: color .15s ease, border-color .15s ease; }
+.st-x:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.st-x svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
+.st-modal-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 28px; }
+.st-m-save { display: none; margin-left: auto; padding: 6px 16px; }  /* 移动头部保存（桌面页内保存行在场） */
+/* rail 底部锚定齿轮（margin-top:auto 自成一端，不挤占既有钮组） */
+/* 设置入口：rail 柱底部锚定（margin-top:auto 吃掉剩余高度）。特异性必须 ≥
+   `.rail > .rbtn + .rbtn`（0,3,0，line 762 的 6px 顶距会压过裸 .rail-gear）。 */
+.rail > .rbtn.rail-gear { margin-top: auto; }
+@media (max-width: 639px) {
+  /* 全屏浮层：壳高走 fixed inset-0（布局视口链，键盘压视口型内核随收缩——100vh/h-screen 红线）；
+     保存升头部、页内保存行隐（单一保存动作不双留） */
+  .st-modal { left: 0; top: 0; inset: 0; width: auto; max-height: none; border: 0; border-radius: 0; transform: translateY(14px); }
+  .st-modal.open { transform: none; }
+  .st-modal-head { padding: 10px 12px 10px 16px; }
+  .st-m-save { display: inline-flex; }
+  .st-modal-head .st-x { margin-left: 8px; }
+  .st-foot { display: none; }
+}
+/* ──── 关闭确认浮层（spec §6 三选，替代原生 confirm · st-confirm 族）────
+   层级：st-modal(81) < st-confirm-backdrop(89) < st-confirm(90) < toast(100，toast.js 内联)。
+   折叠壳家族照 st-modal 纪律：常驻 DOM、收起态 visibility:hidden 出 Tab 序、转场仅
+   opacity/transform、RM 两态同杀（.open 自带合并 transition，特异度高于基础态）。
+   焦点序：弹出默认聚焦「取消」（三钮行内末位，DOM 序 = 主钮 → 次钮 → 取消）；Tab/Shift+Tab
+   在浮层内首尾环回（SettingsPage.onConfirmKeydown），Escape = 取消（stopPropagation 先于
+   app document 级 Escape 链）；设置浮层 inert 双保险。390px：按钮整行纵排（主钮居首）仍完整可用 */
+.st-confirm-backdrop { position: fixed; inset: 0; z-index: 89; background: rgba(33, 29, 24, .35); opacity: 0; pointer-events: none; visibility: hidden; transition: opacity .18s ease, visibility 0s .18s; }
+.st-confirm-backdrop.show { opacity: 1; pointer-events: auto; visibility: visible; transition: opacity .18s ease, visibility 0s 0s; }
+.st-confirm { position: fixed; left: 50%; top: 50%; z-index: 90; width: min(400px, calc(100vw - 32px)); padding: 18px 20px 16px; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(25, 22, 18, .35); opacity: 0; pointer-events: none; visibility: hidden; transform: translate(-50%, -46%) scale(.97); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s .18s; }
+.st-confirm.open { opacity: 1; pointer-events: auto; visibility: visible; transform: translate(-50%, -50%) scale(1); transition: opacity .18s ease, transform .18s var(--ease), visibility 0s 0s; }
+.st-confirm-t { font-size: 14px; font-weight: 700; margin: 0 0 6px; }
+.st-confirm-d { font-size: 12px; line-height: 1.6; color: var(--ink-soft); margin: 0 0 14px; }
+.st-confirm-acts { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.st-confirm-btn { border: 1px solid var(--line); border-radius: 999px; padding: 7px 16px; background: transparent; cursor: pointer; font-family: var(--sans); font-size: 12px; font-weight: 600; color: var(--ink); transition: background-color .15s ease, border-color .15s ease, color .15s ease; }
+.st-confirm-btn:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); color: var(--brass); }
+.st-confirm-btn.primary { border: 0; background: var(--brass); color: var(--paper); }
+.st-confirm-btn.primary:hover { background: color-mix(in srgb, var(--brass) 85%, var(--ink)); color: var(--paper); }
+.st-confirm-btn:disabled { opacity: .55; cursor: default; }
+@media (max-width: 639px) {
+  .st-confirm { width: calc(100vw - 40px); padding: 16px 16px 14px; }
+  .st-confirm-acts { flex-direction: column; align-items: stretch; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st-backdrop, .st-backdrop.show { transition: none; }
+  .st-modal, .st-modal.open { transition: none; }  /* 两态同杀：RM 直切 + 收起态 visibility 无孤儿延迟 */
+  .st-confirm-backdrop, .st-confirm-backdrop.show { transition: none; }
+  .st-confirm, .st-confirm.open { transition: none; }
+}

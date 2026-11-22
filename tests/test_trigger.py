@@ -620,7 +620,16 @@ def test_armed_loop_event_wake(db_conn, vault_dir, tmp_path):
     """change event + enough non-self-excluded rows → run_fn well before
     the 300s backstop; the scan itself is unchanged."""
     from server.core import events
-    from server.bgagent.scheduler import _armed_loop
+    from server.bgagent.scheduler import AgentSlot, _armed_loop
+
+    class _Sup:
+        """Minimal live-alias-set source (loop reads it every cycle)."""
+
+        def __init__(self, aliases):
+            self._a = set(aliases)
+
+        def current_aliases(self):
+            return set(self._a)
 
     cfg = _cfg_trigger(tmp_path, vault_dir, arm_count=2)
     ran = []
@@ -634,8 +643,8 @@ def test_armed_loop_event_wake(db_conn, vault_dir, tmp_path):
             # await; creating it outside would bind it to a dead loop).
             lock = asyncio.Lock()
             task = asyncio.create_task(
-                _armed_loop(cfg, vault_dir, lock, [], run_fn, db_conn,
-                            {"cons"}, interval_s=300))
+                _armed_loop(AgentSlot(cfg), _Sup({"cons"}), vault_dir,
+                            lock, [], run_fn, db_conn, interval_s=300))
             await asyncio.sleep(0.2)
             t0 = time.monotonic()
             log_change(db_conn, "notes/w1.md", "created", source="web")
