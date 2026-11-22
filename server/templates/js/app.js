@@ -55,6 +55,7 @@ const state = reactive({
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
   settingsOpen: false,     // 设置浮层（spec 2026-11-22 §6 modal 改版：侧栏底部齿轮 + 深链 #settings；不占主页面，可与任何页面共存）
   settingsCloseSeq: 0,     // 关闭请求信号（Escape 链最高优先支发；dirty 守卫在组件内，取消即不关）
+  settingsSavedSeq: 0,     // 保存成功信号（组件 200 后递增）——config 改动不产 change_log 行，树靠它即时刷新
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
   rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
@@ -322,6 +323,10 @@ watch(() => state.aiOpen, (open) => {
 })
 // 模式切换：编辑/预览互切时重算高亮（预览→编辑 清除；编辑→预览 落到当前节）
 watch(() => state.previewMode, () => syncTocSpy())
+
+// 设置保存成功 → 文件树即时刷新（privacy.dirs 等改动只活在 config.yaml，不产 change_log 行，
+// watcher 轮询等不来；loadDocs 自带 ETag，代价可忽略——2026-11-22 用户验收项）
+watch(() => state.settingsSavedSeq, (seq) => { if (seq) loadDocs() })
 // 文档换/内容变 → 重建条目（post flush 保证 v-html 已 patch；编辑态 preview DOM 是 v-show 隐藏非移除，DOM 恒同步）
 watch([() => state.currentPath, () => state.docContent], () => {
   refreshTocEntries()

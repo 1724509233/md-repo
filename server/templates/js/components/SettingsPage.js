@@ -972,6 +972,9 @@ export const SettingsPage = {
           // 保存成功后重载 GET：按新 revision 回填全表单（与后端真相一致，api_key 掩码同步刷新，
           // 分段徽标随 hydrate 基线重取归零）
           await load()
+          // 配置改动即真相变更（privacy.dirs 影响树/搜索/顶栏的隐私显示）→ 通知 app 刷文件树
+          // （settingsCloseSeq 同款信号面；config 改动不产 change_log 行，watcher 轮询等不来）
+          state.settingsSavedSeq = (state.settingsSavedSeq || 0) + 1
           return true
         }
         if (res.status === 409) {
