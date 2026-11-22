@@ -88,3 +88,76 @@ def test_my_days_fixed_3d(home_client, db_conn):
     assert stale_date not in dates
     paths = {op["path"] for d in data["my_days"] for op in d["ops"]}
     assert "recent.md" in paths and "sys.md" not in paths
+
+
+# ── actions 四计数（§5.1/§3-G4；unseen = seq 游标 × 别名 allow-filter）──
+
+def test_actions_counts(home_client, db_conn, ledger_conn, vault_dir):
+    import hashlib
+    import json
+
+    from server.services import proposals
+    from server.vault.db.file_index import upsert_file
+
+    now = time.time()
+
+    # 待审提案 ×2（pending → processing → awaiting_review，同 test_abort_signals 惯用法）
+    for i in (1, 2):
+        r = proposals.create(ledger_conn, vault_dir, "summary", actor="t",
+                             run_id=f"r{i}", source_refs=["notes/test.md"],
+                             justification="j", payload={"form": "cache", "body": "b"})
+        proposals.advance(ledger_conn, vault_dir, r["id"], "processing", actor="t")
+        proposals.advance(ledger_conn, vault_dir, r["id"], "awaiting_review", actor="t")
+
+    # 冲突文件 ×1（web 面既有文件名约定）
+    cp = vault_dir / "notes" / "test.conflict-pc.md"
+    cp.write_bytes(b"conflict body")
+    upsert_file(db_conn, "notes/test.conflict-pc.md",
+                hashlib.sha256(cp.read_bytes()).hexdigest(), cp.stat().st_mtime)
+
+    # 回收站批次 ×1（形状对齐 list_trash：meta.json + 盘上文件）
+    batch = vault_dir / ".trash" / "b1"
+    (batch / "sub").mkdir(parents=True)
+    (batch / "sub" / "x.md").write_bytes(b"gone")
+    (batch / "meta.json").write_text(json.dumps(
+        {"batch": "b1", "deleted_at": "2026-11-22T00:00:00", "source": "web",
+         "files": [{"path": "sub/x.md", "size": 4}]}), encoding="utf-8")
+
+    # unseen 假账防线：agent×2 + 守夜人×1 算「代改」；watchdog×5（含用户自己的
+    # Obsidian 编辑与 MCP 直写）恒不计（§3-G4）
+    seqs = []
+    for i in range(2):
+        log_change(db_conn, f"ag{i}.md", "update", source="agent", ts=now - i)
+        seqs.append(_max_seq(db_conn))
+    log_change(db_conn, "bg.md", "update", source=ALIAS, ts=now - 0.5)
+    seqs.append(_max_seq(db_conn))
+    for i in range(5):
+        log_change(db_conn, f"wd{i}.md", "update", source="watchdog", ts=now - i - 0.1)
+
+    actions = home_client.get("/api/home").json()["actions"]
+    assert actions["pending_proposals"] == 2
+    assert actions["conflicts"] == 1
+    assert actions["trash_batches"] == 1
+    assert actions["unseen_agent_changes"] == 3
+
+    # 游标推进后「看过」即看过：再多的 watchdog 行也不得把它报回来
+    seen = max(seqs)
+    actions2 = home_client.get("/api/home", params={"last_seen_seq": seen}).json()["actions"]
+    assert actions2["unseen_agent_changes"] == 0
+
+
+def test_actions_no_bg_targets(vault_dir, db_conn, ledger_conn):
+    """未配置 bgagent（bg_targets None）→ 200；unseen 只数 agent 行。"""
+    from fastapi.testclient import TestClient
+    now = time.time()
+    log_change(db_conn, "ag.md", "update", source="agent", ts=now)
+    log_change(db_conn, "wd.md", "update", source="watchdog", ts=now)
+    app = create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn)
+    with TestClient(app) as tc:
+        r = tc.get("/api/home")
+        assert r.status_code == 200
+        assert r.json()["actions"]["unseen_agent_changes"] == 1
+
+
+def _max_seq(conn) -> int:
+    return conn.execute("SELECT max(seq) FROM change_log").fetchone()[0]

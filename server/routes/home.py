@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 
 from ..vault.db.changes import get_changes, get_changes_sources
+from ..vault.db.file_index import get_all_files
 
 SYSTEM_WINDOW_DAYS = 7   # 系统活动窗下界（§5.1 钳制）
 MY_WINDOW_DAYS = 3       # 足迹窗固定值（§3-G3，与缺席窗解耦）
@@ -74,9 +75,25 @@ def build_home_payload(db_conn, *, vault_dir, aliases: frozenset[str],
         d["ops"].sort(key=lambda op: (op["ts"], op["seq"]), reverse=True)
     my_days = sorted(days.values(), key=lambda d: d["date"], reverse=True)
 
-    # ── actions：Task 2 填实（当前为零形，形状先行钉住）
+    # ── actions（§3-G4 / §5.1）：proposals 走 ledger 域；unseen = seq 游标
+    # × 别名 allow-filter——watchdog（含用户自己的 Obsidian 编辑与 MCP 直写）
+    # 恒不计，违者即违 §4.1 真账铁律（oracle 送审 B2）。
     actions = {"pending_proposals": 0, "unseen_agent_changes": 0,
                "conflicts": 0, "trash_batches": 0}
+    if ledger_conn is not None:
+        from ..services.proposals import status_summary
+        actions["pending_proposals"] = status_summary(
+            ledger_conn)["by_status"]["awaiting_review"]
+    actions["conflicts"] = sum(
+        1 for f in get_all_files(db_conn) if ".conflict-" in f["path"])
+    from ..services.trash import list_trash
+    actions["trash_batches"] = len(list_trash(vault_dir))
+    cursor_rows = get_changes_sources(
+        db_conn, since_seq=max(int(last_seen_seq or 0), 0),
+        exclude_sources={"web"}, limit=5000)
+    actions["unseen_agent_changes"] = sum(
+        1 for r in cursor_rows
+        if r["source"] == "agent" or r["source"] in aliases)
 
     return {"window": {"since": eff, "until": now},
             "system_groups": system_groups,
