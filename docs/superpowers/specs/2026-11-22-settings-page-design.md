@@ -2,7 +2,7 @@
 
 - 日期：2026-11-22
 - 状态：已评审（oracle GO-with-fixes，M1–M6 / S1–S8 全部吸收，2026-11-22）
-- 决策记录：方案 A（直写 config.yaml，ruamel 注释保真）胜出；旁路覆盖文件（两处真相）与纯文本编辑器（繁琐未解）否决。热生效取「分级」档：**进行中的后台 agent run 用旧配置跑完，下一拍起用新配置**；「全部立即重建」否决（撕掉进行中的 run 会留半截写入）。
+- 决策记录：方案 A（直写 config.yaml，ruamel 注释保真）胜出；旁路覆盖文件（两处真相）与纯文本编辑器（繁琐未解）否决。热生效取「分级」档：**进行中的后台 agent run 用旧配置跑完，下一拍起用新配置**；「全部立即重建」否决（撕掉进行中的 run 会留半截写入）。UI 形态改版（2026-11-22 用户拍板）：整页接管 → **modal 浮层 + 侧栏底部齿轮入口**（见 §6）。
 
 ## 1. 背景与目标
 
@@ -129,7 +129,13 @@ config.yaml 目前唯一编辑方式是手改文件 + 重启。最繁琐的是 `
 
 ## 6. UI 结构（实施时 @designer 主导细节，本节是结构与交互契约）
 
-- 新组件 `server/templates/js/components/SettingsPage.js`。页面机制照监控页先例：整页模式（`state.settings`，与监控页/文档区互斥，进入/退出转场复用监控页的溶解节奏），深链 `#settings`（可分享、F5 可恢复）。入口默认放**监控页页头「设置」按钮**（设置属运维区；bgagent 状态展示本就在监控页）——具体摆位 @designer 可改，但必须满足：单一入口、监控页/设置页/文档区三者互斥不叠加。
+- 新组件 `server/templates/js/components/SettingsPage.js`。**交互形态 = modal 浮层（2026-11-22 用户拍板改版；原「整页接管」方案否决——设置不占主页面是行业规范，仓内监控页先例不适用于设置类）**：
+  - **入口**：左侧竖栏**底部**齿轮图标钮（icon-only，`aria-label="设置"`，常驻可见）；监控页页头入口删除（单一入口纪律）；深链 `#settings` 保留 = 打开浮层（F5 可恢复，关闭清 hash）。
+  - **桌面**：居中对话框（backdrop 压暗；宽度约 880px 上限、高约 86vh 上限，头部固定 + 体部内滚；主页面零 reflow）。
+  - **移动端（≤639px）**：全屏浮层（头部带关闭 + 保存钮；壳高走既有布局视口链，不用 100vh；键盘弹出红线照旧）。
+  - **转场**：backdrop opacity + 面板 transform（scale/translate，≤200ms，仅 GPU 属性），reduced-motion 直切；折叠壳家族照 `MobileSheet` 先例（visibility:hidden + RM 下 `.open` 同杀——审计钉家族）。
+  - **关闭**：右上 X / Escape（层级最高，先于监控页退出）/ 点 backdrop；**有未保存改动时任一关闭途径需二次确认**（原生 `confirm` 先例被容忍），干净则直关；关闭后焦点归位齿轮钮。z-index 为既有层级族最高。
+  - **内部结构不变**：桌面左列分段导航（浮层内双列）、移动端顶部分段钮；表单/保存流程/反馈条/页底说明全部沿用原契约。
 - 页内分段导航（桌面左列锚点、移动端堆叠/分段控件，照监控页先例）：
   1. **主 agent**：base_url / model / api_key（password 型，显示「已设置（留空保持不变）」态——**UI 留空 = payload 中省略该键**（§4.2 步 2 的缺省保持语义），显式清空走「清除」小按钮 = payload 发 `""`）/ 数值参数 / tools 白名单多选（选项来自 `_meta.tools`）；
   2. **后台 agent**：卡片列表（名称 / alias / 启用开关 / cron / 运行状态徽标——复用 `/api/memory/status` 的 agents 数据），点开条目表单，内部分组：基本（name/alias/enabled/target_dir/prompt/report_dir）、调度与预算（cron/max_rounds/timeout_s/budget_*/trigger）、工具（tools checkbox、verbs checkbox、propose+write_doc 同持即时红字提示——服务端仍是权威）、模型（provider/model_id/base_url/api_key/参数）。「添加」= 空表单；「删除」= 确认框（文案含「若正在运行，本轮跑完即停」）；**alias 改名 = 删 + 增**：表单需提示「改名将清空已存 api_key（需重填）且 trigger 计权从零开始」（§5.4/S3）。
