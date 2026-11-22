@@ -58,11 +58,15 @@ def _rows(conn, path: str):
 # ── 1. self_exclusion: one home for the exclusion policy ──────────────────
 
 def test_self_exclusion_set_and_single_source():
-    """The policy set, and: main's bus filter and the scheduler's scan-side
-    authority use the SAME function (single source — they cannot drift)."""
+    """The policy set, and: the change filter has exactly ONE writer —
+    BgSupervisor.apply（spec 2026-11-22 §5.4：过滤器唯一点，扫描侧经
+    current_aliases() 共读同一活别名集，两侧天然同单源、不可能 drift）。"""
     assert scheduler.self_exclusion({"a", "b"}) == {"executor", "agent", "a", "b"}
+    import inspect
+
     from server import main as server_main
-    assert server_main.self_exclusion is scheduler.self_exclusion
+    assert 'set_filter("change"' not in inspect.getsource(server_main.build_runtime)
+    assert "set_filter(" in inspect.getsource(scheduler.BgSupervisor.apply)
 
 
 # ── 2/3. bus filters installed by build_runtime ────────────────────────────
@@ -147,7 +151,15 @@ def test_runtime_callbacks_book_exactly_one_row(tmp_path, vault_dir, db_conn, le
 # ── 5. bgagent tasks: enabled agent → tasks spawned; none → none ──────────
 
 def test_bg_tasks_spawned_for_enabled_agent(tmp_path, vault_dir, db_conn, ledger_conn):
-    rt = _build(vault_dir, db_conn, ledger_conn, [_cfg(tmp_path, vault_dir)], tmp_path)
+    # Spec 2026-11-22 §5.4: the executor task is driven by its registry
+    # entry (is_executor present + enabled ⇒ task; gone ⇒ graceful retire),
+    # so the executor-role config is part of the applied set.
+    import dataclasses
+
+    cfgs = [_cfg(tmp_path, vault_dir),
+            dataclasses.replace(_cfg(tmp_path, vault_dir, "exec-role"),
+                                is_executor=True)]
+    rt = _build(vault_dir, db_conn, ledger_conn, cfgs, tmp_path)
     try:
         names = {t.get_name() for t in rt.bg_tasks}
         assert "bgagent-cons" in names          # cron loop
@@ -162,6 +174,37 @@ def test_bg_tasks_empty_without_agents(tmp_path, vault_dir, db_conn, ledger_conn
     rt = _build(vault_dir, db_conn, ledger_conn, [], tmp_path)
     try:
         assert rt.bg_tasks == []
+        assert rt.supervisor.tasks() == []      # apply([]) 仍在场（change 过滤器唯一点）
     finally:
         rt.stop()
         events.set_bus(None)
+
+
+def test_runtime_exposes_supervisor_and_hook(tmp_path, vault_dir, db_conn, ledger_conn):
+    """spec 2026-11-22 §4.3/§5.4: Runtime 持 supervisor 与 notif_hook 引用
+    （settings 路由的热生效把手）；stop 走 supervisor.shutdown——死后 apply 拒绝。"""
+    import dataclasses
+
+    from server.bgagent.notify import GuardedNotificationHook
+    from server.bgagent.scheduler import BgSupervisor
+
+    cfgs = [_cfg(tmp_path, vault_dir),
+            dataclasses.replace(_cfg(tmp_path, vault_dir, "exec-role"),
+                                is_executor=True)]
+    rt = _build(vault_dir, db_conn, ledger_conn, cfgs, tmp_path)
+    try:
+        assert isinstance(rt.supervisor, BgSupervisor)
+        assert isinstance(rt.notif_hook, GuardedNotificationHook)
+        assert rt.notif_hook._daily_cap == 20
+        # registry 收录全部别名（enabled/executor 皆在册，spec §5.4 分支表前提）；
+        # tasks() 是活集且在用环拆卸后会被 done-callback 收干——registry 才是稳态面
+        assert set(rt.supervisor._slots) == {"cons", "exec-role"}
+        assert set(rt.supervisor._locks) == {"cons"}   # executor 无 LLM 锁
+    finally:
+        rt.stop()
+        events.set_bus(None)
+    try:
+        rt.supervisor.apply(cfgs)
+        raise AssertionError("apply after stop must raise")
+    except RuntimeError:
+        pass

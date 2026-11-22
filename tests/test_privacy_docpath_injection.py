@@ -161,7 +161,7 @@ def _agent_chat_app(vault_dir, db_conn, ledger_conn, ai_config, tmp_path, monkey
     _LIVE_PORTALS.append(tc)
 
     def agent():
-        return captured["cache"][session_id]
+        return captured["cache"][session_id][0]
 
     return tc, agent
 

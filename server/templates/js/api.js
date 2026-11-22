@@ -12,6 +12,14 @@ export const api = {
     return res.json()  // { files: [...], dirs: [...] }
   },
 
+  /** GET /api/docs 原始全量（绕过 ETag 三态）——给需要「每次都要数据」的非树消费者。
+   *  getDocs 的 304→null 契约会把「无变化」当空数据喂给它们（2026-11-22 设置页目录候选实证）。 */
+  async getDocsRaw() {
+    const res = await fetch('/api/docs', { cache: 'no-store' })
+    if (!res.ok) throw new Error(`GET /api/docs (raw) → ${res.status}`)
+    return res.json()
+  },
+
   /** GET /api/docs/{path} — 读取文档内容 */
   async getDoc(path) {
     const res = await fetch('/api/docs/' + encodeURIComponent(path))
@@ -383,7 +391,33 @@ export const api = {
     try { data = await res.json() } catch (e) { /* 空体 */ }
     if (!res.ok) return { ok: false, error: (data && data.error) || String(res.status) }
     return { ok: true, text: (data && data.text) || '' }
+  },
+
+  // ── 设置页（spec 2026-11-22 §4：GET 掩码回显 + PUT 字段级写回）──
+  // 契约：非 2xx **不抛**——409（revision 冲突）/ 422（校验失败）/ 503（未接线）的 body
+  // 都是页面流程数据（重载按钮 / 页顶告警条文案），返回 {status, data}；仅网络失败 throw。
+
+  /** GET /api/settings — 五段可编辑配置 + _meta（api_key 恒掩码） */
+  async getSettings() {
+    return _settingsFetch('/api/settings', { method: 'GET' })
+  },
+
+  /** PUT /api/settings — {form 字段 + revision}；200 {revision, applied, restart_needed} */
+  async putSettings(body) {
+    return _settingsFetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
   }
+}
+
+/** 设置端点共用 fetch：解析 status + JSON body（非 JSON → null），非 2xx 不抛 */
+async function _settingsFetch(url, init) {
+  const res = await fetch(url, init)
+  let data = null
+  try { data = await res.json() } catch (e) { /* 非 JSON 响应体 → null */ }
+  return { status: res.status, data }
 }
 
 /** 提案 URL：relpath 形如 suggestions/2026-10-21_x.md，逐段编码；suffix 省略 = 记录读取端点 */

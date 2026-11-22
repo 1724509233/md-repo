@@ -1,12 +1,12 @@
 # server/bgagent/ — 后台定时 Agent
 
-后台定时 agent 系统：cron 调度 + 事件 arming（三门释放）+ 确定性执行器 + 报告生成 + 站内通知。入口在 `server/main.py` 启动时调 `start_background_agents(agents, vault_dir, ...)`：为每个 enabled 非执行器 agent 起一个 cron task、每个 trigger agent 起一个 30 分钟 arming task、执行器起一个共享 30 分钟 task；单次 run 由 `run_once()` 执行（`AgentSpec` → 事件流 → 报告文件 → 通知）。深度论证见 spec `~/md-vault/projects/md-repo/specs/2026-10-11-bgagent-design.md`（基线）、`~/md-vault/projects/md-repo/specs/2026-10-24-event-driven-scheduler-design.md`（事件 arming / 三门）、`~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`（预算 / 执行器 / 回读反馈）。
+后台定时 agent 系统：cron 调度 + 事件 arming（三门释放）+ 确定性执行器 + 报告生成 + 站内通知。**生产入口是 `BgSupervisor`**（`server/main.py::build_runtime` 构造并 `apply(bg_agents)`）：为每个 enabled 非执行器 agent 起一个 cron task、每个 trigger agent 起一个 30 分钟 arming task、执行器 task 由 enabled 的 `is_executor` registry 条目驱动；`start_background_agents()` 保留为**测试兼容薄封装**。单次 run 由 `run_once()` 执行（`AgentSpec` → 事件流 → 报告文件 → 通知）。深度论证见 spec `~/md-vault/projects/md-repo/specs/2026-10-11-bgagent-design.md`（基线）、`~/md-vault/projects/md-repo/specs/2026-10-24-event-driven-scheduler-design.md`（事件 arming / 三门）、`~/md-vault/projects/md-repo/specs/2026-10-21-memory-runtime-design.md`（预算 / 执行器 / 回读反馈）、`docs/superpowers/specs/2026-11-22-settings-page-design.md`（设置页热生效 supervisor）。
 
 ## 模块结构
 
 | 文件 | 职责 |
 |------|------|
-| `scheduler.py` | `start_background_agents()` — cron + 事件 arming + 执行器循环；`self_exclusion()` 自排除策略单源 |
+| `scheduler.py` | `BgSupervisor`（生产入口：任务所有权 + 活别名集 + per-alias 锁 + `apply()` 热重载分支表，spec 2026-11-22 §5.4）、`start_background_agents()`（测试兼容薄封装）、cron + 事件 arming + 执行器循环、`agent_caps()`（监控页预算显示）、`self_exclusion()` 自排除策略单源 |
 | `runner.py` | `run_once()` — 单次 run：`AgentSpec` 构建 → 消费事件流累积 `_RunStats` → 写报告 → 通知；`filter_tools()` 工具白名单 |
 | `notify.py` | `RunReport` 数据类、`NotificationHook` 抽象、`InAppHook` / `GuardedNotificationHook`（SQLite notifications 表）、`cleanup_old_notifications()` |
 | `executor.py` | **确定性执行器**：框架角色（无 LLM），adopted 提案的唯一落地者；4 个 per-type merge handler |
@@ -16,7 +16,8 @@
 
 | 符号 | 签名 | 说明 |
 |------|------|------|
-| `start_background_agents` | `(agents, vault_dir, hooks=None, run_fn=None, db_conn=None, ledger_conn=None, executor_fn=None) -> list[asyncio.Task]` | 起调度 task（须在运行中的 loop 内调用） |
+| `BgSupervisor` | `(vault_dir, *, hooks, run_fn, db_conn, ledger_conn, executor_fn, privacy)`；方法 `apply(agents) -> None`（同步、同环——热重载唯一写入点：活别名集原地增删 + change 过滤器重算；死后 raise）、`tasks()`（live 全集，含缓退者）、`shutdown()`（cancel 全部 + 死标志）、`current_aliases()` | 生产入口（构造须在运行中的 loop 内） |
+| `start_background_agents` | `(agents, vault_dir, hooks=None, run_fn=None, db_conn=None, ledger_conn=None, executor_fn=None, privacy=None) -> list[asyncio.Task]` | 测试兼容薄封装（建 supervisor → apply → `tasks()`）；生产路径不经它 |
 | `run_once` | `async (cfg, vault_dir, *, hooks=None, trigger="cron", runtime_cls=LoopRuntime) -> RunReport` | 单次 run；`trigger` 是批次触发源（`cron` 定时 tick \| `trigger` 事件 arming 释放）；`runtime_cls` 可注入（测试用 FakeRuntime） |
 | `run_executor` | `(vault_dir, conn) -> dict` | 一个执行器周期，返回 `{"merged": n, "expired": n, "errors": [...]}` |
 | `filter_tools` | `(names: tuple[str, ...] \| list[str]) -> list[Tool]` | 工具白名单过滤；无匹配 → 空列表（调用方视为配置错误） |
@@ -170,12 +171,12 @@ background_agents:
       low_score: 0.2                 # recall 命中判分阈值（非 run gate）
 ```
 
-装配（`server/main.py` → `build_runtime`，启动时；`conn` / `ledger_conn` 是 `build_runtime` 的入参，分别为 index.db / ledger.db 连接）：
+装配（`server/main.py` → `build_runtime`，启动时；`conn` / `ledger_conn` 是 `build_runtime` 的入参，分别为 index.db / ledger.db 连接；`supervisor` 存进 `Runtime` 供设置页热生效）：
 
 ```python
 # production 用 GuardedNotificationHook（量护栏）而非裸 InAppHook
-bg_tasks = start_background_agents(
-    bg_agents, vault_dir,
+supervisor = BgSupervisor(vault_dir,
     hooks=[GuardedNotificationHook(conn, daily_cap=notifications_cfg.daily_cap)],
-    db_conn=conn, ledger_conn=ledger_conn)
+    db_conn=conn, ledger_conn=ledger_conn, privacy=privacy)
+supervisor.apply(bg_agents)   # change 过滤器 + 活别名集 + 任务的全部初始写入
 ```

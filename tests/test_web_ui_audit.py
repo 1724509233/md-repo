@@ -241,6 +241,22 @@ def test_rename_row_click_guard():
     assert ft.count('@click.stop.prevent="treeOps.openMenu') == 2  # 两处 ⋯ 按钮
 
 
+# label.st-field 容器扫描：label 会把空白/文字点击转发激活其第一个 labelable 后代——
+# 内含 button 时 = 点字段标题/提示/hint 误触第一个钮（设置页隐私目录 tag 点非 × 区域即删，
+# 根因复盘 2026-11-22）。AGENTS「锚点激活行为」泛化红线：含钮字段容器必须是 div.st-field
+# （标签语义 span.st-lbl for/aria-labelledby 补位），label.st-field 只许包 input/select。
+ST_FIELD_LABEL = re.compile(r'<label[^>]*class="st-field"[^>]*>[\s\S]*?</label>')
+
+
+def test_st_field_label_never_contains_button():
+    bad = {}
+    for name, src in _templates().items():
+        n = sum(1 for m in ST_FIELD_LABEL.findall(src) if "<button" in m)
+        if n:
+            bad[name] = n
+    assert bad == {}
+
+
 def test_anchorless_link_jump_forces_preview_top():
     # bug 83e7241f：软链无锚点跳转 → 强制预览 + 滚动至文档首部
     app = _templates()["app.js"]
@@ -315,6 +331,74 @@ def test_editor_template_refs_are_returned():
     returned = m.group(0)
     for name in set(re.findall(r'ref="(\w+)"', ep)):
         assert name in returned, f"template ref {name} missing from setup return"
+
+
+def test_settings_template_bindings_are_returned():
+    # 「setup 漏 return 普通绑定」家族钉（2026-11-22 用户验收捕获真崩溃）：toolsSel 用于
+    # 模板 chip 渲染却漏出 setup return → 点「自定义」首渲染 undefined.includes 崩页。
+    # 规则：设置浮层模板所有绑定表达式（指令值 + 插值）的根标识符必须出自 setup return。
+    sp = _templates()["SettingsPage.js"]
+    tm = re.search(r"template:\s*`(.*?)`\s*\n\s*\}", sp, re.S)
+    assert tm, "SettingsPage template not found"
+    tpl = tm.group(1)
+    rm = re.search(r"return \{\n(.*?)\n    \}\n  \},\n  template:", sp, re.S)
+    assert rm, "SettingsPage setup return not found"
+    returned = set(re.findall(r"\w+", rm.group(1)))
+    # v-for 别名豁免
+    aliases: set[str] = set()
+    for m2 in re.finditer(r'v-for="\(?(\w+)(?:,\s*(\w+))?', tpl):
+        aliases.update(g for g in m2.groups() if g)
+    consts = {"true", "false", "null", "undefined", "in", "of", "typeof", "new",
+              "Math", "String", "Number", "Boolean", "Object", "Array", "JSON",
+              "Date", "window", "document", "$emit", "$event", "Set", "Map"}
+    exprs = (re.findall(r'(?:v-[\w:]+|:[\w.]+|@[\w.]+)="([^"]*)"', tpl)
+             + re.findall(r"\{\{(.*?)\}\}", tpl))
+    for expr in exprs:
+        stripped = re.sub(r"'[^']*'|\"[^\"]*\"", "", expr)
+        # 对象字面量键不是根标识符（:class="{ on: x }" 的 on/show）：按键位置剥掉
+        stripped = re.sub(r"([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)", r"\1\3", stripped)
+        for tok in re.findall(r"(?<![\w.$])([A-Za-z_$][\w$]*)", stripped):
+            if tok in returned or tok in aliases or tok in consts:
+                continue
+            raise AssertionError(
+                f"template binding {tok!r} missing from setup return"
+                f" (expr: {expr.strip()[:60]!r})")
+
+
+def test_no_python_string_apis_in_frontend_js():    # 家族钉（2026-11-22 真机控制台捕获）：加载器的 Python 词汇（str.casefold 等）曾漏进
+    # SettingsPage.js——dirCandidates 求值即抛，下拉/自由输入全灭，node --check 放行语法合法的外来 API。
+    for name, src in _templates().items():
+        if not name.endswith(".js"):
+            continue
+        for banned in (".casefold(", ".startswith(", ".endswith(", ".rstrip(", ".lstrip("):
+            # JS 等价物都存在（startsWith/endsWith 合法）——只禁 Python 下划线形态与 casefold
+            if banned in (".startswith(", ".endswith("):
+                continue
+            assert banned not in src, f"{name}: Python-only string API {banned!r} in frontend JS"
+
+
+def test_vault_dirs_uses_raw_docs_fetch():
+    # 家族钉（2026-11-22 agent-browser 实证）：api.getDocs 的 ETag 304→null 契约专供树消费者；
+    # 设置页目录候选若复用它会拿到 null → 空名单且守卫不再重试——必须走 getDocsRaw。
+    sp = _templates()["SettingsPage.js"]
+    m = re.search(r"function ensureVaultDirs\(\) \{(.*?)\n    \}", sp, re.S)
+    assert m, "ensureVaultDirs not found"
+    body = m.group(1)
+    assert "getDocsRaw()" in body, "ensureVaultDirs must use api.getDocsRaw (304→null trap)"
+    assert re.search(r"api\.getDocs\(\)", body) is None, "ensureVaultDirs must not call api.getDocs"
+
+
+def test_settings_422_goes_inline_not_top_banner():
+    # 2026-11-22 用户改版：422 校验错误全部下沉表单项（字段红框+红小字 → 卡片顶兜底 → toast 三级），
+    # 顶部告警区只留 409 并发冲突与热生效族（非字段校验）——422 处理路径不得再引用顶部告警条形态。
+    # 'invalid' 是旧顶部告警条的 report.kind 键：整个文件零出现 = 告警条承接校验错误的路径已死。
+    sp = _templates()["SettingsPage.js"]
+    assert "'invalid'" not in sp and '"invalid"' not in sp
+    assert re.search(r"res\.status === 422\) \{\s*\n\s*apply422", sp), \
+        "422 必须走 apply422（字段级落点），不得回挂顶部告警条"
+    # 三级兜底面与预检不得空白的工具组在场（拍板 6：工具不准空）
+    assert "fieldErrors" in sp and "cardErrors" in sp and "showToast" in sp
+    assert "'至少选择一个工具'" in sp
 
 
 def test_p2_search_card_button():

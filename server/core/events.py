@@ -107,8 +107,19 @@ async def wake_wait(queue: asyncio.Queue, timeout: float) -> None:
     keystone: an item consumed in the timeout race is a wake hint only;
     the payload is never needed). CancelledError propagates (never
     swallowed) so outer cancellation exits promptly.
+
+    Implementation note (2026-11-22): deliberately NOT
+    ``asyncio.wait_for(queue.get(), t)`` — the 3.11.7 wait_for/Timeout
+    machinery has a race that can SWALLOW an external task.cancel() when
+    the inner future resolution and the cancel interleave (observed: an
+    armed loop surviving cancel after an event wake, hanging
+    asyncio.run's teardown). ``asyncio.wait`` over the getter avoids that
+    path entirely: cancellation of THIS task interrupts the wait await
+    directly, and the getter is cleaned up in ``finally``.
     """
+    getter = asyncio.ensure_future(queue.get())
     try:
-        await asyncio.wait_for(queue.get(), timeout=timeout)
-    except asyncio.TimeoutError:
-        pass
+        await asyncio.wait({getter}, timeout=timeout)
+    finally:
+        if not getter.done():
+            getter.cancel()

@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸式壳重构 · 左下圆钮修订版 — 设计预览 · md-vault</title>
+<!--
+  沉浸式壳重构 静态预览稿（评审用 mockup，非应用代码）spec 2026-11-22-immersive-shell
+  二修定稿：常驻 rail 退役，全局入口 = 左下悬浮圆钮（hover 右上 90° 扇弧展开六枚子钮）。
+  token 与语汇逐字取自 server/templates/style.css；与 2026-11-22-home-butler-landing-preview.html 同语言。
+  给实现者的三句话：
+  ① 子页抽屉开合过渡一律走 transform（translateX），勿动 width——宽度参与 flex 布局会挤压文档列，
+     「浮层不挤压」是本稿核心卖点。
+  ② hover 扇弧要做指针桥：从圆钮圆心到各子钮的扇形路径上不得中途收起（指针沿弧移动零掉线），
+     reduced-motion 时扇弧降级为直切展开，弹性过渡整体豁免。
+  ③ 管家气泡栈悬浮走 absolute+transform（勿动文档列任何盒属性）；
+     把手徽标计数与圆钮扇弧里铃铛的未读是两套独立游标（V1 分立，勿并）。
+-->
+<style>
+/* ================================================================
+   纸墨「书房」tokens（与 style.css :root 逐字一致）
+   ================================================================ */
+:root {
+  color-scheme: light;
+  --paper: #F4EFE6;   /* 底色，暖纸白 */
+  --ink: #211D18;     /* 主文字，深墨 */
+  --ink-soft: #6E655A;/* 次要文字，灰墨 */
+  --brass: #9A6B32;   /* 唯一强调色，黄铜 */
+  --line: #D8CFBF;    /* 分隔线，浅木色 */
+  --surface: #FBF8F2; /* 卡片/面板，比底色亮一档 */
+  --st-error: #ef4444;
+  /* 预览衬底（非应用内容） */
+  --pv-mat: color-mix(in srgb, var(--line) 45%, var(--paper));
+  --serif: 'Source Serif 4', Georgia, 'Songti SC', 'Noto Serif CJK SC', 'Source Han Serif SC', 'SimSun', serif;
+  --ui: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: ui-monospace, Consolas, 'JetBrains Mono', monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--pv-mat); color: var(--ink);
+  font-family: var(--ui); font-size: 16px; line-height: 1.75;
+  padding: 32px 20px 72px;
+}
+button { font: inherit; color: inherit; }
+a { color: inherit; }
+:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--brass); border-radius: 6px; }
+
+/* ---------- 预览页头 + 场景切换工具条（评审稿工具条 · 非界面） ---------- */
+.pv-head { max-width: 1400px; margin: 0 auto 18px; }
+.pv-title { font-family: var(--serif); font-size: 19px; font-weight: 600; margin: 0 0 4px; }
+.pv-sub { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+.segbar {
+  max-width: 1400px; margin: 0 auto 22px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+}
+.segbar .tag {
+  font-size: 10.5px; letter-spacing: .08em; color: var(--ink-soft);
+  border: 1px dashed color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 999px; padding: 2px 10px; margin-right: 6px; white-space: nowrap;
+}
+.segb {
+  height: 30px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+  font-size: 12.5px; font-weight: 500; color: var(--ink-soft);
+  background: transparent; border: 1px solid transparent;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.segb:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--ink); }
+.segb.on { background: var(--brass); border-color: var(--brass); color: var(--paper); }
+.scene { display: none; max-width: 1400px; margin: 0 auto; }
+.scene.show { display: block; }
+.pv-cap { font-size: 12px; color: var(--ink-soft); margin: 0 2px 10px; line-height: 1.7; }
+.pv-cap b { font-weight: 600; color: var(--ink); }
+.pv-cap .hot { color: var(--brass); font-weight: 600; }
+
+/* ---------- 应用屏框 ---------- */
+.app {
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  overflow: hidden; display: flex; height: 780px; position: relative;
+}
+
+/* ---------- 左下悬浮圆钮（唯一全局入口；生产实现 fixed 距左/下 24px，本框内 absolute 等效） ---------- */
+.fab {
+  position: absolute; left: 24px; bottom: 24px; width: 48px; height: 48px; z-index: 50;
+  border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px -10px rgba(33,29,24,.32), 0 2px 8px rgba(33,29,24,.10);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--brass);
+}
+.fab .adot {  /* 右上聚合徽标点：有待办才画 */
+  position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--brass); box-shadow: 0 0 0 2px var(--paper);
+}
+/* 展开态（场景 3 静态呈现；生产 = hover 触发，扇弧过渡走 transform） */
+.fab.fan { background: color-mix(in srgb, var(--brass) 8%, var(--surface)); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fsub {
+  position: absolute; width: 34px; height: 34px; border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 8px 20px -8px rgba(33,29,24,.30), 0 1px 4px rgba(33,29,24,.10);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-soft);
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.fsub svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.fsub:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fsub .badge {
+  position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 999px; background: var(--brass); color: #fff;
+  font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--surface); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 主区通用 ---------- */
+.main { flex: 1; min-width: 0; display: flex; position: relative; }
+
+/* ---------- 槽位（in-flow，挤压主区）：左槽文件树 260px / 右槽 AI 对话；默认全关 ---------- */
+.slot-l {
+  width: 260px; flex-shrink: 0; background: var(--paper);
+  border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0;
+}
+.slot-r {
+  width: min(400px, 32%); flex-shrink: 0; background: var(--surface);
+  border-left: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0;
+}
+.p-head {
+  height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+  border-bottom: 1px solid var(--line); background: var(--surface);
+  font-family: var(--ui); position: relative;
+}
+.p-head .ptitle { font-size: 13px; font-weight: 600; letter-spacing: .02em; color: var(--ink); }
+.p-head .pcount { font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.p-head .pacts { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.ibtn {
+  width: 26px; height: 26px; border-radius: 7px; border: none; background: transparent; color: var(--ink-soft);
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: background-color .15s ease, color .15s ease; position: relative;
+}
+.ibtn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.ibtn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ibtn.on { background: color-mix(in srgb, var(--brass) 14%, transparent); color: var(--brass); }
+
+/* ---------- 文件树（槽位与抽屉共用） ---------- */
+.tree { flex: 1; overflow-y: auto; min-height: 0; padding: 8px 8px 14px; font-family: var(--ui); font-size: 13px; }
+.trow {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 7px;
+  color: var(--ink-soft); cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease;
+}
+.trow:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.trow .chev { width: 12px; height: 12px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.trow .chev.open { transform: rotate(90deg); }
+.trow .diric { width: 14px; height: 14px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; opacity: .8; }
+.trow .fname { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.trow .tcount {
+  margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 1.25rem; height: 1.125rem; padding: 0 .375rem; border-radius: 9999px;
+  background: color-mix(in srgb, var(--ink) 7%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  font-size: 10px; line-height: 1; font-weight: 500; color: var(--ink-soft); font-variant-numeric: tabular-nums;
+}
+.tlock { width: 12px; height: 12px; margin-left: auto; flex-shrink: 0; stroke: var(--ink-soft); fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; opacity: .75; }
+.tlock + .tcount { margin-left: 6px; }
+.tfile {
+  display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 30px; border-radius: 7px;
+  color: var(--ink); cursor: pointer; user-select: none; white-space: nowrap;
+  transition: background-color .15s ease, color .15s ease;
+}
+.tfile:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.tfile .fname { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tfile.active { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); font-weight: 500; }
+.tfile .mtime { margin-left: auto; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); flex-shrink: 0; }
+
+/* ---------- 文档列 ---------- */
+.doccol { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; background: var(--paper); }
+/* 路径头：一行弱色小字，无背景无边框——不成第二条顶栏 */
+.pathhead {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  padding: 14px 56px 0 28px; font-family: var(--ui); font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
+}
+.pathhead .bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.pathhead .bp .sep { opacity: .5; }
+.pathhead .bp .cur { color: var(--ink-soft); }
+.pill-lock {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border-radius: 999px; padding: 1px 8px 1px 6px;
+}
+.pill-lock svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.unsaved { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-size: 10.5px; color: var(--ink-soft); }
+.unsaved::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brass); }
+
+/* 文档排版（衬线正文，规格对齐 #preview） */
+.dbody { flex: 1; overflow-y: auto; min-height: 0; }
+.doc { max-width: 700px; margin: 0 auto; padding: 14px 64px 48px 40px; font-family: var(--serif); font-size: 16px; line-height: 1.75; color: var(--ink); }
+.doc h1 { font-size: 26px; font-weight: 700; line-height: 1.35; margin: 1.2rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid color-mix(in srgb, var(--brass) 45%, transparent); }
+.doc h2 { font-size: 19px; font-weight: 600; line-height: 1.4; margin: 1.6rem 0 .7rem; }
+.doc p { margin: .9rem 0; }
+.doc a { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
+.doc ul { padding-left: 1.25rem; margin: .75rem 0; list-style: disc; }
+.doc li { margin: .375rem 0; }
+.doc blockquote { border-left: 3px solid var(--brass); padding-left: 1rem; margin: 1rem 0; color: var(--ink-soft); font-style: italic; }
+.doc code:not(pre code) { font-family: var(--mono); font-size: .8125rem; background: color-mix(in srgb, var(--brass) 8%, transparent); color: color-mix(in srgb, var(--brass) 85%, var(--ink)); padding: .125rem .375rem; border-radius: 4px; }
+.doc .code-block { background: color-mix(in srgb, var(--ink) 4%, var(--surface)); border-radius: 8px; margin: 12px 0; overflow: hidden; border: 1px solid var(--line); }
+.doc .code-head { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-bottom: 1px solid var(--line); font-size: 11px; color: var(--ink-soft); font-family: var(--ui); }
+.doc .code-block pre { margin: 0; padding: 12px; overflow-x: auto; font-family: var(--mono); font-size: 13px; line-height: 1.6; }
+.k { color: #8a4f1d; } .s { color: #4d7c0f; } .c { color: #94897a; font-style: italic; } .n { color: #b45309; } .f { color: #1d5c8a; }
+/* 图示占位（mermaid） */
+.dia { border: 1px dashed color-mix(in srgb, var(--ink-soft) 45%, var(--line)); border-radius: 10px; margin: 16px 0; padding: 14px; background: color-mix(in srgb, var(--ink) 2%, transparent); }
+.dia .cap { font-family: var(--ui); font-size: 10.5px; letter-spacing: .08em; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); margin-bottom: 8px; }
+.dia svg { display: block; width: 100%; height: auto; }
+.dia .nd rect { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; rx: 6; }
+.dia .nd.act rect { stroke: var(--brass); }
+.dia .nd text { font-family: var(--ui); font-size: 11px; fill: var(--ink); }
+.dia .ln { stroke: color-mix(in srgb, var(--ink-soft) 60%, transparent); stroke-width: 1.2; fill: none; }
+.dia .ar { stroke: color-mix(in srgb, var(--ink-soft) 60%, transparent); stroke-width: 1.2; fill: none; }
+
+/* ---------- 右缘 dock：~40px 文档操作图标条 ---------- */
+.dock {
+  position: absolute; right: 6px; top: 52px; z-index: 12;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.dbtn {
+  width: 34px; height: 34px; border-radius: 8px; border: none; background: transparent; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; position: relative;
+  color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
+  transition: background-color .15s ease, color .15s ease;
+}
+.dbtn svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.dbtn:hover { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--ink); }
+.dbtn.on { background: color-mix(in srgb, var(--brass) 14%, transparent); color: var(--brass); }
+.dbtn.dirty::after {
+  content: ''; position: absolute; top: 5px; right: 5px;
+  width: 7px; height: 7px; border-radius: 999px; background: var(--brass);
+  box-shadow: 0 0 0 2px var(--paper);
+}
+.dbtn.danger { color: color-mix(in srgb, var(--st-error) 62%, var(--ink-soft)); }
+.dbtn.danger:hover { background: color-mix(in srgb, var(--st-error) 8%, transparent); color: #b91c1c; }
+.dsep { width: 18px; height: 1px; background: color-mix(in srgb, var(--line) 80%, transparent); margin: 5px auto; }
+
+/* ---------- AI 对话槽 ---------- */
+.ai-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-family: var(--ui); }
+.ai-brand {
+  width: 28px; height: 28px; border-radius: 9999px; flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line));
+  background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass);
+  display: flex; align-items: center; justify-content: center;
+}
+.ai-brand svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ai-name { font-size: 13px; font-weight: 600; }
+.ai-acts { margin-left: auto; display: flex; gap: 4px; }
+.msgs { flex: 1; overflow-y: auto; min-height: 0; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 88%; border-radius: 12px; padding: 9px 13px; font-family: var(--serif); font-size: 14.5px; line-height: 1.7; }
+.msg-user { align-self: flex-end; background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--ink); }
+.msg-ai { align-self: flex-start; background: var(--paper); color: var(--ink); border: 1px solid var(--line); }
+.msg .cite { display: block; margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-soft); }
+.ai-foot { flex-shrink: 0; padding: 10px 12px 12px; border-top: 1px solid var(--line); display: flex; gap: 8px; align-items: flex-end; }
+.ai-in {
+  flex: 1; min-height: 36px; padding: 8px 12px; font-family: var(--ui); font-size: 13px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 9px; color: var(--ink-soft);
+}
+.ai-send {
+  width: 36px; height: 36px; border-radius: 9px; border: none; cursor: pointer; flex-shrink: 0;
+  background: var(--brass); color: var(--paper); display: flex; align-items: center; justify-content: center;
+}
+.ai-send svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- 子页抽屉：悬浮浮层（不挤压，圆钮恒在最上层可随时换页） ---------- */
+.drawer {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+  width: 320px; display: flex; flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
+  /* 「悬浮」全靠投影落进文档列：双层阴影（远距扩散 + 近距贴边） */
+  box-shadow: 22px 0 56px -20px rgba(33,29,24,.38), 8px 0 18px -8px rgba(33,29,24,.20);
+}
+.drawer.wide { width: min(920px, calc(100% - 48px)); }
+.p-head .picon { width: 15px; height: 15px; color: var(--brass); display: flex; }
+.p-head .picon svg { width: 100%; height: 100%; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.p-head .upd { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); margin-left: auto; margin-right: 4px; font-variant-numeric: tabular-nums; }
+.p-head .upd + .pacts { margin-left: 0; }
+
+/* ---------- 监控抽屉内容：宽内容装进浮层 ---------- */
+.mgrid { flex: 1; overflow-y: auto; min-height: 0; padding: 16px 18px 24px; display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
+.mcol { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.mcard { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.mc-h { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; font-size: 10px; font-weight: 600; letter-spacing: .1em; color: var(--ink-soft); }
+.mc-h::after { content: ''; flex: 1; height: 1px; background: color-mix(in srgb, var(--line) 75%, transparent); }
+.big { font-family: var(--mono); font-size: 30px; font-weight: 500; line-height: 1.1; color: var(--brass); font-variant-numeric: tabular-nums; }
+.cap { font-size: 11.5px; color: var(--ink-soft); margin-top: 3px; }
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 10px; }
+.tile { background: color-mix(in srgb, var(--ink) 3%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 7px; padding: 6px 9px; }
+.tile .tk { font-size: 9.5px; letter-spacing: .05em; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .tv { font-family: var(--mono); font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; margin-top: 1px; }
+/* 事件流 */
+.feed { display: flex; flex-direction: column; }
+.frow { display: flex; align-items: baseline; gap: 10px; padding: 9px 4px; min-width: 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 60%, transparent); font-size: 13px; }
+.frow:last-child { border-bottom: none; }
+.frow .t { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.frow .act { font-family: var(--serif); font-size: 14px; color: var(--ink); flex-shrink: 0; }
+.frow .act.warn { color: color-mix(in srgb, var(--st-error) 70%, var(--ink)); }
+.frow .path { font-family: var(--mono); font-size: 11.5px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.frow .tagchip { flex-shrink: 0; font-size: 10px; color: var(--brass); background: color-mix(in srgb, var(--brass) 8%, transparent); border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--line)); border-radius: 999px; padding: 0 7px; }
+
+/* ---------- 设置浮窗（唯一有背衬压暗处） ---------- */
+.modal-bg {
+  position: absolute; inset: 0; z-index: 48; /* 背衬压全局（圆钮同层被压），浮窗在上 */
+  background: rgba(33,29,24,.40);
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  width: min(880px, 92%); height: min(580px, 90%);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 24px 64px rgba(33,29,24,.35);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.mhead { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 52px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.mhead .mt { font-family: var(--serif); font-size: 15px; font-weight: 600; }
+.mbody { flex: 1; display: flex; min-height: 0; }
+.mtabs { width: 150px; flex-shrink: 0; border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.mtab {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px;
+  font-size: 13px; color: var(--ink-soft); cursor: pointer; border: none; background: transparent; text-align: left;
+  transition: background-color .15s ease, color .15s ease;
+}
+.mtab svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.mtab:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); }
+.mtab.on { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); font-weight: 500; }
+.mtab .tbadge { margin-left: auto; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--brass); color: #fff; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.mpane { flex: 1; overflow-y: auto; min-height: 0; padding: 18px 22px 26px; min-width: 0; }
+.q-sec { font-size: 10.5px; font-weight: 600; letter-spacing: .1em; color: var(--ink-soft); margin: 0 2px 10px; display: flex; align-items: center; gap: 8px; }
+.q-sec::after { content: ''; flex: 1; height: 1px; background: color-mix(in srgb, var(--line) 75%, transparent); }
+.qrow {
+  display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
+  transition: border-color .15s ease;
+}
+.qrow + .qrow { margin-top: 8px; }
+.qrow:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.qtitle { font-family: var(--serif); font-size: 14.5px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spill { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-family: var(--mono); font-size: 10.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); white-space: nowrap; }
+.spill::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: #94a3b8; flex-shrink: 0; }
+.spill.awaiting { background: color-mix(in srgb, var(--brass) 10%, transparent); border-color: color-mix(in srgb, var(--brass) 35%, var(--line)); color: var(--brass); }
+.spill.awaiting::before { background: var(--brass); }
+.spill.adopted { background: color-mix(in srgb, var(--brass) 10%, transparent); border-color: color-mix(in srgb, var(--brass) 35%, var(--line)); color: var(--brass); }
+.spill.adopted::before { background: var(--brass); }
+.qgo { flex-shrink: 0; margin-left: auto; font-size: 12.5px; font-weight: 500; color: var(--brass); text-decoration: none; white-space: nowrap; }
+.qgo:hover { text-decoration: underline; text-underline-offset: 3px; }
+.qtime { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+/* ---------- 首页（信笺日报，简化示意） ---------- */
+.home { flex: 1; overflow-y: auto; min-height: 0; }
+.home-in { max-width: 560px; margin: 0 auto; padding: 54px 28px 40px; }
+.g1-hi { font-family: var(--serif); font-size: 25px; font-weight: 600; line-height: 1.45; margin: 0; }
+.g1-hi .absent { color: var(--brass); }
+.g1-said { font-family: var(--serif); font-size: 16px; line-height: 1.85; color: var(--ink-soft); margin: 14px 0 0; }
+.sec { margin-top: 40px; }
+.sec-title { font-family: var(--serif); font-size: 18px; font-weight: 600; margin: 0 0 14px; }
+.grp { border-left: 1px solid var(--line); padding: 2px 0 2px 16px; }
+.grp + .grp { margin-top: 16px; }
+.grp-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; min-width: 0; }
+.grp-row .t { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.grp-row .act { font-family: var(--serif); font-size: 15px; color: var(--ink); white-space: nowrap; }
+.grp-row .mid { color: var(--ink-soft); flex-shrink: 0; }
+.grp-row .path { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.grp-row .path:hover { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
+.day { display: flex; align-items: baseline; gap: 13px; padding: 8px 0; }
+.day + .day { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.day .d { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); flex-shrink: 0; }
+.day .sum { font-family: var(--serif); font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* ---------- 管家摘要面：半隐把手（所有文档场景常驻，Home 也在——管家总在书房） ---------- */
+.grip {
+  position: absolute; right: -15px; top: 50%; transform: translateY(-50%); z-index: 20;
+  width: 30px; height: 30px; border-radius: 50%;
+  background: color-mix(in srgb, var(--brass) 82%, var(--ink)); /* 暗金底 */
+  box-shadow: 0 4px 12px -4px rgba(33,29,24,.35), inset 0 0 0 1px color-mix(in srgb, var(--paper) 16%, transparent);
+}
+/* 管家专属图标 = 线性领结（纸色线，居可见半圆中央；半隐=一半探出屏幕外） */
+.grip svg {
+  position: absolute; top: 50%; left: 2px; transform: translateY(-50%);
+  width: 11px; height: 11px; fill: none;
+  stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.grip .gpill {
+  position: absolute; top: -7px; left: -9px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 999px; background: var(--surface); color: var(--brass);
+  border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--line));
+  font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--paper); font-variant-numeric: tabular-nums;
+}
+/* 气泡栈：悬浮于把手旁，纵向叠最多 3 条；左缘圆角，与左侧浮层的右缘圆角成镜像语系 */
+.bubbles {
+  position: absolute; right: 18px; top: 64px; z-index: 21; width: 272px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.bubble {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 12px 0 0 12px;
+  box-shadow: 0 10px 26px -12px rgba(33,29,24,.28), 0 2px 6px rgba(33,29,24,.08);
+  padding: 9px 14px 8px 13px;
+}
+.bubble p { margin: 0; font-family: var(--serif); font-size: 14px; line-height: 1.65; color: var(--ink); }
+.bubble .bt { display: block; margin-top: 3px; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); text-align: right; }
+.bmore {
+  align-self: flex-end; font-family: var(--ui); font-size: 11px; color: var(--ink-soft);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px 0 0 999px;
+  padding: 2px 10px 2px 12px; box-shadow: 0 6px 16px -10px rgba(33,29,24,.25);
+}
+/* 聊天窗浮窗：停靠右缘、与 dock 错位（右侧留缝表达「悬浮」不是「占栏」），图钉=升级右槽常驻 */
+.chatwin {
+  position: absolute; right: 54px; top: 60px; bottom: 24px; z-index: 26;
+  width: min(400px, calc(100% - 120px));
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: -18px 0 48px -22px rgba(33,29,24,.30), 0 16px 40px -18px rgba(33,29,24,.22);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.msg-usr {
+  align-self: flex-end; font-family: var(--ui); font-size: 13px; color: var(--ink);
+  padding: 2px 2px 2px 12px; max-width: 88%; text-align: right;
+}
+.didrow {
+  display: flex; align-items: center; gap: 7px; align-self: flex-start; cursor: pointer;
+  font-family: var(--ui); font-size: 11.5px; color: color-mix(in srgb, var(--ink-soft) 80%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--line) 85%, transparent); border-radius: 8px; padding: 5px 10px;
+  transition: color .15s ease, border-color .15s ease;
+}
+.didrow:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); }
+.didrow .car { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- 窄窗口收纳（评审在任意宽度可开，不横向溢出） ---------- */
+@media (max-width: 960px) {
+  .slot-l { width: 220px; }
+  .slot-r { width: 300px; }
+  .drawer.wide { width: calc(100% - 32px); }
+  .mgrid { grid-template-columns: 1fr; }
+  .doc { padding: 14px 56px 40px 24px; }
+  .mtabs { width: 110px; }
+  .app { height: 680px; }
+}
+@media (max-width: 720px) {
+  .slot-l { display: none; }
+  .slot-r { width: 240px; }
+}
+</style>
+</head>
+<body>
+<header class="pv-head">
+  <p class="pv-title">沉浸式壳重构（左下圆钮修订版）—— 设计预览稿</p>
+  <p class="pv-sub">spec 2026-11-22-immersive-shell · 二修定稿 · 仅供浏览器视觉评审，非应用代码 · 常驻侧栏退役：日常默认<b>单栏文档</b>（零其它 chrome），全局入口收敛为<b>左下悬浮圆钮</b>，悬停在右上扇弧展开六枚子钮；子页抽屉悬浮覆盖、不挤压文档；管家摘要在右缘（半隐握把 + 气泡栈），系统详情台账在左下圆钮的通知里——摘要归摘要、详情归详情。</p>
+</header>
+
+<nav class="segbar" aria-label="场景切换">
+  <span class="tag">评审稿工具条 · 非界面</span>
+  <button class="segb" type="button" data-go="1">1 · 首页</button>
+  <button class="segb on" type="button" data-go="2">2 · 文档默认单栏</button>
+  <button class="segb" type="button" data-go="3">3 · 入口展开</button>
+  <button class="segb" type="button" data-go="4">4 · 三栏全开</button>
+  <button class="segb" type="button" data-go="5">5 · 文件抽屉浮层</button>
+  <button class="segb" type="button" data-go="6">6 · 监控宽抽屉</button>
+  <button class="segb" type="button" data-go="7">7 · 设置浮窗</button>
+  <button class="segb" type="button" data-go="8">8 · 管家气泡栈</button>
+  <button class="segb" type="button" data-go="9">9 · 聊天浮窗</button>
+</nav>
+<!-- ==================== 场景 1 · 单栏 Home ==================== -->
+<section class="scene" id="sc1">
+  <p class="pv-cap"><b>场景 1 · 单栏首页</b> —— 只剩两样东西：信笺日报 + 左下圆钮。零侧栏、零顶栏、零 dock。</p>
+  <div class="app">
+    <div class="main">
+      <div class="home">
+        <div class="home-in">
+          <section>
+            <h1 class="g1-hi">午后好。书房一切如常。</h1>
+            <p class="g1-said">今天没有需要您拿主意的事。有几处昨天的小动静，列在下面。</p>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">昨天我做了什么</h2>
+            <div class="grp">
+              <div class="grp-row"><span class="t">08:47</span><span class="act">整理索引</span><span class="mid">·</span><a class="path" href="#">projects/md-repo/notes/…butler-landing.md</a></div>
+              <div class="grp-row"><span class="t">22:04</span><span class="act">归档整理</span><span class="mid">·</span><a class="path" href="#">review/…-trash-actor.md</a></div>
+            </div>
+          </section>
+          <section class="sec">
+            <h2 class="sec-title">您上次离开前做到哪</h2>
+            <div class="day"><span class="d">11-21</span><span class="sum">编辑 3 · 移动 1 · 会话 2 次</span></div>
+            <div class="day"><span class="d">11-20</span><span class="sum">编辑 1 · 会话 1 次</span></div>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div class="grip" title="管家在书房——点开聊天浮窗"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 2 · 文档默认单栏（头号场景） ==================== -->
+<section class="scene show" id="sc2">
+  <p class="pv-cap"><b>场景 2 · 文档默认单栏 —— 95% 时间的样子</b> <span class="hot">（沉浸的兑现点：默认态零 chrome）</span>开文档只有三样：一行弱色<b>文档头行</b>（路径 + 锁标 + 未保存点）、居中衬线正文、右缘 <b>dock</b>（预览激活、保存带黄铜脏点、删除弱红），外加左下圆钮。没有侧栏、没有顶栏、没有常驻对话——对比旧版四栏一目了然。左槽树与右槽对话默认全关，按需再开（场景 4）。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+        <span class="unsaved">未保存</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+          <div class="code-block">
+            <div class="code-head"><span>python</span><span>sync.py</span></div>
+            <pre><span class="k">def</span> <span class="f">classify</span>(path, base, remote, local):
+    <span class="k">if</span> base <span class="k">is None</span> <span class="k">or</span> local != base:
+        <span class="k">return</span> <span class="s">"conflict"</span> <span class="k">if</span> remote != base <span class="k">else</span> <span class="s">"push"</span>
+    <span class="k">if</span> remote != base:
+        <span class="k">return</span> <span class="s">"pull"</span>          <span class="c"># 服务器有新版本</span>
+    <span class="k">return</span> <span class="s">"noop"</span></pre>
+          </div>
+          <div class="dia">
+            <div class="cap">图示</div>
+            <svg viewBox="0 0 640 110" role="img" aria-label="同步流程示意">
+              <g class="nd"><rect x="8" y="38" width="120" height="36" rx="8"/><text x="68" y="61" text-anchor="middle">本地清单</text></g>
+              <path class="ln" d="M128 56h64"/><path class="ar" d="m184 50 8 6-8 6"/>
+              <g class="nd act"><rect x="240" y="38" width="140" height="36" rx="8"/><text x="310" y="61" text-anchor="middle">三方对比 · 择级</text></g>
+              <path class="ln" d="M380 56h64"/><path class="ar" d="m436 50 8 6-8 6"/>
+              <g class="nd"><rect x="492" y="14" width="120" height="32" rx="8"/><text x="552" y="34" text-anchor="middle">上传 / 下载</text></g>
+              <g class="nd"><rect x="492" y="64" width="120" height="32" rx="8"/><text x="552" y="84" text-anchor="middle">冲突副本</text></g>
+              <path class="ln" d="M452 56h20v-30h20M452 56v40h20"/>
+            </svg>
+          </div>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="grip" title="管家在书房——点开聊天浮窗"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 3 · 入口展开（FAB 扇弧） ==================== -->
+<section class="scene" id="sc3">
+  <p class="pv-cap"><b>场景 3 · 入口展开</b> —— 悬停圆钮，六枚子钮沿右上 90° 扇弧（半径约 92px）弹性展开：文件 / 搜索 / 回收站（徽标 5）/ 监控 / 通知（徽标 3）/ 设置。子钮比主钮小一圈、投影更轻——<span class="hot">「hover 才存在」的临时感</span>靠间距与浮层厚度表达，不是又一条常驻栏。背后就是场景 2 的单栏文档，展开不打扰它。点文件/搜索/回收站/监控 → 左侧抽屉滑入（场景 5/6）；点设置 → 浮窗（场景 7）。离开即收拢，界面回到零 chrome。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+
+    <!-- FAB 展开态：六枚子钮沿右上 90° 扇弧（半径 ~92px，圆心=主钮中心） -->
+    <div class="fab fan" title="功能扇弧（悬停展开）">M
+      <button class="fsub" type="button" title="文件" style="left:7px; bottom:99px"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></button>
+      <button class="fsub" type="button" title="搜索" style="left:35px; bottom:95px"><svg viewBox="0 0 16 16"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg></button>
+      <button class="fsub" type="button" title="回收站" style="left:61px; bottom:81px"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg><span class="badge">5</span></button>
+      <button class="fsub" type="button" title="监控" style="left:81px; bottom:61px"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></button>
+      <button class="fsub" type="button" title="通知" style="left:95px; bottom:35px"><svg viewBox="0 0 16 16"><path d="M8 2.3a3.3 3.3 0 0 0-3.3 3.3c0 2.8-1.2 4-1.2 4h9s-1.2-1.2-1.2-4A3.3 3.3 0 0 0 8 2.3Z"/><path d="M6.7 12.4a1.4 1.4 0 0 0 2.6 0"/></svg><span class="badge">3</span></button>
+      <button class="fsub" type="button" title="设置 · 记忆待审 3" style="left:99px; bottom:7px"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></button>
+    </div>
+  </div>
+</section>
+<!-- ==================== 场景 4 · 三栏全开 ==================== -->
+<section class="scene" id="sc4">
+  <p class="pv-cap"><b>场景 4 · 三栏全开 —— 按需全开态，日常默认是场景 2</b> —— 左槽文件树 260px 与右槽管家对话均为 in-flow 槽位（挤压主区），从扇弧里点开才存在；此态是栏位的<b>上限</b>，不是首页。文档头行与 dock 与场景 2 完全一致。右槽管家对话 = 聊天浮窗图钉升级而来（场景 9）；此时右缘握把让位，不再叠画。</p>
+  <div class="app">
+    <aside class="slot-l">
+      <div class="p-head">
+        <span class="ptitle">文档</span><span class="pcount">217</span>
+        <span class="pacts"><button class="ibtn" type="button" title="全部收起"><svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg></button></span>
+      </div>
+      <div class="tree">
+        <div class="trow"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">projects</span><span class="tcount">42</span></div>
+        <div class="trow" style="padding-left:20px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">md-repo</span><span class="tcount">18</span></div>
+        <div class="trow" style="padding-left:38px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">specs</span><span class="tcount">9</span></div>
+        <div class="tfile active"><span class="fname">同步通道设计说明.md</span><span class="mtime">14:20</span></div>
+        <div class="tfile"><span class="fname">回收站与恢复.md</span><span class="mtime">周四</span></div>
+        <div class="tfile"><span class="fname">设置页设计.md</span><span class="mtime">周三</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">notes</span><span class="tcount">31</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">私人</span><svg class="tlock" viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">review</span><span class="tcount">12</span></div>
+      </div>
+    </aside>
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+        <span class="unsaved">未保存</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+          <div class="code-block">
+            <div class="code-head"><span>python</span><span>sync.py</span></div>
+            <pre><span class="k">def</span> <span class="f">classify</span>(path, base, remote, local):
+    <span class="k">if</span> base <span class="k">is None</span> <span class="k">or</span> local != base:
+        <span class="k">return</span> <span class="s">"conflict"</span> <span class="k">if</span> remote != base <span class="k">else</span> <span class="s">"push"</span>
+    <span class="k">if</span> remote != base:
+        <span class="k">return</span> <span class="s">"pull"</span>          <span class="c"># 服务器有新版本</span>
+    <span class="k">return</span> <span class="s">"noop"</span></pre>
+          </div>
+          <div class="dia">
+            <div class="cap">图示</div>
+            <svg viewBox="0 0 640 110" role="img" aria-label="同步流程示意">
+              <g class="nd"><rect x="8" y="38" width="120" height="36" rx="8"/><text x="68" y="61" text-anchor="middle">本地清单</text></g>
+              <path class="ln" d="M128 56h64"/><path class="ar" d="m184 50 8 6-8 6"/>
+              <g class="nd act"><rect x="240" y="38" width="140" height="36" rx="8"/><text x="310" y="61" text-anchor="middle">三方对比 · 择级</text></g>
+              <path class="ln" d="M380 56h64"/><path class="ar" d="m436 50 8 6-8 6"/>
+              <g class="nd"><rect x="492" y="14" width="120" height="32" rx="8"/><text x="552" y="34" text-anchor="middle">上传 / 下载</text></g>
+              <g class="nd"><rect x="492" y="64" width="120" height="32" rx="8"/><text x="552" y="84" text-anchor="middle">冲突副本</text></g>
+              <path class="ln" d="M452 56h20v-30h20M452 56v40h20"/>
+            </svg>
+          </div>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <aside class="slot-r">
+      <div class="ai-head">
+        <span class="ai-brand"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></span>
+        <span class="ai-name">管家</span>
+        <span class="ai-acts">
+          <button class="ibtn" type="button" title="新会话"><svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+          <button class="ibtn" type="button" title="收起对话"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </span>
+      </div>
+      <div class="msgs">
+        <div class="msg msg-user">这篇开头两段有点绕，帮我顺一下。</div>
+        <div class="msg msg-ai">顺好了，改动就落在「同步通道设计说明」里：主要删掉了两处绕回前提的从句，结论都提前。<span class="cite">引自：projects/md-repo/specs/同步通道设计说明.md</span></div>
+      </div>
+      <div class="ai-foot">
+        <div class="ai-in">想问什么，就说……</div>
+        <button class="ai-send" type="button" title="发送"><svg viewBox="0 0 16 16"><path d="M2.6 8h10.8M9.6 4l4 4-4 4"/></svg></button>
+      </div>
+    </aside>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 5 · 文件抽屉浮层（核心卖点保留） ==================== -->
+<section class="scene" id="sc5">
+  <p class="pv-cap"><b>场景 5 · 文件抽屉浮层</b> —— 入口：扇弧点「文件」。320px 抽屉从左侧滑入，<span class="hot">悬浮覆盖</span>在文档区之上（双层投影落进纸面），文档列宽度与场景 2 分毫不变。圆钮恒在浮层之上——随时能换页。头部图钉：钉住=升级为左槽常驻（切到场景 4 的形态）。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+        <span class="pill-lock"><svg viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+        <span class="unsaved">未保存</span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+          <h2>三方择级</h2>
+          <ul>
+            <li>本地与基准一致、服务器有更新 → <a href="#">下载</a></li>
+            <li>本地已改、服务器未动 → 上传</li>
+            <li>两边都改 → 落冲突副本，两版都留着</li>
+          </ul>
+          <p>择级顺序是承重的：<code>非一致守卫</code>必须先于「本地未动」判定评估，颠倒顺序会让冲突从入口复活。</p>
+          <div class="code-block">
+            <div class="code-head"><span>python</span><span>sync.py</span></div>
+            <pre><span class="k">def</span> <span class="f">classify</span>(path, base, remote, local):
+    <span class="k">if</span> base <span class="k">is None</span> <span class="k">or</span> local != base:
+        <span class="k">return</span> <span class="s">"conflict"</span> <span class="k">if</span> remote != base <span class="k">else</span> <span class="s">"push"</span>
+    <span class="k">if</span> remote != base:
+        <span class="k">return</span> <span class="s">"pull"</span>          <span class="c"># 服务器有新版本</span>
+    <span class="k">return</span> <span class="s">"noop"</span></pre>
+          </div>
+          <div class="dia">
+            <div class="cap">图示</div>
+            <svg viewBox="0 0 640 110" role="img" aria-label="同步流程示意">
+              <g class="nd"><rect x="8" y="38" width="120" height="36" rx="8"/><text x="68" y="61" text-anchor="middle">本地清单</text></g>
+              <path class="ln" d="M128 56h64"/><path class="ar" d="m184 50 8 6-8 6"/>
+              <g class="nd act"><rect x="240" y="38" width="140" height="36" rx="8"/><text x="310" y="61" text-anchor="middle">三方对比 · 择级</text></g>
+              <path class="ln" d="M380 56h64"/><path class="ar" d="m436 50 8 6-8 6"/>
+              <g class="nd"><rect x="492" y="14" width="120" height="32" rx="8"/><text x="552" y="34" text-anchor="middle">上传 / 下载</text></g>
+              <g class="nd"><rect x="492" y="64" width="120" height="32" rx="8"/><text x="552" y="84" text-anchor="middle">冲突副本</text></g>
+              <path class="ln" d="M452 56h20v-30h20M452 56v40h20"/>
+            </svg>
+          </div>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn dirty" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+
+    <aside class="drawer">
+      <div class="p-head">
+        <span class="picon"><svg viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg></span>
+        <span class="ptitle">文档</span><span class="pcount">217</span>
+        <span class="pacts">
+          <button class="ibtn" type="button" title="钉到左栏（升级为常驻栏位）"><svg viewBox="0 0 16 16"><path d="M8 9.5V14"/><path d="M5 3h6l-.8 3.5h.8a1 1 0 0 1 1 1v.5H4V8a1 1 0 0 1 1-1h.8Z"/></svg></button>
+          <button class="ibtn" type="button" title="全部收起"><svg viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg></button>
+        </span>
+      </div>
+      <div class="tree">
+        <div class="trow"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">projects</span><span class="tcount">42</span></div>
+        <div class="trow" style="padding-left:20px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">md-repo</span><span class="tcount">18</span></div>
+        <div class="trow" style="padding-left:38px"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">specs</span><span class="tcount">9</span></div>
+        <div class="tfile active"><span class="fname">同步通道设计说明.md</span><span class="mtime">14:20</span></div>
+        <div class="tfile"><span class="fname">回收站与恢复.md</span><span class="mtime">周四</span></div>
+        <div class="tfile"><span class="fname">设置页设计.md</span><span class="mtime">周三</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">notes</span><span class="tcount">31</span></div>
+        <div class="trow"><svg class="chev" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">私人</span><svg class="tlock" viewBox="0 0 16 16"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg></div>
+        <div class="trow"><svg class="chev open" viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg><svg class="diric" viewBox="0 0 16 16"><path d="M2 4.6A1.6 1.6 0 0 1 3.6 3h2.1l1.3 1.7h5.4A1.6 1.6 0 0 1 14 6.3v5.1a1.6 1.6 0 0 1-1.6 1.6H3.6A1.6 1.6 0 0 1 2 11.4Z"/></svg><span class="fname">review</span><span class="tcount">12</span></div>
+        <div class="tfile" style="padding-left:38px"><span class="fname">周记 · 第 47 周.md</span><span class="mtime">周日</span></div>
+        <div class="tfile" style="padding-left:38px"><span class="fname">读书 · 明史的早晨.md</span><span class="mtime">上周五</span></div>
+      </div>
+    </aside>
+    <div class="grip" title="管家在书房——点开聊天浮窗"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+<!-- ==================== 场景 6 · 监控宽抽屉 ==================== -->
+<section class="scene" id="sc6">
+  <p class="pv-cap"><b>场景 6 · 监控宽抽屉</b> —— 入口：扇弧点「监控」。宽内容（min(920px)）同样装进浮层：统计卡 + 事件流并排，投影悬浮在单栏文档之上，文档列依旧不挤压。页头只留一个刷新节奏：「更新于 HH:mm」。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+        </article>
+      </div>
+    </div>
+
+    <aside class="drawer wide">
+      <div class="p-head">
+        <span class="picon"><svg viewBox="0 0 16 16"><path d="M1.8 8h2.7l1.7-3.8 2.6 7.6 1.7-3.8h3.7"/></svg></span>
+        <span class="ptitle">监控</span>
+        <span class="upd">更新于 14:32</span>
+        <span class="pacts"><button class="ibtn" type="button" title="刷新"><svg viewBox="0 0 16 16"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2v2.8h-2.8"/></svg></button></span>
+      </div>
+      <div class="mgrid">
+        <div class="mcol">
+          <div class="mcard">
+            <div class="mc-h">今日动静</div>
+            <div class="big">24</div>
+            <div class="cap">次改动与对话 · 一切正常</div>
+            <div class="tiles">
+              <div class="tile"><div class="tk">编辑</div><div class="tv">12</div></div>
+              <div class="tile"><div class="tk">移动</div><div class="tv">3</div></div>
+              <div class="tile"><div class="tk">会话</div><div class="tv">9</div></div>
+              <div class="tile"><div class="tk">异常</div><div class="tv">0</div></div>
+            </div>
+          </div>
+          <div class="mcard">
+            <div class="mc-h">等您拿主意</div>
+            <div class="big">3</div>
+            <div class="cap">条记忆提案待裁决 · 从设置页进入</div>
+          </div>
+        </div>
+        <div class="mcol">
+          <div class="mcard">
+            <div class="mc-h">事件流</div>
+            <div class="feed">
+              <div class="frow"><span class="t">14:20</span><span class="act">编辑</span><span class="path">projects/md-repo/specs/同步通道设计说明.md</span></div>
+              <div class="frow"><span class="t">13:05</span><span class="act">会话</span><span class="tagchip">管家</span><span class="path">围绕「回收站与恢复」讨论了 2 轮</span></div>
+              <div class="frow"><span class="t">11:47</span><span class="act">移动</span><span class="path">review/…-sync-lane.md → review/归档/…-sync-lane.md</span></div>
+              <div class="frow"><span class="t">09:12</span><span class="act">收信</span><span class="tagchip">手机</span><span class="path">收了 3 篇，送上 6 篇</span></div>
+              <div class="frow"><span class="t">08:47</span><span class="act">整理索引</span><span class="path">projects/md-repo/notes/…butler-landing.md</span></div>
+              <div class="frow"><span class="t">昨日 22:04</span><span class="act warn">冲突</span><span class="path">notes/周记.md · 两版都留着没删</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+    <div class="grip" title="管家在书房——点开聊天浮窗"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 7 · 设置浮窗 ==================== -->
+<section class="scene" id="sc7">
+  <p class="pv-cap"><b>场景 7 · 设置浮窗</b> —— 入口：扇弧点「设置」。设置是浮窗（背衬压暗，全站唯一压暗处，连圆钮也一并被压住——浮窗是唯一模态）。「记忆」不占任何常驻位，并入设置页标签：提案队列在此裁决。</p>
+  <div class="app">
+    <!-- 背后单栏首页（被背衬压暗） -->
+    <div class="main">
+      <div class="home">
+        <div class="home-in">
+          <h1 class="g1-hi">午后好。书房一切如常。</h1>
+          <p class="g1-said">您不在的这几天，我把书房打理好了。有三件事我做不了主，给您留在桌上。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-bg">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="设置">
+        <div class="mhead">
+          <span class="mt">设置</span>
+          <span class="pacts" style="margin-left:auto"><button class="ibtn" type="button" title="关闭"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button></span>
+        </div>
+        <div class="mbody">
+          <nav class="mtabs">
+            <button class="mtab" type="button"><svg viewBox="0 0 16 16"><rect x="5" y="5" width="6" height="6" rx="1"/><path d="M6.5 5V3M9.5 5V3M6.5 13v-2M9.5 13v-2M5 6.5H3M5 9.5H3M13 6.5h-2M13 9.5h-2"/></svg>模型</button>
+            <button class="mtab" type="button"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5"/><path d="M8 5v3.2l2.2 1.4"/></svg>后台任务</button>
+            <button class="mtab on" type="button"><svg viewBox="0 0 24 24"><circle cx="6" cy="12" r="2.4"/><circle cx="17" cy="6" r="2.4"/><circle cx="17" cy="18" r="2.4"/><path d="M8.2 11 14.8 7.2M8.2 13l6.6 3.8"/></svg>记忆<span class="tbadge">3</span></button>
+          </nav>
+          <div class="mpane">
+            <p class="q-sec">提案队列 · 等您拿主意</p>
+            <div class="qrow">
+              <span class="qtitle">周记的写作节奏：每周日晚</span>
+              <span class="spill awaiting">待裁决</span><span class="qtime">2 小时前</span>
+              <a class="qgo" href="#">去裁决 ›</a>
+            </div>
+            <div class="qrow">
+              <span class="qtitle">「守夜人」指夜间归档任务，不是设备</span>
+              <span class="spill awaiting">待裁决</span><span class="qtime">昨天 22:31</span>
+              <a class="qgo" href="#">去裁决 ›</a>
+            </div>
+            <div class="qrow">
+              <span class="qtitle">移动后的文件默认不再追问</span>
+              <span class="spill awaiting">待裁决</span><span class="qtime">昨天 21:02</span>
+              <a class="qgo" href="#">去裁决 ›</a>
+            </div>
+            <div class="qrow">
+              <span class="qtitle">读书卡片统一放 notes/读书/</span>
+              <span class="spill adopted">已采纳</span><span class="qtime">周一</span>
+              <a class="qgo" href="#">看详情 ›</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+<!-- ==================== 场景 8 · 管家气泡栈（摘要面） ==================== -->
+<section class="scene" id="sc8">
+  <p class="pv-cap"><b>场景 8 · 管家气泡栈 —— 摘要在右缘</b> <span class="hot">（摘要归摘要、详情归详情）</span>管家有事不喊页面，在书房门口别纸条：半隐握把上叠最近 <b>3 条摘要</b>（「+2」表示还有），第一人称一句话、点了直达落点。数量分解、状态明细、历史台账都在左下圆钮的「通知」里。气泡悬浮于文档之上，不挤一栏一字——握把上的「5」是未读消息数，与铃铛未读是两套独立游标（V1 分立）。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="grip" title="管家留言 5 条"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg><span class="gpill">5</span></div>
+    <div class="bubbles" style="right:48px">
+      <div class="bubble"><p>您昨天问的三件事，我理出来了，要看吗。</p><span class="bt">刚才</span></div>
+      <div class="bubble"><p>收了 3 篇，一处对不上，您看下。</p><span class="bt">14:20</span></div>
+      <div class="bubble"><p>记忆提案有 2 条，等您拿主意。</p><span class="bt">昨天 22:31</span></div>
+      <span class="bmore">+2</span>
+    </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+
+<!-- ==================== 场景 9 · 聊天浮窗（图钉升级） ==================== -->
+<section class="scene" id="sc9">
+  <p class="pv-cap"><b>场景 9 · 聊天浮窗 —— 问完即关，图钉升级</b> 点握把展开：约 400px 聊天窗悬浮停靠右缘，与 dock 错位留缝——<span class="hot">悬浮不是占栏</span>。头部图钉 = 升级为右槽常驻（即场景 4 的形态）；工具行是管家「去办了」的折叠汇报，正文衬线、出处随行。</p>
+  <div class="app">
+    <div class="doccol">
+      <div class="pathhead">
+        <span class="bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">同步通道设计说明.md</span></span>
+      </div>
+      <div class="dbody">
+        <article class="doc">
+          <h1>同步通道设计说明</h1>
+          <p>同步的每一次往返都走同一条通道：客户端上报本地清单，服务器按<strong>三方对比</strong>分类，再分别处理上传、下载与冲突。分类的基准不是「上次扫描」，而是<strong>上次双方确认一致的哈希</strong>。</p>
+          <blockquote>基准选错，冲突就永远迟到一拍——这也是我们把「已确认哈希」单独记档的原因。</blockquote>
+        </article>
+      </div>
+      <div class="dock">
+        <button class="dbtn on" type="button" title="预览（当前）· 点击转编辑"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+        <button class="dbtn" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+        <div class="dsep"></div>
+        <button class="dbtn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+        <button class="dbtn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+        <button class="dbtn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+        <button class="dbtn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+        <button class="dbtn danger" type="button" title="删除"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+      </div>
+    </div>
+    <div class="chatwin" role="dialog" aria-label="管家">
+      <div class="ai-head">
+        <span class="ai-brand"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></span>
+        <span class="ai-name">管家</span>
+        <span class="ai-acts">
+          <button class="ibtn" type="button" title="钉到右栏（升级为常驻栏位）"><svg viewBox="0 0 16 16"><path d="M8 9.5V14"/><path d="M5 3h6l-.8 3.5h.8a1 1 0 0 1 1 1v.5H4V8a1 1 0 0 1 1-1h.8Z"/></svg></button>
+          <button class="ibtn" type="button" title="关闭"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+        </span>
+      </div>
+      <div class="msgs">
+        <div class="msg-usr">这周笔记里提到「守夜人」的地方，都给我列一下。</div>
+        <div class="didrow"><svg class="car" viewBox="0 0 16 16"><path d="m5.5 3.5 4.5 4.5-4.5 4.5"/></svg>去办了 · 翻了三处书架，取回 3 句</div>
+        <div class="msg msg-ai">都在：《周记 · 第 47 周》两处、《归档整理说明》一处，三处都指夜间归档任务，口径是一致的。<span class="cite">引自：notes/周记 · 第 47 周.md</span></div>
+      </div>
+      <div class="ai-foot">
+        <div class="ai-in">想问什么，就说……</div>
+        <button class="ai-send" type="button" title="发送"><svg viewBox="0 0 16 16"><path d="M2.6 8h10.8M9.6 4l4 4-4 4"/></svg></button>
+      </div>
+    </div>
+    <div class="fab" title="打开功能扇弧">M<span class="adot"></span></div>
+  </div>
+</section>
+<script>
+/* 仅做场景切换（评审稿工具条），非界面逻辑 */
+(function () {
+  var btns = document.querySelectorAll('.segb');
+  var scenes = document.querySelectorAll('.scene');
+  btns.forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = 'sc' + b.getAttribute('data-go');
+      btns.forEach(function (x) { x.classList.toggle('on', x === b); });
+      scenes.forEach(function (s) { s.classList.toggle('show', s.id === id); });
+      window.scrollTo({ top: 0 });
+    });
+  });
+})();
+</script>
+</body>
+</html>

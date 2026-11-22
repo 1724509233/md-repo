@@ -141,6 +141,11 @@ class GuardedNotificationHook(NotificationHook):
         self._conn = db_conn
         self._daily_cap = daily_cap
 
+    def set_daily_cap(self, daily_cap: int) -> None:
+        """热调 cap（spec 2026-11-22 §5.2）：设置页保存后原位改值。
+        cap 仍是法（YAML），只是法改了——守卫本身零改动。"""
+        self._daily_cap = daily_cap
+
     def notify(self, report: RunReport) -> None:
         action = notify_db.guarded_insert(
             self._conn, _report_fields(report), self._daily_cap, _collapsed_msg)

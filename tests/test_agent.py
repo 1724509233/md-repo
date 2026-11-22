@@ -1592,7 +1592,7 @@ def test_check_md_path_rejects_drive_qualified():
 def test_evict_stale_agents_removes_idle_unlocked():
     from server.routes.agent import _evict_stale_agents
 
-    cache = {"a": object(), "b": object()}
+    cache = {"a": (object(), 0), "b": (object(), 0)}
     last_active = {"a": 0.0, "b": 0.0}
     evicted = _evict_stale_agents(cache, last_active, {}, ttl=1800, now=2000.0)
     assert evicted == ["a", "b"]
@@ -1606,7 +1606,7 @@ def test_evict_stale_agents_keeps_fresh_and_locked():
     from server.routes.agent import _evict_stale_agents
 
     fresh, locked = object(), object()
-    cache = {"fresh": fresh, "locked": locked, "gone": object()}
+    cache = {"fresh": (fresh, 0), "locked": (locked, 0), "gone": (object(), 0)}
     last_active = {"fresh": 1900.0, "locked": 0.0, "gone": 0.0}
 
     lock = asyncio.Lock()
@@ -1619,7 +1619,7 @@ def test_evict_stale_agents_keeps_fresh_and_locked():
     evicted = _evict_stale_agents(cache, last_active, {"locked": lock},
                                   ttl=1800, now=2000.0)
     assert evicted == ["gone"]
-    assert cache == {"fresh": fresh, "locked": locked}
+    assert cache == {"fresh": (fresh, 0), "locked": (locked, 0)}
     assert "gone" not in last_active
     # kept entries stay in last_active too
     assert "fresh" in last_active and "locked" in last_active
@@ -1629,7 +1629,7 @@ def test_evict_stale_agents_ttl_boundary():
     """idle == ttl is kept — eviction is strictly idle > ttl."""
     from server.routes.agent import _evict_stale_agents
 
-    cache = {"edge": object(), "over": object()}
+    cache = {"edge": (object(), 0), "over": (object(), 0)}
     last_active = {"edge": 200.0, "over": 100.0}
     evicted = _evict_stale_agents(cache, last_active, {}, ttl=100, now=300.0)
     assert evicted == ["over"]
@@ -1641,7 +1641,7 @@ def test_evict_stale_agents_missing_last_active_counts_stale():
     lock check is what protects in-flight work, not the timestamp)."""
     from server.routes.agent import _evict_stale_agents
 
-    cache = {"orphan": object()}
+    cache = {"orphan": (object(), 0)}
     evicted = _evict_stale_agents(cache, {}, {}, ttl=1800, now=5000.0)
     assert evicted == ["orphan"]
     assert cache == {}
@@ -1653,7 +1653,7 @@ def test_evict_stale_agents_default_ttl_and_now():
 
     from server.routes.agent import _evict_stale_agents
 
-    cache = {"old": object(), "new": object()}
+    cache = {"old": (object(), 0), "new": (object(), 0)}
     last_active = {"old": time.time() - 3601, "new": time.time()}
     evicted = _evict_stale_agents(cache, last_active, {})
     assert evicted == ["old"]
@@ -1670,11 +1670,11 @@ def test_evict_stale_agents_keeps_pending_confirms():
 
     pending = SimpleNamespace(pending_confirms={"tc1": {}})
     plain = object()
-    cache = {"pending": pending, "plain": plain}
+    cache = {"pending": (pending, 0), "plain": (plain, 0)}
     last_active = {"pending": 0.0, "plain": 0.0}
     evicted = _evict_stale_agents(cache, last_active, {}, ttl=1800, now=2000.0)
     assert evicted == ["plain"]
-    assert cache == {"pending": pending}
+    assert cache == {"pending": (pending, 0)}
     assert "pending" in last_active
 
 

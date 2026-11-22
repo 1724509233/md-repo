@@ -15,6 +15,7 @@ md-sync 服务端的 HTTP 路由层：按 **URL 前缀域**划分，每域一个
 | `recall.py` | AI 搜索 + 召回遥测（`/api/ai`、`/api/recall`） |
 | `memory.py` | 提案控制台 + 回滚 + 报告通道 + 状态（`/api/memory`） |
 | `agent.py` | AI 聊天 + LLM agent 聊天/确认/新会话（`/api/ai`、`/api/agent`） |
+| `settings.py` | 设置页读写：config.yaml 五段掩码回显 + 校验即启动校验的字段级写回 + 分级热生效编排（`/api/settings`；spec 2026-11-22；接线 `SettingsDeps`，未接线 503） |
 
 ## 公共 API（函数级）
 
@@ -45,13 +46,15 @@ def register_all(app, ctx: WebContext) -> None:
 | `vault_dir` | Path | vault 根目录 |
 | `ai_config` | object \| None | `AIConfig`（未配置 AI 时 None） |
 | `sync_lock` | `SyncLock` | 内存同步锁（由 `create_app` 注入） |
-| `bg_targets` | dict \| None | 每 alias 的 config 派生 cap（仅 memory 域读：`armed_target` / `runs_cap`） |
+| `bg_targets` | dict \| None | 每 alias 的 config 派生 cap（仅 memory 域读：`armed_target` / `runs_cap`）；设置页保存后由 settings 域重注入 |
+| `settings` | `SettingsDeps` \| None | 设置页接线面（`config_path` + 可变 `runtime` 槽：supervisor/notif_hook/root_logger/file_handler/privacy；None 或槽未填 → `/api/settings` 503） |
+| `settings_gen` | int | 设置代际戳：PUT 成功 ++；`agent.py` 的 `_get_agent` 读侧比对，落后即（不忙时）重建 Agent（spec §5.1，M1：永不外部清缓存） |
 
-`ROUTE_MODULES` = `(console, notifications, sync, recall, memory, agent)`，固定顺序。
+`ROUTE_MODULES` = `(console, notifications, sync, recall, egress, memory, agent, trash, settings)`，固定顺序（含 egress/trash 为后加域；快照全集钉 `tests/test_routes_order.py`）。
 
 ## 关键设计
 
-### 域划分表（6 域 × 前缀 × 职责）
+### 域划分表（粗粒度视图；逐域计数以 `tests/test_routes_order.py::EXPECTED` 快照为准）
 
 | 域 | URL 前缀 | 职责 | 端点数 |
 |----|----------|------|--------|
@@ -62,7 +65,7 @@ def register_all(app, ctx: WebContext) -> None:
 | memory | `/api/memory` | 提案控制台 + 回滚 + 报告通道 + 状态 | 11 |
 | agent | `/api/ai`、`/api/agent` | 简单 AI 聊天 + LLM agent 链路 | 4 |
 
-合计 31 个端点。跨域 URL 前缀当前不重叠，故 `ROUTE_MODULES` tuple 是**显式 freeze** 而非功能要求；真正的顺序敏感性在各模块**内部**（见下）。
+合计 50 个端点（快照全集见 `tests/test_routes_order.py::EXPECTED`）。跨域 URL 前缀当前不重叠，故 `ROUTE_MODULES` tuple 是**显式 freeze** 而非功能要求；真正的顺序敏感性在各模块**内部**（见下）。
 
 ### 端点全量表（6 域分组）
 

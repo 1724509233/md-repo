@@ -32,6 +32,10 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 > 本文件只留「违者必炸」的铁律句与法源指针；机制全文一律进 `docs/superpowers/` 或 README（内联链接即索引）。
 
+### 设置页（config 写面，2026-11-22）
+
+- **设置页热生效铁律（spec `docs/superpowers/specs/2026-11-22-settings-page-design.md`，设计/评审/计划全链在该文件与 plans 同名文件）**——违者必炸：① PUT 落盘前必须在 **config 同目录** tmp 上跑真加载器（bgagent prompt 校验锚 = config 目录；tmp 去 `%TEMP%` 即假阴性），校验不过零落盘；`os.replace` 成功后 apply 抛 **不得反滚文件**（500 `saved:true`，回滚只会造第三态）。② `agent_cache` 失效只许 **`_get_agent` 读侧代际重建**（gen 落后 + 不忙），**永不外部清缓存**——RunHub persist 在持久化时刻取引用，外清 = 丢本轮对话（M1）。③ `BgSupervisor.apply` 是 change 过滤器与活别名集**唯一写入点**；环圈首时序 `reload.clear()` → 读 cfg/retired/别名集 → 进 wait 之间**零 await**（apply 同步同环是承重契约），违反即忙环或丢更新（M2/M4）。④ per-alias `asyncio.Lock` 归 supervisor，**跨 slot 重建复用**——发新锁即让在跑 run 与新环双写同 target_dir（M3）。⑤ `tasks()` 恒含缓退中任务，`shutdown()` 后置死、死后 `apply()` raise（M5）。回归钉家族：`test_settings_routes.py`、`test_bgagent_scheduler.py`（M2-M5 系）、`test_settings_hotapply.py`、`test_settings_doc_io.py`。完整性新增面备案见 spec §7（LAN 访客可改 config——用户拍板；token 化列为演进位）。
+
 ### 同步
 
 - **Sync lock is a cross-process file lock**（`server/core/sync_lock.py`，挂 `app.state.ctx.sync_lock`）：原子 `os.open(O_CREAT|O_EXCL)` 排他（stdlib only——无 fcntl/msvcrt），同 vault 双进程不得并发 sync；锁龄 >300s 视为 stale 可接管（崩溃不得 wedge vault），内容不可读/空按 stale 处理（fail-open）。内存 `locked_at` 属性永远先查且是测试 seam：测试模拟持锁直接设它——拒绝路径不碰文件系统。文件内容格式等细节代码自明。
@@ -72,9 +76,13 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 - **锚点激活行为（2026-11-17 bug 4a2249fc 返工复盘，详见 `issues/2026-11-17-tree-anchor-activation-jump.md`）**: 文件树文件行是 `<a href="#doc/…">`（P1-4 深链），行内交互元素（rename input、⋯ 按钮）的 click 只写 `@click.stop` 仍会跳文档——点击链接后代元素照样激活祖先 `<a>` 默认行为（hash 变 → hashchange → openDoc），该旁路不经任何 Vue handler。必须 `@click.stop.prevent`。泛化红线：任何有默认行为的容器（`<a href>`/submit 按钮/label）内的交互子元素都要 `.prevent`；跳转/滚动类 bug 先按层列监听全集（Vue handler / 原生默认 action / window 级 hashchange-scroll）再看触发元素在每层之上还是之下。回归钉：`test_rename_row_click_guard`（双层断言，单层放行过半成品修复）。
 
+- **label 容器内禁放 labelable 后代（2026-11-22 设置页隐私目录误删）**：`<label>` 内空白/标签文字/hint 的点击会被浏览器**转发激活第一个 labelable 后代**（button/input/select/textarea 皆是）——不经任何 Vue handler，`.prevent` 救不了「点在 label 空白处」那一路。设置页字段（label.st-field）需含按钮时必须 `div.st-field` + `label[for]`/`aria-labelledby` 补语义（全页 15 处审计唯一漏网即隐私目录，点非×区域删标签）。回归钉：`test_web_ui_audit.py`（label.st-field 内禁 button 后代）。
+
 ### 平台与测试备忘
 
 - **Windows newline translation**: test fixtures write sample files in binary mode (`write_bytes`) so SHA-256 hashes match. If you add test fixtures with text files, use `write_bytes` not `write_text`, or hashes will differ on Windows.
+
+- **跨语言搬运校验规则：搬语义不搬函数名（2026-11-22 casefold 事故）**：把加载器（Python）的校验文案直译进前端 JS 会带出 `String.prototype.casefold()` 这类 Python 原生 API——语法合法、`node --check` 放行、**Vue computed 求值即抛**，功能全灭且页面无一表象（现场只在浏览器 console，静态检查与 pytest 全绿放行）。前端 JS 禁 Python 串 API（casefold/`in` 词组/rstrip/lstrip 等），等价语义用 toLowerCase/includes。回归钉：`test_no_python_string_apis_in_frontend_js`。
 
 - agent-browser CDP（Windows）：见文首同名节——全文已迁 `docs/superpowers/notes/2026-10-13-agent-browser-cdp-windows.md`，红线速记在彼处。
 
@@ -135,4 +143,5 @@ Web UI is a Vue 3 CDN SPA (no build step): `server/templates/index.html` is the 
 - Tailwind Play CDN generates styles at runtime — class names in JS `classList.add()` work, but dynamically constructed class strings must be complete (no partial matching).
 - Hidden containers (`v-show` → `display:none`) have `clientHeight === 0` — any scroll-to-bottom/into-view executed while hidden is a no-op (F5-restore lands before the panel opens). Fix: pending flag + ResizeObserver consuming on the 0→non-zero size transition; if the element can unmount under `v-if`, re-attach the observer via `watch(ref)`.
 - `v-show`-resident components mount at page load — `onMounted` may fire BEFORE boot-restore backfills props. Initialization that depends on restored state must be idempotent/retriggerable via `watch`, never a single `onMounted` pass.
+- **api.js 封装的 null 语义先查再用（2026-11-22 getDocs() 304→null 陷阱）**：该函数 ETag 三态契约是 304 时返回 null（专供文件树消费者 null=保持旧值）。第二个「每次都必须拿到数据」的消费者复用会把 null 当空数据吃，叠一次性拉取守卫后永久静默失效（无任何报错）。此类消费者用 getDocsRaw()（no-store 全量）。回归钉：test_vault_dirs_uses_raw_docs_fetch。
 
