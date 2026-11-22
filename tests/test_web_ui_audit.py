@@ -734,7 +734,10 @@ def test_p2_visual_round_js():
     assert app.count(':doc-missing="state.docMissing"') == 2  # TopBar + EditorPane 传通
     assert app.count("if (!state.currentPath || state.docMissing) return") == 2  # saveWithRetry + downloadDoc
     # ── B：Escape 关台对齐 @close 清理集合 ──
-    esc = app[app.index("Escape 分层关闭"):][:900]
+    # 原钉→新锚（T3）：原 [:900] 固定窗口——T3 在链首插桌面 escTarget/fan/drawer 分支后
+    # 记忆支漂出窗口（断言语义「关台清全套」不变，固定窗宽本就脆，改作用域锚到 aiOpen 支前）
+    esc = app[app.index("Escape 分层关闭"):]
+    esc = esc[: esc.index("else if (state.aiOpen)")]
     assert "state.memoryDetail = null" in esc and "state.memoryReport = null" in esc
     # ── C：软链修饰键自开新标签（落账在前、站内路径在后，alt 先退不动）──
     dl = app[app.index("'a.md-softlink[data-vault-path]'"):app.index("openDoc(a.getAttribute('data-vault-path')")]

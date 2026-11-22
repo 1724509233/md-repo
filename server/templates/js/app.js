@@ -22,6 +22,7 @@ import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
 import { FabMenu } from './components/FabMenu.js'
 import { ICONS } from './utils/icons.js'
+import { drawerNext, escTarget, loadSlots, saveSlots } from './utils/shellState.js'
 
 // 初始化 markdown 渲染器
 setupMarkdown()
@@ -63,7 +64,9 @@ const state = reactive({
   rollbackCalls: [],      // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
   homeRefreshSeq: 0,      // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
   drawer: null            // 沉浸式壳 W1（plan 2026-11-22-immersive-shell）：桌面抽屉唯一源
-                          //（'file'|'search'|'trash'|'monitor'|null；T2 只声明+占位写入，T3 生效；移动旗标另路不动）
+                          //（T3 定稿值域 'file'|'search'|'trash'|null；monitor 不入抽屉态——
+                          //  批准偏离：监控态由 state.monitoring 单实例承担，桌面 mwrap 重塑宽抽屉；
+                          //  移动旗标另路不动）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -97,6 +100,46 @@ const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)'
 const desktopMq = window.matchMedia('(min-width: 1024px)')
 const isDesktop = ref(desktopMq.matches)
 desktopMq.addEventListener('change', (e) => { isDesktop.value = e.matches })
+
+/* ─── 沉浸式壳 W1 抽屉层（plan Task 3）───────────────────────────────────────
+   桌面抽屉唯一源 = state.drawer（'file'|'search'|'trash'|null），计算属性统一喂模板；
+   移动 ≤1023px 走既有 filePanelOpen/searchDrawerOpen 旗标，本层在移动恒不生效（红线）。
+   批准偏离（T3 备案）：监控不并入 drawer 值域——state.monitoring + MonitorPage 单实例保留
+   （双实例 = 双轮询），桌面由 style.css min-width:1024px 把 .mwrap 重塑为 absolute 悬浮
+   宽抽屉（宽 min(920px, calc(100vw - 96px))，画谱同 panel-shell），移动整页接管原样。 */
+// 图钉钉左槽（计划 Self-Review 1 并入 T3）：tree=true 时文件抽屉桌面升级为 in-flow 左槽
+//（宽 260、无投影、文档区挤压）；持久化 mdvault.shellSlots（T7 接线 right 槽，本任务只做 tree）
+const LS_SLOTS = 'mdvault.shellSlots'
+function readSlotsRaw() {
+  try { return localStorage.getItem(LS_SLOTS) } catch (e) { return null }  // 隐私模式 → 默认槽位
+}
+const slots = ref(loadSlots(readSlotsRaw()))
+function persistSlots() {
+  try { localStorage.setItem(LS_SLOTS, saveSlots(slots.value)) } catch (e) { /* 静默（先例同形） */ }
+}
+function toggleTreeSlot() {
+  if (slots.value.tree) {
+    slots.value.tree = false
+    state.drawer = null   // spec §4 表：取消钉住即关
+  } else {
+    slots.value.tree = true
+  }
+  persistSlots()
+}
+// 钉态 = 桌面 && slots.tree && 当前面为文件；搜索/回收站选中时脱离钉面走 overlay 抽屉
+//（单壳双态的 W1 简化：钉住只锁文件槽，多槽并存归 T7 槽位系统）
+const treePinned = computed(() =>
+  isDesktop.value && slots.value.tree === true && activePanel.value === 'file')
+const panelDrawerOpen = computed(() =>
+  isDesktop.value
+    ? (state.drawer === 'file' || state.drawer === 'search' || state.drawer === 'trash' || treePinned.value)
+    : state.filePanelOpen)
+const DESKTOP_W = { file: 320, search: 380, trash: 360 }   // spec §4 抽屉宽表；钉态恒 260（§3 左槽）
+const panelWidth = computed(() => {
+  if (!isDesktop.value) return activePanelCfg().width
+  if (treePinned.value) return 260
+  return DESKTOP_W[state.drawer] || 320
+})
 // 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
 let notifCloseT = null
 function closeNotifDropdown() {
@@ -125,7 +168,11 @@ function exitMonitorPage() {
 function goHome() {
   if (state.currentPath) state.currentPath = null
 }
-function openTrashFace() { activePanel.value = 'trash' }
+function openTrashFace() {
+  activePanel.value = 'trash'
+  // 桌面 rail 退役（T3）：抽屉是唯一入口，Home 卡「回收站」同开抽屉（移动 drawer 恒 null 零触达）
+  if (isDesktop.value) state.drawer = 'trash'
+}
 
 // lastPresence 心跳（S0–S4 分级依据）：**只在在场时写**——挂载即记 + 5min 心跳
 // （仅 visible，后台标签不冒充在场）+ hidden/pagehide 两兜底补「离场时刻」。
@@ -160,6 +207,10 @@ async function openDoc(path, heading, fromLink) {
     replaceHash: p => history.replaceState(null, '', docHash(p, { edit: !state.previewMode })),
     toast: showToast, message: '保存失败，未离开当前文档',
   }) === 'held') return 'held'
+  // 沉浸式壳 W1 抽屉规则（Review Focus 1）：导航守卫成功（非 held）后才关桌面抽屉——
+  // held 早退路径（上方 return）绝不触碰 drawer，用户保住文件列表上下文。
+  // 监控页的退场在函数首行既有 exitMonitorPage 调用（开文档需文档区可见，原有契约不动）。
+  state.drawer = null
   state.currentPath = path
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -654,6 +705,7 @@ function openMonitorPage() {
   clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
   const el = document.querySelector('.mwrap')
   if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
+  state.drawer = null                          // 桌面（T3）：开监控收子页抽屉，单浮层不叠浮
   state.monitoring = true
   state.memoryOpen = false
   state.memoryDetail = null
@@ -675,7 +727,8 @@ function onSettingsClosed() {
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
-// 移动端 file/trash 共用同一 overlay（panel-shell 的 open 态 = filePanelOpen，face 由 activePanel 切换）：
+// 移动端 file/trash 共用同一 overlay（panel-shell 的移动 open 态 = filePanelOpen，face 由 activePanel 切换；
+// 桌面 rail 已退役（T3），桌面入口 = FAB → state.drawer，见 panelDrawerOpen 计算属性）：
 // 关 → 开并切 face；开且已在该 face → 关（原 toggle 语义）；开但在另一 face → 只切 face 不关
 function onRailClick(p) {
   if (window.innerWidth >= 1024) {
@@ -811,6 +864,18 @@ export function createApp() {
         }
       )
 
+      // 跨断点双旗标迁移（Review Focus 2）：state.drawer 桌面唯一源、移动旗标另路——
+      // 两路各归各家，resize 跨断点不得出现两面板同开或全死。isDesktop 由 matchMedia 驱动，
+      // 与上方 innerWidth 监听互补（后者管移动体系自身复位，本 watch 管桌面态不携出断点）。
+      watch(isDesktop, (now, was) => {
+        if (was && !now) {
+          state.drawer = null          // 桌面→移动：桌面抽屉旗标归零（不携进 overlay 态）
+          state.filePanelOpen = false  // 移动面板同点关闭（与 innerWidth 链双保险，防两开）
+        } else if (!was && now) {
+          state.filePanelOpen = false  // 移动→桌面：移动 overlay 旗标归零（桌面消费端本就不读它，此为复位兜底）
+        }
+      })
+
       // URL 状态同步（P1-4）：当前文档 + 编辑态进 hash；
       // replaceState 不产历史垃圾，前进/后退由 hashchange 兜底（markdown 软链 #doc/ 跳转同走此路）
       watch([() => state.currentPath, () => state.previewMode], ([p, preview]) => {
@@ -871,7 +936,23 @@ export function createApp() {
         // 组件自有浮层（FileTree/TrashPanel 菜单、SearchPanel popover）由各自 handler 关。
         document.addEventListener('keydown', (e) => {
           if (e.key !== 'Escape') return
+          // 沉浸式壳 W1（T3）：桌面专属 fan/drawer 两层插在既有链前（Review Focus 5「只关最上层」），
+          // 优先级归 shellState.escTarget 裁决（settings > fan > drawer > dropdown）；
+          // drawer 折叠 = 子页抽屉 + 桌面监控折算（关监控必须走 exitMonitorPage——保
+          // homeRefreshSeq++ 首页重取语义，Home spec §6.3）；移动监控不折叠（恒 null），
+          // Esc 出口保持下方原链位——移动 ≤1023px 行为逐条不变红线。
+          const tgt = escTarget({
+            settingsOpen: state.settingsOpen,
+            fanOpen: !!(fabRef.value && fabRef.value.isOpen()),
+            drawer: isDesktop.value ? (state.drawer || state.monitoring) : null,
+            dropdownOpen: state.notifOpen || state.moreMenuOpen || state.tocOpen,
+          })
           if (state.settingsOpen) requestCloseSettings()  // 设置浮层居链首（最高层，spec §6）：只发请求，dirty 守卫在组件内
+          else if (tgt === 'fan') { if (fabRef.value) fabRef.value.closeIfOpen() }  // 扇弧兜底（focus 在扇弧外时；扇弧内 FabMenu 自带 stopPropagation 已吃掉）
+          else if (tgt === 'drawer') {
+            if (state.monitoring) exitMonitorPage()   // 桌面宽抽屉：退场动画 + homeRefreshSeq（下方移动监控支不可达桌面）
+            else state.drawer = null                  // 桌面子页抽屉（移动旗标不入折叠，下方各层原样）
+          }
           else if (state.notifOpen) closeNotifDropdown()
           else if (state.moreMenuOpen) state.moreMenuOpen = false
           else if (state.relSheetOpen) state.relSheetOpen = false
@@ -956,11 +1037,16 @@ export function createApp() {
         }
       }
 
-      // FAB 扇弧选择（Task 2 占位接线，T3 抽屉接管）：notifications → 既有下拉；
-      // 其余 id（file/search/trash/monitor/settings）暂存 state.drawer=id——T3 生效，当前无消费端
+      // FAB 扇弧选择（Task 3 收口）：notifications → 既有下拉；settings → 设置浮层
+      //（修 T2 占位的 drawer='settings' 死值）；monitor → 既有 openMonitorPage（批准偏离：
+      // monitoring 单实例，桌面由 mwrap 宽抽屉承载）；file/search/trash → 抽屉态机，
+      // activePanel 与 drawer 同源（面 v-show 复用，spec §4「再点同一子钮即收」归 drawerNext）
       function onFabPick(id) {
         if (id === 'notifications') { toggleNotifDropdown(); return }
-        state.drawer = id
+        if (id === 'settings') { openSettingsPage(); return }
+        if (id === 'monitor') { openMonitorPage(); return }
+        activePanel.value = id
+        state.drawer = drawerNext(state.drawer, id)
       }
 
       async function markAllRead() {
@@ -1032,6 +1118,7 @@ export function createApp() {
       return {
         state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, ICONS,
         activePanel, panels, activePanelCfg,
+        panelDrawerOpen, panelWidth, treePinned, toggleTreeSlot,
         onRailClick, onTreeSelect, onSearchPick,
         onFabPick, fabBadges,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
@@ -1048,8 +1135,9 @@ export function createApp() {
       <div class="flex h-full">
         <!-- 键盘直达主区（P2②）：屏外常驻，Tab 首站显形（样式 style.css .skip-link） -->
         <a class="skip-link" href="#main-content" @click.prevent="skipToMain">跳至主要内容</a>
-        <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
-        <aside class="sidebar-shell flex shrink-0">
+        <!-- 左侧图标 rail（沉浸式壳 W1 T3：桌面退役 lg:hidden——桌面入口 = 左下 FAB 扇弧，
+             rail 上的桌面替代无需迁移代码；移动 rail 面板体系原样） -->
+        <aside class="sidebar-shell flex shrink-0 lg:hidden">
           <!-- rail（桌面 64px / 移动 48px） -->
           <div class="rail">
             <button v-for="p in panels" :key="p.id" type="button"
@@ -1081,32 +1169,44 @@ export function createApp() {
             </button>
           </div>
 
-          <!-- 面板容器（桌面：v-show 常驻 200ms fade；移动：260px 左侧滑入 overlay） -->
-          <div class="panel-shell" :class="{ open: state.filePanelOpen }" :style="{ width: activePanelCfg().width + 'px' }">
-            <div v-show="activePanel === 'file'" class="panel-face">
-              <div class="p-head">
-                <span class="ptitle">文档</span>
-                <span class="pcount">{{ state.files.length }}</span>
-                <span class="pacts">
-                  <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
-                    @click="fileTreeRef && fileTreeRef.collapseAll()">
-                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
-                  </button>
-                </span>
-              </div>
-              <div class="flex-1 min-h-0 overflow-hidden">
-                <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
-                  @select="onTreeSelect" />
-              </div>
+        </aside>
+
+        <!-- 二级面板容器（T3 桌面浮层化后自 rail aside 上提至根级：桌面钉态 .pinned 须作根 flex
+             子项参与布局挤压文档列；浮层/移动 fixed 态不参与布局、位序无关）。
+             移动 ≤1023px：open=filePanelOpen + 260px 左滑 overlay（style.css 媒体块原位规则，逐字不变）；
+             桌面：open=panelDrawerOpen（state.drawer/treePinned 折算），absolute 贴左缘悬浮抽屉，
+             钉态转 in-flow 左槽 -->
+        <div class="panel-shell" :class="{ open: panelDrawerOpen, pinned: treePinned }" :style="{ width: panelWidth + 'px' }">
+          <div v-show="activePanel === 'file'" class="panel-face">
+            <div class="p-head">
+              <span class="ptitle">文档</span>
+              <span class="pcount">{{ state.files.length }}</span>
+              <span class="pacts">
+                <!-- 图钉钉左槽（计划 Self-Review 1 并入 T3）：桌面专属入口（移动 rail 体系无此概念）；
+                     aria-pressed 报钉态，点击翻转 slots.tree 即落盘（mdvault.shellSlots，T7 并 right 槽） -->
+                <button v-if="isDesktop" type="button" class="ibtn" :aria-pressed="treePinned ? 'true' : 'false'"
+                  :title="treePinned ? '取消钉住' : '钉住为左槽'" aria-label="将文件面板钉住为左槽"
+                  @click="toggleTreeSlot">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M8.5 3h7l-.7 6 2.7 2.7H6.5l2.7-2.7z"/></svg>
+                </button>
+                <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
+                  @click="fileTreeRef && fileTreeRef.collapseAll()">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+                </button>
+              </span>
             </div>
-            <div v-show="activePanel === 'search'" class="panel-face">
-              <SearchPanel :on-pick="onSearchPick" />
-            </div>
-            <div v-show="activePanel === 'trash'" class="panel-face">
-              <TrashPanel :items="state.trashItems" />
+            <div class="flex-1 min-h-0 overflow-hidden">
+              <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
+                @select="onTreeSelect" />
             </div>
           </div>
-        </aside>
+          <div v-show="activePanel === 'search'" class="panel-face">
+            <SearchPanel :on-pick="onSearchPick" />
+          </div>
+          <div v-show="activePanel === 'trash'" class="panel-face">
+            <TrashPanel :items="state.trashItems" />
+          </div>
+        </div>
 
         <!-- 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html；
              关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css） -->
@@ -1257,8 +1357,9 @@ export function createApp() {
               @open-doc="onMemoryOpenDoc($event)" @close="state.relSheetOpen = false" />
           </div>
 
-          <!-- 沉浸式壳 W1（plan Task 2）：左下全局入口扇弧——桌面专属（isDesktop = matchMedia 1024px，
-               移动端零渲染零样式触达）；占位接线：notifications → 既有下拉，其余 → state.drawer（T3 生效）；
+          <!-- 沉浸式壳 W1（plan Task 2/3）：左下全局入口扇弧——桌面专属（isDesktop = matchMedia 1024px，
+               移动端零渲染零样式触达）；接线（T3）：notifications → 既有下拉，settings → 设置浮层，
+               monitor → 监控宽抽屉（monitoring 单实例），file/search/trash → 左缘悬浮抽屉（state.drawer 态机）；
                @home 复用既有 goHome（currentPath 置 null → hash watch null 支路 replaceState 清 hash，spec §3 B1） -->
           <fab-menu v-if="isDesktop" ref="fabRef" :badges="fabBadges" @pick="onFabPick" @home="goHome()"></fab-menu>
 

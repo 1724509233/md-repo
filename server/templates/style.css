@@ -2037,3 +2037,50 @@ details.d-sec .body { padding: 8px 12px 14px; }
   /* 两态同杀：RM 下扇弧直切展开/收起，收起态 visibility 无孤儿延迟 */
   .fab-main, .fab-fan, .fab-fan.open, .fab-sub { transition: none; }
 }
+
+/* ──── 沉浸式壳 W1 · Task 3：panel-shell 桌面浮层抽屉 + 监控宽抽屉 ────
+   画谱 = spec 预览稿 .drawer（场景 2/5/6）：贴左缘 absolute 浮层、右缘圆角 0 12px 12px 0、
+   双层投影（远距扩散 + 近距贴边）、transform translateX 开合（宽度不参与 flex，文档列零挤压）。
+   移动 ≤1023px 的 .panel-shell 原位规则（fixed overlay z-40 / search-drawer / mwrap flex 整页
+   接管）在各自媒体块逐字保留——本块只加 min-width:1024px 桌面形态（红线：移动端零改动）。
+   RM 直切：transition 已由 :789 既有块两态同杀（.panel-shell, .panel-shell.open）；
+   mwrap 入场动画在下块单杀。 */
+@media (min-width: 1024px) {
+  .panel-shell {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+    border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
+    transform: translateX(-102%); visibility: hidden;
+    box-shadow: 22px 0 56px -20px rgba(33, 29, 24, .38), 8px 0 18px -8px rgba(33, 29, 24, .20);
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1), visibility 0s .38s;
+  }
+  .panel-shell.open {
+    transform: translateX(0); visibility: visible;
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1), visibility 0s 0s;
+  }
+  /* 图钉钉左槽（Self-Review 1）：.pinned 回归 in-flow flex 子项（根级位序保证在文档列左缘），
+     宽 260（panelWidth 同源）、无投影、直出不滑——「占栏」与「浮层」的形态分界（spec §3/§4） */
+  .panel-shell.pinned {
+    position: relative; width: 260px; transform: none; visibility: visible;
+    border-radius: 0; box-shadow: none; transition: none;
+  }
+  /* 监控宽抽屉（批准偏离备案，T3）：state.monitoring 与 MonitorPage 单实例保留（双实例=双轮询；
+     移动整页接管原样、Home「非监控态」契约不变），桌面仅重塑容器形态为 absolute 悬浮宽抽屉，
+     宽 min(920px, calc(100vw - 96px))（预览稿 .drawer.wide 口径），开合 = display 切换 +
+     入场滑入动画（v-show 下 transition 从 display:none 不触发，动画重放 = doc-enter 同款手法）；
+     退场沿用既有 .mp-out 淡出（exitMonitorPage 定时器 + homeRefreshSeq 语义不动）。 */
+  .mwrap {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+    width: min(920px, calc(100vw - 96px));
+    border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
+    box-shadow: 22px 0 56px -20px rgba(33, 29, 24, .38), 8px 0 18px -8px rgba(33, 29, 24, .20);
+    animation: drawerSlideIn .3s cubic-bezier(.32, .72, 0, 1) both;
+  }
+}
+@keyframes drawerSlideIn {
+  from { transform: translateX(-102%); }
+  to { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 直切：监控宽抽屉入场滑入杀掉（transform 类），mp-enter/mp-out 降级既有块已覆盖 */
+  .mwrap { animation: none; }
+}
