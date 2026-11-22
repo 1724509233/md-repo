@@ -1,4 +1,4 @@
-# 首页管家日报 Implementation Plan
+﻿# 首页管家日报 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -65,7 +65,7 @@
   ```
   `ops[].seq` 是客户端写 `lastSeenChangeSeq` 游标所需，勿省。
 
-- [ ] **Step 1: 写失败测试** `tests/test_home_routes.py`（fixture 组合 `client, db_conn, vault_dir` + 自建带 `bg_targets` 的 app：复制 `tests/test_agent_stream_routes.py:124-128` 的 create_app+TestClient 自建范式，传 `bg_targets={"守夜人": {"armed_target": None, "runs_cap": None}}`）。三个测试：
+- [x] **Step 1: 写失败测试** `tests/test_home_routes.py`（fixture 组合 `client, db_conn, vault_dir` + 自建带 `bg_targets` 的 app：复制 `tests/test_agent_stream_routes.py:124-128` 的 create_app+TestClient 自建范式，传 `bg_targets={"守夜人": {"armed_target": None, "runs_cap": None}}`）。三个测试：
   ```python
   # 造数惯用法：from server.vault.db.changes import log_change
   # log_change(db_conn, path, "update", source=..., ts=...) 逐行写，自带 commit
@@ -78,11 +78,11 @@
   def test_my_days_fixed_3d(client, db_conn): ...
       # source="web" 两行：2 天前、5 天前 → my_days 只含 2 天前的日期行，且 counts 正确；即使请求 since 拉到 7 天前也不含 5 天前
   ```
-- [ ] **Step 2: 跑测试确认失败**：`python -m pytest tests/test_home_routes.py -v` → FAIL（404 / ImportError）。
-- [ ] **Step 3: 实现** `home.py`（按上面签名；system 行取 `get_changes_sources(db_conn, since=eff, exclude_sources={"web"}, limit=2000)`，my 行取 `get_changes(db_conn, since=now-3d, source="web", limit=500)`；别名集 `frozenset((ctx.bg_targets or {}).keys())` 在路由层传入）；注册进 `ROUTE_MODULES` 与路由表。
-- [ ] **Step 4: 更新路由钉**：`tests/test_routes_order.py` `EXPECTED` 按注册实际位置插 `(("GET",), "/api/home")`，计数注释同步。
-- [ ] **Step 5: 全绿**：`python -m pytest tests/test_home_routes.py tests/test_routes_order.py -v` → PASS。
-- [ ] **Step 6: Commit**：`git add -A && git commit -m "feat(home): GET /api/home 聚合端点——窗口钳制/别名集分桶/3d 足迹窗"`
+- [x] **Step 2: 跑测试确认失败**：`python -m pytest tests/test_home_routes.py -v` → FAIL（404 / ImportError）。
+- [x] **Step 3: 实现** `home.py`（按上面签名；system 行取 `get_changes_sources(db_conn, since=eff, exclude_sources={"web"}, limit=2000)`，my 行取 `get_changes(db_conn, since=now-3d, source="web", limit=500)`；别名集 `frozenset((ctx.bg_targets or {}).keys())` 在路由层传入）；注册进 `ROUTE_MODULES` 与路由表。
+- [x] **Step 4: 更新路由钉**：`tests/test_routes_order.py` `EXPECTED` 按注册实际位置插 `(("GET",), "/api/home")`，计数注释同步。
+- [x] **Step 5: 全绿**：`python -m pytest tests/test_home_routes.py tests/test_routes_order.py -v` → PASS。
+- [x] **Step 6: Commit**：`git add -A && git commit -m "feat(home): GET /api/home 聚合端点——窗口钳制/别名集分桶/3d 足迹窗"`
 
 ### Task 2: `actions` 四计数（含 seq 已读游标）
 
@@ -94,7 +94,7 @@
 - Consumes: Task 1 的 `build_home_payload`；`services/proposals.status_summary(conn) -> {"by_status": {...}, ...}`（传 `ctx.ledger_conn`，`by_status["awaiting_review"]` 即待审计数）；`proposal_records.create(conn, ...)`（ledger 域造 awaiting_review 行——参数以 `server/vault/db/proposal_records.py:39` 现签名为准，测试里参考既有调用点）；`file_index.get_all_files(conn)`；`services/trash.list_trash(vault_dir)`。
 - Produces: `actions = {"pending_proposals": int, "unseen_agent_changes": int, "conflicts": int, "trash_batches": int}`。unseen 语义 = `seq > last_seen_seq` 且 source ∈ {"agent"} ∪ 别名集（**watchdog/unknown/reconcile 恒不计**）；conflicts = files 表路径含 `.conflict-` 的行数；实现取 `get_changes_sources(db_conn, since_seq=last_seen_seq, exclude_sources={"web"}, limit=5000)` 后 Python 侧 allow-filter（集合是唯一判据，SQL 谓词只是省量）。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
   ```python
   def test_actions_counts(client, db_conn, ledger_conn, vault_dir, home_client): ...
       # proposals: proposal_records.create(ledger_conn, ...) 两条默认状态行
@@ -105,10 +105,10 @@
   def test_actions_no_bg_targets(...):  # create_app 不传 bg_targets → 200；unseen 只数 agent 行
   ```
   （`home_client` = Task 1 里自建的带 bg_targets app 的 fixture 化提取。）
-- [ ] **Step 2: 跑测试确认失败**：`python -m pytest tests/test_home_routes.py -v` → actions 断言 FAIL。
-- [ ] **Step 3: 实现**（proposal 计数用 `status_summary(ctx.ledger_conn)["by_status"]["awaiting_review"]`；trash 用 `len(list_trash(vault_dir))`；conflicts 用 get_all_files Python 计数）。
-- [ ] **Step 4: 全绿**：`python -m pytest tests/test_home_routes.py -v` → PASS。
-- [ ] **Step 5: Commit**：`git commit -am "feat(home): actions 四计数——待审提案/冲突/回收站/seq 游标式代改计数"`
+- [x] **Step 2: 跑测试确认失败**：`python -m pytest tests/test_home_routes.py -v` → actions 断言 FAIL。
+- [x] **Step 3: 实现**（proposal 计数用 `status_summary(ctx.ledger_conn)["by_status"]["awaiting_review"]`；trash 用 `len(list_trash(vault_dir))`；conflicts 用 get_all_files Python 计数）。
+- [x] **Step 4: 全绿**：`python -m pytest tests/test_home_routes.py -v` → PASS。
+- [x] **Step 5: Commit**：`git commit -am "feat(home): actions 四计数——待审提案/冲突/回收站/seq 游标式代改计数"`
 
 ### Task 3: `POST /api/home/summary` — 单飞/缓存/退避 + egress 行级接线
 
@@ -140,7 +140,7 @@
   #      ——在模型调用完成后、无论成败都执行（失败也先记账，红线 7）
   ```
 
-- [ ] **Step 1: 写失败测试**（stub 抄 `tests/test_egress_runtime.py:67-91` 的 `_Completions/_Client` monkeypatch 范式，patch 点 `server.routes.home.AsyncOpenAI`；自建 app 传 `ai_config`（`base_url="http://model.test/v1"` 云形状）+ `ledger_conn` + privacy（PrivacyConfig 构造照抄既有测试用法，grep `PrivacyConfig(` in tests））：
+- [x] **Step 1: 写失败测试**（stub 抄 `tests/test_egress_runtime.py:67-91` 的 `_Completions/_Client` monkeypatch 范式，patch 点 `server.routes.home.AsyncOpenAI`；自建 app 传 `ai_config`（`base_url="http://model.test/v1"` 云形状）+ `ledger_conn` + privacy（PrivacyConfig 构造照抄既有测试用法，grep `PrivacyConfig(` in tests））：
   ```python
   def test_summary_requires_model(client): ...                 # 无 ai_config 的 app fixture → 400 model_not_configured
   def test_summary_cache_singleflight_backoff(...):            # 首次 200 且 stub create 计 1；当日第二次 POST → create 仍 1（{"text"} 相同）；
@@ -151,10 +151,10 @@
   def test_summary_loopback_zero_rows(...):                    # ai_config fixture 默认 localhost → 台账零行但 200
   def test_summary_empty_window_digest(...):                   # 零活动窗 → 仍调用 stub；捕获的 user 消息含「这段时间没有动静」
   ```
-- [ ] **Step 2: 确认失败**：`python -m pytest tests/test_home_routes.py -v` → 新测试 404。
-- [ ] **Step 3: 实现**（prompts 常量 → digest 组装 → ctl → 路由）。
-- [ ] **Step 4: 全绿**：`python -m pytest tests/test_home_routes.py tests/test_egress_runtime.py -v`。
-- [ ] **Step 5: Commit**：`git commit -am "feat(home): POST /api/home/summary——单飞/当日缓存/失败退避 + egress 行级台账 + digest 组装"`
+- [x] **Step 2: 确认失败**：`python -m pytest tests/test_home_routes.py -v` → 新测试 404。
+- [x] **Step 3: 实现**（prompts 常量 → digest 组装 → ctl → 路由）。
+- [x] **Step 4: 全绿**：`python -m pytest tests/test_home_routes.py tests/test_egress_runtime.py -v`。
+- [x] **Step 5: Commit**：`git commit -am "feat(home): POST /api/home/summary——单飞/当日缓存/失败退避 + egress 行级台账 + digest 组装"`
 
 ### Task 4: 前端导航骨架（goHome / hash 修复 / 心跳 / Home 挂载）
 
@@ -172,17 +172,17 @@
   - TopBar.js：`emits` 追加 `'go-home'`；模板 `.topbar-logo` 容器（:93）加 `@click="goHome()"` 与 `cursor:pointer` 处理（复用 `.topbar-logo` 类，样式若需 hover 给 style.css `.topbar-logo{cursor:pointer}` 一行）；setup return 加 `goHome`。
   - api.js：`async getHome(sinceMs, lastSeenSeq)` → `GET /api/home?since=..&last_seen_seq=..`（since 传秒：服务端语义是 epoch 秒；`Math.floor(sinceMs/1000)`）；`async genHomeSummary()` → POST。
   - Home.js（占位版即可编译运行）：`props: {}`，`emits: ['open-doc','open-memory','open-trash']`；onMounted + `watch(() => state.homeRefreshSeq)` 触发 `api.getHome(lastPresenceMs ?? Date.now()-7d, lastSeenSeq)`；G1 至少渲染时段问候字符串。
-- [ ] **Step 1: 先写钉（红）**：在 `tests/test_web_ui_audit.py` 追加（惯例 = 稳定字符串 token）：
+- [x] **Step 1: 先写钉（红）**：在 `tests/test_web_ui_audit.py` 追加（惯例 = 稳定字符串 token）：
   ```python
   def test_home_landing_wired(): app.js 源含："'Home'"（import/component 注册两处之一）、
       "history.replaceState(null, '', location.pathname)"、"v-if=\"!state.currentPath\""、
       "state.homeRefreshSeq"、"mdvault.lastPresence"、"pagehide"、"visibilitychange"、"@go-home"
   def test_home_component_registered(): "app.component('Home', Home)" in app.js
   ```
-- [ ] **Step 2: 确认失败** → 实现 app.js / TopBar.js / api.js / Home.js 占位（按上面 Interfaces 逐条，行号为当前 main 坐标，编辑以内容锚定）。
-- [ ] **Step 3: 全绿 + 回归**：`python -m pytest tests/test_web_ui_audit.py -v` 与 `python -m pytest tests/ -x -q`（全量防误伤既有钉）。
-- [ ] **Step 4: 手测导航闭环**：`python -m server.main config.yaml`（若无 config 复制 config.example.yaml）→ 打开首页占位 → 点文档 → 点 logo 回首页 → **F5 仍是首页** → 后退键不动。
-- [ ] **Step 5: Commit**：`git commit -am "feat(home): 落地导航骨架——logo 回首页清 hash、lastPresence 心跳、Home 挂载与监控退页重取"`
+- [x] **Step 2: 确认失败** → 实现 app.js / TopBar.js / api.js / Home.js 占位（按上面 Interfaces 逐条，行号为当前 main 坐标，编辑以内容锚定）。
+- [x] **Step 3: 全绿 + 回归**：`python -m pytest tests/test_web_ui_audit.py -v` 与 `python -m pytest tests/ -x -q`（全量防误伤既有钉）。
+- [x] **Step 4: 手测导航闭环**：`python -m server.main config.yaml`（若无 config 复制 config.example.yaml）→ 打开首页占位 → 点文档 → 点 logo 回首页 → **F5 仍是首页** → 后退键不动。
+- [x] **Step 5: Commit**：`git commit -am "feat(home): 落地导航骨架——logo 回首页清 hash、lastPresence 心跳、Home 挂载与监控退页重取"`
 
 ### Task 5: Home 完整渲染 + homeVoice 文案层 + 样式
 
@@ -204,16 +204,16 @@
   export const HOME_COPY = { ... }          // spec §3 分级表 + §4.4 语料逐字搬入（含 S0/S1 变体、G2/G3/G4 段题与空态、组头模板、页脚）
   ```
 - Home.js 行为要点：G1 按 tierOf 出话（S0/S1 无数字；G4 非空切变体文案——量词中文「N 件/件事」按 spec 语料）；✨按钮 → `genHomeSummary()`（生成中禁用；`model_not_configured` → 按钮旁「管家还没接上模型」；429/502 → 保持分级文案）；G2 `tier ∈ {S0,S1}` → 单句收束不渲段题卡；组头用 groupHead（Task 1 actor/alias 字段）；G3 最近一天默认展开、S0/S1 段题变体；G4 盒子三行动作（记忆控制台 emit / unseen → `document.querySelector('#hb-g2').scrollIntoView` / trash emit）；渲染非空 system_groups 后 `try { localStorage.setItem('mdvault.lastSeenChangeSeq', String(maxSeq)) } catch {}`；模块级 `let bootedOnce = false`（首次 mount 置真）；所有文本 Vue 插值渲染。
-- [ ] **Step 1: 先写钉（红）**：homeVoice 源含 `'S0'..'S4'` 分支 token 与 `'mdvault.lastSeenChangeSeq'`；Home.js 源 **不含** `"v-html"`；Home.js 含 `'您刚离开，还没有新的事'`、`'我做不了主的事'`（语料在位）；style.css 含 `.hb-` 分节。
-- [ ] **Step 2: 确认失败** → 实现 homeVoice.js → style.css 分节 → Home.js 完整版。
-- [ ] **Step 3: 全绿 + 全量回归**：`python -m pytest tests/test_web_ui_audit.py -v && python -m pytest tests/ -x -q`。
-- [ ] **Step 4: Commit**：`git commit -am "feat(home): 管家日报完整渲染——分级文案 homeVoice、G2 信笺分组、G4 行动盒子、已读游标落笔"`
+- [x] **Step 1: 先写钉（红）**：homeVoice 源含 `'S0'..'S4'` 分支 token 与 `'mdvault.lastSeenChangeSeq'`；Home.js 源 **不含** `"v-html"`；Home.js 含 `'您刚离开，还没有新的事'`、`'我做不了主的事'`（语料在位）；style.css 含 `.hb-` 分节。
+- [x] **Step 2: 确认失败** → 实现 homeVoice.js → style.css 分节 → Home.js 完整版。
+- [x] **Step 3: 全绿 + 全量回归**：`python -m pytest tests/test_web_ui_audit.py -v && python -m pytest tests/ -x -q`。
+- [x] **Step 4: Commit**：`git commit -am "feat(home): 管家日报完整渲染——分级文案 homeVoice、G2 信笺分组、G4 行动盒子、已读游标落笔"`
 
 ### Task 6: 浏览器目检门（用户验收，UI 提交前置）
 
 **Files:** 无新文件（问题修回各文件）。
 
-- [ ] **Step 1:** `python -m server.main config.yaml`，按清单逐项过（桌面 + DevTools 移动模拟 + 隐私模式窗口）：
+- [x] **Step 1:** `python -m server.main config.yaml`，按清单逐项过（桌面 + DevTools 移动模拟 + 隐私模式窗口）：
   1. 首屏即首页、无 hash；G1 文案与缺席时长正确（首次 → 首次句）；
   2. 开文档 → 点 logo 回首页 → **F5 仍首页**、URL 无 `#doc/`；后退/前进不弹文档；
   3. 造 activity：网页编辑几篇 + `log_change` 种 watchdog/agent/别名行 → G2 三桶正确、无「我让 reconcile 办的」；G3 只近 3 天；G4 三条动作全可跳（记忆控制台/锚滚 G2/回收站面）；
@@ -221,8 +221,8 @@
   5. 隐私模式窗口打开首页：不崩、泛化 G1；
   6. 移动端 375px：单列无横滚、G4 盒子不溢出；
   7. 监控页进出：退出后首页数据刷新。
-- [ ] **Step 2:** 用户明确认可 → 若有修改回 Task 4/5 文件并复跑钉 → 提交收尾：`git commit -am "fix(home): 目检回修"`（如有）。
-- [ ] **Step 3:** 汇报可合并；`docs/superpowers/plans/` 本文件勾选状态同步为已完成。
+- [x] **Step 2:** 用户明确认可 → 若有修改回 Task 4/5 文件并复跑钉 → 提交收尾：`git commit -am "fix(home): 目检回修"`（如有）。
+- [x] **Step 3:** 汇报可合并；`docs/superpowers/plans/` 本文件勾选状态同步为已完成。
 
 ---
 
