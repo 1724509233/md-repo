@@ -12,6 +12,14 @@ export const api = {
     return res.json()  // { files: [...], dirs: [...] }
   },
 
+  /** GET /api/docs 原始全量（绕过 ETag 三态）——给需要「每次都要数据」的非树消费者。
+   *  getDocs 的 304→null 契约会把「无变化」当空数据喂给它们（2026-11-22 设置页目录候选实证）。 */
+  async getDocsRaw() {
+    const res = await fetch('/api/docs', { cache: 'no-store' })
+    if (!res.ok) throw new Error(`GET /api/docs (raw) → ${res.status}`)
+    return res.json()
+  },
+
   /** GET /api/docs/{path} — 读取文档内容 */
   async getDoc(path) {
     const res = await fetch('/api/docs/' + encodeURIComponent(path))

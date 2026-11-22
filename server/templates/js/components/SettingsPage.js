@@ -286,7 +286,7 @@ function checkPrivacyDir(v) {
   if (/^[A-Za-z]:/.test(norm) || norm.startsWith('/')) return '需为库内相对目录名，不能是绝对路径'
   if (norm.split('/').includes('..')) return '不能包含 ..'
   if (norm.includes('/')) return '只填顶层目录名，不要带斜杠'
-  if (['.sync', '.trash', 'suggestions'].includes(norm.casefold())) return '系统目录不能设为隐私目录'
+  if (['.sync', '.trash', 'suggestions'].includes(norm.toLowerCase())) return '系统目录不能设为隐私目录'
   return ''
 }
 // 422 message → 字段键启发式（已知键词表；定位不了走卡片顶兜底，不硬猜。词表序 = 具体优先，
@@ -600,14 +600,15 @@ export const SettingsPage = {
     // 候选 = 一级目录 − 已有标签 − 保留词表，按输入子串过滤；数据源 /api/docs dirs 来自 os.walk，
     // 含无文档的空目录；后端已剪隐藏目录与系统目录，前端保留词表兜底二次过滤（与 checkPrivacyDir 同表）
     const dirCandidates = computed(() => {
-      const taken = new Set(((form.value && form.value.privacy.dirs) || []).map(d => String(d).casefold()))
+      const taken = new Set(((form.value && form.value.privacy.dirs) || []).map(d => String(d).toLowerCase()))
       const q = String(dirDraft.value).trim().toLowerCase()
-      return vaultDirs.value.filter(d => !taken.has(d.casefold()) && (!q || d.toLowerCase().includes(q)))
+      return vaultDirs.value.filter(d => !taken.has(d.toLowerCase()) && (!q || d.toLowerCase().includes(q)))
     })
     function ensureVaultDirs() {
       if (vaultDirsFetched) return
       vaultDirsFetched = true        // 失败也只拉一次：静默退化纯输入，不反复打端点
-      api.getDocs()
+      // getDocsRaw 而非 getDocs：ETag 304→null 契约会把「无变化」喂成空名单（2026-11-22 实证）
+      api.getDocsRaw()
         .then(d => {
           const first = new Set()
           for (const p of ((d && d.dirs) || [])) {

@@ -365,6 +365,29 @@ def test_settings_template_bindings_are_returned():
                 f" (expr: {expr.strip()[:60]!r})")
 
 
+def test_no_python_string_apis_in_frontend_js():    # 家族钉（2026-11-22 真机控制台捕获）：加载器的 Python 词汇（str.casefold 等）曾漏进
+    # SettingsPage.js——dirCandidates 求值即抛，下拉/自由输入全灭，node --check 放行语法合法的外来 API。
+    for name, src in _templates().items():
+        if not name.endswith(".js"):
+            continue
+        for banned in (".casefold(", ".startswith(", ".endswith(", ".rstrip(", ".lstrip("):
+            # JS 等价物都存在（startsWith/endsWith 合法）——只禁 Python 下划线形态与 casefold
+            if banned in (".startswith(", ".endswith("):
+                continue
+            assert banned not in src, f"{name}: Python-only string API {banned!r} in frontend JS"
+
+
+def test_vault_dirs_uses_raw_docs_fetch():
+    # 家族钉（2026-11-22 agent-browser 实证）：api.getDocs 的 ETag 304→null 契约专供树消费者；
+    # 设置页目录候选若复用它会拿到 null → 空名单且守卫不再重试——必须走 getDocsRaw。
+    sp = _templates()["SettingsPage.js"]
+    m = re.search(r"function ensureVaultDirs\(\) \{(.*?)\n    \}", sp, re.S)
+    assert m, "ensureVaultDirs not found"
+    body = m.group(1)
+    assert "getDocsRaw()" in body, "ensureVaultDirs must use api.getDocsRaw (304→null trap)"
+    assert re.search(r"api\.getDocs\(\)", body) is None, "ensureVaultDirs must not call api.getDocs"
+
+
 def test_settings_422_goes_inline_not_top_banner():
     # 2026-11-22 用户改版：422 校验错误全部下沉表单项（字段红框+红小字 → 卡片顶兜底 → toast 三级），
     # 顶部告警区只留 409 并发冲突与热生效族（非字段校验）——422 处理路径不得再引用顶部告警条形态。
