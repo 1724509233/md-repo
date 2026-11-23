@@ -452,7 +452,7 @@ export const EditorPane = {
     return { editorEl, previewEl, previewHtmlEl, ebtnEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
   },
   template: `
-    <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
+    <div ref="docWrapEl" class="doc-wrap max-w-[var(--col-measure)] mx-auto min-h-full flex flex-col">
       <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
         :disabled="docMissing"

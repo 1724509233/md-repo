@@ -1531,7 +1531,7 @@ export function createApp() {
               <Home v-if="!state.currentPath && state.view !== 'search'" @open-doc="openDoc" @open-memory="onMemoryRailClick()" @open-trash="openTrashFace()" />
               <!-- 文档列（T4）：桌面文档头行 + 滚动正文（doc-head 在 .doc-enter 内，随入场转场；
                    ≤1023px doc-head v-if 恒 false——顶栏原样承载，红线零触达） -->
-              <div v-show="!!state.currentPath && state.view !== 'search'" class="flex-1 flex flex-col min-w-0 overflow-hidden">
+              <div v-show="!!state.currentPath && state.view !== 'search'" class="doc-enter flex-1 flex flex-col min-w-0 overflow-hidden">
                 <div v-if="isDesktop && state.currentPath" class="doc-head">
                   <span class="doc-bp"><template v-for="(seg, di) in docHeadSegs" :key="di"><span v-if="di > 0" class="doc-sep">/</span><span :class="{ 'doc-cur': di === docHeadSegs.length - 1 }">{{ seg }}</span></template></span>
                   <span v-if="docPrivate" class="doc-lock" title="此文档位于隐私目录，内容模型不可见"><span v-html="ICONS.lock"></span>模型不可见</span>

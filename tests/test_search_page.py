@@ -84,6 +84,37 @@ def test_s1_fab_search_entry_and_dim():
     assert m and "visibility" not in m.group(0), "is-dim 禁 visibility（FAB 须可点/可 Tab）"
 
 
+def test_s1b_three_tokens_and_centering():
+    # spec §3：--col-measure(680)/--col-topline/--col-inline 三 token 两视图共读；
+    # 摘 .doc-scroll/.doc-head 非对称 padding-right 让位（列心病根，Review Focus 4）。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    ep = (TPL / "js/components/EditorPane.js").read_text(encoding="utf-8")
+    app = _app()
+    assert "--col-measure: 680px" in css
+    assert "--col-topline:" in css and "--col-inline:" in css
+    m = re.search(r"\.search-page \{([^}]*)\}", css)
+    assert m, ".search-page 规则缺失"
+    for tok in ("var(--col-measure)", "var(--col-inline)", "var(--col-topline)"):
+        assert tok in m.group(1), f"search 容器未共读 {tok}"
+    m = re.search(r"\.doc-head \{([^}]*)\}", css)
+    assert "var(--col-topline)" in m.group(1), "doc-head 顶线未接 token"
+    assert "max-w-[var(--col-measure)]" in ep, "EditorPane 列宽未接 token"
+    assert "padding-right: calc(24px + var(--dock-w))" not in css, "非对称让位未摘（S1 核心修复）"
+    assert "right: calc(var(--dock-w) + 8px)" in css, "toc-dd 桌面锚（合法 dock 消费）被误伤"
+    # 转场（§9）：doc 列挂 doc-enter——v-show display 翻转自动重放（L183 机制复用）
+    assert '"doc-enter flex-1 flex flex-col min-w-0 overflow-hidden"' in app
+
+
+def test_s1b_recent_searches_empty_state():
+    # spec §4 空态：最近搜索 ≤3 条 chip（回填即搜，只存词）；清空入口一句拍板。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    assert "'mdvault.recentSearches'" in sp
+    assert "slice(0, 3)" in sp
+    assert "sp-recent" in sp and "fillRecent" in sp and "clearRecent" in sp
+    # 记账只在有结果的完成上记（零命中词不进 chip——计划拍板）
+    assert re.search(r"if \(results\.value\.length\) rememberRecent\(search\.lastQuery\(\)\)", sp)
+
+
 def test_s1_open_doc_switches_view():
     # spec §9：openDoc 时 view := 'doc'（全局规则①改述）。
     app = _app()

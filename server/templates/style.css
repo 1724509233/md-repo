@@ -832,6 +832,14 @@ pre code.hljs { background: transparent; padding: 0; }
 .sp-empty-ring svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; }
 .sp-empty-t1 { font-size: 12px; color: var(--ink-soft); }
 .sp-empty-t2 { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: center; }
+/* 最近搜索 chip 行（S1b 空态，spec 2026-11-23 §4）：弱字描边胶囊，回填即搜；黄铜预算不占用 */
+.sp-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 18px 0 4px; }
+.sp-recent .lb { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); margin-right: 2px; }
+.sp-recent button { font-size: 12.5px; color: var(--ink-soft); background: none; border: 1px solid var(--line);
+  border-radius: 9999px; padding: 3px 12px; cursor: pointer; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-recent button:hover { color: var(--ink); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.sp-recent .clr { border: 0; text-decoration: underline; text-underline-offset: 3px; padding: 3px 2px; opacity: .65; }
+@media (max-width: 1023px) { .sp-recent { display: none; } }  /* 移动 sheet 零改动红线：共享组件的桌面空态件不外溢 */
 /* 平铺卡片：每个 segment 独立成卡（B 变体 .f-card）；flex-shrink:0 —— 卡片不可压缩，
    超出由 .sp-results 滚动（否则默认 shrink:1 + overflow:hidden 会让卡片被压矮而非出滚动条） */
 .sp-card { flex-shrink: 0; appearance: none; width: 100%; text-align: left; font: inherit; color: inherit;
@@ -2179,7 +2187,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
    .ai-open right 让位规则——桌面已左下锚点，不再与 AI 面板对位。 */
 .doc-head {
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
-  padding: 12px 24px 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  padding: var(--col-topline) var(--col-inline) 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
   font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
 }
 .doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
@@ -2213,7 +2221,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
    doc-scroll/doc-head 桌面右侧给 dock 让位一个 --dock-w 槽（文本列 max-width 居中于剩余
    空间，1024px 档最窄情形也不压字）。dock 在场时 AI 面板/edge tab 同步让出右缘槽
    （过渡态——T7 消息面重做锚点时按 spec §4A 的 chatwin/slot 体系改写，本块为其前最小避让）。 */
-:root { --dock-w: 40px; --destructive: #b91c1c; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
+:root { --dock-w: 40px; --destructive: #b91c1c;
+  /* 检索页三 token（spec 2026-11-23 §3，doc/search 两视图共读；Home 720px 出生即豁免挂账 §16） */
+  --col-measure: 680px; --col-topline: 12px; --col-inline: 24px; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
 .dock {
   position: fixed; right: 0; top: 64px; /* T7 几何：上锚定（原纵向居中与右缘居中握把同带相撞——
     预览稿场景 2 画法：dock 上带、握把贴 dock 下缘；Home 无 dock 时握把回纵向居中） */
@@ -2243,17 +2253,20 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (min-width: 1024px) {
   /* toc-dd 桌面锚 = dock 左缘（top 贴顶栏退役后的行位；z-50 压过 dock 10） */
   .toc-dd { top: 16px; right: calc(var(--dock-w) + 8px); }
-  /* 文档列让位：滚动容器与头行右侧各空一个 dock 槽（选择器列表与 .doc-head 基础视觉规则
-     分离——T4 钉只审基础态） */
-  .doc-scroll, .doc-head { padding-right: calc(24px + var(--dock-w)); }
+  /* 2026-11-23 检索页 S1：原「.doc-scroll, .doc-head 右侧 padding-right 非对称 dock 让位」已摘——
+     它是 doc 列心左偏 20px 的病根（spec 2026-11-23-immersive-search §3）；
+     680 档 ≥1024 下与 fixed dock 无重叠面（目检定档项）。 */
   /* AI 面 dock 槽避让由 T7 消息面块承接（chatwin 右锚含 dock 槽 / chat-slot in-flow 占位）；
      旧「过渡态」#ai-panel/#ai-btn right 让位行已删（桌面 #ai-btn tab 退役，spec §4A 握把升格） */
 }
 
-/* ════ 沉浸式检索页 S1（plan 2026-11-23-immersive-search）════
-   .search-page = 主区检索页容器（桌面专属旗标驱动；S1 保底几何，T3 升 --col-* 三 token 与文档列对心）。
+/* ════ 沉浸式检索页 S1b（plan 2026-11-23-immersive-search）════
+   .search-page = 主区检索页容器（桌面专属旗标驱动）：三 token 与文档列对心（box=680 列宽+对称
+   inline 外垫——摘非对称让位后两视图列心恒等同视口心，doc⇄search 原地变身零横跳）。
    FAB 检索态降 40% 透明但仍可点/可 Tab——后备出口禁隐藏（spec §8，Review Focus 6）。 */
-.search-page { flex: 1; min-width: 0; max-width: 680px; margin: 0 auto; overflow-y: auto; padding: 54px 24px 40px; }
+.search-page { display: flex; flex-direction: column; min-height: 0; flex: 1;
+  max-width: calc(var(--col-measure) + 2 * var(--col-inline)); margin: 0 auto;
+  padding: var(--col-topline) var(--col-inline) 40px; }
 .fab-root.is-dim { opacity: .4; }
 .fab-root.is-dim:hover { opacity: 1; }
 

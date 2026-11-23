@@ -82,13 +82,33 @@ export const SearchPanel = {
     const search = createSearchController({
       api, topK: SEARCH_TOP_K, debounceMs: 300, state,
       focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
-      onSearchComplete() { if (appState) appState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
+      onSearchComplete() { if (appState) appState.recallDataVersion++; if (results.value.length) rememberRecent(search.lastQuery()) } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
 
     // 模板用顶层 ref（嵌套 ref 写入如 activeIndex = i 会把 ref 替换成裸值）
     const { results, loading, activeIndex, moreLoading, fuzzyDone, resultTier } = state
 
     watch(searchQuery, (q) => search.setInput(q))
+
+    // ── 最近搜索（spec 2026-11-23 §4 空态：≤3 chip 回填即搜，只存词不存结果；满则 LRU 挤尾）──
+    // 计划拍板：① 记账只落在「有结果的完成」上（零命中词不进 chip）；② 行尾「清空」一句入口。
+    const RECENT_KEY = 'mdvault.recentSearches'
+    const recent = ref((() => {
+      try { const a = JSON.parse(localStorage.getItem(RECENT_KEY)); return Array.isArray(a) ? a.filter(x => typeof x === 'string').slice(0, 3) : [] }
+      catch (e) { return [] }
+    })())
+    function rememberRecent(q) {
+      const w = (q || '').trim()
+      if (!w) return
+      const next = [w, ...recent.value.filter(x => x !== w)].slice(0, 3)
+      recent.value = next
+      try { localStorage.setItem(RECENT_KEY, JSON.stringify(next)) } catch (e) { /* 无存储：仅本次内存，设计内 */ }
+    }
+    function clearRecent() {
+      recent.value = []
+      try { localStorage.removeItem(RECENT_KEY) } catch (e) { /* 同上 */ }
+    }
+    function fillRecent(w) { searchQuery.value = w }   // v-model → watch setInput：回填即搜
 
     // ── ① tag 选择器行（spec 2026-11-13 §3-①）────────────────────────────
     // /api/tags 全量（doc_count 降序）；失败/空 → 行隐藏（v-if），搜索照常
@@ -225,6 +245,8 @@ export const SearchPanel = {
       shownRowCount, SEARCH_TOP_K,
       pickItem, onKeydown, renderSnippet, search,
       isPriv, ICONS_LOCAL,
+      // 最近搜索（S1b 空态）
+      recent, fillRecent, clearRecent,
       // ① tag 选择器
       tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
       // ② 权重 popover
@@ -268,6 +290,12 @@ export const SearchPanel = {
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
+      </div>
+      <!-- 最近搜索（spec 2026-11-23 §4 空态）：未输入时 ≤3 chip 回填即搜；行尾清空入口 -->
+      <div v-if="!searchQuery && recent.length" class="sp-recent">
+        <span class="lb">最近搜索</span>
+        <button v-for="w in recent" :key="w" type="button" @click="fillRecent(w)">{{ w }}</button>
+        <button class="clr" type="button" @click="clearRecent">清空</button>
       </div>
       <!-- ① tag 选择器行（输入区与 meta 行之间；/api/tags 失败/空 → 整行隐藏） -->
       <div v-if="tagOptions.length" class="sp-chips" :class="{ expanded: tagsExpanded }">
