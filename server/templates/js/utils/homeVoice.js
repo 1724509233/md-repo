@@ -3,10 +3,12 @@
    口吻与 prompts.py HOME_SUMMARY_SYSTEM 同源——同一个管家的两张嘴，改动同 PR。
    零 Vue / 零 DOM 依赖（node 可直 import，行为测试照 chatRestore 先例）。 */
 
-/* 存储键（心跳写点在 app.js；已读游标写点在 Home.js——键名唯一出处在此） */
+/* 存储键（心跳写点在 app.js；已读游标写点在 Home.js——键名唯一出处在此。
+   游标已换尺 ts（epoch 秒，服务端时钟源）；旧 seq 游标键退役，迁移零成本：
+   读不到 seenTs → 请求不带 seen_ts → 本次全不算未看，渲染后游标即落 until。 */
 export const LS_KEYS = {
   lastPresence: 'mdvault.lastPresence',
-  seenSeq: 'mdvault.lastSeenChangeSeq',
+  seenTs: 'mdvault.seenTs',
 }
 
 /* S0–S4 阈值（拍板 §9.8：量级可调） */
@@ -86,6 +88,9 @@ export const HOME_COPY = {
     headAgent: '我自己动手的',
     headExternal: '我眼皮子底下的外部改动',
     headBg: (alias) => `我让${alias}办的`,
+    lookback: '看看前三天',
+    lookbackOff: '收起',
+    lookbackTitle: '回看前三天',
   },
   g3: {
     title: '您上次离开前做到哪',
@@ -99,7 +104,7 @@ export const HOME_COPY = {
     quiet: '都打理好了，不急。',
     proposals: (n) => `${n} 条记忆提案，等您拿主意`,
     proposalsLink: '去记忆控制台 →',
-    unseen: (n) => `${n} 处是我代您改的，您还没看过`,
+    unseen: (n) => `${n} 篇文档是 agent 动的，您还没看过`,
     unseenLink: '看我改了什么 →',
     conflicts: (n) => `${n} 处同步冲突，两版我都留着没删`,
     conflictsLink: '帮我看看 →',

@@ -1149,11 +1149,14 @@ export function createApp() {
         // 子钮 pick 经 drawerNext 自决开合，不得被同点外点链抵消；dock 右缘操作条——
         // 其文件/重命名/删除钮经 revealTree 开抽屉，同一 click 冒泡再关会把开动作吞掉
         //（豁免同 FAB 一理，先例参 TopBar onDocClick 对 data-toc-toggle 的豁免）。
+        // [data-drawer-entry]：Home G4「去回收站」链接经 openTrashFace 开抽屉（恒开
+        // 语义），同一 click 冒泡进本监听不得把刚开的抽屉再吞掉——入口级标记由
+        // Home.js 模板只挂回收站行（同 data-notif-toggle 入口粒度先例，禁整盒豁免）。
         document.addEventListener('click', (e) => {
           if (!isDesktop.value || !state.drawer || treePinned.value) return
           const t = e.target
           if (!t || !t.closest) return
-          if (t.closest('.panel-shell') || t.closest('.fab-root') || t.closest('.dock')) return
+          if (t.closest('.panel-shell') || t.closest('.fab-root') || t.closest('.dock') || t.closest('[data-drawer-entry]')) return
           state.drawer = null
         })
 

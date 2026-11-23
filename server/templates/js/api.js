@@ -371,12 +371,14 @@ export const api = {
   // ── 首页·管家日报（spec 2026-11-22-home-butler-landing §5）──
 
   /** GET /api/home — 缺席窗聚合。since 传毫秒、服务端语义是 epoch 秒（floor 换算）；
-   *  lastSeenSeq = 已读游标（mdvault.lastSeenChangeSeq），驱动 unseen 代改计数 */
-  async getHome(sinceMs, lastSeenSeq = 0) {
+   *  seenTs = 已读游标（epoch 秒，服务端时钟；mdvault.seenTs），null/空 → 不带参
+   *  （服务端视为 null → unseen 恒 0） */
+  async getHome(sinceMs, seenTs = null) {
     const params = new URLSearchParams({
-      since: String(Math.floor(sinceMs / 1000)),
-      last_seen_seq: String(lastSeenSeq || 0)
+      since: String(Math.floor(sinceMs / 1000))
     })
+    const ts = (seenTs === null || seenTs === undefined || seenTs === '') ? null : Number(seenTs)
+    if (ts !== null && Number.isFinite(ts)) params.set('seen_ts', String(ts))
     const res = await fetch('/api/home?' + params.toString())
     if (!res.ok) throw new Error(`GET /api/home → ${res.status}`)
     return res.json()

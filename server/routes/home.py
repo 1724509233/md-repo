@@ -8,6 +8,7 @@ config 别名集为分桶唯一判据）+ my_days（固定 3d 足迹窗，与请
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from fastapi.responses import JSONResponse
@@ -16,13 +17,15 @@ from openai import AsyncOpenAI
 from ..agent.prompts import HOME_SUMMARY_SYSTEM
 from ..core.privacy import is_privacy
 from ..services.egress import EgressTarget, flush_touches, parse_endpoint, should_record
+
+logger = logging.getLogger("md-vault.api")
 from ..vault.db.changes import get_changes, get_changes_sources
 from ..vault.db.file_index import get_all_files
 
 SYSTEM_WINDOW_DAYS = 7   # 系统活动窗下界（§5.1 钳制）
 MY_WINDOW_DAYS = 3       # 足迹窗固定值（§3-G3，与缺席窗解耦）
 
-_OP_KEYS = ("seq", "ts", "action", "path", "from_path")  # ops 行形（seq 供已读游标）
+_OP_KEYS = ("seq", "ts", "action", "path", "from_path")  # ops 行形（seq 只做同 ts 平手稳定序）
 
 
 def _effective_since(since: float | None, now: float) -> float:
@@ -49,7 +52,7 @@ def _ops_of(rows: list[dict]) -> list[dict]:
 
 
 def build_home_payload(db_conn, *, vault_dir, aliases: frozenset[str],
-                       since: float | None, last_seen_seq: int,
+                       since: float | None, seen_ts: float | None,
                        ledger_conn=None, now: float | None = None) -> dict:
     now = time.time() if now is None else now
     eff = _effective_since(since, now)
@@ -82,25 +85,32 @@ def build_home_payload(db_conn, *, vault_dir, aliases: frozenset[str],
         d["ops"].sort(key=lambda op: (op["ts"], op["seq"]), reverse=True)
     my_days = sorted(days.values(), key=lambda d: d["date"], reverse=True)
 
-    # ── actions（§3-G4 / §5.1）：proposals 走 ledger 域；unseen = seq 游标
-    # × 别名 allow-filter——watchdog（含用户自己的 Obsidian 编辑与 MCP 直写）
-    # 恒不计，违者即违 §4.1 真账铁律（oracle 送审 B2）。
-    actions = {"pending_proposals": 0, "unseen_agent_changes": 0,
-               "conflicts": 0, "trash_batches": 0}
+    # ── actions（§3-G4 / §5.1）：proposals 走 ledger 域；unseen = 窗内 ∧
+    # ts > seen_ts ∧ 别名 allow-filter 三合一（2026-11-23 游标 seq→ts 换尺，
+    # 直接复用上面 system_groups 的窗内行集，不再另查 seq 游标）——
+    # watchdog（含用户自己的 Obsidian 编辑与 MCP 直写）恒不计，违者即违
+    # §4.1 真账铁律（oracle 送审 B2）。计数单位 = distinct path「篇」。
+    actions = {"pending_proposals": 0, "unseen_agent_docs": 0,
+               "conflicts": 0, "conflict_path": None, "trash_batches": 0}
     if ledger_conn is not None:
         from ..services.proposals import status_summary
         actions["pending_proposals"] = status_summary(
             ledger_conn)["by_status"]["awaiting_review"]
-    actions["conflicts"] = sum(
-        1 for f in get_all_files(db_conn) if ".conflict-" in f["path"])
+    # conflict_path：计数同一次扫描里取第一个冲突路径——前端点击只扫 /api/docs
+    # 可见面，机器区（如 index/）被树排除会永远找不到，故由服务端给出可开路径。
+    conflict_paths = [f["path"] for f in get_all_files(db_conn) if ".conflict-" in f["path"]]
+    actions["conflicts"] = len(conflict_paths)
+    actions["conflict_path"] = conflict_paths[0] if conflict_paths else None
     from ..services.trash import list_trash
     actions["trash_batches"] = len(list_trash(vault_dir))
-    cursor_rows = get_changes_sources(
-        db_conn, since_seq=max(int(last_seen_seq or 0), 0),
-        exclude_sources={"web"}, limit=5000)
-    actions["unseen_agent_changes"] = sum(
-        1 for r in cursor_rows
-        if r["source"] == "agent" or r["source"] in aliases)
+    # seen_ts 缺席（旧 seq 游标键退役的迁移态）→ 恒 0：本次全不算未看，
+    # 前端渲染后游标即落 window.until，下次起正常计。
+    if seen_ts is not None:
+        actions["unseen_agent_docs"] = len({
+            r["path"] for r in rows
+            if (r["source"] == "agent" or r["source"] in aliases)
+            and r["ts"] > seen_ts
+        })
 
     return {"window": {"since": eff, "until": now},
             "system_groups": system_groups,
@@ -111,7 +121,10 @@ def build_home_payload(db_conn, *, vault_dir, aliases: frozenset[str],
 # ── POST /api/home/summary（§5.2）：按需一句话 + 成本面防护 + 行级出域台账 ──
 
 SUMMARY_COOLDOWN_S = 300
-SUMMARY_MAX_TOKENS = 200
+# 200→2048（2026-11-23）：思考型模型 reasoning 长度抖动实测 100→650+，小预算被思考吃光
+# （finish_reason=length, content=None）→ 空摘要 502 + 300s 冷却。chat_template_kwargs
+# thinking:false 实测被 Splash 代理无视，不可依赖；放大预算 provider 无关，每日一次封顶。
+SUMMARY_MAX_TOKENS = 2048
 _GROUP_LABELS = {"agent": "我自己动手的", "external": "我眼皮子底下的外部改动"}
 
 
@@ -190,7 +203,7 @@ async def generate_summary(ctx, ctl: SummaryCtl) -> str:
 async def _generate_once(ctx, ctl: SummaryCtl) -> str:
     aliases = frozenset((ctx.bg_targets or {}).keys())
     payload = build_home_payload(ctx.db_conn, vault_dir=ctx.vault_dir,
-                                 aliases=aliases, since=None, last_seen_seq=0,
+                                 aliases=aliases, since=None, seen_ts=None,
                                  ledger_conn=ctx.ledger_conn)
     pdirs = tuple(ctx.privacy.dirs) if ctx.privacy is not None else ()
     digest, touched = assemble_home_digest(payload, privacy_dirs=pdirs,
@@ -211,6 +224,7 @@ async def _generate_once(ctx, ctl: SummaryCtl) -> str:
         if not text:
             raise RuntimeError("empty summary")
     except Exception:
+        logger.warning("home summary generate failed", exc_info=True)
         if record:  # 失败也先落账：payload 已出域，红线 7 要的是事实不是体面
             flush_touches(ctx.ledger_conn, pdirs, target, touched)
         ctl._last_fail = time.time()
@@ -226,11 +240,11 @@ def register(app, ctx) -> None:
     app.state.home_summary = ctl
 
     @app.get("/api/home")
-    async def home(since: float | None = None, last_seen_seq: int = 0) -> dict:
+    async def home(since: float | None = None, seen_ts: float | None = None) -> dict:
         aliases = frozenset((ctx.bg_targets or {}).keys())
         return build_home_payload(
             ctx.db_conn, vault_dir=ctx.vault_dir, aliases=aliases,
-            since=since, last_seen_seq=last_seen_seq, ledger_conn=ctx.ledger_conn)
+            since=since, seen_ts=seen_ts, ledger_conn=ctx.ledger_conn)
 
     @app.post("/api/home/summary")
     async def home_summary():

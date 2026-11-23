@@ -1800,6 +1800,28 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .hb-day .expand:hover { color: var(--brass); }
 .hb-day-ops { flex-basis: 100%; padding: 2px 0 4px; }
 
+/* G2 日段 × 文件行（2026-11-23 重构波：actor 桶 → 日段 → 文件行；回看开关） */
+.hb-sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.hb-sec-head .hb-sec-title { margin: 0; }
+.hb-lookback { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+.hb-lookback:hover { text-decoration: underline; text-underline-offset: 3px; }
+.hb-quiet .hb-lookback { margin-left: 16px; }   /* 短留收束句尾的回看入口 */
+.hb-g2-day { padding: 2px 0 6px; }
+.hb-g2-day + .hb-g2-day { margin-top: 8px; }
+.hb-g2-day-head { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); margin: 0 0 4px; }
+.hb-file-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 4px; min-width: 0; border-radius: 6px; cursor: pointer; }
+.hb-file-row.is-dead { cursor: default; }
+.hb-file-row .fname { font-size: 15px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-file-row.is-dead .fname { color: var(--ink-soft); }
+.hb-file-row:not(.is-dead):hover .fname { color: var(--brass); }
+.hb-file-row .fdir { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); min-width: 0; flex-shrink: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-file-row .hb-chip { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; flex-shrink: 0; }
+.hb-file-row .t { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; margin-left: auto; padding-left: 8px; flex-shrink: 0; }
+.hb-unseen-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brass); flex-shrink: 0; align-self: center; }
+/* 滚动落位 flash：黄铜 8% 底 ~1.2s 淡出（reduced-motion 下前端不加类，CSS 双保险） */
+@keyframes hb-flash-fade { from { background: color-mix(in srgb, var(--brass) 8%, transparent); } to { background: transparent; } }
+.hb-flash { animation: hb-flash-fade 1.2s ease-out; }
+
 /* G4 唯一盒子区 */
 .hb-g4 { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .hb-g4-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 18px; flex-wrap: wrap; padding: 15px 18px; }
@@ -1819,6 +1841,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .hb-g1-btn { transition: none; }
+  .hb-flash { animation: none; }
 }
 
 /* ============ 设置浮层（spec 2026-11-22 §6 modal 改版 · st- 族）============

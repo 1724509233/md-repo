@@ -90,7 +90,8 @@ def test_my_days_fixed_3d(home_client, db_conn):
     assert "recent.md" in paths and "sys.md" not in paths
 
 
-# ── actions 四计数（§5.1/§3-G4；unseen = seq 游标 × 别名 allow-filter）──
+# ── actions 四计数（§5.1/§3-G4；unseen = 窗内 ∧ ts>seen_ts ∧ 别名 allow-filter，
+#    计数单位 distinct path「篇」；2026-11-23 游标 seq→ts 换尺）──
 
 def test_actions_counts(home_client, db_conn, ledger_conn, vault_dir):
     import hashlib
@@ -123,27 +124,38 @@ def test_actions_counts(home_client, db_conn, ledger_conn, vault_dir):
         {"batch": "b1", "deleted_at": "2026-11-22T00:00:00", "source": "web",
          "files": [{"path": "sub/x.md", "size": 4}]}), encoding="utf-8")
 
-    # unseen 假账防线：agent×2 + 守夜人×1 算「代改」；watchdog×5（含用户自己的
-    # Obsidian 编辑与 MCP 直写）恒不计（§3-G4）
-    seqs = []
-    for i in range(2):
-        log_change(db_conn, f"ag{i}.md", "update", source="agent", ts=now - i)
-        seqs.append(_max_seq(db_conn))
+    # unseen 假账防线：agent 2 篇（ag0.md 三 op 归并仍 1 篇）+ 守夜人 1 篇算「代改」；
+    # watchdog×5（含用户自己的 Obsidian 编辑与 MCP 直写）恒不计（§3-G4，B2）
+    for off in (3, 2, 1):   # 同 path 3 op = 1 篇（distinct path 计数）
+        log_change(db_conn, "ag0.md", "update", source="agent", ts=now - off)
+    log_change(db_conn, "ag1.md", "update", source="agent", ts=now - 2.5)
     log_change(db_conn, "bg.md", "update", source=ALIAS, ts=now - 0.5)
-    seqs.append(_max_seq(db_conn))
     for i in range(5):
         log_change(db_conn, f"wd{i}.md", "update", source="watchdog", ts=now - i - 0.1)
 
     actions = home_client.get("/api/home").json()["actions"]
     assert actions["pending_proposals"] == 2
     assert actions["conflicts"] == 1
+    # conflict_path：计数同扫取首路径——点击面只扫 /api/docs 可见面，机器区冲突
+    # 必须由服务端给出可开路径（2026-11-23 口径错位修复）
+    assert actions["conflict_path"] == "notes/test.conflict-pc.md"
     assert actions["trash_batches"] == 1
-    assert actions["unseen_agent_changes"] == 3
+    # seen_ts 缺省（旧 seq 游标键退役的迁移态）→ 恒 0：本次全不算未看
+    assert actions["unseen_agent_docs"] == 0
 
-    # 游标推进后「看过」即看过：再多的 watchdog 行也不得把它报回来
-    seen = max(seqs)
-    actions2 = home_client.get("/api/home", params={"last_seen_seq": seen}).json()["actions"]
-    assert actions2["unseen_agent_changes"] == 0
+    # ① 窗内 ∧ ts>seen_ts ∧ agent/别名 → distinct path「篇」；④ watchdog 不计
+    # （计入即 8，见上造数）
+    seen = home_client.get("/api/home", params={"seen_ts": now - 3600}).json()["actions"]
+    assert seen["unseen_agent_docs"] == 3
+
+    # ③ 迟记账行：ts 在窗内但 ≤ seen_ts 不计（ag1.md ts=now−2.5 被切掉）
+    cut = home_client.get("/api/home", params={"seen_ts": now - 2}).json()["actions"]
+    assert cut["unseen_agent_docs"] == 2
+
+    # ⑤ 旧 last_seen_seq 参数退役：不再影响响应（未知 query 被忽略）
+    old = home_client.get("/api/home", params={"last_seen_seq": 999999}).json()
+    assert old["actions"]["unseen_agent_docs"] == 0
+    assert old["system_groups"] == home_client.get("/api/home").json()["system_groups"]
 
 
 def test_actions_no_bg_targets(vault_dir, db_conn, ledger_conn):
@@ -154,13 +166,11 @@ def test_actions_no_bg_targets(vault_dir, db_conn, ledger_conn):
     log_change(db_conn, "wd.md", "update", source="watchdog", ts=now)
     app = create_app(vault_dir=vault_dir, db_conn=db_conn, ledger_conn=ledger_conn)
     with TestClient(app) as tc:
-        r = tc.get("/api/home")
+        r = tc.get("/api/home", params={"seen_ts": 0})
         assert r.status_code == 200
-        assert r.json()["actions"]["unseen_agent_changes"] == 1
-
-
-def _max_seq(conn) -> int:
-    return conn.execute("SELECT max(seq) FROM change_log").fetchone()[0]
+        assert r.json()["actions"]["unseen_agent_docs"] == 1
+        # 无冲突文件 → conflict_path=None（与计数同口径的缺省态）
+        assert r.json()["actions"]["conflict_path"] is None
 
 
 # ── POST /api/home/summary（§5.2：缓存/单飞/退避 + egress 行级台账）──────

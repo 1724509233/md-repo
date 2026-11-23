@@ -1353,7 +1353,7 @@ def test_home_voice_module():
     # 行为面走 node 直 import（同 chatRestore/format 先例）：S0–S4 边界、
     # 缺席量词（<15min 无数字 / 15min–2d 报小时 / ≥24h「一天」级 / ≥2d「N 天又 M 小时」）、时段四界。
     f = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
-    assert "mdvault.lastSeenChangeSeq" in f and "mdvault.lastPresence" in f
+    assert "mdvault.seenTs" in f and "mdvault.lastPresence" in f
     for tok in ("'S0'", "'S1'", "'S2'", "'S3'", "'S4'"):
         assert tok in f, tok
     node = shutil.which("node")
@@ -1430,3 +1430,70 @@ def test_home_render_pins():
     assert "system_groups.length && !shortStay" in home
     css = (TPL / "style.css").read_text(encoding="utf-8")
     assert ".hb-home" in css and ".hb-g4" in css
+
+
+def test_home_g4_trash_entry_drawer_guard_exemption():
+    # Home G4「去回收站」行经 openTrashFace 开抽屉（恒开语义），同一 click 冒泡进
+    # app.js 抽屉外点监听秒关（外点病族第 3 犯，AGENTS 红线）。双层断言（同
+    # test_fab_notif_toggle_guard_exemption 风格）：① 入口标记只挂回收站行（k==='t'，
+    # 禁整盒豁免）；② 守卫链登记 [data-drawer-entry]。
+    home = _templates()["Home.js"]
+    app = _templates()["app.js"]
+    assert """:data-drawer-entry="r.k === 't' ? '1' : null\"""" in home, \
+        "Home G4 回收站链接缺 data-drawer-entry 入口标记"
+    m = re.search(r"if \(t\.closest\('\.panel-shell'\).*?\[data-drawer-entry\]'\)\) return", app)
+    assert m, "app.js 抽屉外点守卫链缺 [data-drawer-entry] 豁免登记"
+
+
+def test_home_g2_scroll_explicit_container():
+    # scrollToG2 显式容器滚动钉（2026-11-23 落不了位修复）：锚 .hb-shell 用
+    # shell.scrollTo，禁回退裸 scrollIntoView（多滚动祖先歧义）。
+    home = _templates()["Home.js"]
+    i = home.index("function scrollToG2")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert ".closest('.hb-shell')" in fn, "scrollToG2 缺 .closest('.hb-shell') 容器锚定"
+    assert "shell.scrollTo" in fn, "scrollToG2 缺 shell.scrollTo 显式容器滚动"
+    assert "scrollIntoView(" not in fn, "scrollToG2 回退裸 scrollIntoView 调用"
+
+
+def test_home_g2_ts_cursor_day_rows_pins():
+    # G2 重构波（2026-11-23）钉：游标 seq→ts（推进源=服务端 clock window.until）、
+    # 日段×文件行渲染、未看黄铜点 + flash、回看开关（3 天窗）、滚动显式容器同族。
+    home = _templates()["Home.js"]
+    api = (TPL / "js/api.js").read_text(encoding="utf-8")
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    # ① 新键在位；旧 seq 游标键全线退役（禁写入；读侧兼容亦未保留——迁移零成本）
+    assert "mdvault.seenTs" in voice
+    assert "seenSeq" not in voice and "seenSeq" not in home
+    assert "last_seen_seq" not in api and "lastSeenSeq" not in api
+    # ② 游标推进源 = payload.window.until（服务端时钟），fetchHome 内禁 Date.now()
+    i = home.index("function fetchHome")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert "localStorage.setItem(LS_KEYS.seenTs, String(d.window.until))" in fn, \
+        "游标推进源必须是 payload.window.until（服务端时钟）"
+    assert "Date.now()" not in fn
+    # ③ G2 渲染结构：actor 桶 → 日段 → 文件行（类名 Home 模板与 style.css 两处一致）
+    assert "g2Groups" in home
+    for cls in ("hb-g2-day", "hb-file-row"):
+        assert cls in home and "." + cls in css, cls
+    # ④ 未看黄铜点与 flash：模板 + CSS 双在，且 reduced-motion 下 CSS 关动画
+    for cls in ("hb-unseen-dot", "hb-flash"):
+        assert cls in home and "." + cls in css, cls
+    rm_i = css.index(".hb-g1-btn { transition: none")
+    assert "  .hb-flash { animation: none; }" in css[rm_i:rm_i + 200], \
+        "hb reduced-motion 块缺 .hb-flash 关动画"
+    # ⑤ 回看开关：3 天窗条件渲染（「现在」用 window.until，缺席窗 since 用 baseSinceMs）
+    assert 'v-if="canLookback"' in home and "toggleLookback" in home
+    assert "3 * 86400" in home and "window.until" in home
+    assert "lookback: '看看前三天'" in voice and "lookbackOff: '收起'" in voice
+    # ⑤b 收束态回看入口（2026-11-23 补）：短留收束句尾同挂回看钮，点开展开结构
+    # （回看不分离开时长）；收束段守卫必须是 shortStay && !lookback。
+    assert 'v-if="shortStay && !lookback"' in home, "收束句守卫未挂回看联动"
+    assert "lookbackTitle" in voice and "回看前三天" in voice, "回看态段题文案缺失"
+    # ⑥ 未看行滚动：显式容器（.closest('.hb-shell') + shell.scrollTo），禁裸 scrollIntoView
+    i = home.index("function scrollToUnseen")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert ".closest('.hb-shell')" in fn and "shell.scrollTo" in fn
+    assert "scrollIntoView(" not in fn, "scrollToUnseen 回退裸 scrollIntoView"
+    assert "hb-unseen-dot" in fn and "hb-file-row" in fn, "滚动目标须是首条未看文件行"
