@@ -3,7 +3,7 @@
 - 日期：2026-11-22（rev2 二修：常驻 rail → 左下悬浮圆钮入口 + 默认单栏态；rev3 三修：AI 面板 → 右缘半隐把手 + 管家气泡栈 + 聊天浮窗，均用户拍板）
 - 状态：设计定稿（§2 七项拍板），待用户评审 → 实施计划
 - 范围定性：壳级架构重构（导航模型 + 栏位模型 + 操作路径）；同步/索引/agent/设置热生效等底层子系统行为零改动
-- 法源与关联：首页 spec §10「沉浸式壳」演进位的兑现（`2026-11-22-home-butler-landing-design.md`，Home 零改动契约必须守住）；设置页 spec（`2026-11-22-settings-page-design.md`，modal 壳复用）；预览稿同目录 `2026-11-22-immersive-shell-preview.html`
+- 法源与关联：首页 spec §10「沉浸式壳」演进位的兑现（`2026-11-22-home-butler-landing-design.md`，Home 零改动契约必须守住）；设置页 spec（`2026-11-22-settings-page-design.md`，modal 壳复用）；预览稿同目录 `2026-11-22-immersive-shell-preview.html`；配色评审（2026-11-23，仅色彩与视觉层级面：三建议改 + 两目检盯）`2026-11-23-immersive-shell-color-review.md`
 
 ## 0. TL;DR
 

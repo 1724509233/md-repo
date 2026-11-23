@@ -477,7 +477,7 @@ pre code.hljs { background: transparent; padding: 0; }
    自动批准 ON 态只由颜色表达（brass 图标 + 18% 底色 + 45% 边框），几何零变化，
    是头部的唯一颜色载体；brand 显式 brass（tailwind.config 未注册，text-brass 系类为空操作）。 */
 .ai-head { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-family: 'Inter', sans-serif; }
-.ai-brand { width: 32px; height: 32px; border-radius: 9999px; border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ai-brand { width: 32px; height: 32px; border-radius: 9999px; border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: color-mix(in srgb, var(--brass) 82%, var(--ink)); display: flex; align-items: center; justify-content: center; flex-shrink: 0; } /* 配色评审③：摘要面（ai-brand/气泡栈）用暗金=brass 掺墨，与详情徽标（亮黄铜 pill/聚合点）明度分档——同色两档读作一事的轻重说，同色同档读作三件事 */
 .ai-brand .icon { width: 14px; height: 14px; }
 .ai-id { flex: 1; min-width: 0; }
 .ai-line1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -2079,6 +2079,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (min-width: 1024px) {
   .panel-shell {
     position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+    background: var(--surface); /* 配色评审②（2026-11-23）：分层只剩两腿——浮层与纸面明度差须显式拉大（原 --paper 与底面零差，仅靠边+影） */
     border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
     transform: translateX(-102%); visibility: hidden;
     box-shadow: 22px 0 56px -20px rgba(33, 29, 24, .38), 8px 0 18px -8px rgba(33, 29, 24, .20);
@@ -2140,7 +2141,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 }
 .doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .doc-bp .doc-sep { opacity: .5; }
-.doc-bp .doc-cur { color: var(--ink-soft); }
+.doc-bp .doc-cur { color: var(--ink); } /* 配色评审⑤：「我在哪」必须可读——面包屑末段升主墨，目录段保持弱色 */
 .doc-lock {
   display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
   font-size: 10.5px; color: var(--ink-soft);
@@ -2176,7 +2177,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
   width: var(--dock-w); z-index: 10;
   flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
   border-radius: 10px 0 0 10px;
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  background: var(--surface); /* 配色评审②：88% 半透降格为「略浮」，浮层底色取满档 surface */
   backdrop-filter: blur(4px);
   box-shadow: -1px 0 0 var(--line), -8px 0 24px -18px rgba(33, 29, 24, .30);
 }
@@ -2194,8 +2195,8 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .dock-btn:disabled { opacity: .35; pointer-events: none; }
 .dock-danger { color: color-mix(in srgb, var(--destructive) 75%, var(--ink-soft)); }
 .dock-danger:hover { background: color-mix(in srgb, var(--destructive) 9%, transparent); color: var(--destructive); }
-.dock-dirty { position: absolute; top: 3px; right: 3px; width: 6px; height: 6px;
-  border-radius: 9999px; background: var(--brass); box-shadow: 0 0 0 2px var(--surface); }
+.dock-dirty { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; box-sizing: border-box;
+  border-radius: 9999px; background: transparent; border: 1.5px solid var(--brass); box-shadow: 0 0 0 2px var(--surface); } /* 配色评审④：品牌=字/图标、状态=点/角标；dirty 用空心圈（你有活儿），实心点恒归「系统有话讲」（未读/待审） */
 @media (min-width: 1024px) {
   /* toc-dd 桌面锚 = dock 左缘（top 贴顶栏退役后的行位；z-50 压过 dock 10） */
   .toc-dd { top: 16px; right: calc(var(--dock-w) + 8px); }
@@ -2248,7 +2249,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
     box-shadow: 0 6px 18px -8px rgba(33, 29, 24, .22);
   }
   .bubble:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
-  .bubble p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+  .bubble p { margin: 0; font-size: 13px; line-height: 1.45; color: color-mix(in srgb, var(--brass) 82%, var(--ink)); } /* 配色评审③：摘要面文字走暗金档 */
   .bubble .bt { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
   .bmore { align-self: flex-end; font-size: 11px; color: var(--ink-soft); padding: 0 4px; }
   /* dock 在场（.has-dock 由 app 模板 hasDoc 下挂 bubble-peek 根）：握把/气泡从居中改贴 dock 下缘
