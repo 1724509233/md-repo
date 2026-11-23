@@ -24,19 +24,23 @@ def _run_node(js: str):
 
 
 def test_shell_state_pure():
-    # drawerNext：target===cur → null（再点即关），否则返回 target；
-    # escTarget：settings > fan > drawer > dropdown；
+    # drawerNext：target===cur → null（再点即关），否则返回 target（域=file|trash|null，
+    # 2026-11-23 检索页：search 移出抽屉值域）；
+    # escTarget：settings > fan > drawer > search > dropdown（浮层压页面，plan 2026-11-23-immersive-search T1）；
     # loadSlots：畸形/缺键/越界 right 全回默认 {tree:false,right:null}。
     mod = (TPL / "js/utils/shellState.js").as_uri()
     js = (
         "import(%r).then(m=>{"
         "const dq=(a,b,w)=>{if(a!==b){console.error(w);process.exit(1)}};"
         "dq(m.drawerNext('file','file'),null,'drawerNext same');"
-        "dq(m.drawerNext('file','search'),'search','drawerNext switch');"
+        "dq(m.drawerNext('file','trash'),'trash','drawerNext switch');"
         "dq(m.drawerNext(null,'monitor'),'monitor','drawerNext from null');"
         "dq(m.escTarget({settingsOpen:true,fanOpen:true,drawer:'file',dropdownOpen:true}),'settings','esc settings');"
         "dq(m.escTarget({fanOpen:true,drawer:'file',dropdownOpen:true}),'fan','esc fan');"
+        "dq(m.escTarget({drawer:'file',view:'search'}),'drawer','esc drawer over view');"
         "dq(m.escTarget({drawer:'file'}),'drawer','esc drawer');"
+        "dq(m.escTarget({view:'search'}),'search','esc search');"
+        "dq(m.escTarget({view:'search',dropdownOpen:true}),'search','esc search over dropdown');"
         "dq(m.escTarget({}),null,'esc none');"
         "const dflt=o=>o.tree===false&&o.right===null;"
         "dq(dflt(m.loadSlots(null)),true,'loadSlots null');"
