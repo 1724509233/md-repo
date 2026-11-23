@@ -1494,23 +1494,42 @@ def test_home_g2_ts_cursor_day_rows_pins():
 
 
 def test_home_g2_day_overflow_collapse_pins():
-    # 日段行数封顶折叠（2026-11-23 噪声治理）：超 8 行折前 8 +「还有 N 篇……展开›」；
-    # 未看行必须置顶（折叠不得藏未读点）；只折展示不动谓词；重取回默认。
+    # 日段行数封顶折叠（2026-11-23 噪声治理 + 动画）：超 8 行折前 8 +「还有 N 篇……展开›」；
+    # 未看行必须置顶（折叠不得藏未读点）；只折展示不动谓词；重取回默认；
+    # 动画 = grid 0fr⇄1fr 纯 CSS（禁 JS 测高），reduced-motion 全关。
     home = _templates()["Home.js"]
     voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
     css = (TPL / "style.css").read_text(encoding="utf-8")
     assert "G2_DAY_CAP = 8" in home, "缺日段封顶常量"
     i = home.index(".sort((a, b) => (b.unseen ? 1 : 0) - (a.unseen ? 1 : 0))")
     assert "rows:" in home[:i][-1200:], "未看置顶 sort 必须挂在日段 rows 构造上"
-    for fn in ("function g2Visible", "function toggleG2Day", "function g2DayKey"):
+    for fn in ("function g2Base", "function g2Fold", "function toggleG2Day", "function g2DayKey"):
         assert fn in home, fn
-    assert "d.rows.slice(0, G2_DAY_CAP)" in home
-    i = home.index("function g2Visible")
-    assert home[i:home.index("\n    }", i)].count("count(") == 0, "折叠谓词勿碰计数（只 slice 展示）"
-    assert 'v-for="r in g2Visible(g, d)"' in home, "模板未接折叠视图"
+    assert "d.rows.slice(0, G2_DAY_CAP)" in home and "d.rows.slice(G2_DAY_CAP)" in home
+    assert "offsetHeight" not in home and "getBoundingClientRect().height" not in home, \
+        "折叠动画禁 JS 测高"
+    assert 'v-for="r in g2Base(d)"' in home and 'v-for="r in g2Fold(d)"' in home, "模板未接折叠视图"
+    assert 'class="hb-g2-fold"' in home and "'is-open'" in home
+    # G3 日展开同语法：折叠容器 + is-open 绑定，旧 v-if 整块开关必须退役
+    assert 'class="hb-day-fold"' in home and "{ 'is-open': expanded.has(d.date) }" in home
+    assert 'v-if="expanded.has(d.date)" class="hb-day-ops"' not in home
     assert "还有 ${n} 篇…… 展开 ›" in voice and "collapseMore: '收起 ›'" in voice
-    assert ".hb-g2-more" in css
     assert "expandedG2.value = new Set()" in home, "重取须回折叠默认态"
+    # 动画机制钉：grid 0fr⇄1fr 过渡 + 折叠行淡入上浮 + reduced-motion 双关
+    assert "grid-template-rows: 0fr" in css and "grid-template-rows: 1fr" in css, "折叠动画须 grid 0fr⇄1fr"
+    assert "hb-g2-fold-inner, .hb-day-fold-inner { overflow: hidden; min-height: 0; }" in css, "grid 折叠须 overflow 内衬"
+    assert "@keyframes hb-fold-in" in css and "hb-g2-fold.is-open .hb-file-row" in css
+    assert ".hb-day-fold.is-open .hb-grp-row" in css, "G3 折叠行未接淡入"
+    rm2 = css.index("@media (prefers-reduced-motion: reduce)", css.index(".hb-g2-fold"))
+    rmblk = css[rm2:rm2 + 300]
+    assert ".hb-g2-fold, .hb-day-fold { transition: none; }" in rmblk and "animation: none" in rmblk, \
+        "reduced-motion 未关折叠动画"
+    # 回看换窗入场：整段 key 重建 + 一次性淡入上浮，reduced-motion 同关
+    assert 'class="hb-win"' in home and ':key="lookback ? \'lb\' : \'base\'"' in home, "回看段缺重建键"
+    assert "@keyframes hb-win-in" in css and ".hb-win { animation: hb-win-in" in css
+    assert ".hb-win { animation: none; }" in rmblk, "reduced-motion 未关换窗入场"
+    # 滚动条槽预占：内容跨滚动阈值（G3/G2 展开）不得挤动居中的 .hb-home
+    assert "scrollbar-gutter: stable" in css, ".hb-shell 须预占滚动条槽防展开左移"
     # ⑥ 未看行滚动：显式容器（.closest('.hb-shell') + shell.scrollTo），禁裸 scrollIntoView
     i = home.index("function scrollToUnseen")
     fn = home[i:i + home[i:].index("\n    }")]

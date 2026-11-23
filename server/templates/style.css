@@ -1751,7 +1751,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
    视觉基准 = docs/superpowers/specs/2026-11-22-home-butler-landing-preview.html（用户已认可）。
    信笺式低 chrome：窄栏居中、细竖线分组、G4 唯一盒子；token 全走 :root；
    中文衬线按 §9.7 维持现状（body 栈落雅黑，不加 CJK 衬线回退）。 */
-.hb-shell { flex: 1; min-width: 0; overflow-y: auto; background: var(--paper); }
+.hb-shell { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--paper); }  /* stable：展开内容跨滚动阈值时滚动条不得挤动居中列（2026-11-23 G3 展开左移） */
 .hb-home { max-width: 720px; margin: 0 auto; padding: 54px 28px 40px; }
 
 /* G1 叙事栈（大字 serif；缺席时长黄铜） */
@@ -1812,6 +1812,23 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .hb-g2-more { margin: 2px 0 0; padding-left: 4px; }
 .hb-g2-more a { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); }
 .hb-g2-more a:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 折叠区高度动画（2026-11-23 拍板，G2 溢出折叠 + G3 日展开共用）：
+   grid 0fr⇄1fr 纯 CSS 过渡——任意行数零 JS 测高。展开 220ms ease-out，收起 180ms ease-in；
+   折叠行一次性淡入+3px 上浮（不逐行错峰）。 */
+.hb-g2-fold, .hb-day-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 180ms ease-in; }
+.hb-day-fold { flex-basis: 100%; }   /* .hb-day 是 flex 头行容器，折叠区接行底占满整行 */
+.hb-g2-fold.is-open, .hb-day-fold.is-open { grid-template-rows: 1fr; transition: grid-template-rows 220ms ease-out; }
+.hb-g2-fold-inner, .hb-day-fold-inner { overflow: hidden; min-height: 0; }
+@keyframes hb-fold-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.hb-g2-fold.is-open .hb-file-row, .hb-day-fold.is-open .hb-grp-row { animation: hb-fold-in 260ms ease-out both; }
+/* 换窗入场（2026-11-23 回看展开/收起）：key 变化重建整段，段题+列表一次性淡入上浮 */
+.hb-win { animation: hb-win-in 220ms ease-out both; }
+@keyframes hb-win-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .hb-g2-fold, .hb-day-fold { transition: none; }
+  .hb-g2-fold.is-open .hb-file-row, .hb-day-fold.is-open .hb-grp-row { animation: none; }
+  .hb-win { animation: none; }
+}
 .hb-file-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 4px; min-width: 0; border-radius: 6px; cursor: pointer; }
 .hb-file-row.is-dead { cursor: default; }
 .hb-file-row .fname { font-size: 15px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

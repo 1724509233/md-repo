@@ -151,10 +151,8 @@ export const Home = {
     const G2_DAY_CAP = 8
     const expandedG2 = ref(new Set())
     function g2DayKey(g, d) { return g.actor + '/' + (g.alias || '') + '@' + d.date }
-    function g2Visible(g, d) {
-      if (d.rows.length <= G2_DAY_CAP || expandedG2.value.has(g2DayKey(g, d))) return d.rows
-      return d.rows.slice(0, G2_DAY_CAP)
-    }
+    function g2Base(d) { return d.rows.length <= G2_DAY_CAP ? d.rows : d.rows.slice(0, G2_DAY_CAP) }
+    function g2Fold(d) { return d.rows.slice(G2_DAY_CAP) }   // 折叠区内容（恒在 DOM，靠 0fr 收高度）
     function toggleG2Day(key) {
       const s = new Set(expandedG2.value)
       if (s.has(key)) s.delete(key); else s.add(key)
@@ -296,7 +294,7 @@ export const Home = {
       state, HOME_COPY, groupHead, data, loadFailed, groups, g2Groups, myDays, g4Rows, expanded,
       shortStay, g1, g2Title, g3Title, summary, summing, sumNote,
       canLookback, lookback, toggleLookback,
-      G2_DAY_CAP, expandedG2, g2Visible, g2DayKey, toggleG2Day,
+      G2_DAY_CAP, expandedG2, g2Base, g2Fold, g2DayKey, toggleG2Day,
       hm, md, verb, daySummary, toggleDay, openPath, openRow, genSummary, load,
       scrollToG2, scrollToUnseen,
     }
@@ -328,7 +326,9 @@ export const Home = {
           <section class="hb-sec" id="hb-g2">
             <p v-if="shortStay && !lookback" class="hb-quiet">{{ HOME_COPY.g2.short }}<button
                v-if="canLookback" class="hb-lookback" @click="toggleLookback">{{ HOME_COPY.g2.lookback }}</button></p>
-            <template v-else>
+            <!-- 换窗入场（2026-11-23）：回看展开/收起整段 key 变化重建，段题+列表一体淡入上浮；
+                 同窗周期刷新 key 不变 → 不重播 -->
+            <div v-else class="hb-win" :key="lookback ? 'lb' : 'base'">
               <div class="hb-sec-head">
                 <h2 class="hb-sec-title">{{ lookback ? HOME_COPY.g2.lookbackTitle : g2Title }}</h2>
                 <button v-if="canLookback" class="hb-lookback" @click="toggleLookback">
@@ -340,13 +340,28 @@ export const Home = {
                 <p class="hb-grp-head">{{ groupHead(g) }}</p>
                 <div class="hb-g2-day" v-for="d in g.days" :key="d.date">
                   <p class="hb-g2-day-head">{{ d.title }}</p>
-                  <div class="hb-file-row" :class="{ 'is-dead': r.dead }" v-for="r in g2Visible(g, d)" :key="r.path"
+                  <div class="hb-file-row" :class="{ 'is-dead': r.dead }" v-for="r in g2Base(d)" :key="r.path"
                        :title="r.path" @click="openRow(r)">
                     <span v-if="r.unseen" class="hb-unseen-dot"></span>
                     <span class="fname">{{ r.name }}</span>
                     <span v-if="r.dir" class="fdir">{{ r.dir }}/</span>
                     <span class="hb-chip" v-for="c in r.chips" :key="c">{{ c }}</span>
                     <span class="t">{{ hm(r.lastTs) }}</span>
+                  </div>
+                  <!-- 折叠区（2026-11-23 动画）：grid 0fr⇄1fr 纯 CSS 高度过渡，零 JS 测高；
+                       行淡入+3px 上浮；reduced-motion 全关。折叠行恒在 DOM，0fr 高度即 0 命中区 -->
+                  <div v-if="d.rows.length > G2_DAY_CAP" class="hb-g2-fold"
+                       :class="{ 'is-open': expandedG2.has(g2DayKey(g, d)) }">
+                    <div class="hb-g2-fold-inner">
+                      <div class="hb-file-row" :class="{ 'is-dead': r.dead }" v-for="r in g2Fold(d)" :key="r.path"
+                           :title="r.path" @click="openRow(r)">
+                        <span v-if="r.unseen" class="hb-unseen-dot"></span>
+                        <span class="fname">{{ r.name }}</span>
+                        <span v-if="r.dir" class="fdir">{{ r.dir }}/</span>
+                        <span class="hb-chip" v-for="c in r.chips" :key="c">{{ c }}</span>
+                        <span class="t">{{ hm(r.lastTs) }}</span>
+                      </div>
+                    </div>
                   </div>
                   <p v-if="d.rows.length > G2_DAY_CAP" class="hb-g2-more">
                     <a href="#" @click.prevent="toggleG2Day(g2DayKey(g, d))">{{
@@ -355,7 +370,7 @@ export const Home = {
                   </p>
                 </div>
               </div>
-            </template>
+            </div>
           </section>
 
           <!-- G3 您上次离开前做到哪（固定 3d 窗，与缺席窗解耦；只展开最近一天） -->
@@ -368,10 +383,15 @@ export const Home = {
               <a v-if="d.ops.length" class="expand" href="#" @click.prevent="toggleDay(d.date)">
                 {{ expanded.has(d.date) ? HOME_COPY.g3.collapse : HOME_COPY.g3.expand }}
               </a>
-              <div v-if="expanded.has(d.date)" class="hb-day-ops">
-                <div class="hb-grp-row" v-for="op in d.ops" :key="op.seq">
-                  <span class="t">{{ hm(op.ts) }}</span><span class="act">{{ verb(op.action) }}</span><span class="mid">·</span>
-                  <a class="path" href="#" @click.prevent="openPath(op)" :title="op.path">{{ op.path }}</a>
+              <!-- G3 同语法折叠（2026-11-23）：grid 0fr⇄1fr，行淡入；默认展开最近一天（类恒挂不重播动画） -->
+              <div v-if="d.ops.length" class="hb-day-fold" :class="{ 'is-open': expanded.has(d.date) }">
+                <div class="hb-day-fold-inner">
+                  <div class="hb-day-ops">
+                    <div class="hb-grp-row" v-for="op in d.ops" :key="op.seq">
+                      <span class="t">{{ hm(op.ts) }}</span><span class="act">{{ verb(op.action) }}</span><span class="mid">·</span>
+                      <a class="path" href="#" @click.prevent="openPath(op)" :title="op.path">{{ op.path }}</a>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
