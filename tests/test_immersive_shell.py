@@ -252,7 +252,7 @@ def test_desktop_topbar_retired():
 
 def test_dock_and_shortcut_pins():
     # Task 5 静态钉（plan Step 1 断言集）：RightDock 八钮 title/aria-label 全集 + disabled
-    # 绑定（保存/下载/重命名/移动/删除 = docMissing 禁用、按钮恒渲染零跳变 D5）+ 三快捷键
+    # 绑定（保存/下载/文件/重命名/删除 = docMissing 禁用、按钮恒渲染零跳变 D5）+ 三快捷键
     # （小写比较——禁 casefold 红线）+ docActions 双消费 + app.js 挂 dock（lg-only 双保险）+
     # 样式面 --dock-w 变量与 .dock z-index:10（spec §7 层序 dock < fab）。
     rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
@@ -262,10 +262,11 @@ def test_dock_and_shortcut_pins():
     css = (TPL / "style.css").read_text(encoding="utf-8")
 
     # ① 八钮 title 文案（预览/编辑激活态同一钮双态 ternary → 动态 title/aria-label；
-    #    保存/下载/重命名/移动/删除 = docMissing 禁用、模式钮锁进编辑，按钮恒渲染零跳变 D5）
+    #    保存/下载/文件/重命名/删除 = docMissing 禁用、模式钮锁进编辑，按钮恒渲染零跳变 D5。
+    #    2026-11-23 用户拍板：原「移动」钮退役改「文件」钮——移动归树内 ⋯ 单写面）
     assert re.search(r":title=\"mode === 'edit' \? '切回预览' : '编辑'\"", rd), "预览⇄编辑双态 title 缺"
     assert rd.count(':aria-label="mode === ') == 1
-    for label in ("保存", "下载", "目录", "关联", "重命名", "移动", "删除"):
+    for label in ("保存", "下载", "目录", "关联", "重命名", "文件", "删除"):
         assert f'title="{label}"' in rd, label
         assert f'aria-label="{label}"' in rd, label
     assert rd.count(":disabled=") >= 5
@@ -547,3 +548,118 @@ def test_setup_return_no_bare_props():
     block = src[i : src.index("\n    }", i)]
     for prop in ("memoryBadge", "initialTab"):
         assert f"{prop}," not in block, f"prop {prop} 裸简写混入 setup return（作用域雷）"
+
+
+def test_dock_toc_toggle_guard_exemption():
+    # 开关钮在 TopBar rootEl 外，document 级外部点击守卫必须豁免之，否则同点开关抵消
+    # （本分支实证 bug）：桌面目录钮迁 RightDock 后，点 dock 目录钮 Vue handler 先开，
+    # 同一原生 click 冒泡到 document 又被 TopBar onDocClick 按「外部点击」立刻关掉。
+    rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
+    tb = (TPL / "js/components/TopBar.js").read_text(encoding="utf-8")
+    # ① dock 目录钮（title="目录"）带 data-toc-toggle 豁免标记
+    m = re.search(r"<button[^>]*data-toc-toggle[^>]*title=\"目录\"", rd)
+    assert m, "RightDock 目录钮缺 data-toc-toggle 豁免标记"
+    # ② TopBar onDocClick 的 closest 选择器同时豁免浮层与开关钮
+    m = re.search(r"onDocClick[\s\S]*?closest\('([^']*)'\)", tb)
+    assert m, "TopBar onDocClick closest 守卫段缺失"
+    assert "[data-toc-dd]" in m.group(1) and "[data-toc-toggle]" in m.group(1), \
+        f"onDocClick 守卫未双豁免: {m.group(1)}"
+
+
+def test_drawer_outside_click_close():
+    # 桌面浮层抽屉点外关闭（spec 2026-11-22 §4 表「文件 320px」行收起列承诺的第四路，
+    # 2026-11-23 用户拍板补位）：document 级监听守卫链三连——isDesktop（移动端天然挡住，
+    # ≤1023px 零改动红线）+ state.drawer（无抽屉不关）+ treePinned（钉住 in-flow 左槽常驻
+    # 不点外关）；豁免三面不关：.panel-shell 抽屉自身 / .fab-root（子钮 pick 经 drawerNext
+    # 自决开合，不得被同点外点链抵消）/ .dock（revealTree 开抽屉的同点冒泡再关会吞掉开动作）。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    blocks = re.findall(r"document\.addEventListener\('click', \(e\) => \{[^{}]*\}\)", app, re.S)
+    seg = [b for b in blocks
+           if "closest('.panel-shell')" in b and "closest('.fab-root')" in b
+           and "closest('.dock')" in b]
+    assert seg, "缺同时豁免 panel-shell/fab-root/dock 三面的点外关闭监听"
+    body = seg[0]
+    assert re.search(
+        r"if \(!isDesktop\.value \|\| !state\.drawer \|\| treePinned\.value\) return", body), \
+        "点外关闭守卫链缺（isDesktop/state.drawer/treePinned 三连）"
+    assert "state.drawer = null" in body, "非豁免点击须关抽屉（state.drawer = null）"
+
+
+def test_dock_file_button_replaces_move():
+    # dock「移动」钮 →「文件」钮（2026-11-23 用户拍板）：移动退出 dock 面（仅树内 ⋯ 单写面），
+    # 文件钮 = emit('revealTree', 'file')（2026-11-23 同轮追加 toggle 分流，开/关口径见
+    # test_dock_file_button_toggle）；runMove/confirmMoveDoc 退出 RightDock
+    #（删除直调 runDelete/confirmDeleteDoc 不动）。
+    rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
+    assert "runMove" not in rd and "confirmMoveDoc" not in rd, "移动直调面未退出 RightDock"
+    assert 'title="移动"' not in rd, "「移动」钮残留"
+    m = re.search(r"<button[^>]*title=\"文件\"[^>]*>", rd, re.S)
+    assert m, "「文件」钮缺（title=\"文件\"）"
+    assert "revealTree', 'file'" in m.group(0), "文件钮未接 $emit('revealTree', 'file')"
+    assert ':disabled="docMissing"' in m.group(0), "文件钮缺 docMissing 禁用（同族口径）"
+
+
+def test_dock_file_button_toggle():
+    # dock「文件」钮 = 开/关收起 + 激活态（2026-11-23 用户拍板）：RightDock fileOpen prop +
+    # on/aria-pressed 绑定；app 传 :file-open（抽屉开 或 左槽钉住）；onRevealTree 顶部
+    # kind==='file' 收起支路——未钉住且抽屉已开 → state.drawer = null 并 return
+    #（钉住态 = 左槽常驻不归它关，图钉钮 toggleTreeSlot 自理）。
+    rd = (TPL / "js/components/RightDock.js").read_text(encoding="utf-8")
+    assert "fileOpen:" in rd, "RightDock 缺 fileOpen prop"
+    m = re.search(r"<button[^>]*title=\"文件\"[^>]*>", rd, re.S)
+    assert m, "「文件」钮缺"
+    assert ':class="{ on: fileOpen }"' in m.group(0), "文件钮缺 on 激活态绑定"
+    assert ':aria-pressed="fileOpen"' in m.group(0), "文件钮缺 aria-pressed"
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    assert ':file-open="state.drawer === \'file\' || treePinned"' in app, \
+        "right-dock 缺 :file-open 传通（抽屉开 || 钉住）"
+    seg = app[app.index("function onRevealTree(kind)"):]
+    assert re.search(
+        r"if \(kind === 'file' && !treePinned\.value && state\.drawer === 'file'\) \{\s*"
+        r"state\.drawer = null\s*return\s*\}", seg), "onRevealTree 缺 file 收起支路"
+    # 收起支路必须在函数顶部（activePanel 让位切换之前——收起不该顺手切 face）
+    assert seg.index("kind === 'file'") < seg.index("activePanel.value"), \
+        "file 收起支路不在函数顶部"
+
+
+def test_rel_side_desktop_float():
+    # 关联桌面浮层化（2026-11-23 用户拍板：关联 = 目录同款子页浮层，不再挤压主区）四钉：
+    # ① style.css @media (min-width: 1024px) 内 .rel-side = position: fixed 浮层（同 .toc-dd
+    #    锚），块邻域注释带拍板年份注记；RM 降级两态都杀 transition；
+    # ② app.js 关联浮层点外关闭监听（isDesktop 守卫 + 豁免 .rel-side 浮层自身与 .dock 关联钮）；
+    # ③ 持久化退位：persistRightSlot 不再写 'rel'（relOpen 持久化 watch 删）、
+    #    applyBootRightSlot 'rel' 回填支路删；
+    # ④ 关联 ↔ 目录浮层互斥 watch（isDesktop 守卫——平板带 861–1023 侧栏形态不互斥，红线）。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    blocks = _media_blocks(css, "@media (min-width: 1024px)")
+    floats = [b for b in blocks if ".rel-side" in b and "position: fixed" in b]
+    assert floats, "缺 .rel-side 桌面浮层块（min-width:1024 + position: fixed）"
+    body = floats[0]
+    assert "visibility: hidden" in body and ".rel-side.open" in body and "visibility: visible" in body
+    # 拍板字样年份注记（块注释在 @media 前邻域，_media_blocks 不含注释 → 回看原文）
+    i = css.index(body)
+    assert "2026-11-23" in css[max(0, i - 1200):i] and "拍板" in css[max(0, i - 1200):i], \
+        "浮层块邻域缺 2026-11-23 拍板注记"
+    rms = _media_blocks(css, "@media (prefers-reduced-motion: reduce)")
+    assert any(re.search(r"\.rel-side, \.rel-side\.open \{ transition: none", b) for b in rms), \
+        "RM 降级未覆盖 .rel-side 两态"
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    # ② 点外关闭：与抽屉版同款守卫链（先例注释指向抽屉版），豁免集不同（.rel-side + .dock）
+    listeners = re.findall(r"document\.addEventListener\('click', \(e\) => \{[^{}]*\}\)", app, re.S)
+    rel = [b for b in listeners
+           if "closest('.rel-side')" in b and "closest('.dock')" in b
+           and "!isDesktop.value || !state.relOpen" in b]
+    assert rel, "缺关联浮层点外关闭监听（isDesktop 守卫 + 豁免 .rel-side/.dock）"
+    assert "state.relOpen = false" in rel[0]
+    # ③ 持久化退位
+    seg = app[app.index("function persistRightSlot"):app.index("function toggleChatPin")]
+    assert "'rel'" not in seg, "persistRightSlot 仍在写 'rel' 槽值"
+    assert "state.chatPinned ? 'ai' : null" in seg
+    assert "watch(() => state.relOpen, persistRightSlot)" not in app, "relOpen 持久化 watch 未删"
+    seg2 = app[app.index("function applyBootRightSlot"):app.index("// 文件管理操作")]
+    assert "'rel'" not in seg2, "applyBootRightSlot 'rel' 回填支路未删"
+    # ④ 互斥 watch 双向 + isDesktop 守卫
+    assert re.search(r"watch\(\(\) => state\.relOpen, \(v\) => \{[^}]*isDesktop\.value"
+                     r"[^}]*state\.tocOpen[^}]*toggleToc\(\)", app), "relOpen→toc 互斥支路缺"
+    assert re.search(r"watch\(\(\) => state\.tocOpen, \(v\) => \{[^}]*isDesktop\.value"
+                     r"[^}]*state\.relOpen = false", app), "tocOpen→rel 互斥支路缺"

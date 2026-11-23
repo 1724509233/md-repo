@@ -71,9 +71,11 @@ export const TopBar = {
     // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理。
     // T5：toc-dd 迁 app 根级单实例（桌面锚 dock 左缘），不再属顶栏子树——「点浮层不关」
     // 改由 data-toc-dd 守卫解耦判定（移动浮层同款属性，行为逐字不变）。
+    // 桌面目录开关钮迁 RightDock 后也在 rootEl 之外，开关钮自身点击不得按「外部点击」
+    // 再关（同点即开又关）——data-toc-toggle 一并豁免。
     function onDocClick(e) {
       if (rootEl.value && rootEl.value.contains(e.target)) return
-      if (e.target.closest && e.target.closest('[data-toc-dd]')) return
+      if (e.target.closest && e.target.closest('[data-toc-dd], [data-toc-toggle]')) return
       if (props.tocOpen) emit('toggleToc')
     }
     function onKeydown(e) {

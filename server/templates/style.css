@@ -2259,3 +2259,34 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .grip, .bubbles { transition: none; }
   #ai-panel.chatwin, #ai-panel.chatwin.open { transition: none; }
 }
+
+/* ──── 沉浸式壳 · 关联浮层桌面化（2026-11-23 用户拍板：关联 = 目录同款子页浮层，不再占栏）────
+   ≥1024px 下 .rel-side 覆写为 .toc-dd 同锚同层浮层（fixed top:16 / right:calc(--dock-w+8) / z-50）：
+   脱离 flex 流，主区宽度/680px 列居中/滚动位置零扰动（原 in-flow 280px 栏挤压作废）。
+   开合走 opacity/transform + visibility 延迟切换（出入都有真动效——DocRelated 内容件 v-if 挂载，
+   toc-dd 的 display 直切画谱不适用）；点外关闭/Esc/互斥（与 toc-dd 同锚必互斥）归 app.js JS 面。
+   ≤1023px 零改动（红线）：平板带 861–1023 保持上方分节的 in-flow 侧栏原形态，
+   ≤860px display:none 与底部抽屉承载均不动。 */
+@media (min-width: 1024px) {
+  .rel-side {
+    position: fixed; top: 16px; right: calc(var(--dock-w) + 8px);
+    width: 280px; height: min(520px, calc(100vh - 32px));
+    z-index: 50;
+    border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(33, 29, 24, .12), 0 2px 6px rgba(33, 29, 24, .06); /* 同 .toc-dd 双层软影 */
+    opacity: 0; visibility: hidden;
+    transform: scale(.97) translateY(-4px); transform-origin: top right;
+    pointer-events: none;
+    transition: opacity .18s ease, transform .18s var(--ease), visibility 0s .18s;
+    overflow: hidden;
+  }
+  .rel-side.open {
+    opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+    transition: opacity .18s ease, transform .18s var(--ease), visibility 0s 0s;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 直切（两态都杀：.open 自带 transition 特异度相同且位置靠后，只杀基础态则 RM 动效复活，
+     同 .panel-shell/.chatwin 纪律）。置本浮层化块之后——同名声明后来者胜，放前会被覆写行吃掉 */
+  .rel-side, .rel-side.open { transition: none; }
+}

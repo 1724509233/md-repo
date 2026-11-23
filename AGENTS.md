@@ -80,7 +80,9 @@ The vault directory is both the data store and the Obsidian vault. `.sync/` insi
 
 - **沉浸式壳桌面/移动双旗标与跨断点清零（2026-11-23 沉浸式壳）**：桌面面板唯一源 = `state.drawer`（值域 file/search/trash/null；挂载/渲染门一律 `isDesktop`——matchMedia(1024) 驱动 ref，禁 innerWidth 非 reactive 形）；移动旗标另路（`filePanelOpen`/`searchDrawerOpen`/`memoryOpen`）。批准偏离：监控不进 drawer 值域，`state.monitoring` 单实例保留（双实例=双轮询），桌面靠 `.mwrap` 宽抽屉化承载。跨断点清零规则：**旗标所在壳被 v-if 卸载的同点必清零**——`watch(isDesktop)` 桌面→移动清 drawer+filePanelOpen；`watch(isConsoleMobile)`（matchMedia 860，口径对齐 openNotif 的 >860 深链改道而非 1024）入宽带清 memoryOpen/detail/report，违者旗标恒真时 backdrop 悬空成不可关黑幕。挂载集必须 = 可达集（console-shell 的 lg:hidden 教训：CSS 隐身 ≠ 不挂载，双实例同 props 冗余取数）。法源：`docs/superpowers/{specs,plans}/2026-11-22-immersive-shell*.md`。回归钉：`tests/test_immersive_shell.py` 家族。
 
-- **壳层 z 层序表（一行，违者盖错层）**：dock 10 < FAB 20 < 抽屉/监控 30 < 握把/气泡 40 < 聊天浮窗 45 < 下拉（通知/目录）50 < 桥区 54 < 扇弧子钮 55 < 设置浮窗 81（backdrop 80、confirm 90）。新浮层先照表对号（spec §7），钉：`test_pinned_slot_below_fab` 等层序家族。
+- **关联浮层化三态 + dock 文件钮 toggle（2026-11-23 用户拍板）**：`state.relOpen` 值域分断点——≥1024 = dock 左缘 fixed 浮层（与 toc-dd 同锚同 z-50，**开合同屏必互斥**：双向 watch 带 isDesktop 守卫）；861–1023 = in-flow 侧栏（共存不互斥，勿把桌面互斥外推）；≤860 = sheet 走 relSheetOpen 另路。浮层化后关联**不再写 slots.right**（'rel' 槽值退役，boot 回填只剩 ai），点外关闭豁免链 = 浮层自身 + `.dock`（开关钮防同点抵消，同 FAB/抽屉先例）。dock 文件钮 = 开/关 toggle（钉住态不归它关，图钉钮自理；激活态 fileOpen 回挂）。回归钉：`test_immersive_shell.py` 关联浮层/dock 文件钮系。
+
+- **壳层 z 层序表（一行，违者盖错层）**：dock 10 < FAB 20 < 抽屉/监控 30 < 握把/气泡 40 < 聊天浮窗 45 < 下拉（通知/目录/关联浮层）50 < 桥区 54 < 扇弧子钮 55 < 设置浮窗 81（backdrop 80、confirm 90）。新浮层先照表对号（spec §7），钉：`test_pinned_slot_below_fab` 等层序家族。
 
 - **Vue setup return 禁裸 prop 简写**：`setup(props)` 作用域里 `return { foo, ... }` 解出的是不存在的局部变量 → ReferenceError **崩整棵组件树**，且页面无任何可读表象（scene 只在浏览器 console），静态扫描/pytest 全绿放行。props 一律 `foo: props.foo` 全写。回归钉：`tests/test_immersive_shell.py::test_setup_return_no_bare_props`。
 
