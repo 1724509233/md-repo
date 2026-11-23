@@ -151,6 +151,58 @@ def test_s2_search_panel_consumes_escape_helpers():
     assert "function escapeHtml" not in sp and "function escapeRe" not in sp, "转义函数须迁出组件"
 
 
+def test_s2_grouped_presentation_pins():
+    # spec §4 呈现重做：按文件分组 / 相关性条退役 / 5 行 clamp+展开 / 加载两分支 /
+    # 零结果两句人话（无放宽按钮，D8）/ 隐私行条件式无路径无计数 / meta 篇+片段+档。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    # 分组模型（防回退 segment 平铺）
+    assert 'class="sp-grp"' in sp and "sp-grp-head" in sp and "groupByPath" in sp
+    # 相关性条双退役（模板 + 样式宽度定义）
+    assert "sp-bar" not in sp, "相关性条模板未退"
+    assert not re.search(r"\.sp-bar[^{]*\{[^}]*width", css), "相关性条样式未退"
+    # clamp5 + 就地展开
+    assert "sp-clamp5" in sp and "展开全文" in sp and "toggleExpand" in sp
+    # 加载两分支：无旧结果=骨架（shimmer 扫描，RM 退静态）；有旧结果=压暗保留 + meta 活指示
+    assert "sp-skel" in sp and "sp-dimmed" in css
+    assert "sp-skel-shine" in css, "骨架 shimmer 动画未落"
+    assert ".sp-skel-row { animation: none; }" in css, "RM 退静态灰条未落"
+    assert "sp-meta-loading" in sp and "search-spinner" in sp, "压暗分支缺活指示"
+    # via 徽标 = 笼统「tag」占位（tag 名逐枚展示 = 后续待办：需结果面带 per-doc tags 后再接）
+    assert 'class="sp-via-badge">tag</span>' in sp and "viaTags" not in sp
+    # 零结果两句（逐字）+ 无放宽按钮
+    assert "无匹配" in sp
+    assert "已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。" in sp
+    assert "放宽" not in sp.replace("已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。", "")
+    # 隐私行：条件式措辞；渲染串无路径/.md/计数
+    assert "若相关文档在隐私设置中，已被排除" in sp
+    assert "privacyNote" in sp
+    # meta：N 篇 · M 个片段 · 档（呈现名经 TIER_LABEL 映射，内部名不直出）
+    assert re.search(r"\{\{ docCount \}\} 篇 · \{\{ segmentCount \}\} 个片段", sp)
+    assert "TIER_LABEL[" in sp
+    # mark 分层两类名在 CSS（防「全部上底」回潮）
+    assert "sp-snip mark.hit-first" in css and "sp-snip mark.hit" in css
+    # 桌面 placeholder 分工（页内框）；移动框不动
+    assert "搜索全部文档内容" in sp
+    # 键盘 active 落点类随模板更名
+    assert ".sp-snip-card.active" in css and "'.sp-snip-card.active'" in sp
+
+
+def test_s2_group_by_path_probe():
+    # search.js groupByPath：同 path 多 segment 收一组、组序=首现序、dir 剥离文件名。
+    mod = (TPL / "js/utils/search.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        "const items=[{path:'a/b/x.md',name:'x.md'},{path:'y.md',name:'y.md'},{path:'a/b/x.md',name:'x.md'}];"
+        "const g=m.groupByPath(items);"
+        "eq(g.length,2,'two groups'); eq(g[0].path,'a/b/x.md','first-seen order');"
+        "eq(g[0].items.length,2,'same path merged'); eq(g[1].dir,'','root no dir');"
+        "eq(g[0].dir,'a/b','dir stripped filename');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
 def test_s1b_three_tokens_and_centering():
     # spec §3：--col-measure(680)/--col-topline/--col-inline 三 token 两视图共读；
     # 摘 .doc-scroll/.doc-head 非对称 padding-right 让位（列心病根，Review Focus 4）。

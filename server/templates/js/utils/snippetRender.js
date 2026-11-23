@@ -49,7 +49,7 @@ export const TIER_LABEL = { strict: '精确', near: '邻近', relaxed: '宽松',
 export function renderInline(slice, terms) {
   const esc = (terms || []).filter(Boolean).map(escapeRe)
   const termAlt = esc.length ? esc.join('|') : '(?!\\u0000)'   // 无命中词 = 永不匹配占位（纯转义直落）
-  const re = new RegExp('(`[^`\\n]+`)|(\\*\\*[^*\\n]+\\*\\*)|(#{1,6}[ \\t]+)|(' + termAlt + ')', 'gm')
+  const re = new RegExp('(`[^`\\n]+`)|(\\*\\*[^*\\n]+\\*\\*)|(#{1,6}[ \\t]+)|(' + termAlt + ')', 'gmi')
   let out = ''
   let last = 0
   let first = true

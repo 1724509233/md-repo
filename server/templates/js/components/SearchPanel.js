@@ -1,48 +1,18 @@
-/* SearchPanel 组件：搜索边栏页（spec §3.3）
- * 输入框 + tag 选择器行 + 召回 meta 行（relaxed/fuzzy 档）+ 平铺富卡片（相关性条 + via 徽标）+ 键盘导航 + 展示更多（显式 fuzzy）
- * 权重控件（面板头右侧 popover）+ 共享搜索控制器（utils/search.js），行为与树内下拉一致（spec §4.3）。
- * tag 融合搜索面（spec 2026-11-13 §3）：tag 选择器 / 排序权重 popover / via 徽标 / #tag 提示。
- */
+/* SearchPanel 组件（spec 2026-11-23-immersive-search §4 呈现重做后）：
+ * 输入框（占位分壳）+ 最近搜索空态 + tag 选择器行 + meta 行（篇·片段·档呈现名）
+ * + 按文件分组结果列表（5 行 clamp/就地展开/±150 窗口/内联级渲染/mark 分层）
+ * + 键盘导航（↑↓ Enter，跨组连续）+ 展示更多（显式 fuzzy）+ 隐私提示行。
+ * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights } from '../utils/search.js'
-import { escapeHtml, escapeRe } from '../utils/snippetRender.js'   // 转义单点（S2/T4 迁出组件，防两仓漂移）
+import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights, groupByPath } from '../utils/search.js'
+import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
 
 const SEARCH_TOP_K = 8
 
-// 片段窗口：以首个命中为中心截取，保证命中落在 3 行 clamp 的前 ~2 行内（260px 宽下 ≈30 汉字）。
-// 优先整句、再逐词定位；fuzzy/relaxed 档可能无字面命中 → 退化为头部截取（同旧行为）。
-// 返回 escapeHtml + <mark> 后的 html（v-html 安全，同旧 highlight 契约）。
-const SNIP_WIN_BEFORE = 30
-const SNIP_WIN_AFTER = 200
-function renderSnippet(content, query) {
-  if (!content) return ''
-  const text = content.trim()
-  const lower = text.toLowerCase()
-  const q = (query || '').trim()
-  const terms = q.split(/\s+/).map(t => t.trim()).filter(Boolean)
-  let idx = -1
-  for (const t of [q, ...terms]) {
-    if (!t) continue
-    idx = lower.indexOf(t.toLowerCase())
-    if (idx >= 0) break
-  }
-  let slice
-  if (idx >= 0) {
-    const start = Math.max(0, idx - SNIP_WIN_BEFORE)
-    const end = Math.min(text.length, idx + SNIP_WIN_AFTER)
-    slice = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '')
-  } else {
-    const end = Math.min(text.length, SNIP_WIN_AFTER)
-    slice = text.slice(0, end) + (end < text.length ? '…' : '')
-  }
-  const escaped = escapeHtml(slice)
-  const esc = terms.map(escapeRe)
-  if (!esc.length) return escaped
-  return escaped.replace(new RegExp('(' + esc.join('|') + ')', 'gi'), '<mark>$1</mark>')
-}
+// （S2 重做：片段窗口/内联渲染/转义迁 utils/snippetRender.js——组件内不再手搓 v-html 管线）
 
 export const SearchPanel = {
   name: 'SearchPanel',
@@ -100,6 +70,15 @@ export const SearchPanel = {
       try { localStorage.removeItem(RECENT_KEY) } catch (e) { /* 同上 */ }
     }
     function fillRecent(w) { searchQuery.value = w }   // v-model → watch setInput：回填即搜
+
+    // ── 壳断点感知（spec §7/§10：页内框与移动 sheet 文案分工；移动侧逐字不动）──
+    const mqDesktop = window.matchMedia('(min-width: 1024px)')
+    const isDesktopShell = ref(mqDesktop.matches)
+    const onMqDesktop = (e) => { isDesktopShell.value = e.matches }
+    mqDesktop.addEventListener('change', onMqDesktop)
+    const inputPlaceholder = computed(() => isDesktopShell.value ? '搜索全部文档内容' : '搜索文档… #tag 按标签搜')
+    // 隐私过滤提示（spec §6：条件式措辞、零计数零路径；显隐判据 = privacy.dirs 非空，前端判定后端零改动）
+    const privacyNote = computed(() => !!(appState && appState.privacyDirs && appState.privacyDirs.length))
 
     // ── ① tag 选择器行（spec 2026-11-13 §3-①）────────────────────────────
     // /api/tags 全量（doc_count 降序）；失败/空 → 行隐藏（v-if），搜索照常
@@ -192,6 +171,34 @@ export const SearchPanel = {
     const docCount = computed(() => new Set(results.value.map(r => r.path)).size)
     const shownRowCount = computed(() => countRows(results.value))
 
+    // ── 分组视图（spec §4）：文件头一行 + 组内片段；flat = 跨组连续键盘序列（组头不参与命中）──
+    const groups = computed(() => {
+      const gs = groupByPath(shaped.value)
+      let f = -1
+      for (const g of gs) for (const it of g.items) it.flat = ++f
+      return gs
+    })
+    const expanded = ref(new Set())     // 展开全文键（flat 索引）；内存态，换结果即复位
+    function toggleExpand(k) {
+      const s = new Set(expanded.value)
+      if (s.has(k)) s.delete(k); else s.add(k)
+      expanded.value = s
+    }
+    watch(results, () => { if (expanded.value.size) expanded.value = new Set() })
+    // 命中词源 = 控制器产出 keywords（修旧毛病：原始输入连 #tag token 一起打进 mark，spec §4 点击落账条）
+    function lastTerms() {
+      const q = (search.lastQuery() || '').trim()
+      return q ? [q.toLowerCase(), ...q.split(/\s+/).map(t => t.toLowerCase()).filter(Boolean)] : []
+    }
+    function snip(it) {
+      const text = (it.content || '').trim()
+      const terms = lastTerms()
+      if (!text) return ''
+      if (expanded.value.has(it.flat)) return renderInline(text, terms)   // content = segment 全文，零请求
+      const idx = firstHitIndex(text.toLowerCase(), terms)
+      return renderInline(sliceWindow(text, idx).slice, terms)
+    }
+
     // 点击落账（spec 2026-11-13 §4）：via=search + query（产出当前结果的
     // keywords，与服务端 recall_queries.query 同值）+ rank（1-based 项序号）；
     // openDoc（onPick）之前发出、不 await（fire-and-forget，恒 204）
@@ -221,21 +228,24 @@ export const SearchPanel = {
 
     // 作用域查询：组件自身根元素（桌面 face 与移动抽屉各一实例，取文档序第一个会命中隐藏实例）
     function scrollActiveIntoView() {
-      const el = rootEl.value ? rootEl.value.querySelector('.sp-card.active') : null
+      const el = rootEl.value ? rootEl.value.querySelector('.sp-snip-card.active') : null
       if (el) el.scrollIntoView({ block: 'nearest' })
     }
 
     onBeforeUnmount(() => {
       document.removeEventListener('mousedown', onSortDocMouseDown)
+      mqDesktop.removeEventListener('change', onMqDesktop)
       search.destroy()
     })
 
     return {
-      searchQuery, inputEl, rootEl, shaped, segmentCount, docCount, resultTier,
+      searchQuery, inputEl, rootEl, shaped, groups, segmentCount, docCount, resultTier,
       results, loading, activeIndex, moreLoading, fuzzyDone,
       shownRowCount, SEARCH_TOP_K,
-      pickItem, onKeydown, renderSnippet, search,
+      pickItem, onKeydown, snip, search,
       isPriv, ICONS_LOCAL,
+      // S2 呈现：呈现名映射 / 展开态 / 占位分工 / 隐私提示
+      TIER_LABEL, expanded, toggleExpand, inputPlaceholder, privacyNote,
       // 最近搜索（S1b 空态）
       recent, fillRecent, clearRecent,
       // ① tag 选择器
@@ -277,7 +287,7 @@ export const SearchPanel = {
         <svg aria-hidden="true" class="sp-q-ic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
         <input ref="inputEl" v-model="searchQuery" type="text"
           class="sp-q-input"
-          placeholder="搜索文档… #tag 按标签搜" @keydown="onKeydown">
+          :placeholder="inputPlaceholder" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
@@ -299,44 +309,44 @@ export const SearchPanel = {
           {{ tagsExpanded ? '收起' : '展开更多' }}
         </button>
       </div>
-      <!-- 召回 meta 行（spec §3.3）：真实档位 + 片段计数；加载态显示「检索中」 -->
+      <!-- 召回 meta 行（spec 2026-11-23 §4/§5）：N 篇 · M 个片段 · 档 [呈现名]（零结果即同请求内回退
+           耗尽的终态——当前档恒取响应 recall，无档可升故 D8 撤销升档入口）；加载态只显「检索中…」 -->
       <div v-if="searchQuery.trim()" class="sp-meta">
-        <span v-if="loading && !results.length">检索中…</span>
-        <span v-else>{{ segmentCount }} 个片段</span>
-        <span v-if="!loading || results.length">· 当前档 <span class="sp-tier">{{ resultTier }}</span></span>
+        <span v-if="loading" class="sp-meta-loading"><span class="search-spinner search-spinner-sm"></span>检索中…</span>
+        <span v-else>{{ docCount }} 篇 · {{ segmentCount }} 个片段</span>
+        <span v-if="!loading || results.length">· 档 <span class="sp-tier">{{ TIER_LABEL[resultTier] || '宽松' }}</span></span>
       </div>
 
-      <!-- 结果区 -->
-      <div class="sp-results" aria-live="polite">
-        <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
-        <div v-if="loading && !results.length" class="sp-loading">
-          <span class="search-spinner"></span>
-          <span>搜索中…</span>
+      <!-- 结果区（两分支加载，§4）：有旧结果压暗保留不清空；无旧结果出骨架不空白 -->
+      <div class="sp-results" :class="{ 'sp-dimmed': loading && results.length }" aria-live="polite">
+        <!-- 骨架屏：约 2 组 ×（1 行组头 + 2~3 行摘要），行宽参差，几何与真实分组同刻度 -->
+        <div v-if="loading && !results.length" class="sp-skel" aria-hidden="true">
+          <div class="sp-skel-grp"><div class="sp-skel-row sk-head" style="width:38%"></div><div class="sp-skel-row" style="width:92%"></div><div class="sp-skel-row" style="width:77%"></div><div class="sp-skel-row" style="width:60%"></div></div>
+          <div class="sp-skel-grp"><div class="sp-skel-row sk-head" style="width:46%"></div><div class="sp-skel-row" style="width:85%"></div><div class="sp-skel-row" style="width:68%"></div></div>
         </div>
-        <!-- 空态（relaxed → fuzzy 回退后仍零结果 = 内容不在库里） -->
+        <!-- 零结果 = relaxed→fuzzy 回退耗尽的终态（两句人话，档位名不进文案；隐私并入条件式） -->
         <div v-else-if="!loading && !results.length && fuzzyDone" class="sp-empty">
-          <div class="sp-empty-ring">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
-          </div>
-          <div class="sp-empty-t1">无匹配</div>
-          <div class="sp-empty-t2">换个关键词试试</div>
+          <div class="sp-empty-t1">无匹配<span v-if="privacyNote">——若相关文档在隐私设置中，已被排除</span></div>
+          <div class="sp-empty-t2">已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。</div>
         </div>
-        <!-- 平铺卡片：每个 segment 独立成卡 -->
+        <!-- 按文件分组（§4 撤销平铺）：组头一行；组内片段卡零边框、纯间距 -->
         <template v-else>
-          <button v-for="(item, i) in shaped" :key="item.path + '-' + i" type="button"
-            class="sp-card" :class="{ active: i === activeIndex }"
-            :title="item.path"
-            @click="pickItem(item, i)" @mouseenter="activeIndex = i">
-            <div class="sp-top">
-              <span v-if="item.via === 'tag' || item.via === 'both'" class="sp-via-badge">tag</span>
-              <span v-if="isPriv(item.path)" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS_LOCAL.lock"></span>
-              <span class="sp-name">{{ item.name }}</span>
-              <span class="sp-path">{{ item.path }}</span>
+          <div class="sp-grp" v-for="g in groups" :key="g.path">
+            <div class="sp-grp-head">
+              <span class="fn">{{ g.name }}</span>
+              <span v-if="g.dir" class="dr">{{ g.dir }}/</span>
+              <span v-if="isPriv(g.path)" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS_LOCAL.lock"></span>
+              <span class="ct">{{ g.items.length }} 片段</span>
             </div>
-            <span v-if="item.heading" class="sp-hchip" :title="item.heading">{{ item.heading }}</span>
-            <div class="sp-snip" v-html="renderSnippet(item.content, searchQuery)"></div>
-            <div class="sp-bar"><i :style="{ width: item.rel + '%' }"></i></div>
-          </button>
+            <div v-for="it in g.items" :key="it.flat" class="sp-snip-card" :class="{ active: it.flat === activeIndex }"
+                 :title="it.path" @click="pickItem(it, it.flat)" @mouseenter="activeIndex = it.flat">
+              <div v-if="it.heading || it.via" class="sp-head-line"><span v-if="it.via === 'tag' || it.via === 'both'" class="sp-via-badge">tag</span><template v-if="it.heading">· {{ it.heading }}</template></div>
+              <div class="sp-snip" :class="{ 'sp-clamp5': !expanded.has(it.flat) }" v-html="snip(it)"></div>
+              <button type="button" class="sp-unfold" v-if="expanded.has(it.flat) || (it.content || '').trim().length > 160" @click.stop.prevent="toggleExpand(it.flat)">{{ expanded.has(it.flat) ? '收起' : '展开全文' }}</button>
+            </div>
+          </div>
+          <!-- 隐私过滤提示（§6：结果区末尾一行弱字，条件式措辞，无计数无路径） -->
+          <div v-if="privacyNote && results.length" class="sp-privacy-note">若相关文档在隐私设置中，已被排除</div>
 
           <!-- 底部：显式 fuzzy 请求进行中 → 展示更多（relaxed 有命中且 fuzzy 未跑）→ 耗尽终态 -->
           <div v-if="moreLoading && results.length > 0" class="sp-prefetching">

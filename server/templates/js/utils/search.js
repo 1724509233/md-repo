@@ -63,6 +63,22 @@ export function countRows(items) {
   return n
 }
 
+// 按文件分组（spec 2026-11-23 §4 分组模型：文件=阅读心智单位，segment 只是定位符）：
+// shaped 平铺项 → [{path, name, dir, items:[同序 shaped 项]}]，组序 = 首现序（score 最优在前）。
+export function groupByPath(items) {
+  const out = []
+  const idx = new Map()
+  for (const it of items) {
+    if (!idx.has(it.path)) {
+      idx.set(it.path, out.length)
+      const p = it.path || ''
+      out.push({ path: it.path, name: it.name, dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', items: [] })
+    }
+    out[idx.get(it.path)].items.push(it)
+  }
+  return out
+}
+
 // #tag 解析（芯片选中态与 API 参数同一来源，spec 2026-11-13 §2）：
 // 与服务端 _TAG_QUERY_RE（server/ai/search.py）同语义——Python \w 为 Unicode、
 // JS \w 仅 ASCII，两侧均用显式字符集 [\w\u4e00-\u9fff]（CJK tag 如 #设计 也是 tag）；

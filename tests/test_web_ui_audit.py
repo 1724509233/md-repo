@@ -417,20 +417,18 @@ def test_settings_422_goes_inline_not_top_banner():
 
 
 def test_p2_search_card_button():
-    # 搜索面板结果卡键盘可达（待办 e96cf4ed）：卡内勘察无嵌套交互元素（renderSnippet 契约
-    # = escapeHtml + <mark>，见 SearchPanel.js:24 注释）→ 原生 <button type="button">；
-    # Enter/Space 原生触发 click，无需 @keydown；UA 重置按 src-link 先例补齐于 .sp-card
+    # S2 分组卡（spec 2026-11-23 §4/§8 取代 10-18「卡=原生 button」键盘可达规格）：
+    # 键盘导航收拢输入框（↑↓ 移 active / Enter 落账打开，跨组连续），卡本体 = click 目标
+    # + active 类（非可聚焦控件）；嵌套交互件「展开全文」.stop 防双触发。
     sp = _templates()["SearchPanel.js"]
-    m = re.search(r'<(\w+)([^>]*class="sp-card"[^>]*)>', sp)
-    assert m and m.group(1) == "button", "搜索面板结果卡必须是原生 button"
+    m = re.search(r'<(\w+)([^>]*class="sp-snip-card"[^>]*)>', sp)
+    assert m, "分组片段卡缺失"
     tag = m.group(0)
-    assert 'type="button"' in tag and '@click="pickItem' in tag and "@mouseenter" in tag
-    assert "keydown" not in tag  # 原生 button 免手写 keydown（role 兜底形才需要）
+    assert '@click="pickItem' in tag and "@mouseenter" in tag and ':class="{ active' in tag
+    assert "class=\"sp-unfold\"" in sp and "@click.stop.prevent=\"toggleExpand" in sp
+    assert "ArrowDown" in sp and "ArrowUp" in sp and "'Enter'" in sp, "输入框键盘导航缺失"
     css = (TPL / "style.css").read_text(encoding="utf-8")
-    i = css.index("\n.sp-card {")  # 行首锚：豁免分节有 `.search-item, .sp-card {` 逗号组合头，防子串误锚
-    rule = css[i:css.index("}", i)]
-    for prop in ("width: 100%", "text-align: left", "font: inherit", "color: inherit", "appearance: none"):
-        assert prop in rule, prop  # UA 重置：观感零变化的前提
+    assert ".sp-snip-card {" in css and ".sp-snip-card.active {" in css
 
 
 def test_p2_a11y_text_sweep():
@@ -566,7 +564,7 @@ def test_p2_visual_round_css():
     m2 = re.search(r"\ninput, textarea \{([^}]*)\}", css)
     assert m2 and "user-select: text" in m2.group(1)
     # 豁免：搜索结果文本需可划词抄录（树搜索下拉行 + 搜索页结果卡）——button 语义与划选共存
-    m3 = re.search(r"\.search-item, \.sp-card \{([^}]*)\}", css)
+    m3 = re.search(r"\.search-item, \.sp-snip-card \{([^}]*)\}", css)
     assert m3 and "user-select: text" in m3.group(1), "搜索结果划选豁免"
     # reduced-motion：三壳 .open 自带合并 transition（特异度高于基础态击杀）——
     # .open 不杀则 RM 下滑入复活 + 收起态 visibility 延迟成孤儿延迟（fold 家族终审同教训）
