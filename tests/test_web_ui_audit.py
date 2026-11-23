@@ -1491,6 +1491,26 @@ def test_home_g2_ts_cursor_day_rows_pins():
     # （回看不分离开时长）；收束段守卫必须是 shortStay && !lookback。
     assert 'v-if="shortStay && !lookback"' in home, "收束句守卫未挂回看联动"
     assert "lookbackTitle" in voice and "回看前三天" in voice, "回看态段题文案缺失"
+
+
+def test_home_g2_day_overflow_collapse_pins():
+    # 日段行数封顶折叠（2026-11-23 噪声治理）：超 8 行折前 8 +「还有 N 篇……展开›」；
+    # 未看行必须置顶（折叠不得藏未读点）；只折展示不动谓词；重取回默认。
+    home = _templates()["Home.js"]
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert "G2_DAY_CAP = 8" in home, "缺日段封顶常量"
+    i = home.index(".sort((a, b) => (b.unseen ? 1 : 0) - (a.unseen ? 1 : 0))")
+    assert "rows:" in home[:i][-1200:], "未看置顶 sort 必须挂在日段 rows 构造上"
+    for fn in ("function g2Visible", "function toggleG2Day", "function g2DayKey"):
+        assert fn in home, fn
+    assert "d.rows.slice(0, G2_DAY_CAP)" in home
+    i = home.index("function g2Visible")
+    assert home[i:home.index("\n    }", i)].count("count(") == 0, "折叠谓词勿碰计数（只 slice 展示）"
+    assert 'v-for="r in g2Visible(g, d)"' in home, "模板未接折叠视图"
+    assert "还有 ${n} 篇…… 展开 ›" in voice and "collapseMore: '收起 ›'" in voice
+    assert ".hb-g2-more" in css
+    assert "expandedG2.value = new Set()" in home, "重取须回折叠默认态"
     # ⑥ 未看行滚动：显式容器（.closest('.hb-shell') + shell.scrollTo），禁裸 scrollIntoView
     i = home.index("function scrollToUnseen")
     fn = home[i:i + home[i:].index("\n    }")]

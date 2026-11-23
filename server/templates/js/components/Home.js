@@ -140,11 +140,26 @@ export const Home = {
               unseen: seen !== null && r.ops.some((op) => op.ts > seen),
               dead: r.ops.every((op) => isDel(op.action)),   // 全删行点了只撞 404 幽灵态
             }
-          }),
+          }).sort((a, b) => (b.unseen ? 1 : 0) - (a.unseen ? 1 : 0)),   // 未看优先置顶（稳定序，段内仍新在前）——折叠封顶下未读点绝不藏进「还有 N 篇」
         }))
         return { actor: g.actor, alias: g.alias, days }
       })
     })
+    /* 日段行数封顶折叠（2026-11-23 噪声治理，同 my_days「紧凑+展开」语法）：
+       超 G2_DAY_CAP 显前 8（未看已置顶）+「还有 N 篇……展开›」。只折展示，
+       计数/未看/G4 谓词全不动；展开态仅存内存，重取（load/回看）回默认。 */
+    const G2_DAY_CAP = 8
+    const expandedG2 = ref(new Set())
+    function g2DayKey(g, d) { return g.actor + '/' + (g.alias || '') + '@' + d.date }
+    function g2Visible(g, d) {
+      if (d.rows.length <= G2_DAY_CAP || expandedG2.value.has(g2DayKey(g, d))) return d.rows
+      return d.rows.slice(0, G2_DAY_CAP)
+    }
+    function toggleG2Day(key) {
+      const s = new Set(expandedG2.value)
+      if (s.has(key)) s.delete(key); else s.add(key)
+      expandedG2.value = s
+    }
     function openRow(r) {
       if (r.dead) return   // openPath 守卫精神：组内全 delete 不可点
       emit('open-doc', r.path)
@@ -221,6 +236,7 @@ export const Home = {
         data.value = d
         loadFailed.value = false
         expanded.value = d.my_days.length ? new Set([d.my_days[0].date]) : new Set()
+        expandedG2.value = new Set()   // 重取（含回看切换）→ 日段折叠回默认
         // 已读游标（§6.3，2026-11-23 换尺 ts）：G2 渲出非空内容才落笔——「看过」即
         // 看过，免疫窗钳制。推进值取 payload.window.until（服务端时钟，绝不用本地钟）。
         // S0/S1 收束态列表根本没露脸，「看过」不成立，绝不推进（终审 M2）。
@@ -280,6 +296,7 @@ export const Home = {
       state, HOME_COPY, groupHead, data, loadFailed, groups, g2Groups, myDays, g4Rows, expanded,
       shortStay, g1, g2Title, g3Title, summary, summing, sumNote,
       canLookback, lookback, toggleLookback,
+      G2_DAY_CAP, expandedG2, g2Visible, g2DayKey, toggleG2Day,
       hm, md, verb, daySummary, toggleDay, openPath, openRow, genSummary, load,
       scrollToG2, scrollToUnseen,
     }
@@ -323,7 +340,7 @@ export const Home = {
                 <p class="hb-grp-head">{{ groupHead(g) }}</p>
                 <div class="hb-g2-day" v-for="d in g.days" :key="d.date">
                   <p class="hb-g2-day-head">{{ d.title }}</p>
-                  <div class="hb-file-row" :class="{ 'is-dead': r.dead }" v-for="r in d.rows" :key="r.path"
+                  <div class="hb-file-row" :class="{ 'is-dead': r.dead }" v-for="r in g2Visible(g, d)" :key="r.path"
                        :title="r.path" @click="openRow(r)">
                     <span v-if="r.unseen" class="hb-unseen-dot"></span>
                     <span class="fname">{{ r.name }}</span>
@@ -331,6 +348,11 @@ export const Home = {
                     <span class="hb-chip" v-for="c in r.chips" :key="c">{{ c }}</span>
                     <span class="t">{{ hm(r.lastTs) }}</span>
                   </div>
+                  <p v-if="d.rows.length > G2_DAY_CAP" class="hb-g2-more">
+                    <a href="#" @click.prevent="toggleG2Day(g2DayKey(g, d))">{{
+                      expandedG2.has(g2DayKey(g, d)) ? HOME_COPY.g2.collapseMore
+                        : HOME_COPY.g2.more(d.rows.length - G2_DAY_CAP) }}</a>
+                  </p>
                 </div>
               </div>
             </template>

@@ -1809,6 +1809,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .hb-g2-day { padding: 2px 0 6px; }
 .hb-g2-day + .hb-g2-day { margin-top: 8px; }
 .hb-g2-day-head { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); margin: 0 0 4px; }
+.hb-g2-more { margin: 2px 0 0; padding-left: 4px; }
+.hb-g2-more a { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); }
+.hb-g2-more a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .hb-file-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 4px; min-width: 0; border-radius: 6px; cursor: pointer; }
 .hb-file-row.is-dead { cursor: default; }
 .hb-file-row .fname { font-size: 15px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

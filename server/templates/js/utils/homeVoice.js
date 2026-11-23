@@ -91,6 +91,8 @@ export const HOME_COPY = {
     lookback: '看看前三天',
     lookbackOff: '收起',
     lookbackTitle: '回看前三天',
+    more: (n) => `还有 ${n} 篇…… 展开 ›`,
+    collapseMore: '收起 ›',
   },
   g3: {
     title: '您上次离开前做到哪',
