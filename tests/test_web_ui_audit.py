@@ -1332,7 +1332,7 @@ def test_home_landing_wired():
     app = _templates()["app.js"]
     for tok in ("'Home'",                                      # import/注册之一
                 "history.replaceState(null, '', location.pathname)",  # hash watch null 支路
-                'v-if="!state.currentPath"',                   # Home 挂载条件
+                'v-if="!state.currentPath && state.view !== \'search\'"',  # Home 挂载条件（2026-11-23 检索页加 view 门）
                 "state.homeRefreshSeq",                        # 监控退页重取信号
                 "mdvault.lastPresence",                        # 心跳存储键
                 "pagehide", "visibilitychange",                # 心跳三写点之二

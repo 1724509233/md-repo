@@ -2250,6 +2250,13 @@ details.d-sec .body { padding: 8px 12px 14px; }
      旧「过渡态」#ai-panel/#ai-btn right 让位行已删（桌面 #ai-btn tab 退役，spec §4A 握把升格） */
 }
 
+/* ════ 沉浸式检索页 S1（plan 2026-11-23-immersive-search）════
+   .search-page = 主区检索页容器（桌面专属旗标驱动；S1 保底几何，T3 升 --col-* 三 token 与文档列对心）。
+   FAB 检索态降 40% 透明但仍可点/可 Tab——后备出口禁隐藏（spec §8，Review Focus 6）。 */
+.search-page { flex: 1; min-width: 0; max-width: 680px; margin: 0 auto; overflow-y: auto; padding: 54px 24px 40px; }
+.fab-root.is-dim { opacity: .4; }
+.fab-root.is-dim:hover { opacity: 1; }
+
 /* ════ 沉浸式壳 W5 · Task 7：管家消息面——右缘暗金半隐握把 + 管家气泡栈 + 聊天浮窗/图钉槽（spec §4A/§7 / 预览稿场景 2·8·9）════
    握把 = 44px 暗金圆钮一半探出右缘（right:-22px，2026-11-23 用户拍板由 30 加大），纸色线性领结（ICONS.bowtie 单点）居可见半区；
    pill = 铃铛未读 + 管家回话合计（纸底黄铜字，≥10 封顶「9+」防角标宽过可见半区糊钮）。hover 握把/气泡浮出气泡栈（peekFeed.buildPeek

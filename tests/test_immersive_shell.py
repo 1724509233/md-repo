@@ -186,6 +186,8 @@ def test_monitor_tree_slot_exclusion():
     assert m, "const treePinned = computed(...) 段缺失"
     assert "!state.monitoring" in m.group(1), \
         "treePinned 缺 !state.monitoring（监控在场时钉住树槽须让位）"
+    assert "state.view !== 'search'" in m.group(1), \
+        "treePinned 缺 view 门（检索页在场钉住树槽同须让位——2026-11-23 检索页扩面）"
 
     seg = app[app.index("function onFabPick"):app.index("async function markAllRead")]
     mon = re.search(r"if \(state\.monitoring\)\s*(?:exitMonitorPage\(|\{[^{}]*exitMonitorPage\()", seg)
@@ -296,7 +298,7 @@ def test_dock_and_shortcut_pins():
     assert "function onRevealTree(kind)" in app
 
     # ④ app.js 挂 dock：hasDoc（含 docMissing 加载失败态）/ lg-only 双保险（v-if + hidden lg:flex）
-    assert re.search(r"<right-dock v-if=\"isDesktop && hasDoc\"\s+class=\"hidden lg:flex\"", app)
+    assert re.search(r"<right-dock v-if=\"isDesktop && hasDoc && state.view !== 'search'\"\s+class=\"hidden lg:flex\"", app)
 
     # ⑤ 样式面：--dock-w 变量（dock 本体 + toc-dd 桌面锚两处引用）/ .dock z-index:10 /
     #    .dock-btn 基础态存在（.dock/.dock-btn 进沉浸式壳分节）
