@@ -129,6 +129,10 @@ def test_s2_snippet_render_pure():
         "h=m.renderInline('para\\n## Title x',[]);"
         "eq(h.includes('##'),false,'heading marker stripped');"
         "eq(h.includes('Title x'),true,'heading text kept');"
+        # --- B1 负样本：行中 # 不得剥（未锚行首时会静默损毁 'C# foo'/'# 12'） ---
+        "h=m.renderInline('see C# foo and issue # 12 fixed',[]);"
+        "eq(h.includes('C#'),true,'mid-line hash kept');"
+        "eq(h.includes('# 12 fixed'),true,'mid-line hash-space kept');"
         # --- 空 terms = 纯转义 ---
         "eq(m.renderInline('a\\\"b',[]),'a&quot;b','empty terms pure escape');"
         # --- firstHitIndex：整词优先再逐词 ---
@@ -174,6 +178,10 @@ def test_s2_grouped_presentation_pins():
     assert "无匹配" in sp
     assert "已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。" in sp
     assert "放宽" not in sp.replace("已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。", "")
+    # B6：手动收窄档（服务端不回退）零结果不得谎称「尽量放宽着找过」——按档条件化
+    assert "emptyHint" in sp and "或在「档」里挑更宽的档位再试。" in sp
+    # B3：桌面 Esc 词非空先清词并截断（防同刻全局 exitSearch 双动作）；移动保持旧双动作
+    assert "e.stopPropagation()" in sp and "isDesktopShell.value && searchQuery.value" in sp
     # 隐私行：条件式措辞；渲染串无路径/.md/计数
     assert "若相关文档在隐私设置中，已被排除" in sp
     assert "privacyNote" in sp
@@ -261,15 +269,18 @@ def test_s4_tier_chip_and_prefs():
     tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
     for name in ("strict", "near", "relaxed", "fuzzy"):
         assert not re.search(r"\b" + name + r"\b", tpl), f"模板含内部档位名 {name}"
-    assert "TIER_LABEL[t]" in tpl and "TIER_TIERS" in tpl and "chipTierVisible" in tpl
+    assert "TIER_LABEL[t]" in tpl and "TIER_TIERS" in tpl and "isDesktopShell" in tpl
     # ② 设备偏好单源 utils（组件不各写各的键）
     assert "mdvault.searchPrefs" in sj and "function readPrefs" in sj and "function writePrefs" in sj
     assert "mdvault.searchPrefs" not in sp
     # ③ chip 开关入口 data-tier-toggle 与外点守卫豁免链同名登记（点开秒关指纹防复发）
     assert "data-tier-toggle" in tpl and "closest('[data-tier-toggle]')" in sp
-    # ③b 回退纯文本的条件必须镜像 chip（v-else 会挂到 pop 的 v-if 上造成 chip+文本双显）
-    assert 'v-else class="sp-tier"' not in tpl, "回退文本用 v-else——双显回归"
-    assert 'v-if="!chipTierVisible" class="sp-tier"' in tpl
+    # ③b 档位面按壳二分（评审 A2/B2 重构钉）：桌面恒 chip（零结果/模糊也必须可换档——
+    # chipTierVisible 旧式「有结果且非模糊」可达性硬伤禁回流）；移动恒纯文本（档值不悬空）。
+    # 双显病（v-else 挂错 pop 的 v-if）由「chip 只在桌面 template 分支内」结构性排除
+    assert "chipTierVisible" not in tpl and "chipTierVisible" not in sp, "旧可达性式禁回流"
+    assert '<template v-if="isDesktopShell">' in tpl, "档位面未分桌面/移动两支"
+    assert '<span v-else class="sp-tier">' in tpl, "移动侧档值纯文本缺席（悬空「· 档」回归）"
     # ④ 控制器档位取 state.recall（缺省 relaxed）；includeCode 布尔才发键
     assert re.search(r"state\.recall && state\.recall\.value", sj)
     assert "typeof includeCode === 'boolean'" in api and "body.include_code = includeCode" in api

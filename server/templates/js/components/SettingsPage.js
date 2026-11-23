@@ -1529,6 +1529,7 @@ export const SettingsPage = {
                           @click="form.search.include_code = !form.search.include_code"></button>
                       </div>
                       <span class="st-hint">默认关：代码块不进检索结果</span>
+                      <span v-if="err('search.include_code')" class="st-field-err">{{ err('search.include_code') }}</span>
                     </div>
                     <span class="st-hint">这里是全局默认；检索页的档位与「含代码」按次生效，不改这里</span>
                   </div>

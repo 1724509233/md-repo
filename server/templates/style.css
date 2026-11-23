@@ -838,7 +838,6 @@ pre code.hljs { background: transparent; padding: 0; }
 .sp-tier-opt.on { color: var(--brass); font-weight: 600; }
 .sp-tier-sep { height: 1px; background: var(--line); margin: 4px 2px; }
 .sp-tier-code { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12.5px; color: var(--ink-soft); cursor: pointer; }
-@media (max-width: 1023px) { .sp-tier-chip, .sp-tier-pop { display: none; } }
 /* 结果列表 */
 .sp-results { flex: 1; overflow-y: auto; padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 /* 空态 */

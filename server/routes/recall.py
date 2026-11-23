@@ -35,7 +35,7 @@ def register(app, ctx) -> None:
         # SearchConfig() 缺省（12/50/True，与旧硬编码 5 的差异仅缺省面）。
         from ..config.search import SearchConfig
         cfg = ctx.search_cfg or SearchConfig()
-        top_k = min(int(body.get("top_k", cfg.top_k_default)), cfg.top_k_max)
+        top_k = max(1, min(int(body.get("top_k", cfg.top_k_default)), cfg.top_k_max))
         include_code = bool(body.get("include_code", not cfg.exclude_code))
         recall = body.get("recall", "strict")
         if recall not in ("strict", "near", "relaxed", "fuzzy"):

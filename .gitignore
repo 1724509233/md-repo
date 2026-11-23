@@ -29,3 +29,5 @@ learning-records/
 lessons/
 reference/
 assets/
+config.yaml.bak-*
+logs/

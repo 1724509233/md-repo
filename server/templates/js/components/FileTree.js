@@ -551,6 +551,11 @@ export const FileTree = {
       if (open && !props.isDesktop) document.addEventListener('mousedown', onDocMouseDown)
       else document.removeEventListener('mousedown', onDocMouseDown)
     })
+    // 评审 B10：跨断点清零——移动下拉开着切桌面，watch(searchOpen) 不再触发、
+    // mousedown 监听残留（桌面下第一次点外会清掉筛选词）。换壳同点摘除
+    watch(() => props.isDesktop, (desk) => {
+      if (desk) document.removeEventListener('mousedown', onDocMouseDown)
+    })
 
     // ============ 搜索跳转联动（spec §4.1）============
     // 展开 path 的所有祖先前缀（幂等：Set 去重）

@@ -47,6 +47,11 @@ def load_search(config_path: str) -> SearchConfig:
 
     top_k_default = int(raw.get("top_k_default", 12))
     top_k_max = int(raw.get("top_k_max", 50))
+    # B9：bool 是 int 子类——`top_k_default: true` 静默变 1 属配错，显式拒
+    for _key in ("top_k_default", "top_k_max"):
+        if isinstance(raw.get(_key), bool):
+            raise ValueError(
+                f"Config file {config_path}: search.{_key} must be an int, got bool")
     exclude_code = raw.get("exclude_code", True)
     if top_k_default < 1:
         raise ValueError(

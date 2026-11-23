@@ -40,14 +40,19 @@ export const SearchPanel = {
       fuzzyDone: ref(false),    // 显式 fuzzy 已跑过（fuzzy 通道关闭）
       resultTier: ref('relaxed'), // 产出当前结果的档位（终态以响应 recall 为准）
       recall: ref(prefs.recall || 'relaxed'),        // 请求档位（chip 写面）
-      includeCode: ref(prefs.includeCode === true)   // 含代码开关（true 才发键）
+      // 三态：null=跟服务端 config exclude_code（不发键）；true/false=设备显式偏好。
+      // 注意判型必须 typeof==='boolean'——ref 对象恒真，判 ref 会把 null 态漏成发键（评审 A1）
+      includeCode: ref(prefs.includeCode)
     }
 
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
     // 隐私回显（spec 2026-11-18 §2.5，display-only）：结果命中隐私目录 → 同款小锁（差集可视化）
     const isPriv = p => isPrivacyScoped(appState ? appState.privacyDirs : [], p)
     const search = createSearchController({
-      api, topK: SEARCH_TOP_K, debounceMs: 300, state,
+      // topK 分层（A1：设置页「默认结果数」必须真生效）：桌面页不发键 → 跟 config
+      // top_k_default（宽栏 12）；移动 sheet 与树内下拉钉 8（移动零改动红线）。
+      // 函数形态=运行时求值，跨断点切换即换层（isDesktopShell 声明在后，调用期已初始化）
+      api, topK: () => (isDesktopShell.value ? null : SEARCH_TOP_K), debounceMs: 300, state,
       focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
       onSearchComplete() { if (appState) appState.recallDataVersion++; if (results.value.length) rememberRecent(search.lastQuery()) } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
@@ -125,8 +130,15 @@ export const SearchPanel = {
     const tierPopEl = ref(null)
     const includeCode = state.includeCode   // 模板绑定用（避免模板里拖 state.* 长链）
     const currentTier = computed(() => resultTier.value || state.recall.value)
-    const chipTierVisible = computed(() =>
-      results.value.length > 0 && currentTier.value !== 'fuzzy')
+    // 零结果文案诚实性（B6）：既有长句（fuzzy 链耗尽才成立）只在自动链走满时成立；
+    // 手动收窄档零结果服务端不回退，文案改指引换宽档（新句措辞避开长句独占钉字样）
+    const emptyHint = computed(() =>
+      currentTier.value === 'strict' || currentTier.value === 'near'
+        ? '没找到——换个说法，或在「档」里挑更宽的档位再试。'
+        : '已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。')
+    // chip 可达性（评审 A2）：桌面壳恒渲染 chip（meta 行在场即在场，唯一例外是整行缺席的
+    // 「加载中且无旧结果」）——手动收窄零结果、或手选/回退到模糊后，都必须还能换档，
+    // 否则设备偏好把档位焊死在 UI 不可达处。移动壳回退纯文本档值（B2：恒显，不再有悬空标签）
     function selectTier(t) {
       showTierPop.value = false
       if (t === currentTier.value) return
@@ -135,9 +147,15 @@ export const SearchPanel = {
       search.rerun()   // 尚无输入（lastRaw 空）则 no-op
     }
     function toggleIncludeCode() {
-      const next = !state.includeCode.value
-      state.includeCode.value = next
-      writePrefs({ ...readPrefs(), includeCode: next })
+      // 三态翻转（A1）：开 → 显式 true（发 include_code:true）；
+      // 关 → 回「跟 config」（value=null + prefs 删键，不发 include_code:false）
+      if (state.includeCode.value === true) {
+        state.includeCode.value = null
+        writePrefs({ ...readPrefs(), includeCode: undefined })
+      } else {
+        state.includeCode.value = true
+        writePrefs({ ...readPrefs(), includeCode: true })
+      }
       search.rerun()
     }
     // 点外关闭（同 sort-pop 的 mousedown 模式）。入口豁免走 [data-tier-toggle] 属性粒度
@@ -221,6 +239,15 @@ export const SearchPanel = {
         const idx = activeIndex.value >= 0 ? activeIndex.value : 0
         if (shaped.value[idx]) pickItem(shaped.value[idx], idx)
       } else if (e.key === 'Escape') {
+        // 桌面检索页（B3）：词非空时 Esc 只清词并截断事件——全局链同刻 exitSearch 会
+        // 退页，双动作违背 spec §4「搜索词、结果在离开/返回间保留」。第二次 Esc（词已空）
+        // 不截断 → 正常退页。移动 sheet 保持 10-18 旧双动作（零改动红线）
+        if (isDesktopShell.value && searchQuery.value) {
+          searchQuery.value = ''
+          search.resetToIdle()
+          e.stopPropagation()
+          return
+        }
         searchQuery.value = ''
         search.resetToIdle()
       }
@@ -246,9 +273,9 @@ export const SearchPanel = {
       pickItem, onKeydown, snip, search,
       isPriv, ICONS_LOCAL,
       // S2 呈现：呈现名映射 / 展开态 / 占位分工 / 隐私提示
-      TIER_LABEL, expanded, toggleExpand, inputPlaceholder, privacyNote,
+      TIER_LABEL, expanded, toggleExpand, inputPlaceholder, privacyNote, isDesktopShell,
       // T10 档位 chip + 含代码开关（设备偏好）
-      showTierPop, tierPopEl, currentTier, chipTierVisible, selectTier, toggleIncludeCode,
+      showTierPop, tierPopEl, currentTier, emptyHint, selectTier, toggleIncludeCode,
       TIER_TIERS, includeCode,
       // 最近搜索（S1b 空态）
       recent, fillRecent, clearRecent,
@@ -296,17 +323,20 @@ export const SearchPanel = {
         <span v-if="loading" class="sp-meta-loading"><span class="search-spinner search-spinner-sm"></span>检索中…</span>
         <span v-else>{{ docCount }} 篇 · {{ segmentCount }} 个片段</span>
         <span v-if="!loading || results.length" class="sp-meta-tier">· 档
-          <!-- 桌面页内 chip（plan T10）：四项全称下拉 + 含代码开关；移动 sheet 零改动退纯文本
-              （CSS 媒体块藏 chip/pop，此面逐字同 S2 前形态）。显档恒取响应终点档（resultTier） -->
-          <button v-if="chipTierVisible" type="button" class="sp-tier sp-tier-chip" data-tier-toggle
-            :aria-expanded="showTierPop ? 'true' : 'false'" @click="showTierPop = !showTierPop">{{ TIER_LABEL[currentTier] }} ⌄</button>
-          <span v-if="showTierPop" ref="tierPopEl" class="sp-tier-pop">
-            <button v-for="t in TIER_TIERS" :key="t" type="button" class="sp-tier-opt"
-              :class="{ on: t === currentTier }" :aria-pressed="t === currentTier" @click="selectTier(t)">{{ TIER_LABEL[t] }}</button>
-            <span class="sp-tier-sep"></span>
-            <label class="sp-tier-code"><input type="checkbox" :checked="includeCode" @change="toggleIncludeCode()"><span>含代码</span></label>
-          </span>
-          <span v-if="!chipTierVisible" class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
+          <!-- 档位面（评审 A2/B2 重构）：桌面壳恒渲染 chip（chip 可达性硬约束：零结果/模糊态
+              也必须能换档）；移动壳恒纯文本（零改动，档值跟响应终点档）。CSS 媒体块退役——
+              可达性由 shell 分支保证，不留双保险死样式 -->
+          <template v-if="isDesktopShell">
+            <button type="button" class="sp-tier sp-tier-chip" data-tier-toggle
+              :aria-expanded="showTierPop ? 'true' : 'false'" @click="showTierPop = !showTierPop">{{ TIER_LABEL[currentTier] }} ⌄</button>
+            <span v-if="showTierPop" ref="tierPopEl" class="sp-tier-pop">
+              <button v-for="t in TIER_TIERS" :key="t" type="button" class="sp-tier-opt"
+                :class="{ on: t === currentTier }" :aria-pressed="t === currentTier" @click="selectTier(t)">{{ TIER_LABEL[t] }}</button>
+              <span class="sp-tier-sep"></span>
+              <label class="sp-tier-code"><input type="checkbox" :checked="includeCode" @change="toggleIncludeCode()"><span>含代码</span></label>
+            </span>
+          </template>
+          <span v-else class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
         </span>
       </div>
 
@@ -320,7 +350,7 @@ export const SearchPanel = {
         <!-- 零结果 = 宽档→模糊全链回退耗尽的终态（两句人话，档位名不进文案；隐私并入条件式） -->
         <div v-else-if="!loading && !results.length && fuzzyDone" class="sp-empty">
           <div class="sp-empty-t1">无匹配<span v-if="privacyNote">——若相关文档在隐私设置中，已被排除</span></div>
-          <div class="sp-empty-t2">已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。</div>
+          <div class="sp-empty-t2">{{ emptyHint }}</div>
         </div>
         <!-- 按文件分组（§4 撤销平铺）：组头一行；组内片段卡零边框、纯间距 -->
         <template v-else>

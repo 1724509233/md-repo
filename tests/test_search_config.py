@@ -51,6 +51,12 @@ def test_loader_non_bool_exclude_code_raises(tmp_path):
         load_search(_cfg(tmp_path, "search:\n  exclude_code: 'yes'\n"))
 
 
+def test_loader_bool_int_field_raises(tmp_path):
+    # B9：bool 是 int 子类，`top_k_default: true` 静默变 1 属配错——显式拒
+    with pytest.raises(ValueError, match=r"search\.top_k_default"):
+        load_search(_cfg(tmp_path, "search:\n  top_k_default: true\n"))
+
+
 def test_loader_non_mapping_raises(tmp_path):
     with pytest.raises(ValueError, match=r"search"):
         load_search(_cfg(tmp_path, "search: 12\n"))
@@ -148,6 +154,25 @@ def test_settings_put_search_invalid_422(tmp_path, vault_dir, db_conn):
         r = _put_with(client, {"search": {"top_k_default": 0}})
         assert r.status_code == 422
         assert r.json()["errors"][0]["section"] == "search"
+
+
+def test_wired_cfg_flows_to_rag_and_hotapply(tmp_path, vault_dir, db_conn, monkeypatch):
+    """B8 双缺一钉：main/接线链（create_app search_cfg=）与热切（PUT→ctx.search_cfg）
+    任一缺失时 config 段对检索请求不可见（评审 A1「空转旋钮」）。未接线面（conftest client）
+    走 SearchConfig() 恰等于期望值不可区分——本钉必须用 _wire 接线面。"""
+    client = _client_for(tmp_path, vault_dir, db_conn)
+    captured = _patch_rag(monkeypatch)
+    with client:
+        # 接线正确：样本 config 无 search 段 → 内置缺省 12 / include_code False
+        client.post("/api/ai/search", json={"query": "x"})
+        assert captured[-1]["top_k"] == 12
+        assert captured[-1]["include_code"] is False
+        # 热生效：PUT 后不重启，同 client 的下一次检索必须见新值（默认结果数非空转）
+        r = _put_with(client, {"search": {"top_k_default": 20, "exclude_code": False}})
+        assert r.status_code == 200, r.text
+        client.post("/api/ai/search", json={"query": "x"})
+        assert captured[-1]["top_k"] == 20
+        assert captured[-1]["include_code"] is True
 
 
 def test_settings_search_pane_frontend_pins():

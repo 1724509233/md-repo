@@ -117,7 +117,7 @@ def _section_of(message: str) -> str:
         return "privacy"
     if "notifications" in message:
         return "notifications"
-    if "search." in message or message.startswith("search"):
+    if "search." in message or "'search'" in message:
         return "search"
     if "log_" in message or "log." in message:
         return "log"

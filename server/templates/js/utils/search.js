@@ -115,6 +115,8 @@ export function writePrefs(p) {
 }
 
 export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput, onSearchComplete }) {
+  // topK 可为函数（SearchPanel 按壳分层：桌面 null=不发键跟 config，移动 8）
+  const resolveTopK = () => (typeof topK === 'function' ? topK() : topK)
   let debounceTimer = null
   let abortController = null
   let requestId = 0
@@ -137,7 +139,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     if (state.resultTier) state.resultTier.value = tier
     let data
     try {
-      data = await api.aiSearch(keywords, topK, controller.signal, tier, tags,
+      data = await api.aiSearch(keywords, resolveTopK(), controller.signal, tier, tags,
                                 state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
@@ -189,7 +191,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.moreLoading.value = true
     let data
     try {
-      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags,
+      data = await api.aiSearch(lastKeywords, resolveTopK(), controller.signal, 'fuzzy', lastTags,
                                 state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return
