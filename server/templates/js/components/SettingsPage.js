@@ -66,10 +66,12 @@ import { ICONS } from '../utils/icons.js'
 
 const { ref, computed, watch, nextTick, inject, onBeforeUnmount } = Vue
 
-// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源；命名口径 2026-11-22 用户拍板，与监控页对齐）
+// 分段导航（桌面左列锚点 / ≤639 分段钮同一数据源；命名口径 2026-11-22 用户拍板，与监控页对齐；
+// search 段 = plan 2026-11-23 T9 全局默认层——档位/含代码的查询级入口在检索页，不在这里）
 const SECTIONS = [
   { id: 'ai', label: '主智能体' },
   { id: 'bg', label: '后台智能体' },
+  { id: 'search', label: '检索' },
   { id: 'misc', label: '杂项' }
 ]
 
@@ -323,6 +325,12 @@ const MISC_FIELD_MAP = [
   [/log_retention_days/, 'log.retention_days'],
   [/log_level/, 'log.level']
 ]
+// search 段 422 定位表（加载器文案含键名；exclude_code 报错落用户侧开关字段）
+const SEARCH_FIELD_MAP = [
+  [/top_k_default/, 'top_k_default'],
+  [/top_k_max/, 'top_k_max'],
+  [/exclude_code/, 'include_code']
+]
 
 export const SettingsPage = {
   name: 'SettingsPage',
@@ -419,6 +427,7 @@ export const SettingsPage = {
     const baseAi = ref('')
     const baseBg = ref([])
     const baseMisc = ref('')
+    const baseSearch = ref('')
     const aiFp = () => JSON.stringify({
       f: form.value.ai,
       ak: (apiKeyTouched.value ? '1' : '0') + '|' + String(apiKeyInput.value), // touched 且 input 空的「清除」态与干净态串不同，不漏判
@@ -426,20 +435,23 @@ export const SettingsPage = {
       ts: toolsSel.value
     })
     const miscFp = () => JSON.stringify({ n: form.value.notifications, l: form.value.log, p: form.value.privacy })
+    const searchFp = () => JSON.stringify(form.value.search)
     const bgFps = () => (form.value.background_agents || []).map(e => JSON.stringify(e))
     const dirtyAi = computed(() => !!form.value && aiFp() !== baseAi.value)
     const dirtyMisc = computed(() => !!form.value && miscFp() !== baseMisc.value)
+    const dirtySearch = computed(() => !!form.value && searchFp() !== baseSearch.value)
     const dirtyBg = computed(() => {
       if (!form.value) return false
       const fps = bgFps()
       return fps.length !== baseBg.value.length || fps.some((f, i) => f !== baseBg.value[i])
     })
     const bgEntryDirty = i => bgFps()[i] !== baseBg.value[i]
-    const settingsDirty = computed(() => dirtyAi.value || dirtyBg.value || dirtyMisc.value)
+    const settingsDirty = computed(() => dirtyAi.value || dirtyBg.value || dirtyMisc.value || dirtySearch.value)
     function resetBaselines() {
       baseAi.value = aiFp()
       baseBg.value = bgFps()
       baseMisc.value = miscFp()
+      baseSearch.value = searchFp()
     }
 
     // ─── 关闭确认浮层（spec §6 三选，替代原生 confirm）：保存并关闭（成功才关）/ 放弃修改（重拉
@@ -528,6 +540,13 @@ export const SettingsPage = {
         // 条目镜像（Task 9 接管编辑）：raw 副本存底本，未知键保存时直通回条目
         background_agents: (d.background_agents || []).map(bgEntryView),
         notifications: { daily_cap: numOrEmpty(d.notifications && d.notifications.daily_cap) },
+        // search 段（plan T9）：include_code 唯一反义点——服务端 exclude_code（默认 true）
+        // ↔ 用户正向「结果包含代码文件」；buildPayload 提交前翻回
+        search: {
+          top_k_default: numOrEmpty(d.search && d.search.top_k_default),
+          top_k_max: numOrEmpty(d.search && d.search.top_k_max),
+          include_code: !!(d.search && d.search.exclude_code === false)
+        },
         log: {
           level: strOrEmpty(d.log && d.log.level) || 'INFO',
           dir: strOrEmpty(d.log && d.log.dir),          // 页外字段直通回传（重启生效段）
@@ -893,6 +912,16 @@ export const SettingsPage = {
       if (cap !== '' && cap != null && (!isIntVal(cap) || Number(cap) < 1)) add('misc.daily_cap', 'misc', '需为不小于 1 的整数')
       const ret = form.value.log.retention_days
       if (ret !== '' && ret != null && (!isIntVal(ret) || Number(ret) < 1)) add('misc.log.retention_days', 'misc', '需为不小于 1 的整数')
+      // 检索段（plan T9）：两数值可空=回加载器缺省；非空=整数 ≥1；同填则默认 ≤ 上限
+      //（交叉预检镜像 loader 的 default>max 拒——不等 422 走一圈）
+      const sCfg = form.value.search
+      for (const [fk, key] of [['search.top_k_default', 'top_k_default'], ['search.top_k_max', 'top_k_max']]) {
+        const v = sCfg[key]
+        if (v !== '' && v != null && (!isIntVal(v) || Number(v) < 1)) add(fk, 'search', '需为不小于 1 的整数')
+      }
+      if (isIntVal(sCfg.top_k_default) && isIntVal(sCfg.top_k_max)
+          && Number(sCfg.top_k_default) > Number(sCfg.top_k_max))
+        add('search.top_k_default', 'search', '默认结果数不能大于结果数上限')
       return out
     }
     function groupFields(list) {
@@ -969,6 +998,12 @@ export const SettingsPage = {
           const hit = MISC_FIELD_MAP.find(([re]) => re.test(msg))
           if (hit) fe['misc.' + hit[1]] = clean
           else card('misc', clean)
+          continue
+        }
+        if (sec === 'search') {
+          const hit = SEARCH_FIELD_MAP.find(([re]) => re.test(msg))
+          if (hit) fe['search.' + hit[1]] = clean
+          else card('search', clean)
           continue
         }
         showToast(clean, 'error') // section 都定不了 → toast 兜底
@@ -1053,6 +1088,15 @@ export const SettingsPage = {
       const cap = toNum(f.notifications.daily_cap)
       if (cap !== null) notif.daily_cap = cap
       p.notifications = notif
+      // ── 检索段（plan T9）：空标量省略键=回加载器缺省；开关默认态零足迹——
+      // 仅「含代码=开」物化 exclude_code: false（关=默认 true，省略键即回缺省）──
+      const search = {}
+      const tkd = toNum(f.search.top_k_default)
+      if (tkd !== null) search.top_k_default = tkd
+      const tkm = toNum(f.search.top_k_max)
+      if (tkm !== null) search.top_k_max = tkm
+      if (f.search.include_code) search.exclude_code = false
+      p.search = search
       const log = { level: f.log.level, dir: f.log.dir }
       const ret = toNum(f.log.retention_days)
       if (ret !== null) log.retention_days = ret
@@ -1083,7 +1127,7 @@ export const SettingsPage = {
       // 表单项级校验呈现（红框判定 + 红小字 + 修改即清 + 卡顶兜底）
       err, clearErr, cardErrs, dirErr, clearDirErr,
       // 分段徽标 + 关闭确认浮层
-      dirtyAi, dirtyBg, dirtyMisc, bgEntryDirty,
+      dirtyAi, dirtyBg, dirtyMisc, dirtySearch, bgEntryDirty,
       confirmOpen, confirmRef, cancelBtnRef, cancelConfirm, discardAndClose, saveAndClose, onConfirmKeydown,
       dirDraft, dirInputRef, dirListRef, dirOpen, dirActive, dirCandidates,
       removeDir, onDirKeydown, onDirInput, onDirOpenList, onDirBlurClose, pickDir,
@@ -1448,6 +1492,42 @@ export const SettingsPage = {
                         @click="onBgDelete(bgEditing)">{{ bgDelArmed === bgEditing ? '确认删除？' : '删除此条目' }}</button>
                       <span class="st-hint">若正在运行，本轮跑完即停</span>
                     </div>
+                  </div>
+                </div>
+
+                <!-- ═══ 检索（plan 2026-11-23 T9：全局默认层；档位/含代码的查询级入口在检索页）═══ -->
+                <div v-show="section === 'search'" class="mcard">
+                  <div class="mc-h">
+                    <span class="mc-t">检索</span>
+                    <span class="st-sv" :class="{ dirty: dirtySearch }" :title="dirtySearch ? '本段有未保存的修改' : '本段已与服务端一致'">{{ dirtySearch ? '未保存' : '已保存' }}</span>
+                  </div>
+                  <div class="st-fields">
+                    <div v-if="cardErrs('search').length" class="st-card-err">
+                      <span v-for="(m, i) in cardErrs('search')" :key="i">{{ m }}</span>
+                    </div>
+                    <div class="st-grid">
+                      <label class="st-field">
+                        <span class="st-lbl">默认结果数</span>
+                        <input class="st-input" data-fk="search.top_k_default" :class="{ 'is-err': err('search.top_k_default') }"
+                          type="number" min="1" step="1" v-model="form.search.top_k_default" @input="clearErr('search.top_k_default')">
+                        <span v-if="err('search.top_k_default')" class="st-field-err">{{ err('search.top_k_default') }}</span>
+                      </label>
+                      <label class="st-field">
+                        <span class="st-lbl">结果数上限</span>
+                        <input class="st-input" data-fk="search.top_k_max" :class="{ 'is-err': err('search.top_k_max') }"
+                          type="number" min="1" step="1" v-model="form.search.top_k_max" @input="clearErr('search.top_k_max')">
+                        <span v-if="err('search.top_k_max')" class="st-field-err">{{ err('search.top_k_max') }}</span>
+                      </label>
+                    </div>
+                    <!-- 容器 div（label 内禁 labelable 后代——AGENTS 红线；本字段后代是 button） -->
+                    <div class="st-field">
+                      <span class="st-lbl" id="st-code-lbl">结果包含代码文件</span>
+                      <button class="st-toggle" :class="{ on: form.search.include_code }" type="button" role="switch"
+                        :aria-checked="form.search.include_code" aria-labelledby="st-code-lbl"
+                        @click="form.search.include_code = !form.search.include_code"></button>
+                      <span class="st-hint">默认关：代码块不进检索结果</span>
+                    </div>
+                    <span class="st-hint">这里是全局默认；检索页的档位与「含代码」按次生效，不改这里</span>
                   </div>
                 </div>
 

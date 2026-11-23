@@ -148,3 +148,19 @@ def test_settings_put_search_invalid_422(tmp_path, vault_dir, db_conn):
         r = _put_with(client, {"search": {"top_k_default": 0}})
         assert r.status_code == 422
         assert r.json()["errors"][0]["section"] == "search"
+
+
+def test_settings_search_pane_frontend_pins():
+    # T9：设置页第 4 分段「检索」——SECTIONS/模板/hydrate/buildPayload/apply422 五链对号。
+    from pathlib import Path
+    sp = (Path(__file__).resolve().parent.parent
+          / "server/templates/js/components/SettingsPage.js").read_text(encoding="utf-8")
+    assert "{ id: 'search', label: '检索' }" in sp
+    # 三字段文案（数值 label 逐字；开关 label 用户正向语义，反义只许在组件内一次）
+    for s in ("默认结果数", "结果数上限", "结果包含代码文件",
+              "search.top_k_default", "search.top_k_max", "search.include_code"):
+        assert s in sp, s
+    assert "sec === 'search'" in sp, "apply422 段定位链缺 search"
+    assert "p.search = search" in sp, "buildPayload 缺 search 段"
+    assert "search: {" in sp, "hydrate 缺 search 镜像"
+    assert "dirtySearch" in sp, "脏徽标链缺 search"
