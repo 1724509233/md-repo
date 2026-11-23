@@ -1439,8 +1439,8 @@ def test_home_g4_trash_entry_drawer_guard_exemption():
     app = _templates()["app.js"]
     assert """:data-drawer-entry="r.k === 't' ? '1' : null\"""" in home, \
         "Home G4 回收站链接缺 data-drawer-entry 入口标记"
-    m = re.search(r"if \(t\.closest\('\.panel-shell'\).*?\[data-drawer-entry\]'\)\) return", app)
-    assert m, "app.js 抽屉外点守卫链缺 [data-drawer-entry] 豁免登记"
+    m = re.search(r"if \(t\.closest\('\.panel-shell'\).*?\[data-tree-menu\]'\)\) return", app)
+    assert m, "app.js 抽屉外点守卫链缺 [data-tree-menu] 豁免登记"
 
 
 def test_home_g2_scroll_explicit_container():

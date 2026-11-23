@@ -264,7 +264,8 @@ def test_click_ledger_surfaces():
     ft = read_js("components/FileTree.js")
     for js in (sp, ft):
         assert "via: 'search'" in js, "search surface must ledger via:'search'"
-        assert "search.lastQuery()" in js, "click query = 产出当前结果的 keywords"
+        # S3 起 FileTree 控制器惰性创建：两条路径（search.x / ensureSearch().x）同语义
+        assert re.search(r"(search|ensureSearch\(\))\.lastQuery\(\)", js), "click query = 产出当前结果的 keywords"
         assert "rank: i + 1" in js, "rank = 1-based 项序号"
 
     app_js = read_js("app.js")

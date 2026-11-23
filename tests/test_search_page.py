@@ -203,6 +203,54 @@ def test_s2_group_by_path_probe():
     _run_node(js)
 
 
+def test_s3_tree_desktop_retire():
+    # spec §7（D6）：树内 RAG 下拉桌面门控退役；树框复位纯文件名筛选；移动逐字节不动。
+    ft = (TPL / "js/components/FileTree.js").read_text(encoding="utf-8")
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    # isDesktop prop + app 用点传参
+    assert "isDesktop: { type: Boolean" in ft
+    assert ':is-desktop="isDesktop"' in app
+    # 退役接线全挂 isDesktop 门；桌面 nav 常驻（筛选词不藏树）
+    assert 'v-show="!isDesktop && searchOpen"' in ft, "下拉未挂桌面门"
+    assert 'v-show="isDesktop || !searchOpen"' in ft, "桌面 nav 未常驻"
+    # placeholder 两框分工（§7 防混淆钉）
+    assert "按文件名筛选" in ft and "快速跳转… #tag 按标签搜" in ft
+    # RAG 控制器惰性创建：桌面支路永不实例化（零请求承重）
+    assert "ensureSearch" in ft
+    assert re.search(r"if \(!props\.isDesktop\) ensureSearch\(\)\.setInput", ft)
+    # 文件名筛选 = 纯客户端
+    assert "filteredFiles" in ft and "filterActive" in ft
+    # 移动支路完整（防一刀切）：listbox / pickResult / combobox 微契约 / 控制器工厂全在
+    for s in ('role="listbox"', "pickResult", "resultOptId", "createSearchController"):
+        assert s in ft
+
+
+def test_s3_ctrl_k_shortcuts():
+    # spec §8：Ctrl/⌘+K 桌面直达检索页（聚焦全选）；移动不拦截（三补②）；
+    # 检索页态 Ctrl+S/E/F2 全禁（guard 在 Ctrl+S handler 顶，同 handler 覆盖全链）。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    m = re.search(r"e\.key\.toLowerCase\(\) === 'k'", app)
+    assert m, "Ctrl+K 键位缺失"
+    blk = app[m.start():m.start() + 420]
+    assert "e.ctrlKey || e.metaKey" in blk
+    assert "if (!isDesktop.value) return" in blk, "移动拦截未豁免"
+    assert "e.preventDefault()" in blk and "openSearch(true)" in blk
+    i = app.index("=== 's')")
+    assert "if (state.view === 'search') return" in app[max(0, i - 300):i], "检索态快捷键 guard 缺失"
+
+
+def test_s3_drawer_guard_exemptions():
+    # 用户目检 2026-11-23（点外守卫红线家族再犯）：抽屉点外关闭须豁免 Teleport 菜单
+    # （body 顶层不在抽屉子树）；断开 target 保守不关；桌面树框 Esc 清词不得
+    # 冒泡进全局 Esc 链（escTarget=drawer 收抽屉）。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    ft = (TPL / "js/components/FileTree.js").read_text(encoding="utf-8")
+    assert ft.count("data-tree-menu") >= 2, "菜单浮层+背板都要登记"
+    assert "'[data-tree-menu]'" in app, "抽屉点外守卫未豁免树菜单"
+    assert "document.contains(t)" in app, "断开 target 防御缺失"
+    assert re.search(r"searchQuery\.value = '';\s*e\.stopPropagation\(\)", ft), "Esc 清词未拦冒泡"
+
+
 def test_s1b_three_tokens_and_centering():
     # spec §3：--col-measure(680)/--col-topline/--col-inline 三 token 两视图共读；
     # 摘 .doc-scroll/.doc-head 非对称 padding-right 让位（列心病根，Review Focus 4）。

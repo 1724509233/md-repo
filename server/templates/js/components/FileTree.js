@@ -149,7 +149,9 @@ export const FileTree = {
   props: {
     files: { type: Array, default: () => [] },
     dirs: { type: Array, default: () => [] },
-    currentPath: { type: String, default: null }
+    currentPath: { type: String, default: null },
+    // spec 2026-11-23 §7（D6）：桌面=纯文件名筛选（RAG 下拉退役）；移动=现状逐字节不动
+    isDesktop: { type: Boolean, default: false }
   },
   emits: ['select'],
   setup(props, { emit }) {
@@ -159,10 +161,19 @@ export const FileTree = {
     // 提供给递归子组件
     provide('treeState', { expandedDirs })
 
+    // ── 桌面纯文件名筛选（spec §7 D6 复位）：path 含词（大小写不敏感，含目录段命中——
+    //    祖先链随命中文件的 path 播种自然保留）；空词=全量。零请求、零新端点 ──
+    const filterActive = computed(() => props.isDesktop && searchQuery.value.trim().length > 0)
+    const filteredFiles = computed(() => {
+      if (!filterActive.value) return props.files
+      const q = searchQuery.value.trim().toLowerCase()
+      return props.files.filter(f => (f.path || '').toLowerCase().includes(q))
+    })
+
     // 构建树形结构
     const tree = computed(() => {
       const root = { dirs: {}, files: [] }
-      // 先由后端 dirs 播种目录节点（空文件夹也可见）
+      // 先由后端 dirs 播种目录节点（空文件夹也可见）；筛选态不播空目录——只见命中链
       function ensureDir(path) {
         let node = root
         for (const part of path.split('/')) {
@@ -170,8 +181,8 @@ export const FileTree = {
           node = node.dirs[part]
         }
       }
-      for (const d of props.dirs) ensureDir(d)
-      for (const f of props.files) {
+      if (!filterActive.value) for (const d of props.dirs) ensureDir(d)
+      for (const f of filteredFiles.value) {
         const parts = f.path.split('/')
         let node = root
         for (let i = 0; i < parts.length - 1; i++) {
@@ -446,14 +457,20 @@ export const FileTree = {
       moreLoading: ref(false),  // 显式 fuzzy 请求进行中（「展示更多」点击后）
       fuzzyDone: ref(false)     // fuzzy 通道已关闭（跑过 / 零命中已耗尽 / 请求失败）
     }
-    const search = createSearchController({
-      api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
-      focusInput() {
-        const input = document.querySelector('#search-input')
-        if (input) input.focus({ preventScroll: true }) // 保证 ArrowUp/Down 继续可用
-      },
-      onSearchComplete() { fileState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
-    })
+    // 控制器惰性创建（spec §7：桌面支路永不实例化——零 debounce、零请求、零连接面）。
+    // 状态容器与工厂解耦：桌面态这些 ref 恒空，模板下拉本身已被 isDesktop 门隐藏。
+    let search = null
+    function ensureSearch() {
+      if (!search) search = createSearchController({
+        api, topK: SEARCH_TOP_K, debounceMs: 300, state: searchState,
+        focusInput() {
+          const input = document.querySelector('#search-input')
+          if (input) input.focus({ preventScroll: true }) // 保证 ArrowUp/Down 继续可用
+        },
+        onSearchComplete() { fileState.recallDataVersion++ } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
+      })
+      return search
+    }
     const { results, loading, activeIndex, moreLoading, fuzzyDone } = searchState
     const searchOpen = computed(() => searchQuery.value.trim().length > 0)
 
@@ -465,19 +482,39 @@ export const FileTree = {
     // 与每行的 :id 都只经它拼接（字面量全文件恰一处，两侧漂移即被静态钉打回）
     const resultOptId = i => `ts-opt-${i}`
 
-    // 300ms 尾随防抖；query 变化即重置状态，回到 relaxed
-    watch(searchQuery, (q) => search.setInput(q))
+    // 300ms 尾随防抖；query 变化即重置状态，回到 relaxed。桌面走纯客户端筛选（§7）
+    watch(searchQuery, (q) => { if (!props.isDesktop) ensureSearch().setInput(q) })
+
+    // 桌面筛选联动：命中路径自动展开（扩词后新命中的链也补展开——watch 源含 query）；
+    // 进/退筛选态间快照复位，用户原有折叠序不丢
+    let filterSnapshot = null
+    watch([searchQuery, () => props.isDesktop], () => {
+      if (filterActive.value) {
+        if (filterSnapshot === null) filterSnapshot = new Set(expandedDirs.value)
+        for (const f of filteredFiles.value) expandToPath(f.path)
+      } else if (filterSnapshot !== null) {
+        expandedDirs.value = filterSnapshot
+        filterSnapshot = null
+      }
+    })
 
     // 点击落账（spec 2026-11-13 §4）：via=search + query（产出当前结果的
     // keywords）+ rank（1-based 项序号）；select（openDoc）之前发出、不 await
     function pickResult(item, i) {
-      api.recallClick({ path: item.path, via: 'search', query: search.lastQuery(), rank: i + 1 })
+      api.recallClick({ path: item.path, via: 'search', query: ensureSearch().lastQuery(), rank: i + 1 })
       emit('select', item.path, item.heading)
       searchQuery.value = ''
       search.resetToIdle()
     }
 
     function onKeydown(e) {
+      if (props.isDesktop) {
+        // 桌面纯筛选：下拉不存在，仅 Esc 清词（↑↓/Enter 无对象可导航）。
+        // stopPropagation 承重：不放行则同键冒泡进全局 Esc 链（escTarget=drawer）——
+        // 「Esc 清搜索框」连带收抽屉（2026-11-23 用户目检抓获）。移动支路逐字节不动。
+        if (e.key === 'Escape') { searchQuery.value = ''; e.stopPropagation() }
+        return
+      }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         activeIndex.value = Math.min(activeIndex.value + 1, shapedResults.value.length - 1)
@@ -510,7 +547,8 @@ export const FileTree = {
     }
 
     watch(searchOpen, (open) => {
-      if (open) document.addEventListener('mousedown', onDocMouseDown)
+      // 外点关闭只在移动下拉态有意义（桌面筛选态点树行是正操作，清词即误伤）
+      if (open && !props.isDesktop) document.addEventListener('mousedown', onDocMouseDown)
       else document.removeEventListener('mousedown', onDocMouseDown)
     })
 
@@ -548,7 +586,7 @@ export const FileTree = {
 
     onBeforeUnmount(() => {
       document.removeEventListener('mousedown', onDocMouseDown)
-      search.destroy()
+      if (search) search.destroy()
     })
 
     return {
@@ -557,7 +595,7 @@ export const FileTree = {
       ICONS, menu, menuEl, editing, rootInput, closeMenu, startNew, startRename, confirmDelete, moveItem,
       onNavContextmenu, onRootInputKeydown, confirmRootInput,
       onNavDragOver, onNavDrop, ROOT_TARGET,
-      moreLoading, fuzzyDone, showMore: search.showMore, shownRowCount, SEARCH_TOP_K,
+      moreLoading, fuzzyDone, showMore: () => { if (search) search.showMore() }, shownRowCount, SEARCH_TOP_K,
       docHash,
       expandToPath, revealActive, collapseAll,
       isPriv
@@ -571,7 +609,7 @@ export const FileTree = {
           role="combobox" aria-controls="tree-search-results"
           :aria-expanded="searchOpen && shapedResults.length > 0"
           :aria-activedescendant="activeIndex >= 0 && activeIndex < shapedResults.length ? resultOptId(activeIndex) : undefined"
-          placeholder="快速跳转… #tag 按标签搜" @keydown="onKeydown">
+          :placeholder="isDesktop ? '按文件名筛选' : '快速跳转… #tag 按标签搜'" @keydown="onKeydown">
         <button v-if="searchQuery" class="sp-q-clear" title="清除" aria-label="清除" @click="searchQuery = ''">
           <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
@@ -579,7 +617,7 @@ export const FileTree = {
         <!-- RAG 搜索下拉框：listbox 容器（combobox 微契约，spec §1.7）。
              状态行（加载/无匹配/展示更多/已耗尽）留在 listbox 内但为无 role 的普通节点——
              不进 role=option（假 option 会被 aria-activedescendant 导航邻域误认作可选项） -->
-        <div id="tree-search-results" role="listbox" class="search-dropdown" v-show="searchOpen">
+        <div id="tree-search-results" role="listbox" class="search-dropdown" v-show="!isDesktop && searchOpen">
           <!-- 加载（单请求 relaxed；零命中时服务端同请求内已回退 fuzzy） -->
           <div v-if="loading && !results.length" class="search-loading">
             <span class="search-spinner"></span>
@@ -620,7 +658,7 @@ export const FileTree = {
           </div>
         </div>
       </div>
-      <nav class="tree-scroll flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="!searchOpen"
+      <nav class="tree-scroll flex-1 min-h-0 overflow-y-auto scroll-thin px-2 pb-4 space-y-0.5 text-sm" v-show="isDesktop || !searchOpen"
         :class="{ 'tree-drop-root': dropTarget === ROOT_TARGET }"
         @dragover="onNavDragOver($event)"
         @drop="onNavDrop($event)"
@@ -643,10 +681,12 @@ export const FileTree = {
 
       <!-- 操作菜单浮层：Teleport 到 body —— 菜单是 fixed 顶层浮层，放在面板子树内会被
            .panel-shell 困住（≤1023px 时其 transform 成为 fixed 包含块 + 层叠上下文，
-           overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争 -->
+           overflow:hidden 还会裁切），z-50 无法与主内容区/控制台竞争。
+            data-tree-menu：菜单在 body 顶层不在 .panel-shell 子树——抽屉「点外关闭」守卫须
+            豁免它（点菜单项=点内），同 data-drawer-entry 入口粒度先例（AGENTS.md 红线） -->
       <Teleport to="body">
-        <div v-if="menu" class="fixed inset-0 z-40" aria-hidden="true" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
-        <div v-if="menu" ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
+        <div v-if="menu" data-tree-menu class="fixed inset-0 z-40" aria-hidden="true" @click="closeMenu" @contextmenu.prevent="closeMenu"></div>
+        <div v-if="menu" data-tree-menu ref="menuEl" role="menu" class="fixed z-50 w-40 bg-surface border border-border rounded-lg shadow-lg py-1"
           :style="{ left: menu.x + 'px', top: menu.y + 'px' }">
           <button v-if="menu.isDir" role="menuitem" class="w-full text-left px-3 py-2 text-xs hover:bg-[color-mix(in_srgb,var(--brass)_10%,transparent)]"
             @click="startNew(menu.path, 'new-file')">新建文件</button>

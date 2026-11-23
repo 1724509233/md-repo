@@ -1159,6 +1159,9 @@ export function createApp() {
         // §13 实测项移交 W2 波闸目检——用户真机若被地址栏吃掉，退 Ctrl+Shift+E（spec §5 表同步改）。
         document.addEventListener('keydown', (e) => {
           if (state.settingsOpen) return
+          // 检索页（spec 2026-11-23 §8）：无编辑器在场，Ctrl+S/E/F2 编辑快捷键整体禁用
+          // （同 handler 顶部一守卫覆盖全链；F2 的树重命名定位在检索页也无对象）
+          if (state.view === 'search') return
           if (e.ctrlKey && e.key.toLowerCase() === 's') {
             // Ctrl+S 保存（Shift 变体同收——preventDefault 顺带吃掉浏览器「另存为」）
             e.preventDefault()
@@ -1169,6 +1172,17 @@ export function createApp() {
           } else if (e.key.toLowerCase() === 'f2') {
             e.preventDefault()
             onRevealTree('rename')
+          }
+        })
+
+        // Ctrl/⌘+K → 检索页直达（spec §8）：桌面专属——移动不拦截（三补②，键还浏览器原生）；
+        // settings 链纪律同上一个 handler 放行惯例；已在检索页 = openSearch(true) 幂等复焦全选
+        document.addEventListener('keydown', (e) => {
+          if (state.settingsOpen) return
+          if (e.key && e.key.toLowerCase() === 'k' && (e.ctrlKey || e.metaKey)) {
+            if (!isDesktop.value) return
+            e.preventDefault()
+            openSearch(true)
           }
         })
 
@@ -1200,11 +1214,15 @@ export function createApp() {
         // [data-drawer-entry]：Home G4「去回收站」链接经 openTrashFace 开抽屉（恒开
         // 语义），同一 click 冒泡进本监听不得把刚开的抽屉再吞掉——入口级标记由
         // Home.js 模板只挂回收站行（同 data-notif-toggle 入口粒度先例，禁整盒豁免）。
+        // [data-tree-menu]：FileTree 操作菜单 Teleport 在 body 顶层不在抽屉子树——
+        // 点「重命名/删除/新建」菜单项=点内（2026-11-23 用户目检抓获，红线同款）。
         document.addEventListener('click', (e) => {
           if (!isDesktop.value || !state.drawer || treePinned.value) return
           const t = e.target
           if (!t || !t.closest) return
-          if (t.closest('.panel-shell') || t.closest('.fab-root') || t.closest('.dock') || t.closest('[data-drawer-entry]')) return
+          // 防御：target 已被同刻的 v-if 重渲染摘除（closest 恒 null）——无法证内外，保守不关
+          if (!document.contains(t)) return
+          if (t.closest('.panel-shell') || t.closest('.fab-root') || t.closest('.dock') || t.closest('[data-drawer-entry]') || t.closest('[data-tree-menu]')) return
           state.drawer = null
         })
 
@@ -1446,7 +1464,7 @@ export function createApp() {
             </div>
             <div class="flex-1 min-h-0 overflow-hidden">
               <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
-                @select="onTreeSelect" />
+                :is-desktop="isDesktop" @select="onTreeSelect" />
             </div>
           </div>
           <div v-show="activePanel === 'trash'" class="panel-face">
