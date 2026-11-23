@@ -78,9 +78,11 @@ input, textarea { -webkit-user-select: text; user-select: text; }
    滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
    + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown——实效来自
    「展示更多」钮（option 走 aria-activedescendant 方案，焦点恒留 input，:focus-visible
-   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
-   .rel-scroll 及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
-.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible {
+   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll
+   及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
+/* .rel-scroll 补挂（spec 2026-11-23-rel-face-redesign §2.3，上方注释预留补挂位兑现）：
+   「关联」面桌面浮层 overflow:hidden 裁外描环，面内整行 button 有键盘焦点落点 */
+.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible, .rel-scroll :focus-visible {
   box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--brass);
 }
 
@@ -185,14 +187,15 @@ input, textarea { -webkit-user-select: text; user-select: text; }
   .topbar-compact .topbar-logo .logo-word { max-width: 0; opacity: 0; }
 }
 
-/* ============ 目录浮层（P4-3）============
-   锚内容区右缘（顶栏右端之下）：AI 抽屉打开时顶栏随 main padding-right:50% 收缩，
-   浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / ai-btn 40 之下）。
+/* ============ 目录浮层（P4-3 · 沉浸式壳 T5 起为 app 根级单实例）============
+   移动锚顶栏下缘（fixed top:56 = 顶栏 48 + 8，right:8 视口右缘——与旧「顶栏子树 absolute」
+   视觉逐位同构，消费路径零改动）；桌面锚 dock 左缘（文末 T5 分节媒体覆盖）。
+   AI 抽屉打开时浮层自然收进内容区，永不压面板。z-50 与通知下拉/更多菜单同层（ai-panel 15 / 移动 ai 抽屉 40 / 聊天浮窗 45 之下；旧桌面 #ai-btn 40 已随 T7 tab 退役）。
    开 = display 恢复时 animation 正向播放（opacity + translateY(4px→0) + scale(.98→1)，transform 路径零 reflow）；
    合 = v-show 直切（无退场，避免 display 切换的 JS 时序管理；浮层零常驻占用，代价可接受）。
    浮层本体不参与 flex 布局：开关不改内容区尺寸/居中，文档滚动位置不动。 */
 .toc-dd {
-  position: absolute; right: 8px; top: calc(100% + 8px);
+  position: fixed; right: 8px; top: 56px;
   width: 260px; max-height: min(420px, 52vh);
   z-index: 50;
   display: flex; flex-direction: column;
@@ -310,16 +313,7 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 #ai-panel .font-ui, #ai-panel button, #ai-panel input, #ai-panel textarea { font-family: 'Inter', sans-serif; }
 #ai-messages { font-family: 'Source Serif 4', serif; }
 
-/* 桌面 toggle tab */
-@media (min-width: 1024px) {
-  /* 例外（ledger Task 7 Ruling）：贴边 tab 需骑乘面板边缘，transform % 相对本体
-     无法表达容器 50%；32px 小面 right 过渡 reflow 可忽略 */
-  #ai-btn { right: 0; z-index: 25; width: 32px; height: 64px; border-radius: 8px 0 0 8px; background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); transition: right .25s cubic-bezier(.32,.72,0,1), background-color .15s, color .15s; }
-  #ai-btn.ai-open { right: 50%; }
-  #ai-btn:hover { background: color-mix(in srgb, var(--brass) 12%, var(--surface)); color: var(--brass); }
-  #ai-btn #ai-chevron { transform: rotate(-90deg); }
-  #ai-btn.open #ai-chevron { transform: rotate(90deg); }
-}
+/* 桌面 toggle tab —— 已退役（T7，spec §4A：右缘入口升格为暗金半隐握把 .grip；移动 #ai-btn-mobile 原样） */
 
 /* ============ 移动底部抽屉 (< lg) ============ */
 @media (max-width: 1023px) {
@@ -483,7 +477,7 @@ pre code.hljs { background: transparent; padding: 0; }
    自动批准 ON 态只由颜色表达（brass 图标 + 18% 底色 + 45% 边框），几何零变化，
    是头部的唯一颜色载体；brand 显式 brass（tailwind.config 未注册，text-brass 系类为空操作）。 */
 .ai-head { position: relative; display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-shrink: 0; font-family: 'Inter', sans-serif; }
-.ai-brand { width: 32px; height: 32px; border-radius: 9999px; border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.ai-brand { width: 32px; height: 32px; border-radius: 9999px; border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: color-mix(in srgb, var(--brass) 82%, var(--ink)); display: flex; align-items: center; justify-content: center; flex-shrink: 0; } /* 配色评审③：摘要面（ai-brand/气泡栈）用暗金=brass 掺墨，与详情徽标（亮黄铜 pill/聚合点）明度分档——同色两档读作一事的轻重说，同色同档读作三件事 */
 .ai-brand .icon { width: 14px; height: 14px; }
 .ai-id { flex: 1; min-width: 0; }
 .ai-line1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -801,7 +795,9 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 顶栏 logo（spec §3.1：22px mark + 14px wordmark） */
 .topbar-logo .logo-mark--top { width: 22px; height: 22px; border-radius: 6px; font-size: 11px; }
 /* 字标同 .tb-label 口径：max-width + opacity 平滑收纳（上限 60px ≈ "md-vault" 自然宽 + 余量） */
-.topbar-logo { transition: gap .2s ease; }
+.topbar-logo { transition: gap .2s ease; cursor: pointer; }
+/* logo 回首页（spec 2026-11-22）：role=button 的键盘焦点面可见（同 .tree-more:focus-visible 家族口径） */
+.topbar-logo:focus-visible { outline: 2px solid var(--brass); outline-offset: 3px; border-radius: 6px; }
 .topbar-logo .logo-word {
   font-size: 14px;
   max-width: 60px; overflow: hidden; white-space: nowrap;
@@ -1079,11 +1075,26 @@ details.d-sec .body { padding: 8px 12px 14px; }
   #memory-console-backdrop { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  #memory-console-shell > .c-face.anim { animation: none; }
+  #memory-console-shell > .c-face.anim,
+  .st-pane-memory > .c-face.anim { animation: none; }
   .console-shell, .console-shell.open { transition: none; }
   .spill.awaiting::before { animation: none; }
   .done { animation: none; }
 }
+
+/* ============ 设置浮窗 · 记忆 pane（沉浸式壳 T6，plan 2026-11-22-immersive-shell Task 6；spec §6）
+   MemoryConsole 三面整体迁入 st-body：宽度随 pane、卡壳圆角沿 mcard 视觉语言；
+   面 = 流内静态（非 #memory-console-shell 的 absolute inset 面），滚动归 st-modal-body，
+   pane 本体 overflow:auto 兜底。st-nav「记忆」段徽标 = badgeParts.total（>0 才画，
+   激活态反色保可读）。组件 scoped ref 双实例隔离（Review Focus 3），数据 app 30s 轮询下传。 ============ */
+.st-pane-memory { overflow: auto; }
+.st-pane-memory > .c-face { display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
+.st-pane-memory > .c-face.anim { animation: cFaceIn .2s cubic-bezier(.32,.72,0,1) both; }
+.st-nav-btn { display: flex; align-items: center; gap: 6px; }
+.st-nav-ic { display: inline-flex; flex-shrink: 0; }
+.st-nav-ic svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.st-nav-badge { margin-left: auto; min-width: 15px; height: 15px; padding: 0 4px; border-radius: 999px; background: var(--brass); color: var(--paper); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.st-nav-btn.active .st-nav-badge { background: var(--paper); color: var(--brass); } /* 激活态黄铜实心 → 徽标反色 */
 
 /* ============ 后台监控页 L1（定稿 design/console-v4-watch.html 场景 02 · 非对称网格 02E；
    组件 CSS 自设计稿原样移植，类名与设计稿一致；既有类零改动，.rcl-stats/.rcl-stat/.tchip/.spill
@@ -1362,9 +1373,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .rpt-md .code-block { margin: 8px 0; }
 .rpt-md .code-block pre { font-size: 11px; padding: 9px 10px; }
 /* 报告面深链 sweep：JS 同详情面口径在 [data-face="report"] 上挂 .mp-deep（MemoryConsole rptDeepT），
-   既有规则（动效层 ⑤）作用域仅 detail → 报告面标题（同构 .d-title）在此补齐同一 sweep */
-#memory-console-shell [data-face="report"].mp-deep .d-title { position: relative; }
-#memory-console-shell [data-face="report"].mp-deep .d-title::after {
+   既有规则（动效层 ⑤）作用域仅 detail → 报告面标题（同构 .d-title）在此补齐同一 sweep。
+   T6：去 #memory-console-shell 前缀升为属性级全局选择器——data-face 仅 MemoryConsole 面根使用，
+   双实例（移动 console-shell + 设置浮窗记忆 pane）同吃同一 sweep */
+[data-face="report"].mp-deep .d-title { position: relative; }
+[data-face="report"].mp-deep .d-title::after {
   content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
   background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
   border-radius: 2px; transform-origin: left center;
@@ -1373,13 +1386,12 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 动效降级（本分节新增件：L0 降级 chip 增长脉冲 + 报告面深链 sweep） */
 @media (prefers-reduced-motion: reduce) {
   .l0-deg.fresh { animation: none; }
-  #memory-console-shell [data-face="report"].mp-deep .d-title::after { animation: none; }
+  [data-face="report"].mp-deep .d-title::after { animation: none; }
 }
 
 /* ============ 记忆控制台 · 文档面（v2b② spec §6.4：控制台呈现面，2026-11-14）
    纯追加：既有类零改动。三块可折叠（2026-11-14 用户拍板：tag 与 wikilink 分块 + 各块折叠 + 机器建议改名 AI 建议）。
-   新增件 = .doc-path-line 文档路径行（mono 10px ellipsis，hover title 全值）
-   / .doc-row 链接行（wikilink 块 = 中性，整行可点跳转；.mach = AI 建议机器行，
+   新增件 = .doc-row 链接行（wikilink 块 = 中性，整行可点跳转；.mach = AI 建议机器行，
    黄铜左缘 2px + 4% 黄铜底 = 唯一强调色）
    / .c-sec-h .b-ic 块标题图标槽（图标 = 关联类型：wikilink 链环 / tag 标签 / AI 建议 relatedness 黄铜）
    / .c-sec-fold 可折叠块标题（.c-sec-h 升级 button，整行可点；.car chevron 展开旋转 90°；.fold 0fr→1fr）
@@ -1389,8 +1401,6 @@ details.d-sec .body { padding: 8px 12px 14px; }
    / .doc-row.fading 忽略淡出（opacity .2s，JS 200ms 后移除行）
    / .topbar-btn:disabled 顶栏「关联」禁用态（未选文档；按钮恒定渲染零跳变，D5 同口径）
    动效仅 opacity/transform 路径（.fold grid 0fr→1fr，GPU 友好无 reflow）。 ============ */
-/* 文档路径行（p-head 之下；全值在 hover title） */
-.doc-path-line { flex-shrink: 0; padding: 7px 14px 0; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 链接行：wikilink 块 = 中性（整行可点跳转）；AI 建议 = 机器行（黄铜）；文档名行全宽（无每行图标） */
 .doc-row { display: block; width: 100%; text-align: left; background: transparent; border: none; font-family: var(--sans); padding: 7px 8px; margin: 0 0 6px; border-radius: 7px; cursor: pointer; transition: background-color .15s ease, opacity .2s ease; }
 .doc-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
@@ -1425,6 +1435,25 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 顶栏「关联」：未选文档 → disabled（按钮恒定渲染零跳变，D5 同口径） */
 .topbar-btn:disabled { opacity: .4; cursor: default; }
 .topbar-btn:disabled:hover { background: transparent; color: var(--ink-soft); }
+/* ── rel-face-redesign 追加（2026-11-23 定稿，spec 同名文件 §2/§3）：用户层单列表两行式行规格
+   + tag chip + 头计数徽标 + 按压反馈 + 空态次行。纯追加，token 全走 :root 零新色。
+   内宽推导：280px 浮层 − .c-sec 左右内距 24 − 行内距 16 ≈ 240px（移动 sheet 更宽，规格不变只是余量大）。
+   名行/次行 = R2 basename 去 .md / R3 目录（根 = 「根目录」恒显，行高恒定）；
+   chip = R5 黄铜弱描边 pill——与 .cnt.hot（12%/35%）同族再弱一档（6%/32%），
+   行级黄铜轨 + 4% 底仍是机器层专属，不互撞；
+   :active 墨 6% 一次性按压确认感（.15s ease = 基础行 background-color 过渡同族），
+   :not(.mach) 限定——机器层行底色（黄铜 4%/7%）不被按压态墨底覆写。
+   名↔chip gap = .doc-row-line 既有 flex 容器 gap 7px 直用（§2 表 6px 为推导值，存量规则不动）。 */
+.doc-row-name { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12.5px; font-weight: 500; line-height: 1.4; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row-dir { font-family: var(--mono); font-size: 10px; line-height: 1.4; margin-top: 2px; color: color-mix(in srgb, var(--ink-soft) 78%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tag { display: inline-flex; align-items: center; flex-shrink: 0; max-width: 96px; height: 16px; padding: 0 6px; border-radius: 999px; font-family: var(--mono); font-size: 9.5px; color: var(--brass); border: 1px solid color-mix(in srgb, var(--brass) 32%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row:not(.mach):active { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+/* 头计数徽标 = .c-sec-h .cnt 画法复用（§3：mono 10px pill；为 0 模板层不渲染）；
+   .rel-face 作用域覆写 .p-head .pcount 文本形——其余面板头 pcount 零改动 */
+.rel-face .p-head .pcount { font-family: var(--mono); font-size: 10px; font-weight: 500; min-width: 1.25rem; height: 1.125rem; padding: 0 .375rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, var(--surface)); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); color: var(--ink-soft); }
+/* 空态次行（§4 行动指引；比 .doc-none 主行再弱一档。负 margin 收 .doc-none 下内距 8px 至 ~2px，
+   不动存量 .doc-none 规则——负外距跨内核安全，不用 :has） */
+.doc-none-sub { font-family: var(--sans); font-size: 10px; line-height: 1.4; margin-top: -6px; padding: 0 4px 8px; color: color-mix(in srgb, var(--ink-soft) 55%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .doc-row, .doc-ignore, .c-sec-fold .car { transition: none; }
 }
@@ -1502,9 +1531,10 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .notif-dropdown .notif-item:active { background: color-mix(in srgb, var(--brass) 14%, transparent); }
 
 /* ── 5) 通知 → L0 深链接力：下拉退场（.14s）先行 → 面板宽度直切（既有纪律）+ 详情面 cFaceIn 滑入（既有 .2s）→
-   详情头标题黄铜下划线 sweep 一次（marker-sweep 家族，~.4s 后自清；非深链的队内钻取不加）─── */
-#memory-console-shell [data-face="detail"].mp-deep .d-title { position: relative; }
-#memory-console-shell [data-face="detail"].mp-deep .d-title::after {
+   详情头标题黄铜下划线 sweep 一次（marker-sweep 家族，~.4s 后自清；非深链的队内钻取不加）。
+   T6：去容器前缀升属性级全局选择器（同报告面 sweep 口径，双实例同吃）─── */
+[data-face="detail"].mp-deep .d-title { position: relative; }
+[data-face="detail"].mp-deep .d-title::after {
   content: ''; position: absolute; left: 0; bottom: -3px; width: 100%; height: 2px;
   background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, transparent));
   border-radius: 2px; transform-origin: left center;
@@ -1530,7 +1560,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .mcard.mp-fresh-alert, .alert-pill.mp-pill-pop { animation: none; }
   .notif-dropdown .notif-item { animation: none; transition: none; }
   .notif-dropdown.notif-closing { animation: none; }
-  #memory-console-shell [data-face="detail"].mp-deep .d-title::after { animation: none; }
+  [data-face="detail"].mp-deep .d-title::after { animation: none; }
 }
 
 /* ============ 选区 → 源码编辑（spec 2026-11-09-select-to-source-editing）============
@@ -1636,7 +1666,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* ============ 关联呈现 · 预览区侧栏 + 移动 bottom sheet（spec §6.4 候选①，2026-11-14；
    设计稿 docs/design/2026-11-14-relatedness-doc-face-alternative.html 1:1）
    纯追加：既有类零改动。内容件 = 上方文档面分节同一套（.doc-row/.mach/.doc-basis/.doc-ignore/
-   .c-sec-h/.cnt.hot/.doc-path-line/.doc-none，候选① 与控制台方案零分叉）。
+   .c-sec-h/.cnt.hot/.doc-none，候选① 与控制台方案零分叉）。
    新增件 = .rel-side 280px 右侧栏（关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
    680px 列在剩余空间一次性重居中，无 width 过渡不做逐帧回流）
    / .rel-face 面容器（侧栏 = absolute inset；sheet = 手柄下 flex 子件）
@@ -1649,11 +1679,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 
 /* ── 桌面/平板（≥861px）：280px 右侧栏 ── */
 /* 容器：关闭态 width 0（不占位、不可点）；.open = 瞬时 width 280px（无 width 过渡 → 主区一次性重布局） */
-.rel-side { width: 0; flex-shrink: 0; position: relative; overflow: hidden; background: var(--paper); border-left: 0; pointer-events: none; }
+.rel-side { width: 0; flex-shrink: 0; position: relative; overflow: hidden; background: #fff; border-left: 0; pointer-events: none; } /* 2026-11-23 用户拍板：关联子页白底（三态同源统一） */
 .rel-side.open { width: 280px; border-left: 1px solid var(--line); pointer-events: auto; }
 /* 面容器：侧栏内 absolute inset（关闭态 width 0 由 overflow:hidden 裁剪，无残留）；
    与预览间距 = 侧栏自身 padding（内容件 .c-sec 12px 左内距）+ 1px 左缘线 */
-.rel-side .rel-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); }
+.rel-side .rel-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: #fff; }
 .rel-side .rel-face.anim { animation: cFaceIn .2s var(--ease) both; }
 /* 主滚动区 */
 .rel-scroll { flex: 1; min-height: 0; overflow-y: auto; }
@@ -1672,7 +1702,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .rel-sheet {
     position: fixed; left: 0; right: 0; bottom: 0; height: 80vh; z-index: 40;
     transform: translateY(100%);
-    background: var(--surface); border-top: 2px solid var(--brass);
+    background: #fff; border-top: 2px solid var(--brass); /* 白底随关联子页三态统一（2026-11-23） */
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
     display: flex; flex-direction: column;
@@ -1716,6 +1746,123 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (max-width: 479px) { .priv-badge-label { display: none; } } /* 窄屏收纳文案，锁本体常驻（同顶栏图标化口径） */
 /* 监控页⑧出域：状态行（快照口径同 .mp-meta 家族，非告警） */
 .eg-line { font-family: var(--mono); font-size: 10.5px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+
+/* ============ 首页 · 管家日报（spec 2026-11-22-home-butler-landing）============
+   视觉基准 = docs/superpowers/specs/2026-11-22-home-butler-landing-preview.html（用户已认可）。
+   信笺式低 chrome：窄栏居中、细竖线分组、G4 唯一盒子；token 全走 :root；
+   中文衬线按 §9.7 维持现状（body 栈落雅黑，不加 CJK 衬线回退）。 */
+.hb-shell { flex: 1; min-width: 0; overflow-y: auto; scrollbar-gutter: stable; background: var(--paper); }  /* stable：展开内容跨滚动阈值时滚动条不得挤动居中列（2026-11-23 G3 展开左移） */
+.hb-home { max-width: 720px; margin: 0 auto; padding: 54px 28px 40px; }
+
+/* G1 叙事栈（大字 serif；缺席时长黄铜） */
+.hb-g1-hi { font-size: 27px; font-weight: 600; line-height: 1.4; margin: 0; }
+.hb-absent { color: var(--brass); font-weight: 600; }
+.hb-g1-said { font-size: 17px; line-height: 1.85; color: var(--ink-soft); margin: 16px 0 0; }
+.hb-g1-act { margin-top: 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hb-g1-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 16px;
+  font-family: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13.5px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 9px;
+  cursor: pointer; transition: border-color .15s ease;
+}
+.hb-g1-btn:hover { border-color: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+.hb-g1-btn:disabled { opacity: .55; cursor: default; }
+.hb-star { color: var(--brass); }
+.hb-g1-note { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--ink-soft); }
+
+/* 段题（信笺抬头）与安静句 */
+.hb-sec { margin-top: 46px; }
+.hb-sec-title { font-size: 19px; font-weight: 600; margin: 0 0 16px; }
+.hb-quiet { font-size: 15.5px; color: var(--ink-soft); margin: 0; }
+
+/* G2 信笺式细竖线分组 */
+.hb-grp { border-left: 1px solid var(--line); padding: 2px 0 2px 16px; }
+.hb-grp + .hb-grp { margin-top: 20px; }
+.hb-grp-head { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); margin: 0 0 8px; }
+.hb-grp-row { display: flex; align-items: baseline; gap: 10px; padding: 3px 0; min-width: 0; }
+.hb-grp-row .t { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.hb-grp-row .act { font-size: 15px; color: var(--ink); white-space: nowrap; }
+.hb-grp-row .mid { color: var(--ink-soft); flex-shrink: 0; }
+.hb-grp-row .path {
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--ink-soft);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
+.hb-grp-row .path:hover { color: var(--brass); text-decoration: underline; text-underline-offset: 3px; }
+
+/* G3 日行（展开明细 flex-basis:100% 换行挂回日行下） */
+.hb-day { display: flex; align-items: baseline; gap: 13px; padding: 8px 0; flex-wrap: wrap; }
+.hb-day + .hb-day { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.hb-day .d { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; color: var(--ink-soft); flex-shrink: 0; }
+.hb-day .sum { font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hb-day .expand { margin-left: auto; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); text-decoration: none; flex-shrink: 0; }
+.hb-day .expand:hover { color: var(--brass); }
+.hb-day-ops { flex-basis: 100%; padding: 2px 0 4px; }
+
+/* G2 日段 × 文件行（2026-11-23 重构波：actor 桶 → 日段 → 文件行；回看开关） */
+.hb-sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.hb-sec-head .hb-sec-title { margin: 0; }
+.hb-lookback { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+.hb-lookback:hover { text-decoration: underline; text-underline-offset: 3px; }
+.hb-quiet .hb-lookback { margin-left: 16px; }   /* 短留收束句尾的回看入口 */
+.hb-g2-day { padding: 2px 0 6px; }
+.hb-g2-day + .hb-g2-day { margin-top: 8px; }
+.hb-g2-day-head { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); margin: 0 0 4px; }
+.hb-g2-more { margin: 2px 0 0; padding-left: 4px; }
+.hb-g2-more a { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); }
+.hb-g2-more a:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 折叠区高度动画（2026-11-23 拍板，G2 溢出折叠 + G3 日展开共用）：
+   grid 0fr⇄1fr 纯 CSS 过渡——任意行数零 JS 测高。展开 220ms ease-out，收起 180ms ease-in；
+   折叠行一次性淡入+3px 上浮（不逐行错峰）。 */
+.hb-g2-fold, .hb-day-fold { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 180ms ease-in; }
+.hb-day-fold { flex-basis: 100%; }   /* .hb-day 是 flex 头行容器，折叠区接行底占满整行 */
+.hb-g2-fold.is-open, .hb-day-fold.is-open { grid-template-rows: 1fr; transition: grid-template-rows 220ms ease-out; }
+.hb-g2-fold-inner, .hb-day-fold-inner { overflow: hidden; min-height: 0; }
+@keyframes hb-fold-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.hb-g2-fold.is-open .hb-file-row, .hb-day-fold.is-open .hb-grp-row { animation: hb-fold-in 260ms ease-out both; }
+/* 换窗入场（2026-11-23 回看展开/收起）：key 变化重建整段，段题+列表一次性淡入上浮 */
+.hb-win { animation: hb-win-in 220ms ease-out both; }
+@keyframes hb-win-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .hb-g2-fold, .hb-day-fold { transition: none; }
+  .hb-g2-fold.is-open .hb-file-row, .hb-day-fold.is-open .hb-grp-row { animation: none; }
+  .hb-win { animation: none; }
+}
+.hb-file-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 4px; min-width: 0; border-radius: 6px; cursor: pointer; }
+.hb-file-row.is-dead { cursor: default; }
+.hb-file-row .fname { font-size: 15px; color: var(--ink); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-file-row.is-dead .fname { color: var(--ink-soft); }
+.hb-file-row:not(.is-dead):hover .fname { color: var(--brass); }
+.hb-file-row .fdir { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); min-width: 0; flex-shrink: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hb-file-row .hb-chip { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; color: var(--ink-soft); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; flex-shrink: 0; }
+.hb-file-row .t { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: var(--ink-soft); font-variant-numeric: tabular-nums; margin-left: auto; padding-left: 8px; flex-shrink: 0; }
+.hb-unseen-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--brass); flex-shrink: 0; align-self: center; }
+/* 滚动落位 flash：黄铜 8% 底 ~1.2s 淡出（reduced-motion 下前端不加类，CSS 双保险） */
+@keyframes hb-flash-fade { from { background: color-mix(in srgb, var(--brass) 8%, transparent); } to { background: transparent; } }
+.hb-flash { animation: hb-flash-fade 1.2s ease-out; }
+
+/* G4 唯一盒子区 */
+.hb-g4 { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.hb-g4-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px 18px; flex-wrap: wrap; padding: 15px 18px; }
+.hb-g4-row + .hb-g4-row { border-top: 1px solid var(--line); }
+.hb-g4-txt { font-size: 15.5px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.hb-g4-link { font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12.5px; color: var(--brass); text-decoration: none; white-space: nowrap; }
+.hb-g4-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* 页脚 */
+.hb-foot { margin-top: 52px; text-align: center; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 12px; color: var(--ink-soft); }
+
+/* 窄屏（预览稿移动框口径：留白收紧、叙事字号降一档） */
+@media (max-width: 640px) {
+  .hb-home { padding: 30px 22px 36px; }
+  .hb-g1-hi { font-size: 24px; }
+  .hb-sec { margin-top: 38px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-g1-btn { transition: none; }
+  .hb-flash { animation: none; }
+}
 
 /* ============ 设置浮层（spec 2026-11-22 §6 modal 改版 · st- 族）============
    壳 = backdrop + 居中 dialog（st-modal 族在下方「浮层壳」分节；折叠态 visibility 家族照
@@ -1908,4 +2055,301 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .st-modal, .st-modal.open { transition: none; }  /* 两态同杀：RM 直切 + 收起态 visibility 无孤儿延迟 */
   .st-confirm-backdrop, .st-confirm-backdrop.show { transition: none; }
   .st-confirm, .st-confirm.open { transition: none; }
+}
+
+/* ──── 沉浸式壳（spec 2026-11-22-immersive-shell · plan 2026-11-22-immersive-shell）────
+   W1 = 左下 FAB 扇弧入口（FabMenu.js，桌面 v-if 挂载，移动端零渲染零样式触达）。
+   z 层序（spec §7 表）：dock 10（T5）< 主钮 20 < 抽屉 30（T3）< 下拉 50 < 桥区 54 < 扇弧
+   子钮 55 < st-modal 族 81（沿用现值）。根 fab-root 不设 z-index（不建堆叠上下文）——
+   子层 z 直接参与根层，扇弧才能力压 z-50 下拉族。
+   动效全 GPU（transform/opacity，零 reflow）；扇位定位 = --a 硬编码角度 + 旋转三件套
+   （rotate → translateY(-92px) → 反旋保持 upright），禁几何 JS。RM 降级直切（两态同杀，
+   同 st-modal 教训：RM 只杀基础态则收起态 visibility 延迟成孤儿）。 */
+.fab-root { position: fixed; left: 24px; bottom: 24px; width: 48px; height: 48px; }
+.fab-main { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
+  border-radius: 9999px; cursor: pointer; background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px -10px rgba(33, 29, 24, .32), 0 2px 8px rgba(33, 29, 24, .10);
+  font-family: 'Source Serif 4', serif; font-weight: 700; font-size: 20px; color: var(--brass);
+  transition: background-color .15s ease, border-color .15s ease; }
+.fab-main.fan { background: color-mix(in srgb, var(--brass) 8%, var(--surface)); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fab-dot { position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--brass); box-shadow: 0 0 0 2px var(--paper); }  /* 右上聚合徽标点：有待办才画（预览稿同款） */
+/* 指针桥（四分之一盘，圆心 = 主钮中心）：展开态接指针——主钮→子钮弧上移动零掉线；
+   收起态 pointer-events:none 对文档零侵占。clip-path = 150px 盒内四分之一盘多边形近似（15° 一采点） */
+.fab-bridge { position: absolute; left: 50%; bottom: 50%; width: 150px; height: 150px; z-index: 54;
+  pointer-events: none;
+  clip-path: polygon(0 100%, 100% 100%, 96.6% 74.1%, 86.6% 50%, 70.7% 29.3%, 50% 13.4%, 25.9% 3.4%, 0 0); }
+.fab-bridge.open { pointer-events: auto; }
+/* 子钮容器：折叠壳家族（同 st-modal 纪律）——收起 visibility:hidden 出 Tab 序、
+   delay 挂开合时长（滑出收尾才隐，防中途隐身）；.open 合并 transition delay 0s 即刻可见。
+   命中分层（hover 抖动修复 2026-11-22）：根恒 pointer-events:none——开态容器不得罩主钮
+   （主钮 pointerleave 只在指针真离开时发生），主钮→子钮路径由 .fab-bridge 桥接；子钮自接 auto */
+.fab-fan { position: absolute; inset: 0; z-index: 55; pointer-events: none; visibility: hidden;
+  transition: visibility 0s .22s; }
+.fab-fan.open { visibility: visible; transition: visibility 0s 0s; }
+/* 旋转三件套：--a 逐钮硬编码（组件内联）；收起态半径 0 + scale .2 = 自圆心缩没 */
+.fab-sub { position: absolute; left: 50%; top: 50%; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  display: flex; align-items: center; justify-content: center; border-radius: 9999px; cursor: pointer;
+  pointer-events: auto;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 8px 20px -8px rgba(33, 29, 24, .30), 0 1px 4px rgba(33, 29, 24, .10);
+  color: var(--ink-soft);
+  transform: rotate(var(--a)) translateY(0) rotate(calc(var(--a) * -1)) scale(.2); opacity: 0;
+  transition: transform .22s cubic-bezier(.32, .72, 0, 1), opacity .12s ease,
+              background-color .15s ease, color .15s ease, border-color .15s ease; }
+.fab-fan.open .fab-sub { transform: rotate(var(--a)) translateY(-92px) rotate(calc(var(--a) * -1)) scale(1); opacity: 1; }
+.fab-sub:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass);
+  border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.fab-ic { display: inline-flex; }
+.fab-ic .icon { width: 15px; height: 15px; }
+.fab-badge { position: absolute; top: -4px; right: -4px; min-width: 15px; height: 15px; padding: 0 4px;
+  border-radius: 999px; background: var(--brass); color: #fff;
+  font-family: 'Inter', sans-serif; font-size: 9px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 2px var(--surface); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  /* 两态同杀：RM 下扇弧直切展开/收起，收起态 visibility 无孤儿延迟 */
+  .fab-main, .fab-fan, .fab-fan.open, .fab-sub { transition: none; }
+}
+
+/* ──── 沉浸式壳 W1 · Task 3：panel-shell 桌面浮层抽屉 + 监控宽抽屉 ────
+   画谱 = spec 预览稿 .drawer（场景 2/5/6）：贴左缘 absolute 浮层、右缘圆角 0 12px 12px 0、
+   双层投影（远距扩散 + 近距贴边）、transform translateX 开合（宽度不参与 flex，文档列零挤压）。
+   移动 ≤1023px 的 .panel-shell 原位规则（fixed overlay z-40 / search-drawer / mwrap flex 整页
+   接管）在各自媒体块逐字保留——本块只加 min-width:1024px 桌面形态（红线：移动端零改动）。
+   RM 直切：transition 已由 :789 既有块两态同杀（.panel-shell, .panel-shell.open）；
+   mwrap 入场动画在下块单杀。 */
+@media (min-width: 1024px) {
+  .panel-shell {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+    background: var(--surface); /* 配色评审②（2026-11-23）：分层只剩两腿——浮层与纸面明度差须显式拉大（原 --paper 与底面零差，仅靠边+影） */
+    border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
+    transform: translateX(-102%); visibility: hidden;
+    box-shadow: 22px 0 56px -20px rgba(33, 29, 24, .38), 8px 0 18px -8px rgba(33, 29, 24, .20);
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1), visibility 0s .38s;
+  }
+  .panel-shell.open {
+    transform: translateX(0); visibility: visible;
+    transition: transform .38s cubic-bezier(.32, .72, 0, 1), visibility 0s 0s;
+  }
+  /* 图钉钉左槽（Self-Review 1）：.pinned 回归 in-flow flex 子项（根级位序保证在文档列左缘），
+     宽 260（panelWidth 同源）、无投影、直出不滑——「占栏」与「浮层」的形态分界（spec §3/§4）。
+     z-index 必须回落（2026-11-22 波闸目检）：基础态 z30 是浮层抽屉盖 FAB 的设计，钉住态是
+     in-flow 左槽，沿用 z30 会把 fixed FAB（.fab-main z20）整体盖死——回落 auto（level 0 < 20）。 */
+  .panel-shell.pinned {
+    position: relative; width: 260px; transform: none; visibility: visible;
+    z-index: auto;
+    border-radius: 0; box-shadow: none; transition: none;
+  }
+  /* 钉住态树列表底部给 FAB 让位（48 FAB + 8 余量 ≥56px），最后一行不被圆钮盖住；
+     选择器限定钉住态（特异度压过 .tree-scroll 的 pb-4），移动 overlay 态不受影响 */
+  .panel-shell.pinned .tree-scroll { padding-bottom: 56px; }
+  /* 监控宽抽屉（批准偏离备案，T3）：state.monitoring 与 MonitorPage 单实例保留（双实例=双轮询；
+     移动整页接管原样、Home「非监控态」契约不变），桌面仅重塑容器形态为 absolute 悬浮宽抽屉，
+     宽 min(920px, calc(100vw - 96px))（预览稿 .drawer.wide 口径），开合 = display 切换 +
+     入场滑入动画（v-show 下 transition 从 display:none 不触发，动画重放 = doc-enter 同款手法）；
+     退场沿用既有 .mp-out 淡出（exitMonitorPage 定时器 + homeRefreshSeq 语义不动）。 */
+  .mwrap {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 30;
+    width: min(920px, calc(100vw - 96px));
+    border-right: 1px solid var(--line); border-radius: 0 12px 12px 0;
+    box-shadow: 22px 0 56px -20px rgba(33, 29, 24, .38), 8px 0 18px -8px rgba(33, 29, 24, .20);
+    animation: drawerSlideIn .3s cubic-bezier(.32, .72, 0, 1) both;
+  }
+}
+@keyframes drawerSlideIn {
+  from { transform: translateX(-102%); }
+  to { transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 直切：监控宽抽屉入场滑入杀掉（transform 类），mp-enter/mp-out 降级既有块已覆盖 */
+  .mwrap { animation: none; }
+}
+
+/* ──── 沉浸式壳 W1 · Task 4：TopBar 退役的桌面补齐——文档头行 + 通知下拉迁锚 ────
+   文档头行 = 预览稿 .pathhead 画谱：一行弱色小字（12px 降级墨色），无背景无边框——
+   不成第二条顶栏。模板 v-if="isDesktop && state.currentPath"（Home 态无路径不渲染、
+   ≤1023px 恒 false——移动由 TopBar 原样承载全部信息，红线零触达；TopBar 根挂
+   lg:hidden 与之两路互不干扰）。面包屑 / 隐私徽标（文案口径照 TopBar「模型不可见」
+   + 锁）/ 未保存点均为信息位非交互件（T5 dock 的前置信息位）。
+   通知锚层（notif-anchor）= 唯一锚点切换面：移动 display:contents 零盒侵占
+   （下拉本体仍 absolute 锚主容器，top:48/right:8 原位逐字不变、width 342 媒体原样）；
+   桌面转 fixed 锚扇区展开位上方（FAB 顶缘 72px + 16 余量 = bottom:88）。下拉本体
+   脱锚自撑（relative + top/right auto）：本块在文件末位，同特异度按序覆盖前部
+   .ai-open right 让位规则——桌面已左下锚点，不再与 AI 面板对位。 */
+.doc-head {
+  display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+  padding: 12px 24px 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
+}
+.doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.doc-bp .doc-sep { opacity: .5; }
+.doc-bp .doc-cur { color: var(--ink); } /* 配色评审⑤：「我在哪」必须可读——面包屑末段升主墨，目录段保持弱色 */
+.doc-lock {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border-radius: 999px; padding: 1px 8px 1px 6px;
+}
+.doc-lock .icon { width: 11px; height: 11px; }
+.doc-dirty { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft); }
+.doc-dirty::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--brass); }
+/* 通知锚层默认态 = 移动零侵占（contents 无盒，下拉锚点/堆叠如前） */
+.notif-anchor { display: contents; }
+@media (min-width: 1024px) {
+  /* display:block 是承重的：contents 不产盒，fixed 定位无所依附 */
+  .notif-anchor { display: block; position: fixed; left: 24px; bottom: 88px; z-index: 50; }
+  .notif-anchor .notif-dropdown { position: relative; top: auto; right: auto; width: 380px; }
+}
+
+/* ──── 沉浸式壳 W2 · Task 5：右缘操作条 RightDock + toc-dd 桌面锚 ────
+   dock（spec §5 / 预览稿场景 2）= 固定右缘纵向居中 40px 图标条（--dock-w 单源）；
+   z-index:10 = spec §7 层序首层（dock < fab 20 < 抽屉 30 < 下拉 50 < 桥区 54 < 扇弧 55）。
+   根挂 Tailwind hidden lg:flex 两态（display 交媒体类，本块不重复声明 display）；
+   纵向居中走 transform（GPU，红线：不动 top 逐帧）；钮观感沿 .fab-sub/.toc-btn-open
+   家族（透明底 + hover 黄铜浅底 + 激活 on 态只变色不变几何）。
+   doc-scroll/doc-head 桌面右侧给 dock 让位一个 --dock-w 槽（文本列 max-width 居中于剩余
+   空间，1024px 档最窄情形也不压字）。dock 在场时 AI 面板/edge tab 同步让出右缘槽
+   （过渡态——T7 消息面重做锚点时按 spec §4A 的 chatwin/slot 体系改写，本块为其前最小避让）。 */
+:root { --dock-w: 40px; --destructive: #b91c1c; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
+.dock {
+  position: fixed; right: 0; top: 64px; /* T7 几何：上锚定（原纵向居中与右缘居中握把同带相撞——
+    预览稿场景 2 画法：dock 上带、握把贴 dock 下缘；Home 无 dock 时握把回纵向居中） */
+  width: var(--dock-w); z-index: 10;
+  flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
+  border-radius: 10px 0 0 10px;
+  background: var(--surface); /* 配色评审②：88% 半透降格为「略浮」，浮层底色取满档 surface */
+  backdrop-filter: blur(4px);
+  box-shadow: -1px 0 0 var(--line), -8px 0 24px -18px rgba(33, 29, 24, .30);
+}
+.dock-btn {
+  position: relative; width: 28px; height: 28px; padding: 0; border: none; border-radius: 8px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: background-color .12s ease, color .12s ease;
+}
+.dock-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.dock-btn:hover { background: color-mix(in srgb, var(--brass) 9%, transparent); color: var(--ink); }
+.dock-btn.on { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.dock-btn.on:hover { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+.dock-btn:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+.dock-btn:disabled { opacity: .35; pointer-events: none; }
+.dock-danger { color: color-mix(in srgb, var(--destructive) 75%, var(--ink-soft)); }
+.dock-danger:hover { background: color-mix(in srgb, var(--destructive) 9%, transparent); color: var(--destructive); }
+.dock-dirty { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; box-sizing: border-box;
+  border-radius: 9999px; background: transparent; border: 1.5px solid var(--brass); box-shadow: 0 0 0 2px var(--surface); } /* 配色评审④：品牌=字/图标、状态=点/角标；dirty 用空心圈（你有活儿），实心点恒归「系统有话讲」（未读/待审） */
+@media (min-width: 1024px) {
+  /* toc-dd 桌面锚 = dock 左缘（top 贴顶栏退役后的行位；z-50 压过 dock 10） */
+  .toc-dd { top: 16px; right: calc(var(--dock-w) + 8px); }
+  /* 文档列让位：滚动容器与头行右侧各空一个 dock 槽（选择器列表与 .doc-head 基础视觉规则
+     分离——T4 钉只审基础态） */
+  .doc-scroll, .doc-head { padding-right: calc(24px + var(--dock-w)); }
+  /* AI 面 dock 槽避让由 T7 消息面块承接（chatwin 右锚含 dock 槽 / chat-slot in-flow 占位）；
+     旧「过渡态」#ai-panel/#ai-btn right 让位行已删（桌面 #ai-btn tab 退役，spec §4A 握把升格） */
+}
+
+/* ════ 沉浸式壳 W5 · Task 7：管家消息面——右缘暗金半隐握把 + 管家气泡栈 + 聊天浮窗/图钉槽（spec §4A/§7 / 预览稿场景 2·8·9）════
+   握把 = 44px 暗金圆钮一半探出右缘（right:-22px，2026-11-23 用户拍板由 30 加大），纸色线性领结（ICONS.bowtie 单点）居可见半区；
+   pill = 铃铛未读 + 管家回话合计（纸底黄铜字，≥10 封顶「9+」防角标宽过可见半区糊钮）。hover 握把/气泡浮出气泡栈（peekFeed.buildPeek
+   纯函数：要事优先、最近 3 条 + 「还有 N 条」溢出）。chatwin 浮窗（默认）⇄ chat-slot 图钉右槽
+   （state.chatPinned 单源，右槽二选一持久化 slots.right，T1 shellState.right 键在此消费）。
+   几何取舍（预览稿场景 2 画法 + 短屏稳健）：dock 上锚（top:64px，高确定性 268px=8 钮×28+7 缝×4+
+   上下 pad×2 → --dock-h 常量）；dock 在场时握把/气泡栈贴 dock 下缘（避免与上锚 dock 同带相撞；
+   Home 无 dock 回纵向居中——spec §4A「右缘纵向居中」在零栏位态的字面兑现，预览稿 dock 下方带握把
+   正是此画法）。z 层（spec §7）：握把/气泡 40（抽屉 30 之上、下拉 50 之下），chatwin 45。
+   过渡只 transform/opacity（红线）；RM 降级直切；≤1023px 零触达——本块全部在 min-width:1024px 内。 */
+@media (min-width: 1024px) {
+  :root { --dock-h: 268px; } /* dock 确定性高（钮数导出）——dock 钮增减须同改（test_dock 钉钮数 8） */
+  .grip {
+    position: fixed; right: -22px; top: 50%; transform: translateY(-50%); z-index: 40;
+    width: 44px; height: 44px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
+    background: color-mix(in srgb, var(--brass) 82%, var(--ink));
+    box-shadow: 0 4px 12px -4px rgba(33, 29, 24, .35), inset 0 0 0 1px color-mix(in srgb, var(--paper) 16%, transparent);
+  }
+  .grip:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
+  /* 领结居「可见半区」（左向 22px 实面，2026-11-23 用户拍板加大 30→44 并同步图标 11→15）：
+     绝对定位于钮体，出屏半侧不参与 */
+  .grip .grip-ic { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; }
+  .grip .grip-ic svg { width: 15px; height: 15px; fill: none; stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  .grip .gpill {
+    position: absolute; top: -7px; left: -8px; min-width: 16px; height: 16px; padding: 0 4px;
+    border-radius: 999px; background: var(--surface); color: var(--brass);
+    border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--line));
+    font-size: 10px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 2px var(--paper); font-variant-numeric: tabular-nums;
+  }
+  /* 气泡栈：贴握把左侧（右缘 26px = 出屏 22px + 4px 缝，握把加大 44 后同步外移防相压），纵列 ≤3 条 + 溢出计数 */
+  .bubbles {
+    position: fixed; right: 26px; top: 50%; transform: translateY(-50%); z-index: 40;
+    width: 272px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .bubble {
+    display: block; width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+    box-shadow: 0 6px 18px -8px rgba(33, 29, 24, .22);
+  }
+  .bubble:hover { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+  .bubble p { margin: 0; font-size: 13px; line-height: 1.45; color: color-mix(in srgb, var(--brass) 82%, var(--ink)); } /* 配色评审③：摘要面文字走暗金档 */
+  .bubble .bt { display: block; margin-top: 4px; font-size: 11px; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .bmore { align-self: flex-end; font-size: 11px; color: var(--ink-soft); padding: 0 4px; }
+  /* dock 在场（.has-dock 由 app 模板 hasDoc 下挂 bubble-peek 根）：握把/气泡从居中改贴 dock 下缘
+     （dock 底 = 64+268，+8 缝 → 340）——任何屏高下零相撞（居中制在矮屏会压 dock 中段钮，取舍详见块头注） */
+  .has-dock .grip, .has-dock .bubbles { top: calc(72px + var(--dock-h)); transform: none; }
+  /* ── chatwin 浮窗态（默认）──：桌面覆盖基础 #ai-panel（right:0 / translateX(100%)）；
+     关闭态 translateX 加自身 dock 槽距完全藏入右缘外（plain 100% 会露 --dock-w+14 截边）。
+     顶底内缩 + 圆角阴影 = 预览稿场景 9「悬浮不占栏」画法 */
+  #ai-panel.chatwin {
+    top: 60px; bottom: 24px; right: calc(var(--dock-w) + 14px);
+    width: min(400px, calc(100% - 120px)); z-index: 45;
+    border: 1px solid var(--line); border-left: 1px solid var(--line); border-radius: 14px;
+    box-shadow: -18px 0 48px -22px rgba(33, 29, 24, .30), 0 16px 40px -18px rgba(33, 29, 24, .22);
+    transform: translateX(calc(100% + var(--dock-w) + 14px));
+  }
+  #ai-panel.chatwin.open { transform: none; }
+  /* ── chat-slot 图钉态 ──：作为 .flex-1 容器 in-flow 成员（右槽二选一，宽度复用现 50%）；
+     开合是一次性宽度变化（宽度逐帧过渡 = 重排红线 → transition:none），让位由 flex 完成 */
+  #ai-panel.chat-slot { position: static; right: auto; top: auto; bottom: auto; transform: none; transition: none; width: 0; flex-shrink: 0; border-left: 2px solid var(--brass); }
+  #ai-panel.chat-slot.open { width: 50%; max-width: 560px; }
+  /* 旧 overlay 面板的 main.ai-open padding-right:50% 补偿对两种新形态皆作废：chatwin 悬浮不占栏、
+     chat-slot in-flow 已挤压——保留即 doc 列错位（chatwin 平白左移 / chat-slot 双 squeeze 零宽） */
+  main.ai-open { padding-right: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 降级直切：chatwin 出入 transform 直切；气泡栈/握把无动效基线（hover 出栈经 display，本就直切） */
+  .grip, .bubbles { transition: none; }
+  #ai-panel.chatwin, #ai-panel.chatwin.open { transition: none; }
+}
+
+/* ──── 沉浸式壳 · 关联浮层桌面化（2026-11-23 用户拍板：关联 = 目录同款子页浮层，不再占栏）────
+   ≥1024px 下 .rel-side 覆写为 .toc-dd 同锚同层浮层（fixed top:16 / right:calc(--dock-w+8) / z-50）：
+   脱离 flex 流，主区宽度/680px 列居中/滚动位置零扰动（原 in-flow 280px 栏挤压作废）。
+   开合走 opacity/transform + visibility 延迟切换（出入都有真动效——DocRelated 内容件 v-if 挂载，
+   toc-dd 的 display 直切画谱不适用）；点外关闭/Esc/互斥（与 toc-dd 同锚必互斥）归 app.js JS 面。
+   ≤1023px 零改动（红线）：平板带 861–1023 保持上方分节的 in-flow 侧栏原形态，
+   ≤860px display:none 与底部抽屉承载均不动。 */
+@media (min-width: 1024px) {
+  .rel-side {
+    position: fixed; top: 16px; right: calc(var(--dock-w) + 8px);
+    width: 280px; height: min(520px, calc(100vh - 32px));
+    z-index: 50;
+    border: 1px solid var(--line); border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(33, 29, 24, .12), 0 2px 6px rgba(33, 29, 24, .06); /* 同 .toc-dd 双层软影 */
+    opacity: 0; visibility: hidden;
+    transform: scale(.97) translateY(-4px); transform-origin: top right;
+    pointer-events: none;
+    transition: opacity .18s ease, transform .18s var(--ease), visibility 0s .18s;
+    overflow: hidden;
+  }
+  .rel-side.open {
+    opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+    transition: opacity .18s ease, transform .18s var(--ease), visibility 0s 0s;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* RM 直切（两态都杀：.open 自带 transition 特异度相同且位置靠后，只杀基础态则 RM 动效复活，
+     同 .panel-shell/.chatwin 纪律）。置本浮层化块之后——同名声明后来者胜，放前会被覆写行吃掉 */
+  .rel-side, .rel-side.open { transition: none; }
 }

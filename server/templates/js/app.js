@@ -18,8 +18,15 @@ import { ConflictBanner } from './components/ConflictBanner.js'
 import { MemoryConsole } from './components/MemoryConsole.js'
 import { DocRelated } from './components/DocRelated.js'
 import { MonitorPage } from './components/MonitorPage.js'
+import { Home } from './components/Home.js'
 import { SettingsPage } from './components/SettingsPage.js'
+import { FabMenu } from './components/FabMenu.js'
+import { RightDock } from './components/RightDock.js'
+import { BubblePeek } from './components/BubblePeek.js'
 import { ICONS } from './utils/icons.js'
+import { isPrivacyScoped } from './utils/privacy.js'
+import { drawerNext, escTarget, loadSlots, saveSlots } from './utils/shellState.js'
+import { dedupeAppend } from './utils/peekFeed.js'
 
 // 初始化 markdown 渲染器
 setupMarkdown()
@@ -46,7 +53,7 @@ const state = reactive({
   memoryOpen: false,      // 记忆控制台（桌面 in-flow 300px / 移动 ≤860px 全宽 overlay）
   memoryDetail: null,     // 详情面提案 relpath（null = 队列面）
   memoryReport: null,     // 报告深链 relpath（index/reports/**，通知 report_paths[0]；null = 未开；渲染归 L5）
-  relOpen: false,         // 关联侧栏开合（spec §6.4 候选①：预览区右侧 280px；≥861px；内容 = 当前文档）
+  relOpen: false,         // 关联面开合（spec §6.4 候选①；≥1024 桌面浮层 / 861–1023 平板侧栏两态，2026-11-23 浮层化；内容 = 当前文档）
   relSheetOpen: false,    // 关联 bottom sheet 开合（spec §6.4 候选① 移动 ≤860px：80vh 抽屉）
   memoryStatus: null,     // GET /api/memory/status（九态 + 触发 + 召回 + snapshot 降级计数）
   recallDataVersion: 0,   // 召回数据版本号：每次搜索完成 / search_docs tool_result ++（§2 D2 事件失效：监控页 L2 静默重拉的客户端信号）
@@ -54,11 +61,21 @@ const state = reactive({
   memoryReports: null,    // GET /api/memory/reports（报告渠道列表；null = 尚未轮询，[] = 轮询过但无报告）
   monitoring: false,      // 后台监控页 L1（独立页面，与 L0 控制台面板互斥；入口 window.openMonitorPage）
   settingsOpen: false,     // 设置浮层（spec 2026-11-22 §6 modal 改版：侧栏底部齿轮 + 深链 #settings；不占主页面，可与任何页面共存）
+  settingsTab: 'ai',       // 设置浮层开层段（T6）：'ai' 默认 / 'memory' = #memory 深链与记忆落点；
+                           // 与 memoryOpen（移动 overlay 专用）互不干涉
   settingsCloseSeq: 0,     // 关闭请求信号（Escape 链最高优先支发；dirty 守卫在组件内，取消即不关）
   settingsSavedSeq: 0,     // 保存成功信号（组件 200 后递增）——config 改动不产 change_log 行，树靠它即时刷新
   privacyDirs: [],        // /api/docs 顶层 privacy_dirs 回显（spec 2026-11-18 §2.5，display-only：首段匹配挂锁/弱色，真源=config.yaml）
   trashItems: [],         // 回收站 batch 列表（GET /api/trash，deleted_at 降序；P4-4）
-  rollbackCalls: []       // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
+  rollbackCalls: [],      // 最近调用组（GET /api/memory/rollback-calls，最新在前；监控页⑦块，spec 2026-11-14）
+  homeRefreshSeq: 0,      // 首页重取信号（++ 即 Home 重新拉数）：监控页退出时触发（spec 2026-11-22-home-butler-landing §6.3）
+  drawer: null,           // 沉浸式壳 W1（plan 2026-11-22-immersive-shell）：桌面抽屉唯一源
+                          //（T3 定稿值域 'file'|'search'|'trash'|null；monitor 不入抽屉态——
+                          //  批准偏离：监控态由 state.monitoring 单实例承担，桌面 mwrap 重塑宽抽屉；
+                          //  移动旗标另路不动）
+  chatPinned: false,      // 沉浸式壳 W5（T7，spec §4A）：聊天面板图钉态——false=右缘 .chatwin 浮窗 /
+                          // true=.chat-slot in-flow 右槽（并入 mdvault.shellSlots.right='ai' 持久化）
+  peekReplies: []         // 气泡栈「管家回话」源（浮窗不可见时完成的 assistant 行；cap5 同 run 戳去重）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -70,6 +87,8 @@ const editorPaneRef = ref(null)
 const fileTreeRef = ref(null)
 // ─── AIChatPanel ref（点击落账：ai 面 query 归因 = 会话内最近 search_docs query）───
 const aiChatRef = ref(null)
+// ─── FabMenu ref（沉浸式壳 W1）：T3 Esc 链经 closeIfOpen/isOpen 消费（defineExpose 面）───
+const fabRef = ref(null)
 // ─── 目录条目（P4-3）：文档重渲染后重建（flush post = v-html 已 patch，与 renderedHtml 同款时机）───
 const tocItems = ref([])
 
@@ -84,6 +103,74 @@ let lastChangeTs = Date.now() / 1000
 /* ─── 动效编排（GPU 路径：transform/opacity；reduced-motion 下全部降级为直切/纯 opacity，
    见 style.css 尾部「动效层」分节；互斥契约不变：开页→L0 收起、返回→面板不自动重开）─── */
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches
+// ─── 桌面/移动断点唯一 reactive 源（沉浸式壳 W1）：壳组件 v-if 挂载条件（FAB；T3 续用）───
+// 旧内函数形 `() => window.innerWidth >= 1024` 非 reactive 且函数对象在 v-if 恒真值——
+// 经排查全仓无模板消费者，原位换成 matchMedia 驱动的 ref（跨断点 v-if 自动翻，Review Focus 2 的地基）
+const desktopMq = window.matchMedia('(min-width: 1024px)')
+const isDesktop = ref(desktopMq.matches)
+desktopMq.addEventListener('change', (e) => { isDesktop.value = e.matches })
+// T8 清尾：记忆控制台挂载门（T6 备案 5 收口）。口径对齐深链改道阈值（openNotif 等
+// 均 `window.innerWidth > 860` → 设置浮窗记忆段）：console overlay 仅 ≤860 可达，
+// 故挂载门也用 matchMedia(≤860) 而非 isDesktop(1024)——861~1023 平板带同样退役，
+// 消除桌面/平板带 console-shell 与设置浮窗记忆 pane 的 MemoryConsole 双实例同 props 冗余取数。
+// 跨断点入宽带清 memoryOpen（跨断点清零规则同 watch(isDesktop) 口径）：壳卸载后旗标
+// 无人清 → 861~1023 带 backdrop（lg:hidden 不覆盖此带）悬空成不可关黑幕。
+const consoleMq = window.matchMedia('(max-width: 860px)')
+const isConsoleMobile = ref(consoleMq.matches)
+consoleMq.addEventListener('change', (e) => { isConsoleMobile.value = e.matches })
+watch(isConsoleMobile, (m) => { if (!m) { state.memoryOpen = false; state.memoryDetail = null; state.memoryReport = null } })
+
+/* ─── 沉浸式壳 W1 抽屉层（plan Task 3）───────────────────────────────────────
+   桌面抽屉唯一源 = state.drawer（'file'|'search'|'trash'|null），计算属性统一喂模板；
+   移动 ≤1023px 走既有 filePanelOpen/searchDrawerOpen 旗标，本层在移动恒不生效（红线）。
+   批准偏离（T3 备案）：监控不并入 drawer 值域——state.monitoring + MonitorPage 单实例保留
+   （双实例 = 双轮询），桌面由 style.css min-width:1024px 把 .mwrap 重塑为 absolute 悬浮
+   宽抽屉（宽 min(920px, calc(100vw - 96px))，画谱同 panel-shell），移动整页接管原样。 */
+// 图钉钉左槽（计划 Self-Review 1 并入 T3）：tree=true 时文件抽屉桌面升级为 in-flow 左槽
+//（宽 260、无投影、文档区挤压）；持久化 mdvault.shellSlots（T7 接线 right 槽，本任务只做 tree）
+const LS_SLOTS = 'mdvault.shellSlots'
+function readSlotsRaw() {
+  try { return localStorage.getItem(LS_SLOTS) } catch (e) { return null }  // 隐私模式 → 默认槽位
+}
+const slots = ref(loadSlots(readSlotsRaw()))
+function persistSlots() {
+  try { localStorage.setItem(LS_SLOTS, saveSlots(slots.value)) } catch (e) { /* 静默（先例同形） */ }
+}
+function toggleTreeSlot() {
+  if (slots.value.tree) {
+    slots.value.tree = false
+    state.drawer = null   // spec §4 表：取消钉住即关
+  } else {
+    slots.value.tree = true
+  }
+  persistSlots()
+}
+// 钉态 = 桌面 && slots.tree && 当前面为文件 && 非监控页；搜索/回收站选中时脱离钉面走 overlay 抽屉
+//（单壳双态的 W1 简化：钉住只锁文件槽，多槽并存归 T7 槽位系统）。
+// 监控与树槽互斥（T3 用户拍板）：监控在场钉住槽渲染让位（panelDrawerOpen/panelWidth 皆经
+// treePinned 折算，宽抽屉独苗），slots.tree 持久值不动——退监控后钉槽自动复原，无需重钉。
+const treePinned = computed(() =>
+  isDesktop.value && slots.value.tree === true && activePanel.value === 'file' && !state.monitoring)
+const panelDrawerOpen = computed(() =>
+  isDesktop.value
+    ? (state.drawer === 'file' || state.drawer === 'search' || state.drawer === 'trash' || treePinned.value)
+    : state.filePanelOpen)
+const DESKTOP_W = { file: 320, search: 380, trash: 360 }   // spec §4 抽屉宽表；钉态恒 260（§3 左槽）
+const panelWidth = computed(() => {
+  if (!isDesktop.value) return activePanelCfg().width
+  if (treePinned.value) return 260
+  return DESKTOP_W[state.drawer] || 320
+})
+/* ─── 沉浸式壳 T4：桌面文档头行（doc-head，信息位非交互件 = T5 dock 的前置位）───
+   面包屑按 / 分段；隐私判定与文案口径照 TopBar 现稿（isPrivacyScoped + 「模型不可见」）；
+   渲染双条件 v-if="isDesktop && state.currentPath"（Home 态无路径不渲染、移动恒 false——
+   与 TopBar 根 lg:hidden 两路互不干扰，≤1023px 顶栏照旧承载全部信息）。 */
+const docHeadSegs = computed(() => (state.currentPath || '').split('/'))
+const docPrivate = computed(() =>
+  !!state.currentPath && isPrivacyScoped(state.privacyDirs, state.currentPath))
+// 沉浸式壳 T5：dock 渲染口径 = 存在文档（含 docMissing 加载失败态——「加载失败」文案与
+// 「文档缺失」锁钮同属该态，复用既有 docMissing 旗标，不另立新态）；Home 态 false → 零 chrome
+const hasDoc = computed(() => !!state.currentPath)
 // 通知下拉退场：.14s 反向滑出 → 再收起（打开方向沿用既有 notif-in，合的方向补上退场）
 let notifCloseT = null
 function closeNotifDropdown() {
@@ -97,11 +184,33 @@ function closeNotifDropdown() {
 // 与进入的非对称取舍见 style.css 注）
 let monBackT = null
 function exitMonitorPage() {
+  state.homeRefreshSeq++   // 首页重取信号（spec 2026-11-22 §6.3）：监控页里的操作退场即进日报
   const el = document.querySelector('.mwrap')
   if (!el || reducedMotion()) { state.monitoring = false; return }
   el.classList.add('mp-out')
   clearTimeout(monBackT)
   monBackT = setTimeout(() => { state.monitoring = false }, 190)
+}
+
+// ─── 首页·管家日报（spec 2026-11-22-home-butler-landing §6.3）───────────────
+// 回首页 = currentPath 置 null：hash watch 的 null 支路以 replaceState 清掉 #doc/ 片段——
+// 不清 hash 则「回首页→F5」直落旧文档，首页对刷新路径永不可达（oracle 送审雷）；
+// 空路径 no-op，免多余 hash 抖动。
+function goHome() {
+  if (state.currentPath) state.currentPath = null
+}
+function openTrashFace() {
+  activePanel.value = 'trash'
+  // 桌面 rail 退役（T3）：抽屉是唯一入口，Home 卡「回收站」同开抽屉（移动 drawer 恒 null 零触达）
+  if (isDesktop.value) state.drawer = 'trash'
+}
+
+// lastPresence 心跳（S0–S4 分级依据）：**只在在场时写**——挂载即记 + 5min 心跳
+// （仅 visible，后台标签不冒充在场）+ hidden/pagehide 两兜底补「离场时刻」。
+// 隐私模式 localStorage 抛错 → 静默；Home 端 tierOf 读不到键走 'nostorage' 泛化文案。
+const LS_LAST = 'mdvault.lastPresence'
+function beatPresence() {
+  try { localStorage.setItem(LS_LAST, String(Date.now())) } catch (e) { /* 无存储 → 泛化分级，设计内 */ }
 }
 
 async function loadDocs() {
@@ -129,6 +238,10 @@ async function openDoc(path, heading, fromLink) {
     replaceHash: p => history.replaceState(null, '', docHash(p, { edit: !state.previewMode })),
     toast: showToast, message: '保存失败，未离开当前文档',
   }) === 'held') return 'held'
+  // 沉浸式壳 W1 抽屉规则（Review Focus 1）：导航守卫成功（非 held）后才关桌面抽屉——
+  // held 早退路径（上方 return）绝不触碰 drawer，用户保住文件列表上下文。
+  // 监控页的退场在函数首行既有 exitMonitorPage 调用（开文档需文档区可见，原有契约不动）。
+  state.drawer = null
   state.currentPath = path
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -458,9 +571,11 @@ async function handleToolResult(evt) {
   }
 }
 
-// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 打开设置浮层（spec 2026-11-22 §6 modal 改版）
+// 深链启动（P1-4）：boot 后 hash 带 #doc/ 则直接打开该文档；#settings → 打开设置浮层（spec 2026-11-22 §6 modal 改版）；
+// #memory → 浮窗 + 记忆段（沉浸式壳 T6，spec 2026-11-22-immersive-shell §6）
 function applyInitialHash() {
   if (location.hash === '#settings') { openSettingsPage(); return }
+  if (location.hash === '#memory') { openSettingsPage('memory'); return }
   const h = parseHash(location.hash)
   if (!h) return
   if (h.mode === 'edit') state.previewMode = false
@@ -514,6 +629,59 @@ function onSessionActive(sid) {
 // ─── AI 面板切换（桌面/移动适配）───
 function toggleAI(open) {
   state.aiOpen = open
+}
+
+// ─── 沉浸式壳 W5 · 管家消息面（plan Task 7，spec §4A）────────────────────────
+// onRunDone：AIChatPanel done 终帧单点上抛（{id=run 戳, text=正文截 60 字}）。
+// 仅「桌面 && 聊天不可见」时入栈——可见态用户正看着流，不需要纸条；重开浮窗/游标回放
+// 重放同 Run done → dedupeAppend 按 id 幂等吞掉（Review Focus 4/6「摘要只出一条」，
+// RunHub 铁律零接触：只消费既有事件通道，服务端零改动）。移动 ≤1023px 零触达（红线）。
+function onRunDone(payload) {
+  if (!isDesktop.value || state.aiOpen) return
+  if (!payload || payload.id == null || !payload.text) return
+  state.peekReplies = dedupeAppend(state.peekReplies,
+    { id: payload.id, kind: 'reply', text: payload.text, dest: 'chat', ts: Date.now() / 1000 }, 5)
+}
+
+// pick 落点分派（dest ∈ memory|monitor|conflict|chat）：
+//   memory → 设置浮窗记忆段（T6 通道）；monitor → 监控页（run 健康/冲突计数所在）；
+//   chat → 开聊天浮窗并清该条（回复是一次性纸条）；
+//   conflict → 批准备案映射到监控页：ConflictBanner 是「编辑器写冲突」live 横幅（state.conflict
+//     由 tool_result 竞态注入，无通知行来源，peek 无从构造其载荷）；同步冲突以 .conflict- 文件
+//     形态存在、在监控页/Home 计数可见——通知化前 conflict 摘要走监控页（V1 口径，报告在案）。
+function onPeekPick(item) {
+  if (!item) return
+  if (item.dest === 'memory') { openSettingsPage('memory'); return }
+  if (item.dest === 'chat') {
+    toggleAI(true)
+    state.peekReplies = state.peekReplies.filter(r => r.id !== item.id)
+    return
+  }
+  openMonitorPage()
+}
+
+// 右槽持久化（T1 loadSlots/saveSlots 在此接 right 键）：仅 AI 图钉写槽（spec §3 右槽二选一）。
+// 2026-11-23 用户拍板关联浮层化 = 即开即关浮层，'rel' 槽值退役（loadSlots 对遗留 'rel' 仍
+// 容忍读到，boot 无消费支路，下次写槽自然覆盖）。移动态不改写桌面槽位意图（跨断点红线：
+// 移动旗标另路，不擦桌面记忆）。
+function persistRightSlot() {
+  if (!isDesktop.value) return
+  slots.value.right = state.chatPinned ? 'ai' : null
+  persistSlots()
+}
+function toggleChatPin() {
+  state.chatPinned = !state.chatPinned
+  persistRightSlot()
+}
+// boot 回填只在无 hash 时（boot 与 hash 恢复不打架：#doc/ 走文档侧、#settings/#memory 走浮窗侧，
+// hash 在场即用户意图明确，槽位回填让位）。'rel' 回填支路已退役（2026-11-23 关联浮层化，
+// 即开即关不占槽）；'ai' 图钉是回填唯一路。
+function applyBootRightSlot() {
+  if (location.hash) return
+  if (slots.value.right === 'ai') {
+    state.chatPinned = true
+    state.aiOpen = true
+  }
 }
 
 // 文件管理操作（FileTree 通过 inject('manage') 调用）
@@ -586,9 +754,23 @@ const badgeParts = computed(() => {
 // rail 回收站徽标 = 回收站文件总数（0 → 不渲染，同记忆徽标模式）
 const trashCount = computed(() => state.trashItems.reduce((n, b) => n + ((b.files || []).length), 0))
 
+// FAB 聚合徽标（沉浸式壳 W1，plan Task 2）：三键 = trash / notif / memory（memory = 待审 + failed，
+// T6 定口径）；memoryAwaiting/memoryFailed 为设置子钮 title 构成分解的额外键（组件越界防御读 0）
+const fabBadges = computed(() => ({
+  trash: trashCount.value,
+  notif: state.unreadCount,
+  memory: badgeParts.value.total,
+  memoryAwaiting: badgeParts.value.awaiting,
+  memoryFailed: badgeParts.value.failed,
+}))
+
 function onMemoryRailClick() {
   state.memoryDetail = null   // 重新进入总是回队列面
   state.memoryReport = null   // 报告深链同口径（非 null = 应开在报告详情面）
+  // T6 转移动分支：console-shell 退 ≤860px 全宽 overlay 专属（lg:hidden），>860 已无
+  // in-flow 300px 面板可落（平板带 861–1023 一并改道，不留「按钮开了看不见」死区）——
+  // 走设置浮窗记忆段（桌面唯一入口 FAB→设置→记忆段）。≤860 移动 overlay 语义原样不动。
+  if (window.innerWidth > 860) { openSettingsPage('memory'); return }
   state.memoryOpen = !state.memoryOpen
 }
 
@@ -613,6 +795,7 @@ function openMonitorPage() {
   clearTimeout(monBackT)                       // 返回动画窗口内重入：取消挂起的收起
   const el = document.querySelector('.mwrap')
   if (el) el.classList.remove('mp-out')        // 清残留退场类（fill:both 会在重新显示时重放淡出）
+  state.drawer = null                          // 桌面（T3）：开监控收子页抽屉，单浮层不叠浮
   state.monitoring = true
   state.memoryOpen = false
   state.memoryDetail = null
@@ -624,17 +807,24 @@ function openMonitorPage() {
 //     关闭（X / backdrop / Escape）一律经组件 requestClose——dirty 时组件内原生 confirm，
 //     取消即不关，app 只接组件 @close 落地。转场全归 CSS 折叠壳家族（style.css st-modal 族，
 //     MobileSheet/panel-shell 纪律），JS 无退场定时器。齿轮钮常驻可见，开态挂 .on ───
-function openSettingsPage() { state.settingsOpen = true }
+// T6 tab 扩参：'memory' = #memory 深链 / FAB 记忆落点 / 通知深链改道（经 state.settingsTab
+// 下传组件 initialTab，开层直落记忆段）；无参调用（齿轮 / window.openSettingsPage 外链 /
+// @click 原生事件对象）一律兜底默认段——既有调用方零破坏。
+function openSettingsPage(tab) {
+  state.settingsTab = (typeof tab === 'string' && tab) ? tab : 'ai'
+  state.settingsOpen = true
+}
 // Escape 链最高优先支只发关闭请求（dirty 判定与 confirm 归表单所在组件，app 不复制守卫）
 function requestCloseSettings() { state.settingsCloseSeq++ }
 function onSettingsClosed() {
-  // #settings 深链：关闭即清 hash 回无哈希路径（applyInitialHash 的对应侧）
-  if (location.hash === '#settings') history.replaceState(null, '', location.pathname)
+  // #settings / #memory 深链：关闭即清 hash 回无哈希路径（applyInitialHash 的对应侧）
+  if (location.hash === '#settings' || location.hash === '#memory') history.replaceState(null, '', location.pathname)
   state.settingsOpen = false
 }
 
 // ─── rail 按钮（桌面 setPanel / 移动 toggle overlay，spec §3.5）───
-// 移动端 file/trash 共用同一 overlay（panel-shell 的 open 态 = filePanelOpen，face 由 activePanel 切换）：
+// 移动端 file/trash 共用同一 overlay（panel-shell 的移动 open 态 = filePanelOpen，face 由 activePanel 切换；
+// 桌面 rail 已退役（T3），桌面入口 = FAB → state.drawer，见 panelDrawerOpen 计算属性）：
 // 关 → 开并切 face；开且已在该 face → 关（原 toggle 语义）；开但在另一 face → 只切 face 不关
 function onRailClick(p) {
   if (window.innerWidth >= 1024) {
@@ -676,6 +866,31 @@ function onSearchPick(path, heading) {
     const t = fileTreeRef.value
     if (t) {
       t.expandToPath(path)
+      t.revealActive()
+    }
+  })
+}
+
+// ─── 沉浸式壳 T5：dock → 文件抽屉定位（V1 定位口径）───
+// 文件/重命名钮：开文件抽屉（桌面抽屉唯一源 state.drawer）+ 树内展开祖先前缀并滚到当前行，
+// 行内 ⋯ 菜单执行操作（重命名逻辑留树内不动；移动也归树内 ⋯ 单写面）。演进位：dock 直出重命名对话框/命令面板
+// （spec §12），V1 不做——写面唯一（docActions 单写面，dock 删除钮直调同款函数，禁第二实现）。
+// revealActive/expandToPath = FileTree setup return 既有方法（fileTreeRef 经模板 ref 直取，
+// collapseAll 先例同形）；滚动走组件既有实现，不新写（preventScroll 红线口径归组件）。
+function onRevealTree(kind) {
+  // kind（file|rename|move|delete）：file 已分流 = 开/关 toggle（2026-11-23 拍板：抽屉已开
+  // 且未钉住 → 再点收起；钉住态 = 左槽常驻不归它关，图钉钮 toggleTreeSlot 自理）；
+  // 其余同为「开抽屉 + 定位当前行」，留参为演进位（直出对话框时按 kind 分派）
+  if (kind === 'file' && !treePinned.value && state.drawer === 'file') {
+    state.drawer = null
+    return
+  }
+  activePanel.value = 'file'
+  state.drawer = 'file'
+  nextTick(() => {
+    const t = fileTreeRef.value
+    if (t && state.currentPath) {
+      t.expandToPath(state.currentPath)
       t.revealActive()
     }
   })
@@ -770,15 +985,44 @@ export function createApp() {
         }
       )
 
+      // 关联 ↔ 目录浮层互斥（2026-11-23 关联桌面浮层化：两浮层同锚 dock 左缘同 z-50 层，
+      // 同屏双浮 = 叠字乱版）。仅桌面互斥——平板带 861–1023 关联仍是 in-flow 侧栏
+      //（≤1023px 零改动红线），与 toc-dd 浮层可共存。关 toc 走 toggleToc 现成语义
+      //（含 stopScrollspy 收口），不自写置 false。'rel' 持久化 watch 已随槽值退役删除。
+      watch(() => state.relOpen, (v) => {
+        if (v && isDesktop.value && state.tocOpen) toggleToc()
+      })
+      watch(() => state.tocOpen, (v) => {
+        if (v && isDesktop.value && state.relOpen) state.relOpen = false
+      })
+
+      // 跨断点双旗标迁移（Review Focus 2）：state.drawer 桌面唯一源、移动旗标另路——
+      // 两路各归各家，resize 跨断点不得出现两面板同开或全死。isDesktop 由 matchMedia 驱动，
+      // 与上方 innerWidth 监听互补（后者管移动体系自身复位，本 watch 管桌面态不携出断点）。
+      watch(isDesktop, (now, was) => {
+        if (was && !now) {
+          state.drawer = null          // 桌面→移动：桌面抽屉旗标归零（不携进 overlay 态）
+          state.filePanelOpen = false  // 移动面板同点关闭（与 innerWidth 链双保险，防两开）
+        } else if (!was && now) {
+          state.filePanelOpen = false  // 移动→桌面：移动 overlay 旗标归零（桌面消费端本就不读它，此为复位兜底）
+        }
+      })
+
       // URL 状态同步（P1-4）：当前文档 + 编辑态进 hash；
       // replaceState 不产历史垃圾，前进/后退由 hashchange 兜底（markdown 软链 #doc/ 跳转同走此路）
       watch([() => state.currentPath, () => state.previewMode], ([p, preview]) => {
-        if (!p) return
+        // null 支路（spec 2026-11-22 §6.1）：回首页必须清 hash——replaceState 不产历史
+        // 条目也不触发 hashchange，后退键不会「弹回文档」
+        if (!p) {
+          if (location.hash) history.replaceState(null, '', location.pathname)
+          return
+        }
         const url = docHash(p, { edit: !preview })
         if (location.hash !== url) history.replaceState(null, '', url)
       })
       window.addEventListener('hashchange', () => {
         if (location.hash === '#settings') { state.settingsOpen = true; return }  // 深链随时可达（boot 走 applyInitialHash，此为站内/手输路径）
+        if (location.hash === '#memory') { openSettingsPage('memory'); return }   // T6：浮窗 + 记忆段（与 boot 同口径）
         const h = parseHash(location.hash)
         if (!h) return
         if (h.path !== state.currentPath) {
@@ -791,7 +1035,10 @@ export function createApp() {
       })
 
       onMounted(() => {
-        loadDocs().then(applyInitialHash)
+        loadDocs().then(() => {
+          applyInitialHash()
+          applyBootRightSlot()   // T7 右槽回填（无 hash 才回填——与 hash 恢复不打架）
+        })
         bootRestoreSession()   // 会话启动恢复（spec §2.5）：非阻塞渲染，内部 catch 静默
         loadTrash()   // rail 徽标 = 回收站文件总数，初始取一次
         setInterval(pollChanges, 10000)
@@ -799,6 +1046,17 @@ export function createApp() {
         setInterval(() => { pollNotifications(); pollMemory() }, 30000)
         pollNotifications()
         pollMemory()
+
+        // lastPresence 心跳（spec 2026-11-22-home-butler-landing §6.3）：加载即记一笔，
+        // 5min 心跳仅 visible 续写（后台标签不冒充在场），hidden/pagehide 各兜一笔离场时刻。
+        // boot 笔同样受 visible 门控（终审 M1）：浏览器重启恢复的后台标签不得续锚——
+        // 「在场」的定义是看得见的标签，boot 兜底只是给前台首屏补锚。
+        if (document.visibilityState === 'visible') beatPresence()
+        setInterval(() => { if (document.visibilityState === 'visible') beatPresence() }, 300000)
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') beatPresence()
+        })
+        window.addEventListener('pagehide', beatPresence)
 
         // 未保存守卫（P1-3）：仅 dirty 时拦刷新/关标签；浏览器忽略自定义文案
         window.addEventListener('beforeunload', (e) => {
@@ -814,7 +1072,23 @@ export function createApp() {
         // 组件自有浮层（FileTree/TrashPanel 菜单、SearchPanel popover）由各自 handler 关。
         document.addEventListener('keydown', (e) => {
           if (e.key !== 'Escape') return
+          // 沉浸式壳 W1（T3）：桌面专属 fan/drawer 两层插在既有链前（Review Focus 5「只关最上层」），
+          // 优先级归 shellState.escTarget 裁决（settings > fan > drawer > dropdown）；
+          // drawer 折叠 = 子页抽屉 + 桌面监控折算（关监控必须走 exitMonitorPage——保
+          // homeRefreshSeq++ 首页重取语义，Home spec §6.3）；移动监控不折叠（恒 null），
+          // Esc 出口保持下方原链位——移动 ≤1023px 行为逐条不变红线。
+          const tgt = escTarget({
+            settingsOpen: state.settingsOpen,
+            fanOpen: !!(fabRef.value && fabRef.value.isOpen()),
+            drawer: isDesktop.value ? (state.drawer || state.monitoring) : null,
+            dropdownOpen: state.notifOpen || state.moreMenuOpen || state.tocOpen,
+          })
           if (state.settingsOpen) requestCloseSettings()  // 设置浮层居链首（最高层，spec §6）：只发请求，dirty 守卫在组件内
+          else if (tgt === 'fan') { if (fabRef.value) fabRef.value.closeIfOpen() }  // 扇弧兜底（focus 在扇弧外时；扇弧内 FabMenu 自带 stopPropagation 已吃掉）
+          else if (tgt === 'drawer') {
+            if (state.monitoring) exitMonitorPage()   // 桌面宽抽屉：退场动画 + homeRefreshSeq（下方移动监控支不可达桌面）
+            else state.drawer = null                  // 桌面子页抽屉（移动旗标不入折叠，下方各层原样）
+          }
           else if (state.notifOpen) closeNotifDropdown()
           else if (state.moreMenuOpen) state.moreMenuOpen = false
           else if (state.relSheetOpen) state.relSheetOpen = false
@@ -829,6 +1103,27 @@ export function createApp() {
           else if (state.searchDrawerOpen) state.searchDrawerOpen = false
         })
 
+        // 快捷键（Task 5，spec §5）：Ctrl+S 保存 / Ctrl+E 预览⇄编辑 / F2 重命名定位。
+        // settings 浮层链首放行（浮层开着时快捷键归浮层自身，同 Esc 链 settings 居首纪律）；
+        // 编辑器输入框不豁免（Ctrl+S/E 无输入语义冲突；F2 在 rename 输入行被组件
+        // onEditKeydown 就地吞掉且不冒泡——行内改名不被抢）。
+        // Ctrl+E 按 spec §5 默认值实现（Chromium/Edge 可 preventDefault，理论不占键）；
+        // §13 实测项移交 W2 波闸目检——用户真机若被地址栏吃掉，退 Ctrl+Shift+E（spec §5 表同步改）。
+        document.addEventListener('keydown', (e) => {
+          if (state.settingsOpen) return
+          if (e.ctrlKey && e.key.toLowerCase() === 's') {
+            // Ctrl+S 保存（Shift 变体同收——preventDefault 顺带吃掉浏览器「另存为」）
+            e.preventDefault()
+            saveWithRetry()
+          } else if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'e') {
+            e.preventDefault()
+            setMode(state.previewMode ? 'edit' : 'preview')
+          } else if (e.key.toLowerCase() === 'f2') {
+            e.preventDefault()
+            onRevealTree('rename')
+          }
+        })
+
         // 监控页 L1 入口（Phase B 的 L0「后台 →」调它）
         window.openMonitorPage = openMonitorPage
         // 设置浮层入口（深链/控制台外链用；页面内入口 = rail 底部齿轮钮）
@@ -839,9 +1134,42 @@ export function createApp() {
           if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
           }
-          if (state.notifOpen && !e.target.closest('[data-notif-bell]')) {
+          if (state.notifOpen && !e.target.closest('[data-notif-bell], [data-notif-toggle]')) {
+            // [data-notif-toggle] = FAB「通知」子钮（桌面唯一入口）：开态由 onFabPick→toggleNotifDropdown
+            // 置起，同一 click 冒泡到此不得抵消（同 TopBar data-toc-toggle 豁免一理，bug 同族）
             closeNotifDropdown()
           }
+        })
+
+        // 桌面浮层抽屉点外关闭（spec 2026-11-22 §4 表「文件 320px」行收起列承诺的第四路——
+        // Esc/开文档/FAB 再点之外的「点外关闭」，2026-11-23 用户拍板补位）。守卫链：
+        // 仅桌面浮层态——钉住态（treePinned）= in-flow 左槽常驻不点外关；
+        // 移动端由 isDesktop 守卫天然挡住（≤1023px 零改动红线）。
+        // 豁免（不关）：panel-shell 抽屉自身（含搜索/回收站面）；fab-root FAB/扇弧——
+        // 子钮 pick 经 drawerNext 自决开合，不得被同点外点链抵消；dock 右缘操作条——
+        // 其文件/重命名/删除钮经 revealTree 开抽屉，同一 click 冒泡再关会把开动作吞掉
+        //（豁免同 FAB 一理，先例参 TopBar onDocClick 对 data-toc-toggle 的豁免）。
+        // [data-drawer-entry]：Home G4「去回收站」链接经 openTrashFace 开抽屉（恒开
+        // 语义），同一 click 冒泡进本监听不得把刚开的抽屉再吞掉——入口级标记由
+        // Home.js 模板只挂回收站行（同 data-notif-toggle 入口粒度先例，禁整盒豁免）。
+        document.addEventListener('click', (e) => {
+          if (!isDesktop.value || !state.drawer || treePinned.value) return
+          const t = e.target
+          if (!t || !t.closest) return
+          if (t.closest('.panel-shell') || t.closest('.fab-root') || t.closest('.dock') || t.closest('[data-drawer-entry]')) return
+          state.drawer = null
+        })
+
+        // 桌面关联浮层点外关闭（2026-11-23 浮层化，同款守卫链先例参上条抽屉点外关闭监听注）：
+        // 豁免两面不关：.rel-side 浮层自身；.dock 右缘操作条——关联钮自身经 openDocFace
+        // toggle，同一 click 冒泡再关会把开动作吞掉（豁免同 FAB/抽屉一理）。
+        // 移动端由 isDesktop 守卫天然挡住（≤1023px 零改动红线，sheet 各有关闭路径）。
+        document.addEventListener('click', (e) => {
+          if (!isDesktop.value || !state.relOpen) return
+          const t = e.target
+          if (!t || !t.closest) return
+          if (t.closest('.rel-side') || t.closest('.dock')) return
+          state.relOpen = false
         })
 
         // vault 软链跳转（单一委托 click）：作用域严格限定 #preview（预览区）与 #ai-messages（AI 聊天容器）；
@@ -885,7 +1213,7 @@ export function createApp() {
         // 初始欢迎消息由 AIChatPanel 内部处理
       })
 
-      const isDesktop = () => window.innerWidth >= 1024
+      // isDesktop：模块级 matchMedia 驱动 ref（动效层分节旁声明），setup 透传给模板
 
       function toggleNotifDropdown() {
         if (state.notifOpen) closeNotifDropdown()
@@ -897,6 +1225,21 @@ export function createApp() {
           if (el) el.classList.remove('notif-closing')
           state.notifOpen = true
         }
+      }
+
+      // FAB 扇弧选择（Task 3 收口）：notifications → 既有下拉；settings → 设置浮层
+      //（修 T2 占位的 drawer='settings' 死值）；monitor → 既有 openMonitorPage（批准偏离：
+      // monitoring 单实例，桌面由 mwrap 宽抽屉承载）；file/search/trash → 抽屉态机，
+      // activePanel 与 drawer 同源（面 v-show 复用，spec §4「再点同一子钮即收」归 drawerNext）
+      function onFabPick(id) {
+        if (id === 'notifications') { toggleNotifDropdown(); return }
+        if (id === 'settings') { openSettingsPage(); return }
+        if (id === 'monitor') { openMonitorPage(); return }
+        // 监控与树槽互斥（反向支）：监控页在场开子页抽屉先退监控——走 exitMonitorPage
+        // 保 homeRefreshSeq++ 首页重取语义（treePinned 已含 !state.monitoring，钉槽同步让位）
+        if (state.monitoring) exitMonitorPage()
+        activePanel.value = id
+        state.drawer = drawerNext(state.drawer, id)
       }
 
       async function markAllRead() {
@@ -911,24 +1254,29 @@ export function createApp() {
         await api.markNotificationsRead({ ids: [n.id] })
         state.notifications = state.notifications.filter(x => x.id !== n.id)
         state.unreadCount = Math.max(0, state.unreadCount - 1)
-        // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 控制台开在首个提案的详情面
+        // 深链：本次 run 产出的 proposal_paths（JSON 字符串）→ 记忆台开在首个提案的详情面
+        // （T6 桌面/平板带 >860 改道：设置浮窗 + 记忆段，memoryDetail 经 state 下传 pane 实例；
+        //   ≤860 移动 console overlay 原样）
         let paths = []
         try {
           paths = n.proposal_paths ? JSON.parse(n.proposal_paths) : []
         } catch (e) { /* 非 JSON → 退回报告路径 */ }
         if (Array.isArray(paths) && paths.length) {
-          state.memoryOpen = true
+          if (window.innerWidth > 860) openSettingsPage('memory')
+          else state.memoryOpen = true
           state.memoryDetail = paths[0]
           return
         }
-        // 深链：本次 run 写出的报告渠道文件（index/reports/**，JSON 字符串）→ 控制台报告面
-        // （proposal_paths 为空时才走到这里，由上方 return 保证；渲染归 L5）
+        // 深链：本次 run 写出的报告渠道文件（index/reports/**，JSON 字符串）→ 记忆台报告面
+        // （proposal_paths 为空时才走到这里，由上方 return 保证；渲染归 L5；T6 桌面改道同口径，
+        //   通知点报告深链仍可达报告面 = 浮窗记忆段第三面）
         let rpaths = []
         try {
           rpaths = n.report_paths ? JSON.parse(n.report_paths) : []
         } catch (e) { /* 非 JSON → 退回报告路径 */ }
         if (Array.isArray(rpaths) && rpaths.length) {
-          state.memoryOpen = true
+          if (window.innerWidth > 860) openSettingsPage('memory')
+          else state.memoryOpen = true
           state.memoryReport = rpaths[0]
           return
         }
@@ -966,10 +1314,15 @@ export function createApp() {
       }
 
       return {
-        state, editorPaneRef, fileTreeRef, aiChatRef, isDesktop, ICONS,
+        state, editorPaneRef, fileTreeRef, aiChatRef, fabRef, isDesktop, isConsoleMobile, ICONS,
         activePanel, panels, activePanelCfg,
+        panelDrawerOpen, panelWidth, treePinned, toggleTreeSlot,
+        docHeadSegs, docPrivate, hasDoc, onRevealTree,
         onRailClick, onTreeSelect, onSearchPick,
+        onFabPick, fabBadges,
+        onRunDone, onPeekPick, toggleChatPin,
         onMemoryRailClick, onMemoryOpenDoc, openDocFace, badgeParts, trashCount, openMonitorPage, exitMonitorPage, openSettingsPage, onSettingsClosed, pollMemory,
+        goHome, openTrashFace,
         searchDrawerTouchStart, searchDrawerTouchMove, searchDrawerTouchEnd,
         loadDocs, openDoc, saveWithRetry, downloadDoc, setMode,
         handleToolResult, startNewSession, toggleAI, renderMarkdown, onSwitchSession, onSessionActive,
@@ -982,8 +1335,9 @@ export function createApp() {
       <div class="flex h-full">
         <!-- 键盘直达主区（P2②）：屏外常驻，Tab 首站显形（样式 style.css .skip-link） -->
         <a class="skip-link" href="#main-content" @click.prevent="skipToMain">跳至主要内容</a>
-        <!-- 左侧：图标 rail + 二级面板（spec §3.1 / §3.4） -->
-        <aside class="sidebar-shell flex shrink-0">
+        <!-- 左侧图标 rail（沉浸式壳 W1 T3：桌面退役 lg:hidden——桌面入口 = 左下 FAB 扇弧，
+             rail 上的桌面替代无需迁移代码；移动 rail 面板体系原样） -->
+        <aside class="sidebar-shell flex shrink-0 lg:hidden">
           <!-- rail（桌面 64px / 移动 48px） -->
           <div class="rail">
             <button v-for="p in panels" :key="p.id" type="button"
@@ -1009,42 +1363,57 @@ export function createApp() {
             <!-- 底部锚定齿轮（spec 2026-11-22 §6 modal 改版：设置唯一入口；margin-top:auto 与
                  既有钮组不互挤，常驻可见；icon-only 照 rail 钮样式，aria-label 满足审计钉） -->
             <button id="settings-rail-btn" type="button" class="rbtn rail-gear" :class="{ on: state.settingsOpen }"
-              title="设置" aria-label="设置" @click="openSettingsPage">
+              title="设置" aria-label="设置" @click="openSettingsPage()">
               <span class="ricon"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.1"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2.1 2.1 0 1 1-2.97 2.97l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56v.11a2.1 2.1 0 1 1-4.2 0v-.11a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2.1 2.1 0 1 1-2.97-2.97l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H2.6a2.1 2.1 0 1 1 0-4.2h.11a1.7 1.7 0 0 0 1.56-1.03 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2.1 2.1 0 1 1 2.97-2.97l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1.03-1.56V2.6a2.1 2.1 0 1 1 4.2 0v.11a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2.1 2.1 0 1 1 2.97 2.97l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.56 1.03h.11a2.1 2.1 0 1 1 0 4.2h-.11a1.7 1.7 0 0 0-1.56 1.03z"/></svg></span>
               <span class="rlabel">设置</span>
             </button>
           </div>
 
-          <!-- 面板容器（桌面：v-show 常驻 200ms fade；移动：260px 左侧滑入 overlay） -->
-          <div class="panel-shell" :class="{ open: state.filePanelOpen }" :style="{ width: activePanelCfg().width + 'px' }">
-            <div v-show="activePanel === 'file'" class="panel-face">
-              <div class="p-head">
-                <span class="ptitle">文档</span>
-                <span class="pcount">{{ state.files.length }}</span>
-                <span class="pacts">
-                  <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
-                    @click="fileTreeRef && fileTreeRef.collapseAll()">
-                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
-                  </button>
-                </span>
-              </div>
-              <div class="flex-1 min-h-0 overflow-hidden">
-                <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
-                  @select="onTreeSelect" />
-              </div>
-            </div>
-            <div v-show="activePanel === 'search'" class="panel-face">
-              <SearchPanel :on-pick="onSearchPick" />
-            </div>
-            <div v-show="activePanel === 'trash'" class="panel-face">
-              <TrashPanel :items="state.trashItems" />
-            </div>
-          </div>
         </aside>
 
-        <!-- 记忆控制台：300px 审查面板（设计稿 design/memory-console-design.html；
-             关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css） -->
-        <div id="memory-console-shell" class="console-shell" :class="{ open: state.memoryOpen }">
+        <!-- 二级面板容器（T3 桌面浮层化后自 rail aside 上提至根级：桌面钉态 .pinned 须作根 flex
+             子项参与布局挤压文档列；浮层/移动 fixed 态不参与布局、位序无关）。
+             移动 ≤1023px：open=filePanelOpen + 260px 左滑 overlay（style.css 媒体块原位规则，逐字不变）；
+             桌面：open=panelDrawerOpen（state.drawer/treePinned 折算），absolute 贴左缘悬浮抽屉，
+             钉态转 in-flow 左槽 -->
+        <div class="panel-shell" :class="{ open: panelDrawerOpen, pinned: treePinned }" :style="{ width: panelWidth + 'px' }">
+          <div v-show="activePanel === 'file'" class="panel-face">
+            <div class="p-head">
+              <span class="ptitle">文档</span>
+              <span class="pcount">{{ state.files.length }}</span>
+              <span class="pacts">
+                <!-- 图钉钉左槽（计划 Self-Review 1 并入 T3）：桌面专属入口（移动 rail 体系无此概念）；
+                     aria-pressed 报钉态，点击翻转 slots.tree 即落盘（mdvault.shellSlots，T7 并 right 槽） -->
+                <button v-if="isDesktop" type="button" class="ibtn" :aria-pressed="treePinned ? 'true' : 'false'"
+                  :title="treePinned ? '取消钉住' : '钉住为左槽'" aria-label="将文件面板钉住为左槽"
+                  @click="toggleTreeSlot">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M8.5 3h7l-.7 6 2.7 2.7H6.5l2.7-2.7z"/></svg>
+                </button>
+                <button class="ibtn" title="收起全部文件夹" aria-label="收起全部文件夹"
+                  @click="fileTreeRef && fileTreeRef.collapseAll()">
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 15l5 5 5-5"/><path d="M7 9l5-5 5 5" transform="translate(0 2)"/></svg>
+                </button>
+              </span>
+            </div>
+            <div class="flex-1 min-h-0 overflow-hidden">
+              <FileTree ref="fileTreeRef" :files="state.files" :dirs="state.dirs" :current-path="state.currentPath"
+                @select="onTreeSelect" />
+            </div>
+          </div>
+          <div v-show="activePanel === 'search'" class="panel-face">
+            <SearchPanel :on-pick="onSearchPick" />
+          </div>
+          <div v-show="activePanel === 'trash'" class="panel-face">
+            <TrashPanel :items="state.trashItems" />
+          </div>
+        </div>
+
+        <!-- 记忆控制台（T6 退移动专属 + T8 挂载门收口）：≤860px 全宽 overlay 原样（design/memory-console-design.html，
+             关闭态 width 0 + 无指针事件；面切换 opacity+transform，见 style.css）；
+             桌面/平板带退役改 v-if="isConsoleMobile"（matchMedia ≤860，口径同 openNotif 的 >860 改道）——
+             原 lg:hidden 仅 CSS 隐身、组件仍常驻挂载，与设置浮窗记忆 pane 双实例冗余取数；
+             记忆入口 = FAB→设置浮窗→记忆段（spec §6） -->
+        <div id="memory-console-shell" class="console-shell" v-if="isConsoleMobile" :class="{ open: state.memoryOpen }">
           <MemoryConsole :open="state.memoryOpen" :detail="state.memoryDetail" :report="state.memoryReport"
             @pick="state.memoryDetail = $event"
             @back="state.memoryDetail = null"
@@ -1055,9 +1424,10 @@ export function createApp() {
             @open-doc="onMemoryOpenDoc($event)" />
         </div>
 
-        <!-- 移动端（≤860px）记忆控制台 overlay backdrop（≥861px 由 style.css ID 规则隐藏） -->
+        <!-- 移动端（≤860px）记忆控制台 overlay backdrop（T6：lg:hidden 与容器同退；
+             ≥861px 另由 style.css ID 规则隐藏，双保险） -->
         <div id="memory-console-backdrop"
-          class="fixed inset-0 bg-black/30 z-40" aria-hidden="true"
+          class="fixed inset-0 bg-black/30 z-40 lg:hidden" aria-hidden="true"
           :class="{ hidden: !state.memoryOpen }"
           @click="state.memoryOpen = false"></div>
 
@@ -1099,22 +1469,36 @@ export function createApp() {
               @toggle-more-menu="state.moreMenuOpen = !state.moreMenuOpen"
               @toggle-toc="toggleToc" @toc-click="onTocClickItem"
               @open-doc-face="openDocFace"
+              @go-home="goHome()"
               @toggle-notif-dropdown="toggleNotifDropdown" @mark-all-read="markAllRead" @open-notif="openNotif" />
 
             <!-- 编辑器面：监控页 L1 打开时收起（v-show 保持 DOM 与编辑态；两面互斥，
                  监控页 = 定稿设计场景 02 独立页面，组件自持 .mwrap 滚动层）；
                  .doc-enter = 自监控页返回时的入场（display:none→block 自动重放；reduced-motion → 纯 opacity）；
                  文档区 = 横向 flex（spec §6.4 候选①）：滚动中栏（680px 列在剩余空间一次性重居中）
-                 + 关联侧栏（右侧 280px，关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
-                 ≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
+                 + 关联面（两态口径 2026-11-23：≥1024 桌面 = 目录同款右缘浮层，fixed 悬浮不占栏不挤主区，
+                 样式见 style.css 沉浸式壳分节浮层化块；861–1023 平板 = 原 280px in-flow 侧栏，关闭态
+                 width 0 零占位；≤860px 侧栏 display:none，改由底部抽屉 #rel-sheet 承载） -->
             <div v-show="!state.monitoring" class="doc-enter flex-1 flex overflow-hidden">
-              <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
-                <ConflictBanner v-if="state.conflict"
-                  :tool-name="state.conflict.toolName" :path="state.conflict.path"
-                  @accept="acceptConflict" @dismiss="state.conflict = null" />
-                <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
-                  :doc-missing="state.docMissing"
-                  @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
+              <!-- 首页·管家日报（spec 2026-11-22）：未选文档即首页；与文档滚动列互斥占位
+                   （Home 自带 hb-scroll 滚动层，样式层见 style.css hb- 分节；Task 4 = 挂载骨架） -->
+              <Home v-if="!state.currentPath" @open-doc="openDoc" @open-memory="onMemoryRailClick()" @open-trash="openTrashFace()" />
+              <!-- 文档列（T4）：桌面文档头行 + 滚动正文（doc-head 在 .doc-enter 内，随入场转场；
+                   ≤1023px doc-head v-if 恒 false——顶栏原样承载，红线零触达） -->
+              <div v-show="!!state.currentPath" class="flex-1 flex flex-col min-w-0 overflow-hidden">
+                <div v-if="isDesktop && state.currentPath" class="doc-head">
+                  <span class="doc-bp"><template v-for="(seg, di) in docHeadSegs" :key="di"><span v-if="di > 0" class="doc-sep">/</span><span :class="{ 'doc-cur': di === docHeadSegs.length - 1 }">{{ seg }}</span></template></span>
+                  <span v-if="docPrivate" class="doc-lock" title="此文档位于隐私目录，内容模型不可见"><span v-html="ICONS.lock"></span>模型不可见</span>
+                  <span v-if="state.dirty" class="doc-dirty" title="有未保存改动">未保存</span>
+                </div>
+                <div class="doc-scroll flex-1 min-w-0 overflow-y-auto p-4 md:p-6">
+                  <ConflictBanner v-if="state.conflict"
+                    :tool-name="state.conflict.toolName" :path="state.conflict.path"
+                    @accept="acceptConflict" @dismiss="state.conflict = null" />
+                  <EditorPane ref="editorPaneRef" :content="state.docContent" :mode="state.previewMode ? 'preview' : 'edit'"
+                    :doc-missing="state.docMissing"
+                    @input="onEditorInput" @save="saveWithRetry" @download="downloadDoc" />
+                </div>
               </div>
               <aside class="rel-side" :class="{ open: state.relOpen }">
                 <DocRelated v-if="state.relOpen" :path="state.currentPath"
@@ -1126,9 +1510,13 @@ export function createApp() {
               @restored="loadDocs()" />
           </main>
 
-          <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪） -->
-          <div v-show="state.notifOpen"
-            class="absolute max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown">
+          <!-- Notification bell dropdown（放在 main 外层，避免被 overflow:hidden 裁剪）。
+               T4 锚层迁移：外层 .notif-anchor 唯一锚点切换面——移动 display:contents 零侵占
+               （下拉本体仍 absolute 锚主容器，top:48/right:8 原位逐字不变）；桌面 fixed 锚
+               扇区展开位上方（style.css 沉浸式壳 T4 分节）。下拉本体 DOM/动画/aria 零改动 -->
+          <div class="notif-anchor">
+            <div v-show="state.notifOpen"
+              class="absolute max-h-[420px] bg-surface border border-border rounded-xl shadow-lg z-50 flex flex-col overflow-hidden notif-dropdown">
             <div v-if="state.notifications.length > 0" class="flex items-center justify-between px-3.5 py-2.5 border-b border-border shrink-0">
               <span class="font-ui text-xs font-semibold text-text">{{ state.unreadCount }} 条未读</span>
               <button class="font-ui text-[11px] text-muted hover:text-brass transition-colors"
@@ -1150,20 +1538,12 @@ export function createApp() {
                 <p v-if="n.ops_total || n.files_changed"
                    class="font-ui text-[10px] text-muted/50 mt-0.5">{{ n.ops_total }} 次操作 · {{ n.files_changed }} 个文件</p>
               </button>
+              </div>
             </div>
           </div>
 
-          <!-- AI 面板切换按钮（桌面端：tab 形状，贴面板左边缘） -->
-          <button id="ai-btn" class="hidden lg:flex absolute top-1/2 -translate-y-1/2 items-center justify-center z-40"
-            :class="{ 'ai-open': state.aiOpen }"
-            @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
-            <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': !state.aiOpen }"
-              fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-
-          <!-- AI 面板切换按钮（移动端：圆形，固定右下角） -->
+          <!-- AI 面板切换按钮（移动端：圆形，固定右下角。桌面端旧 #ai-btn tab 已退役——
+               入口升格为右缘暗金半隐握把 bubble-peek，spec §4A；移动 #ai-btn-mobile 原样） -->
           <button id="ai-btn-mobile" class="lg:hidden fixed right-4 flex items-center justify-center z-40"
             @click="toggleAI(!state.aiOpen)" aria-label="打开/关闭 AI 助手">
             <svg aria-hidden="true" class="w-5 h-5 transition-transform duration-300" :class="{ 'rotate-180': state.aiOpen }"
@@ -1187,21 +1567,69 @@ export function createApp() {
               @open-doc="onMemoryOpenDoc($event)" @close="state.relSheetOpen = false" />
           </div>
 
-          <!-- AI 面板 -->
+          <!-- 沉浸式壳 W1（plan Task 2/3）：左下全局入口扇弧——桌面专属（isDesktop = matchMedia 1024px，
+               移动端零渲染零样式触达）；接线（T3）：notifications → 既有下拉，settings → 设置浮层，
+               monitor → 监控宽抽屉（monitoring 单实例），file/search/trash → 左缘悬浮抽屉（state.drawer 态机）；
+               @home 复用既有 goHome（currentPath 置 null → hash watch null 支路 replaceState 清 hash，spec §3 B1） -->
+          <fab-menu v-if="isDesktop" ref="fabRef" :badges="fabBadges" @pick="onFabPick" @home="goHome()"></fab-menu>
+
+          <!-- 沉浸式壳 W2（plan Task 5）：右缘文档操作条——桌面专属双保险（v-if=isDesktop + 根
+               hidden lg:flex），hasDoc（含 docMissing 缺失态：钮禁用但条在场，零跳变）驱动渲染，
+               Home 态零 chrome。移动零触达（≤1023px 顶栏「更多」菜单原样）。
+               文件/重命名钮走 revealTree（定位树内行，移动等操作由 ⋯ 菜单执行）；删除 = docActions 同款直调
+               + revealTree 定位（组件内零第二实现）。样式 .dock 分节 z-index:10（spec §7） -->
+          <right-dock v-if="isDesktop && hasDoc" class="hidden lg:flex"
+            :has-doc="hasDoc" :mode="state.previewMode ? 'preview' : 'edit'" :dirty="state.dirty"
+            :doc-missing="state.docMissing" :rel-open="state.relOpen" :toc-open="state.tocOpen"
+            :file-open="state.drawer === 'file' || treePinned"
+            :current-path="state.currentPath" :files="state.files"
+            @set-mode="setMode" @save="saveWithRetry" @download="downloadDoc"
+            @toggle-toc="toggleToc" @open-doc-face="openDocFace" @reveal-tree="onRevealTree" />
+
+          <!-- 沉浸式壳 W5（plan Task 7，spec §4A）：右缘暗金半隐握把 + 管家气泡栈——桌面专属（红线：
+               ≤1023px 零触达）。visible=!aiOpen：聊天（浮窗/占槽）在场时握把让位；expand=点握把开聊天，
+               pick=点气泡按 dest 分派（onPeekPick）；pill 合计 = 铃铛未读 + 未读回话 -->
+          <bubble-peek v-if="isDesktop" :class="{ 'has-dock': hasDoc }" :visible="!state.aiOpen"
+            :unread="state.unreadCount" :replies="state.peekReplies" :doc-missing="state.docMissing"
+            @expand="toggleAI(true)" @pick="onPeekPick" />
+
+          <!-- 本文目录浮层（P4-3 · T5 自 TopBar 迁入根级单实例）：桌面锚 dock 左缘、移动锚顶栏下
+               （style.css .toc-dd 两媒体态）。TopBar 的桌面「目录」钮与旧 toc-dd 随 TopBar 桌面隐身
+               （lg:hidden 下不渲染），移动「目录」钮与浮层消费路径原样不变——app 级滚动同步/scrollspy/
+               Esc/aiOpen 互斥各消费器本就在 app 层，仅 DOM 位从顶栏子树迁出（data-toc-dd 守卫
+               已把「点浮层不关」从 TopBar rootEl 归属解耦，见其 onDocClick）。 -->
+          <div v-show="state.tocOpen" class="toc-dd" data-toc-dd>
+            <div class="toc-head">本文目录</div>
+            <div class="toc-list" data-toc-list>
+              <button v-for="it in tocItems" :key="it.id" type="button"
+                class="toc-item" :class="'lv' + it.level"
+                :data-id="it.id" :title="it.text" @click="onTocClickItem(it)">
+                {{ it.text }}
+              </button>
+              <div v-if="!tocItems.length" class="toc-empty">本文档没有标题</div>
+            </div>
+          </div>
+
+          <!-- AI 面板（T7 双态，spec §4A）：桌面 chatwin 浮窗（默认）⇄ chat-slot 图钉右槽（state.chatPinned 单源，
+               图钉钮在面板头部上抛 togglePin）；双态类仅 isDesktop 挂——移动 ≤1023px 既有 sheet 体系零改动。
+               握把/气泡栈见下方 bubble-peek（入口从右缘 #ai-btn tab 升格为暗金半隐握把，spec §4A） -->
           <div id="ai-panel" class="bg-surface border-border flex flex-col"
-            :class="{ open: state.aiOpen }">
+            :class="{ open: state.aiOpen, chatwin: isDesktop && !state.chatPinned, 'chat-slot': isDesktop && state.chatPinned }">
             <AIChatPanel v-show="state.aiOpen" ref="aiChatRef"
-              :doc-path="state.currentPath || ''" :session-id="state.sessionId"
+              :doc-path="state.currentPath || ''" :session-id="state.sessionId" :chat-pinned="state.chatPinned"
               @tool-result="handleToolResult" @new-session="startNewSession"
-              @switchSession="onSwitchSession" @sessionActive="onSessionActive"
-              @close="toggleAI(false)" />
+              @switchSession="onSwitchSession" @sessionActive="onSessionActive" @runDone="onRunDone"
+              @togglePin="toggleChatPin" @close="toggleAI(false)" />
           </div>
         </div>
 
         <!-- 设置浮层（spec 2026-11-22 §6 modal 改版：backdrop + 居中对话框自持壳，
              fixed 顶层常驻，折叠态 visibility 归 CSS 壳家族；关闭统一经组件 dirty 守卫，
-             app 只接 @close 落地清 state 与深链 hash） -->
-        <SettingsPage @close="onSettingsClosed()" />
+             app 只接 @close 落地清 state 与深链 hash；T6：initialTab ← settingsTab（#memory 深链
+             直落记忆段）、memoryBadge ← badgeParts.total（与 FAB 设置子钮同口径）；
+             记忆段事件上抛：actioned → 立即重轮询、open-doc → 开原文（浮层不自动关，dirty 语义保持） -->
+        <SettingsPage :initial-tab="state.settingsTab" :memory-badge="badgeParts.total"
+          @close="onSettingsClosed()" @actioned="pollMemory()" @open-doc="onMemoryOpenDoc($event)" />
       </div>
     `,
     methods: {
@@ -1231,7 +1659,11 @@ export function createApp() {
   app.component('MemoryConsole', MemoryConsole)
   app.component('DocRelated', DocRelated)
   app.component('MonitorPage', MonitorPage)
+  app.component('Home', Home)
   app.component('SettingsPage', SettingsPage)
+  app.component('FabMenu', FabMenu)
+  app.component('RightDock', RightDock)
+  app.component('BubblePeek', BubblePeek)
 
   return app
 }

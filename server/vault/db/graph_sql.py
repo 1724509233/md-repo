@@ -298,6 +298,43 @@ def graph_get_related(conn: sqlite3.Connection, path: str, hops: int = 1,
     ]
 
 
+def graph_shared_tags(conn: sqlite3.Connection, path: str) -> dict[str, list[str]]:
+    """Tag names shared between ``path`` and each co-tagged doc.
+
+    Returns ``{related_doc_path: [tag_name, ...]}`` (tag names sorted asc —
+    stable chip order); the start doc is never a key. Same entity-name口径
+    as :func:`graph_get_related`'s BFS (exact ``entities.name`` match on the
+    doc path, tag edges doc→tag). Pure SQL over edges/entities (no disk I/O);
+    a legacy vault without graph tables is not special-cased here — the
+    caller has already run the BFS on the same tables.
+
+    PRIVACY CONTRACT (spec 2026-11-18 §2.3): this helper is ENRICHMENT-ONLY —
+    it never surfaces new paths. The caller (the doc-face route) applies it
+    to link rows that already survived the BFS privacy skip, so a privacy-dir
+    doc can neither gain a row nor have its tag names revealed here.
+    """
+    rows = conn.execute(
+        """
+        SELECT other.name, tag.name FROM edges e1
+        JOIN entities src ON src.id = e1.src_id AND src.type = 'doc' AND src.name = ?
+        JOIN entities tag ON tag.id = e1.dst_id AND tag.type = 'tag' AND e1.type = 'tag'
+        JOIN edges e2 ON e2.dst_id = tag.id AND e2.type = 'tag'
+        JOIN entities other ON other.id = e2.src_id AND other.type = 'doc'
+        WHERE other.name != src.name
+        ORDER BY other.name ASC, tag.name ASC
+        """,
+        (path,),
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for doc, tag in rows:
+        # edges PK + entities (name,type) UNIQUE keep (doc, tag) single —
+        # the guard below is belt-and-braces for the aggregation contract.
+        tags = out.setdefault(doc, [])
+        if tag not in tags:
+            tags.append(tag)
+    return out
+
+
 def graph_get_related_with_machine(
     conn: sqlite3.Connection,
     ledger_conn: sqlite3.Connection | None,

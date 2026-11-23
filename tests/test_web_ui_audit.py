@@ -110,8 +110,11 @@ def test_compositor_only_transitions():
     css = (TPL / "style.css").read_text(encoding="utf-8")
     bad = [l.strip()[:90] for l in css.splitlines()
            if re.search(r"transition: *(right|bottom|padding)", l)
-           and "#ai-btn {" not in l and "main { " not in l]
-    # 双例外（ledger Task 7 Rulings）：桌面贴边 tab；main padding 同帧折叠 = 用户定型
+           and "main { " not in l]
+    # 单例外（ledger Task 7 Rulings）：main padding 同帧折叠 = 用户定型。
+    # 原钉→新锚（T8）：旧第二例外 `#ai-btn {`（桌面贴边 tab）随 T7 桌面 tab 退役从
+    # style.css 删净（全文件仅存退役注释提及），例外子句失去所指——删除即收紧：
+    # 再有任何 right/bottom/padding 过渡直接红，无需重新登记。
     assert bad == []
 
 
@@ -375,6 +378,18 @@ def test_no_python_string_apis_in_frontend_js():    # 家族钉（2026-11-22 真
             if banned in (".startswith(", ".endswith("):
                 continue
             assert banned not in src, f"{name}: Python-only string API {banned!r} in frontend JS"
+
+
+def test_doc_actions_shortcut_wiring():
+    # 沉浸式壳 T5：docActions 纯函数面（零 Vue——禁 Vue/DOM 全局，只吃注入 + 原生对话框）+
+    # Ctrl+S 全局快捷键接线（settings 浮层开着时放行给浮层自身处理——链首 return）。
+    da = (TPL / "js/utils/docActions.js").read_text(encoding="utf-8")
+    for banned in ("Vue", "document.", "window."):
+        assert banned not in da, banned
+    app = _templates()["app.js"]
+    seg = app[app.index("// 快捷键（Task 5"):]
+    assert "if (state.settingsOpen) return" in seg
+    assert "saveWithRetry()" in seg
 
 
 def test_vault_dirs_uses_raw_docs_fetch():
@@ -727,14 +742,18 @@ def test_p2_visual_round_js():
     for fn in ("function landOn", "function landCell"):
         assert "if (state?.docMissing) return" in ep[ep.index(fn):][:200], fn
     assert "docMissing: { type: Boolean, default: false }" in tb
-    assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 桌面 编辑/下载/保存 + 移动菜单同三项
-    assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（桌面走 .topbar-btn:disabled CSS）
+    assert tb.count(':disabled="!currentPath || docMissing"') == 6  # 退役态钉：TopBar 整壳已 lg:hidden 移动专属——
+    # 原「桌面三项 + 移动菜单三项」现全为移动形态（内部零改动原则保留），钉数与口径不变
+    assert tb.count("disabled:opacity-40") >= 4  # 关联既有 + 移动三项补（另三项走 .topbar-btn:disabled CSS，移动在用到）
     assert "docMissing: { type: Boolean, default: false }" in ep
     assert ':disabled="docMissing"' in ep       # textarea 双保险
-    assert app.count(':doc-missing="state.docMissing"') == 2  # TopBar + EditorPane 传通
+    assert app.count(':doc-missing="state.docMissing"') == 4  # TopBar + EditorPane + RightDock（T5 dock 传通）+ BubblePeek（T7 契约保留位）
     assert app.count("if (!state.currentPath || state.docMissing) return") == 2  # saveWithRetry + downloadDoc
     # ── B：Escape 关台对齐 @close 清理集合 ──
-    esc = app[app.index("Escape 分层关闭"):][:900]
+    # 原钉→新锚（T3）：原 [:900] 固定窗口——T3 在链首插桌面 escTarget/fan/drawer 分支后
+    # 记忆支漂出窗口（断言语义「关台清全套」不变，固定窗宽本就脆，改作用域锚到 aiOpen 支前）
+    esc = app[app.index("Escape 分层关闭"):]
+    esc = esc[: esc.index("else if (state.aiOpen)")]
     assert "state.memoryDetail = null" in esc and "state.memoryReport = null" in esc
     # ── C：软链修饰键自开新标签（落账在前、站内路径在后，alt 先退不动）──
     dl = app[app.index("'a.md-softlink[data-vault-path]'"):app.index("openDoc(a.getAttribute('data-vault-path')")]
@@ -906,7 +925,10 @@ def test_session_persistence_pins():
     #   F5 → bootRestore 恢复回旧 sid/空态 → 面板空白；第三写点见 ③b。
     #   计划「setItem 恰 2」的字面与 persistSessionId 单点封装自相矛盾——helper 内 setItem
     #   只能出现 1 次；按「写点=调用点」本意落钉。）
-    assert app.count("localStorage.setItem(") == 1
+    #   （2026-11-22 home-butler T4：app.js 出现第二枚 setItem——心跳写 mdvault.lastPresence，
+    #   封进 beatPresence 单点。口径随之收紧为「aiSession 键的 setItem 恰 1」；心跳键的
+    #   写点恰 1 + try/catch 由 test_home_landing_wired 钉。）
+    assert app.count("localStorage.setItem('mdvault.aiSession'") == 1
     ps = _fn_body(app, "function persistSessionId(")
     assert "localStorage.setItem(" in ps and "mdvault.aiSession" in ps
     assert "try" in ps and "catch" in ps, "persistSessionId 必须 try/catch（隐私模式）"
@@ -1299,3 +1321,218 @@ def test_restored_thinking_block_pin():
     assert tb, "thinking 分支恢复态折叠枝（block.expanded 驱动）缺失"
     tl = re.search(r"<div class=\"thinking-line\" @click=\"toggleBlock\(msg, block\)\">", ai)
     assert tl, "thinking 行点击应走 toggleBlock（恢复/流式同一开合入口）"
+
+
+# ── 首页·管家日报（spec 2026-11-22-home-butler-landing §6/§8 钉家族）──────
+
+def test_home_landing_wired():
+    # 导航骨架全要素（Task 4）：Home 挂载、回首页清 hash（logo 回首页不清 hash
+    # 会让首页对「回首页→F5」永不可达——oracle 送审雷）、已读游标信号、
+    # lastPresence 心跳三写点、TopBar go-home 链
+    app = _templates()["app.js"]
+    for tok in ("'Home'",                                      # import/注册之一
+                "history.replaceState(null, '', location.pathname)",  # hash watch null 支路
+                'v-if="!state.currentPath"',                   # Home 挂载条件
+                "state.homeRefreshSeq",                        # 监控退页重取信号
+                "mdvault.lastPresence",                        # 心跳存储键
+                "pagehide", "visibilitychange",                # 心跳三写点之二
+                "@go-home"):                                   # TopBar → goHome 链
+        assert tok in app, tok
+    # 心跳写点单点封进 beatPresence（同 persistSessionId 纪律）：setItem(LS_LAST 恰 1 + try/catch
+    beat = _fn_body(app, "function beatPresence(")
+    assert beat.count("setItem(LS_LAST") == 1 and "try" in beat and "catch" in beat
+
+
+def test_home_component_registered():
+    app = _templates()["app.js"]
+    assert "app.component('Home', Home)" in app
+
+
+def test_home_voice_module():
+    # homeVoice = 文案单点存放（spec §4.3）：分级/量词/问候纯函数 + 定稿语料常量。
+    # 行为面走 node 直 import（同 chatRestore/format 先例）：S0–S4 边界、
+    # 缺席量词（<15min 无数字 / 15min–2d 报小时 / ≥24h「一天」级 / ≥2d「N 天又 M 小时」）、时段四界。
+    f = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    assert "mdvault.seenTs" in f and "mdvault.lastPresence" in f
+    for tok in ("'S0'", "'S1'", "'S2'", "'S3'", "'S4'"):
+        assert tok in f, tok
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node missing")
+    js = r"""
+import(%r).then(m=>{
+  const H=3600e3, D=86400e3, now=1763000000000;
+  const t=o=>m.tierOf(Object.assign({now},o));
+  if(t({bootedOnce:false,lastPresence:undefined})!=='nostorage')process.exit(1);
+  if(t({bootedOnce:false,lastPresence:null})!=='first')process.exit(2);
+  if(t({bootedOnce:true,lastPresence:now-9*H})!=='S0')process.exit(3);
+  if(t({bootedOnce:false,lastPresence:now-(15*60e3-1)})!=='S1')process.exit(4);
+  if(t({bootedOnce:false,lastPresence:now-15*60e3})!=='S2')process.exit(5);
+  if(t({bootedOnce:false,lastPresence:now-6*H+1})!=='S2')process.exit(6);
+  if(t({bootedOnce:false,lastPresence:now-6*H})!=='S3')process.exit(7);
+  if(t({bootedOnce:false,lastPresence:now-2*D+1})!=='S3')process.exit(8);
+  if(t({bootedOnce:false,lastPresence:now-2*D})!=='S4')process.exit(9);
+  if(m.absentPhrase(899)!=='')process.exit(10);
+  if(m.absentPhrase(900)!=='1 个小时')process.exit(11);
+  if(m.absentPhrase(4*3600)!=='4 个小时')process.exit(12);
+  if(m.absentPhrase(24*3600)!=='一天')process.exit(13);
+  if(m.absentPhrase(30*3600)!=='一天又 6 小时')process.exit(14);
+  if(m.absentPhrase(2*86400)!=='2 天')process.exit(15);
+  if(m.absentPhrase(3*86400+14*3600)!=='3 天又 14 小时')process.exit(16);
+  if(m.greetingOf(new Date(2026,0,1,11,59).getTime())!=='早上好')process.exit(17);
+  if(m.greetingOf(new Date(2026,0,1,12,0).getTime())!=='午后好')process.exit(18);
+  if(m.greetingOf(new Date(2026,0,1,22,59).getTime())!=='晚上好')process.exit(19);
+  if(m.greetingOf(new Date(2026,0,1,23,0).getTime())!=='夜深了')process.exit(20);
+  process.exit(0);
+},()=>process.exit(1))
+""" % (TPL / "js/utils/homeVoice.js").as_uri()
+    r = subprocess.run([node, "--input-type=module", "-e", js],
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, f"homeVoice case {r.returncode} failed:\n{r.stderr}"
+
+
+def test_home_template_bindings_resolve():
+    # prod 构建下模板引用未返回的 setup 标识符 = 静默白屏（实测 expanded 漏返 →
+    # Home 整支渲成空注释，零可见报错）。钉：模板全部绑定表达式引用的根标识符，
+    # 必须落在 setup return 键 ∪ v-for 别名 之内。
+    import re as _re
+    home = _templates()["Home.js"]
+    tmpl = home.split("template: `", 1)[1].rsplit("`", 1)[0]
+    exprs = [m.group(1) for m in _re.finditer(r"\{\{(.*?)\}\}", tmpl, _re.S)]
+    exprs += [m.group(1) for m in _re.finditer(r"""(?:v-(?:if|else-if|for|show)|:[\w-]+|@[\w.-]+)="([^"]*)""", tmpl)]
+    aliases = set()
+    for m in _re.finditer(r'v-for="\(?\s*([\w$]+)(?:\s*,\s*([\w$]+))?\s*(?:,\s*([\w$]+)\s*)?\)?\s+in', tmpl):
+        aliases.update(g for g in m.groups() if g)
+    ret = home.rsplit("return {", 1)[1].split("}", 1)[0]   # setup return 是文件最后一个 return {
+    keys = {k for k in _re.split(r"[,\s]+", ret) if k}
+    allowed = keys | aliases | {"true", "false", "null", "undefined", "in", "of"}
+    roots = set()
+    for e in exprs:
+        code = _re.sub(r"'[^']*'|\"[^\"]*\"", " ", e)  # 剥字面量再取标识符
+        roots.update(t for t in _re.findall(r"(?<![\w$.])[A-Za-z_$][\w$]*", code) if not t[0].isdigit())
+    missing = sorted(r for r in roots if r not in allowed)
+    assert not missing, f"Home 模板引用未返回: {missing}"
+
+
+def test_home_render_pins():
+    # 渲染面钉（spec §8）：G1 LLM 文本走 Vue 插值（禁 v-html——防线是 LLM 无渲染权）；
+    # S0/S1 短窗 G2 收束不渲段题（shortStay 守卫）；定稿语料在位（文案单点=homeVoice，
+    # Home.js 与 homeVoice 并查）；样式 hb- 分节存在。
+    home = _templates()["Home.js"]
+    assert "v-html" not in home
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    both = home + voice
+    for tok in ("您刚离开，还没有新的事", "我做不了主的事",
+                "这段时间安安静静，我只看了看房子的四周", "都打理好了，不急"):
+        assert tok in both, tok
+    assert "shortStay" in home
+    # 游标落笔守卫（终审 M2）：S0/S1 收束态列表未渲，游标绝不推进
+    assert "system_groups.length && !shortStay" in home
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert ".hb-home" in css and ".hb-g4" in css
+
+
+def test_home_g4_trash_entry_drawer_guard_exemption():
+    # Home G4「去回收站」行经 openTrashFace 开抽屉（恒开语义），同一 click 冒泡进
+    # app.js 抽屉外点监听秒关（外点病族第 3 犯，AGENTS 红线）。双层断言（同
+    # test_fab_notif_toggle_guard_exemption 风格）：① 入口标记只挂回收站行（k==='t'，
+    # 禁整盒豁免）；② 守卫链登记 [data-drawer-entry]。
+    home = _templates()["Home.js"]
+    app = _templates()["app.js"]
+    assert """:data-drawer-entry="r.k === 't' ? '1' : null\"""" in home, \
+        "Home G4 回收站链接缺 data-drawer-entry 入口标记"
+    m = re.search(r"if \(t\.closest\('\.panel-shell'\).*?\[data-drawer-entry\]'\)\) return", app)
+    assert m, "app.js 抽屉外点守卫链缺 [data-drawer-entry] 豁免登记"
+
+
+def test_home_g2_scroll_explicit_container():
+    # scrollToG2 显式容器滚动钉（2026-11-23 落不了位修复）：锚 .hb-shell 用
+    # shell.scrollTo，禁回退裸 scrollIntoView（多滚动祖先歧义）。
+    home = _templates()["Home.js"]
+    i = home.index("function scrollToG2")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert ".closest('.hb-shell')" in fn, "scrollToG2 缺 .closest('.hb-shell') 容器锚定"
+    assert "shell.scrollTo" in fn, "scrollToG2 缺 shell.scrollTo 显式容器滚动"
+    assert "scrollIntoView(" not in fn, "scrollToG2 回退裸 scrollIntoView 调用"
+
+
+def test_home_g2_ts_cursor_day_rows_pins():
+    # G2 重构波（2026-11-23）钉：游标 seq→ts（推进源=服务端 clock window.until）、
+    # 日段×文件行渲染、未看黄铜点 + flash、回看开关（3 天窗）、滚动显式容器同族。
+    home = _templates()["Home.js"]
+    api = (TPL / "js/api.js").read_text(encoding="utf-8")
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    # ① 新键在位；旧 seq 游标键全线退役（禁写入；读侧兼容亦未保留——迁移零成本）
+    assert "mdvault.seenTs" in voice
+    assert "seenSeq" not in voice and "seenSeq" not in home
+    assert "last_seen_seq" not in api and "lastSeenSeq" not in api
+    # ② 游标推进源 = payload.window.until（服务端时钟），fetchHome 内禁 Date.now()
+    i = home.index("function fetchHome")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert "localStorage.setItem(LS_KEYS.seenTs, String(d.window.until))" in fn, \
+        "游标推进源必须是 payload.window.until（服务端时钟）"
+    assert "Date.now()" not in fn
+    # ③ G2 渲染结构：actor 桶 → 日段 → 文件行（类名 Home 模板与 style.css 两处一致）
+    assert "g2Groups" in home
+    for cls in ("hb-g2-day", "hb-file-row"):
+        assert cls in home and "." + cls in css, cls
+    # ④ 未看黄铜点与 flash：模板 + CSS 双在，且 reduced-motion 下 CSS 关动画
+    for cls in ("hb-unseen-dot", "hb-flash"):
+        assert cls in home and "." + cls in css, cls
+    rm_i = css.index(".hb-g1-btn { transition: none")
+    assert "  .hb-flash { animation: none; }" in css[rm_i:rm_i + 200], \
+        "hb reduced-motion 块缺 .hb-flash 关动画"
+    # ⑤ 回看开关：3 天窗条件渲染（「现在」用 window.until，缺席窗 since 用 baseSinceMs）
+    assert 'v-if="canLookback"' in home and "toggleLookback" in home
+    assert "3 * 86400" in home and "window.until" in home
+    assert "lookback: '看看前三天'" in voice and "lookbackOff: '收起'" in voice
+    # ⑤b 收束态回看入口（2026-11-23 补）：短留收束句尾同挂回看钮，点开展开结构
+    # （回看不分离开时长）；收束段守卫必须是 shortStay && !lookback。
+    assert 'v-if="shortStay && !lookback"' in home, "收束句守卫未挂回看联动"
+    assert "lookbackTitle" in voice and "回看前三天" in voice, "回看态段题文案缺失"
+
+
+def test_home_g2_day_overflow_collapse_pins():
+    # 日段行数封顶折叠（2026-11-23 噪声治理 + 动画）：超 8 行折前 8 +「还有 N 篇……展开›」；
+    # 未看行必须置顶（折叠不得藏未读点）；只折展示不动谓词；重取回默认；
+    # 动画 = grid 0fr⇄1fr 纯 CSS（禁 JS 测高），reduced-motion 全关。
+    home = _templates()["Home.js"]
+    voice = (TPL / "js/utils/homeVoice.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    assert "G2_DAY_CAP = 8" in home, "缺日段封顶常量"
+    i = home.index(".sort((a, b) => (b.unseen ? 1 : 0) - (a.unseen ? 1 : 0))")
+    assert "rows:" in home[:i][-1200:], "未看置顶 sort 必须挂在日段 rows 构造上"
+    for fn in ("function g2Base", "function g2Fold", "function toggleG2Day", "function g2DayKey"):
+        assert fn in home, fn
+    assert "d.rows.slice(0, G2_DAY_CAP)" in home and "d.rows.slice(G2_DAY_CAP)" in home
+    assert "offsetHeight" not in home and "getBoundingClientRect().height" not in home, \
+        "折叠动画禁 JS 测高"
+    assert 'v-for="r in g2Base(d)"' in home and 'v-for="r in g2Fold(d)"' in home, "模板未接折叠视图"
+    assert 'class="hb-g2-fold"' in home and "'is-open'" in home
+    # G3 日展开同语法：折叠容器 + is-open 绑定，旧 v-if 整块开关必须退役
+    assert 'class="hb-day-fold"' in home and "{ 'is-open': expanded.has(d.date) }" in home
+    assert 'v-if="expanded.has(d.date)" class="hb-day-ops"' not in home
+    assert "还有 ${n} 篇…… 展开 ›" in voice and "collapseMore: '收起 ›'" in voice
+    assert "expandedG2.value = new Set()" in home, "重取须回折叠默认态"
+    # 动画机制钉：grid 0fr⇄1fr 过渡 + 折叠行淡入上浮 + reduced-motion 双关
+    assert "grid-template-rows: 0fr" in css and "grid-template-rows: 1fr" in css, "折叠动画须 grid 0fr⇄1fr"
+    assert "hb-g2-fold-inner, .hb-day-fold-inner { overflow: hidden; min-height: 0; }" in css, "grid 折叠须 overflow 内衬"
+    assert "@keyframes hb-fold-in" in css and "hb-g2-fold.is-open .hb-file-row" in css
+    assert ".hb-day-fold.is-open .hb-grp-row" in css, "G3 折叠行未接淡入"
+    rm2 = css.index("@media (prefers-reduced-motion: reduce)", css.index(".hb-g2-fold"))
+    rmblk = css[rm2:rm2 + 300]
+    assert ".hb-g2-fold, .hb-day-fold { transition: none; }" in rmblk and "animation: none" in rmblk, \
+        "reduced-motion 未关折叠动画"
+    # 回看换窗入场：整段 key 重建 + 一次性淡入上浮，reduced-motion 同关
+    assert 'class="hb-win"' in home and ':key="lookback ? \'lb\' : \'base\'"' in home, "回看段缺重建键"
+    assert "@keyframes hb-win-in" in css and ".hb-win { animation: hb-win-in" in css
+    assert ".hb-win { animation: none; }" in rmblk, "reduced-motion 未关换窗入场"
+    # 滚动条槽预占：内容跨滚动阈值（G3/G2 展开）不得挤动居中的 .hb-home
+    assert "scrollbar-gutter: stable" in css, ".hb-shell 须预占滚动条槽防展开左移"
+    # ⑥ 未看行滚动：显式容器（.closest('.hb-shell') + shell.scrollTo），禁裸 scrollIntoView
+    i = home.index("function scrollToUnseen")
+    fn = home[i:i + home[i:].index("\n    }")]
+    assert ".closest('.hb-shell')" in fn and "shell.scrollTo" in fn
+    assert "scrollIntoView(" not in fn, "scrollToUnseen 回退裸 scrollIntoView"
+    assert "hb-unseen-dot" in fn and "hb-file-row" in fn, "滚动目标须是首条未看文件行"

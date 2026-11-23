@@ -31,11 +31,12 @@ export const AIChatPanel = {
   name: 'AIChatPanel',
   props: {
     docPath: { type: String, default: '' },
-    sessionId: { type: String, default: '' }
+    sessionId: { type: String, default: '' },
+    chatPinned: { type: Boolean, default: false }  // 图钉态（app 单一写面：翻转经 emit('togglePin') 上抛）
     // 恢复载荷 prop 已退役（spec 2026-11-20 §5/§7）：恢复统一归 stream 快照订阅
     // （snapshot 帧 → chatRestore 前缀渲染管线），app 层不再「先取数后原子换」喂入
   },
-  emits: ['toolResult', 'newSession', 'switchSession', 'sessionActive'],
+  emits: ['toolResult', 'newSession', 'switchSession', 'sessionActive', 'runDone', 'togglePin'],
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
     const toolNames = toolShortNames
@@ -291,6 +292,9 @@ export const AIChatPanel = {
       const sweepMsgs = sweep
         ? messages.value.filter(m => Array.isArray(m.blocks) && m.blocks.some(b => b.type === 'tool' && b.status === 'confirm'))
         : null
+      // 沉浸式壳 T7（spec §4A）：done 是每 Run 唯一终帧（final/error/round_limit）——收尾前抓取
+      // 本 Run turn 引用（applyEvent done 分支把 currentTurn 置 null；finishTurn 已就地挂 fullText）
+      const doneTurn = evt.type === 'done' && ctx ? ctx.currentTurn : null
       const cmds = applyEvent(ctx, evt)
       if (sweepMsgs) for (const m of sweepMsgs) m.uiTick = (m.uiTick || 0) + 1
       // 面板级副作用（分发后从帧/ctx 块上读）
@@ -312,6 +316,17 @@ export const AIChatPanel = {
       status.value = ctx.busy ? 'thinking' : 'ready'
       queueList.value = ctx.queue
       if (evt.type === 'token_usage') Object.assign(tokenUsage, ctx.tokenUsage)
+      // 沉浸式壳 T7 管家消息面（spec §4A）：done 终帧单点 emit（RunHub 铁律零接触——只消费既有事件帧，
+      // 服务端零改动；流中间 token/tool 支禁发，钉见 tests test_peek_summary_once ③）。
+      // id 锚 run 戳（done 帧带 run_id，兜底 ctx 锚定值）：重开浮窗/游标回放重放同 Run done 得同 id，
+      // app 侧 peekFeed.dedupeAppend 幂等吞掉——Review Focus 4/6「摘要只出一条」。
+      if (evt.type === 'done' && doneTurn) {
+        const full = String(doneTurn.fullText || '').replace(/\s+/g, ' ').trim()
+        if (full) emit('runDone', {
+          text: full.slice(0, 60),
+          id: String(evt.run_id || (ctx && ctx.runId) || ('run-' + Date.now()))
+        })
+      }
       // stop 终帧：未出队队列内容回填输入框（spec §4；多条换行拼接；用户已敲字则不覆盖）
       if (evt.type === 'run_status' && !evt.running && evt.state === 'stopped' && stopQueueTexts.length) {
         const texts = stopQueueTexts
@@ -771,6 +786,13 @@ export const AIChatPanel = {
           <button id="btn-history" class="ai-ibtn" title="历史会话" aria-label="历史会话"
             :class="{ 'text-[var(--brass)]': view === 'history' }" :aria-pressed="view === 'history'" @click="toggleView">
             <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          </button>
+          <!-- 沉浸式壳 T7（spec §4A）：图钉 = 浮窗⇄右槽升级（钉态单源 app state.chatPinned，
+               本钮只上抛翻转；面板仅 aiOpen 态在场，钮随之可见）；关闭钮末位不动（audit ⑪ 钉） -->
+          <button id="btn-pin-chat" class="ai-ibtn" type="button" :aria-pressed="chatPinned"
+            :title="chatPinned ? '取消钉住（回落浮窗）' : '钉到右栏（升级为常驻栏位）'"
+            :aria-label="chatPinned ? '取消钉住聊天面板' : '钉住聊天面板到右栏'" @click="$emit('togglePin')">
+            <svg aria-hidden="true" class="icon" viewBox="0 0 24 24"><path d="M12 17v5"/><path d="M8.5 3h7l-.7 6 2.7 2.7H6.5l2.7-2.7z"/></svg>
           </button>
           <button class="ai-ibtn" @click="$emit('close')" aria-label="关闭">
             <span v-html="ICONS_LOCAL.x"></span>

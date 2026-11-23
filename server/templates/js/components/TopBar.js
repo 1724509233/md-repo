@@ -20,7 +20,7 @@ export const TopBar = {
     aiOpen: { type: Boolean, default: false },   // AI 面板展开 ⇔ 顶栏紧凑态（文字展示与面板展开互斥，2026-11-17 用户定稿）
     privacyDirs: { type: Array, default: () => [] }  // 隐私名单回显（spec 2026-11-18 §2.5）：当前文档首段命中 → 「模型不可见」徽标
   },
-  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face'],
+  emits: ['setMode', 'save', 'download', 'toggleMoreMenu', 'toggleNotifDropdown', 'markAllRead', 'openNotif', 'toggleToc', 'tocClick', 'open-doc-face', 'go-home'],
   // 注：移动端 sidebar 切换钮已随 rail 常驻而移除（spec §3.5）；logo mark + wordmark 随二级边栏迁入顶栏（spec §3.1）
   setup(props, { emit }) {
     const ICONS_LOCAL = ICONS
@@ -57,14 +57,25 @@ export const TopBar = {
       emit('open-doc-face')
     }
 
+    // 回首页（spec 2026-11-22-home-butler-landing §6.1）：清 currentPath 交 app 侧
+    // goHome（hash 清理由 watch null 支路完成，本组件只发意图）
+    function goHome() {
+      emit('go-home')
+    }
+
     function onTocClick(item) {
       emit('tocClick', item)
     }
 
-    // 点击外部关闭：委托到 document（同更多菜单模式）。顶栏内部（浮层、开关按钮、模式/铃铛等
-    // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理
+    // 点击外部关闭：委托到 document（同更多菜单模式）。顶栏内部（开关按钮、模式/铃铛等
+    // 入口）点击不关——设计稿豁免整个顶栏，浮层用于连续跳转；其它下拉由互斥 watch 处理。
+    // T5：toc-dd 迁 app 根级单实例（桌面锚 dock 左缘），不再属顶栏子树——「点浮层不关」
+    // 改由 data-toc-dd 守卫解耦判定（移动浮层同款属性，行为逐字不变）。
+    // 桌面目录开关钮迁 RightDock 后也在 rootEl 之外，开关钮自身点击不得按「外部点击」
+    // 再关（同点即开又关）——data-toc-toggle 一并豁免。
     function onDocClick(e) {
       if (rootEl.value && rootEl.value.contains(e.target)) return
+      if (e.target.closest && e.target.closest('[data-toc-dd], [data-toc-toggle]')) return
       if (props.tocOpen) emit('toggleToc')
     }
     function onKeydown(e) {
@@ -85,13 +96,17 @@ export const TopBar = {
     // 隐私徽标（spec §2.5）：当前文档落在隐私目录（首段命中）→ 编辑器头「锁 · 模型不可见」
     const docPrivate = computed(() => !!props.currentPath && isPrivacyScoped(props.privacyDirs, props.currentPath))
 
-    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, docPrivate }
+    return { ICONS_LOCAL, rootEl, moreMenuEl, setMode, save, download, toggleToc, onTocClick, openDocFace, goHome, docPrivate }
   },
   template: `
-    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative"
+    <!-- 沉浸式壳 T4：降级移动专属——根挂 lg:hidden（内部零改动，移动更多菜单/目录/铃铛全保留）；
+         桌面文档头行由 app.js doc-head 承载（.doc-head 分节） -->
+    <div ref="rootEl" class="flex items-center gap-3 px-4 h-12 border-b border-border bg-surface shrink-0 relative lg:hidden"
       :class="{ 'topbar-compact': aiOpen }">
-      <!-- logo（spec §3.1：从 rail 迁入顶栏） -->
-      <div class="topbar-logo flex items-center gap-2">
+      <!-- logo（spec §3.1：从 rail 迁入顶栏；spec 2026-11-22：点击回首页——div 挂
+           role=button 同键盘 Enter/Space，泛化红线：可点元素给足键盘面） -->
+      <div class="topbar-logo flex items-center gap-2" role="button" tabindex="0" aria-label="返回首页"
+        @click="goHome" @keydown.enter.prevent="goHome" @keydown.space.prevent="goHome">
         <span class="logo-mark logo-mark--top">M</span>
         <span class="logo-word">md-vault</span>
       </div>
@@ -204,19 +219,8 @@ export const TopBar = {
         </div>
       </div>
 
-      <!-- 目录浮层（P4-3）：锚内容区右缘（right:8px），260px / 移动 min(260px,100vw−48px)；
-           过渡与层级见 style.css .toc-dd（z-50 与通知下拉/更多菜单同层，AI 面板 15 / ai-btn 40 之下） -->
-      <div v-show="tocOpen" class="toc-dd" data-toc-dd>
-        <div class="toc-head">本文目录</div>
-        <div class="toc-list" data-toc-list>
-          <button v-for="it in tocItems" :key="it.id" type="button"
-            class="toc-item" :class="'lv' + it.level"
-            :data-id="it.id" :title="it.text" @click="onTocClick(it)">
-            {{ it.text }}
-          </button>
-          <div v-if="!tocItems.length" class="toc-empty">本文档没有标题</div>
-        </div>
-      </div>
+      <!-- 目录浮层已迁 app.js 根级单实例（沉浸式壳 T5：桌面锚 dock 左缘、移动锚顶栏下，
+           随 .toc-dd 分节）；本组件保留「目录」开关钮（移动）与 toggleToc/tocClick 通道 -->
     </div>
   `
 }

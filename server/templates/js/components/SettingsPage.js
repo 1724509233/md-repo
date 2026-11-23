@@ -53,8 +53,16 @@
  *    改动过任何字段 ⇒ 按填写内容整段提交。
  * 文案纪律（AGENTS Frontend Rule 2）：正文零字段名/端点路径/设计概念名；
  *   命名口径统一「主智能体 / 后台智能体 / 杂项」（2026-11-22 用户拍板，与监控页「智能体」措辞对齐）。
+ * 记忆段（沉浸式壳 T6，spec 2026-11-22-immersive-shell §6）：st-nav 尾「记忆」段整体迁入
+ *   MemoryConsole（队列/详情/报告三面，宽度随 pane）；数据零自建轮询——state.memoryStatus/
+ *   Proposals/Reports 由 app 30s pollMemory 单一轮询注入，本段只经组件既有 props 下传消费。
+ *   关闭守卫边界：记忆段不进 dirty 指纹（dirty = 三表单段 hydrate 基线比对，记忆 pane 无表单
+ *   字段不可入指纹）；settingsCloseSeq → requestClose 链零改动（X/backdrop/Escape 仍先过 dirty
+ *   确认浮层）。徽标 memoryBadge（badgeParts.total = 待审+失败）>0 才画，title 口径同 FAB 设置子钮。
  */
 import { showToast } from '../utils/toast.js'
+import { MemoryConsole } from './MemoryConsole.js'
+import { ICONS } from '../utils/icons.js'
 
 const { ref, computed, watch, nextTick, inject, onBeforeUnmount } = Vue
 
@@ -318,7 +326,17 @@ const MISC_FIELD_MAP = [
 
 export const SettingsPage = {
   name: 'SettingsPage',
-  emits: ['close'],
+  components: { MemoryConsole },
+  props: {
+    // T6 开层初始段：值域 = SECTIONS 段 id + 'memory'（plan 文本默认值 'model' 系早期草稿段名，
+    // 实装默认段 id = 'ai'；未知值回默认段）。齿轮/无参入口恒 'ai'（openSettingsPage 兜底）。
+    initialTab: { type: String, default: 'ai' },
+    // 记忆徽标 = badgeParts.total（待审 + failed，口径同原 rail 记忆钮 / FAB 设置子钮）；>0 才画
+    memoryBadge: { type: Number, default: 0 }
+  },
+  // 'actioned' = 记忆段采纳/驳回回执（app 立即 pollMemory 同步徽标）；
+  // 'open-doc' = 记忆详情「来源」跳原文（app 开文档，设置浮层不自动关——dirty 语义保持）
+  emits: ['close', 'actioned', 'open-doc'],
   setup(props, { emit }) {
     const state = inject('state')
     const api = inject('api')
@@ -339,8 +357,15 @@ export const SettingsPage = {
           if (gear) gear.focus({ preventScroll: true })
           return
         }
+        // T6 initialTab 开层定位（openSettingsPage(tab) / #memory 深链）：未知值回默认段；
+        // 齿轮/无参入口 app 侧兜底 settingsTab='ai' → 恒进默认段。
+        // 段切换零表单写入——不产生 dirty（见文件头关闭守卫边界），settingsCloseSeq 链零改动。
+        const tab = props.initialTab
+        section.value = (tab === 'memory' || SECTIONS.some(s => s.id === tab)) ? tab : 'ai'
         // section 停留在杂项的后续打开路径不经 watch(section)——开层时补位拉一次目录候选
         if (section.value === 'misc') ensureVaultDirs()
+        // 记忆段补位：直落记忆段且全站脉搏未到货 → 静默补拉一次（同 bg 段口径）
+        if (section.value === 'memory') ensureBgStatus()
         await nextTick()
         if (!panelRef.value) return
         const first = Array.from(panelRef.value.querySelectorAll('button, input, select, textarea'))
@@ -1038,12 +1063,20 @@ export const SettingsPage = {
 
     // 分段导航（单一在场段；≤639 由 CSS 折成顶部分段钮行）
     const section = ref('ai')
-    // 打开本段且全站脉搏未到货 → 静默补拉徽标数据（immediate 覆盖直落本段的后续打开路径）
-    watch(section, (s) => { if (s === 'bg') ensureBgStatus(); if (s === 'misc') ensureVaultDirs() }, { immediate: true })
+    // 打开本段且全站脉搏未到货 → 静默补拉徽标数据（immediate 覆盖直落本段的后续打开路径）；
+    // memory 段同口径补拉（MemoryConsole 队列消费 state.memoryStatus，app 30s 轮询兜大部队）
+    watch(section, (s) => { if (s === 'bg' || s === 'memory') ensureBgStatus(); if (s === 'misc') ensureVaultDirs() }, { immediate: true })
+
+    // 记忆段事件上抛（T6）：采纳/驳回回执 → app 重轮询；「来源」跳原文 → app openDoc
+    function onMemActioned() { emit('actioned') }
+    function onMemOpenDoc(path) { emit('open-doc', path) }
 
     return {
       state, panelRef, requestClose,
-      SECTIONS, AI_PARAMS, LOG_LEVELS, section,
+      SECTIONS, AI_PARAMS, LOG_LEVELS, section, ICONS,
+      // memoryBadge 是 prop——模板经 props 自动解包可达，setup return 里禁裸标识符
+      //（T6 回归 2026-11-23：裸 memoryBadge 塞 return = setup ReferenceError，整树崩）
+      onMemActioned, onMemOpenDoc,
       loading, loadError, form, meta, load,
       apiKeySet, apiKeyMask, apiKeyTouched, apiKeyInput, apiKeyHint, clearApiKey,
       toolsMode, toolsSel, setToolsMode, toggleTool, toolLabel, toolCls, toolTitle,
@@ -1108,6 +1141,13 @@ export const SettingsPage = {
                 <button v-for="s in SECTIONS" :key="s.id" class="st-nav-btn" type="button"
                   :class="{ active: section === s.id }" :aria-pressed="section === s.id"
                   @click="section = s.id">{{ s.label }}</button>
+                <!-- 记忆段（T6）：图标用 ICONS 现图（link = 关联网络意象，沿「图标单点」不加新条目）；
+                     徽标 = memoryBadge（badgeParts.total = 待审+失败，口径同原 rail 记忆钮）>0 才画；
+                     构成分解 title 留在 FAB 设置子钮（badges 双键），本段不重复 -->
+                <button class="st-nav-btn" type="button"
+                  :class="{ active: section === 'memory' }" :aria-pressed="section === 'memory'"
+                  title="记忆" @click="section = 'memory'"><span class="st-nav-ic" v-html="ICONS.link"></span>记忆<span
+                    v-if="memoryBadge > 0" class="st-nav-badge">{{ memoryBadge > 99 ? '99+' : memoryBadge }}</span></button>
               </nav>
 
               <div class="st-body">
@@ -1471,8 +1511,25 @@ export const SettingsPage = {
                   </div>
                 </div>
 
-                <!-- 保存全部（单一写面；revision 随行） -->
-                <div class="st-foot">
+                <!-- ═══ 记忆（T6，spec 2026-11-22-immersive-shell §6）：MemoryConsole 三面整体迁入，
+                     宽度随 pane、滚动归 st-modal-body（.st-pane-memory 样式见 style.css 记忆控制台分节）；
+                     关闭守卫边界——记忆段不进 dirty 指纹（本段零表单字段），X/backdrop/Escape 关闭
+                     仍统一走 requestClose（settingsCloseSeq 链零改动），故记忆头「关闭」钮直连 requestClose。
+                     数据零自建轮询：memoryStatus/Proposals/Reports 由 app 30s pollMemory 注入 state，
+                     props 下传（与移动 console-shell 实例同口径——组件 scoped ref 已隔离双实例）。 ═══ -->
+                <div v-if="section === 'memory'" class="st-pane-memory">
+                  <memory-console :open="true" :detail="state.memoryDetail" :report="state.memoryReport"
+                    @pick="state.memoryDetail = $event"
+                    @back="state.memoryDetail = null"
+                    @report-pick="state.memoryReport = $event"
+                    @report-back="state.memoryReport = null"
+                    @close="requestClose"
+                    @actioned="onMemActioned"
+                    @open-doc="onMemOpenDoc($event)" />
+                </div>
+
+                <!-- 保存全部（单一写面；revision 随行）——记忆段无表单，保存行/页底说明收起 -->
+                <div v-show="section !== 'memory'" class="st-foot">
                   <button class="st-save" type="button" :disabled="saving" @click="save">
                     {{ saving ? '保存中…' : '保存全部' }}
                   </button>
@@ -1481,7 +1538,7 @@ export const SettingsPage = {
             </div>
 
             <!-- 页底静态说明（spec §6）：页面外段的手工维护口径（用户语言，Rule 2） -->
-            <div class="st-footnote">
+            <div v-show="section !== 'memory'" class="st-footnote">
               网络与端口、数据目录、出网开关与写通道凭证等设置请手工编辑配置文件（重启后生效）。
             </div>
           </template>
