@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>沉浸式检索页 — 设计预览 · md-vault</title>
+<!--
+  沉浸式检索页 静态预览稿（评审用 mockup，非应用代码，不接线）
+  法源 spec 2026-11-23-immersive-search-page（2026-11-23 已拍板：全项按评审推荐）。
+  token 与语汇逐字取自 server/templates/style.css :root；组织方式沿 2026-11-22-immersive-shell-preview.html 先例。
+  画面：桌面 ≥1024px 单栏壳视角（按 1280px 设计，宽度自适应）。
+  六态：空态 / 结果态 / 加载·有旧结果（压暗）/ 加载·无旧内容（骨架屏）/ 零结果态 / 对照态（文档态）——对照态与结果态同列同顶线同列心，
+  切换 ②⇄⑤ 并勾选「对齐辅助线」即肉眼验证「原地变身」。
+  给实现者的三句话：
+  ① 搜索态 chrome 是全壳最低：dock 整条不渲染、FAB 降 40% 透明（仍可点/可 Tab，聚合徽标全亮）、
+     顶线槽换成输入框（占满 measure 列宽）；本稿握把按「无 dock → 纵向居中」既有规则归位。
+  ② 三 token（--col-measure/--col-topline/--col-inline）doc 与 search 两视图共读——
+     两态列宽/顶线/列心必须逐像素同位，这是本稿唯一目的性收益。
+  ③ mark 分层：每张片段卡内首处命中 = brass 12% tint 底，同卡后续命中 = 600 字重无底色；
+     黄铜底块数从 O(命中数) 降到 O(卡片数)。
+-->
+<style>
+/* ================================================================
+   纸墨「书房」tokens（与 server/templates/style.css :root 逐字一致，light）
+   ================================================================ */
+:root {
+  color-scheme: light;      /* 表单控件/滚动条 UA 配色钉死浅色（本壳无深色变体） */
+  --paper: #F4EFE6;   /* 底色，暖纸白 */
+  --ink: #211D18;     /* 主文字，深墨 */
+  --ink-soft: #6E655A;/* 次要文字，灰墨 */
+  --brass: #9A6B32;   /* 唯一强调色，黄铜 */
+  --line: #D8CFBF;    /* 分隔线，浅木色 */
+  --surface: #FBF8F2; /* 卡片/面板，比底色亮一档 */
+}
+/* 既有单源变量（style.css W2/W5 块），本稿沿用 */
+:root { --dock-w: 40px; --dock-h: 268px; --destructive: #b91c1c; }
+/* 本稿新增三枚共享骨架 token（spec §3：doc 与 search 两视图共读） */
+:root {
+  --col-measure: 680px;  /* 正文列上限宽（= 文档列现值，两值相等实施期一次确认） */
+  --col-topline: 16px;   /* 顶线距顶 */
+  --col-inline: 24px;    /* 列左右内缩 */
+}
+/* 字体链（style.css 同名栈；预览稿不引外部字体，靠系统回退） */
+:root {
+  --serif: 'Source Serif 4', Georgia, 'Songti SC', 'Noto Serif CJK SC', 'SimSun', serif;
+  --ui: 'Inter', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Consolas, 'Courier New', monospace;
+  /* 预览衬底（非应用内容） */
+  --pv-mat: color-mix(in srgb, var(--line) 45%, var(--paper));
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--pv-mat); color: var(--ink);
+  font-family: var(--ui); font-size: 16px; line-height: 1.75;
+  padding: 32px 20px 72px;
+}
+button { font: inherit; color: inherit; }
+:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--paper), 0 0 0 3px var(--brass); border-radius: 6px; }
+
+/* ---------- 预览页头 + 状态切换工具条（评审稿工具条 · 非界面） ---------- */
+.pv-head { max-width: 1280px; margin: 0 auto 18px; }
+.pv-title { font-family: var(--serif); font-size: 19px; font-weight: 600; margin: 0 0 4px; }
+.pv-sub { font-size: 12.5px; color: var(--ink-soft); margin: 0; }
+.segbar {
+  max-width: 1280px; margin: 0 auto 14px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 8px 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+}
+.segbar .tag {
+  font-size: 10.5px; letter-spacing: .08em; color: var(--ink-soft);
+  border: 1px dashed color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: 999px; padding: 2px 10px; margin-right: 6px; white-space: nowrap;
+}
+.segb {
+  height: 30px; padding: 0 14px; border-radius: 999px; cursor: pointer;
+  font-size: 12.5px; font-weight: 500; color: var(--ink-soft);
+  background: transparent; border: 1px solid transparent;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.segb:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--ink); }
+.segb.on { background: var(--brass); border-color: var(--brass); color: var(--paper); }
+.seg-guide {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 7px;
+  font-size: 11.5px; color: var(--ink-soft); cursor: pointer; user-select: none; white-space: nowrap;
+}
+.seg-guide input { accent-color: var(--brass); cursor: pointer; }
+.pv-cap { max-width: 1280px; margin: 0 auto 10px; font-size: 12px; color: var(--ink-soft); line-height: 1.7; }
+.pv-cap b { font-weight: 600; color: var(--ink); }
+.pv-cap .hot { color: var(--brass); font-weight: 600; }
+
+/* ---------- 应用屏框（1280 设计档，宽度自适应） ---------- */
+.app {
+  max-width: 1280px; margin: 0 auto;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 12px;
+  height: 760px; position: relative; overflow: hidden;
+}
+.view { position: absolute; inset: 0; display: none; flex-direction: column; min-width: 0; }
+.app[data-state="empty"] .v-search,
+.app[data-state="results"] .v-search,
+.app[data-state="loading"] .v-search,
+.app[data-state="loading-empty"] .v-search,
+.app[data-state="zero"] .v-search { display: flex; }
+.app[data-state="doc"] .v-doc { display: flex; }
+
+/* ---------- 共享骨架列（三 token 共读：doc 与 search 逐像素同位） ---------- */
+.col {
+  width: 100%;
+  max-width: calc(var(--col-measure) + 2 * var(--col-inline));
+  margin: 0 auto; padding: 0 var(--col-inline);
+}
+
+/* ---------- 对齐辅助线（评审稿工具 · 默认隐藏，非界面） ---------- */
+.guides { display: none; position: absolute; inset: 0; z-index: 60; pointer-events: none; }
+.guides.show { display: block; }
+.guides .ln-c, .guides .ln-e { position: absolute; top: 0; bottom: 0; }
+.guides .ln-c { left: 50%; border-left: 1px dashed color-mix(in srgb, var(--brass) 55%, transparent); }
+.guides .ln-e { border-left: 1px dashed color-mix(in srgb, var(--ink-soft) 55%, transparent); }
+.guides .ln-e.l { left: calc(50% - var(--col-measure) / 2); }
+.guides .ln-e.r { left: calc(50% + var(--col-measure) / 2); }
+.guides .ln-top {
+  position: absolute; left: calc(50% - var(--col-measure) / 2); right: calc(50% - var(--col-measure) / 2);
+  top: var(--col-topline); border-top: 1px dashed color-mix(in srgb, var(--ink-soft) 55%, transparent);
+}
+.guides .g-lab {
+  position: absolute; font-family: var(--mono); font-size: 9.5px; letter-spacing: .04em;
+  color: color-mix(in srgb, var(--ink-soft) 80%, transparent); white-space: nowrap; background: color-mix(in srgb, var(--paper) 78%, transparent); padding: 0 3px;
+}
+.guides .g-ghost {
+  position: absolute; right: 0; top: 64px; width: var(--dock-w); height: var(--dock-h);
+  border: 1px dashed color-mix(in srgb, var(--ink-soft) 60%, transparent);
+  border-right: none; border-radius: 10px 0 0 10px;
+}
+.guides .g-ghost b {
+  position: absolute; right: calc(var(--dock-w) + 6px); top: 4px; font-weight: 400;
+}
+/* ================================================================
+   搜索态：顶线槽 = 输入框（占满 measure 列宽）+ meta 行；dock 整条不渲染
+   ================================================================ */
+.s-head { flex-shrink: 0; padding-top: var(--col-topline); }
+.s-field { position: relative; }
+.s-ic {
+  position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; stroke: var(--ink-soft); fill: none; stroke-width: 2;
+  stroke-linecap: round; pointer-events: none;
+}
+.s-input {
+  width: 100%; height: 44px; padding: 0 40px 0 40px;
+  font-family: var(--ui); font-size: 14px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.s-input::placeholder { color: var(--ink-soft); opacity: .7; }
+/* 进入检索页即聚焦输入框（Ctrl+K 直达语义）：画聚焦态 */
+.s-input.focused { border-color: var(--brass); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brass) 25%, transparent); }
+.s-kbd {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  font-family: var(--mono); font-size: 9.5px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); border-radius: 5px; padding: 1px 5px;
+}
+/* meta 行：「N 篇 · M 个片段 · 档 [宽松 ⌄]（内部名 relaxed；档位=可点 chip，本稿不实现下拉） */
+.s-meta { display: none; align-items: center; gap: 8px; padding: 9px 2px 0; font-family: var(--ui); font-size: 11px; color: var(--ink-soft); }
+.app[data-state="results"] .s-meta, .app[data-state^="loading"] .s-meta { display: flex; }
+.s-meta .mt-l { display: none; align-items: center; gap: 7px; }
+.app[data-state^="loading"] .s-meta .mt-l { display: inline-flex; }
+.app[data-state^="loading"] .s-meta .mt-n { display: none; }
+.spin {
+  width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+  border: 1.5px solid color-mix(in srgb, var(--ink-soft) 40%, transparent);
+  border-top-color: var(--brass); animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.s-tier {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  font-family: var(--mono); font-size: 10px; padding: 1px 8px; border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--line));
+  background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass);
+}
+.s-tier svg { width: 8px; height: 8px; stroke: currentColor; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+.s-scroll { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 0 48px; }
+.sub { display: none; }
+.app[data-state="empty"] .sub-empty { display: block; }
+.app[data-state="results"] .sub-results, .app[data-state="loading"] .sub-results { display: block; }
+.app[data-state="loading-empty"] .sub-skel { display: block; }
+.app[data-state="zero"] .sub-zero { display: block; }
+/* 加载态：旧结果压暗 40% 保留（不清空、不闪跳；reduced-motion 下不做压暗过渡） */
+.sub-results { transition: opacity .2s ease; }
+.app[data-state="loading"] .sub-results { opacity: .6; }
+@media (prefers-reduced-motion: reduce) { .sub-results { transition: none; } .spin { animation: none; } }
+
+/* ---------- 结果分组：按文件分组、组内片段；零边框纯间距（组间 24 / 组内 10） ---------- */
+.grp + .grp { margin-top: 24px; }
+.grp-head { display: flex; align-items: baseline; gap: 10px; padding: 0 2px 10px; cursor: pointer; min-width: 0; }
+.grp-name { font-family: var(--ui); font-size: 14px; font-weight: 500; color: var(--ink); flex-shrink: 0; }
+.grp-path { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); white-space: nowrap; }
+.grp-cnt { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); white-space: nowrap; }
+/* 片段卡：零边框；active（键盘选中）= brass 8% 底 + 左缘 2px 黄铜条（复用 rail 三态选中语法） */
+.seg { position: relative; padding: 10px 14px 12px 16px; border-radius: 8px; cursor: pointer; transition: background-color .15s ease; }
+.seg + .seg { margin-top: 10px; }
+.seg:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.seg.on { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.seg.on::before {
+  content: ''; position: absolute; left: 0; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px; background: var(--brass);
+}
+/* heading 弱色 mono 行（`·` 前缀，不再是 pill——黄铜预算让给 mark 与 active 态） */
+.seg-h { margin: 0 0 4px; font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+/* ±150 命中窗口摘要：5 行 clamp + 展开全文（零请求，segment 全文在手） */
+.seg-t {
+  margin: 0; font-family: var(--serif); font-size: 15px; line-height: 1.8; color: var(--ink);
+  display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden;
+}
+.seg.open .seg-t { -webkit-line-clamp: unset; display: block; }
+.seg-more {
+  margin-top: 6px; border: none; background: transparent; padding: 0 1px; cursor: pointer;
+  font-family: var(--ui); font-size: 11.5px; color: var(--ink-soft); text-decoration: underline; text-underline-offset: 3px;
+}
+.seg-more:hover { color: var(--ink); }
+/* mark 分层（spec §11）：首处命中 brass 12% tint 底；同卡后续命中 600 字重、无底色 */
+.seg-t mark { color: inherit; border-radius: 3px; }
+.seg-t mark.hit-first { background: color-mix(in srgb, var(--brass) 12%, transparent); padding: 0 1px; }
+.seg-t mark.hit { font-weight: 600; background: none; }
+.seg-t code { font-family: var(--mono); font-size: 13px; background: color-mix(in srgb, var(--brass) 8%, transparent); color: color-mix(in srgb, var(--brass) 85%, var(--ink)); padding: .1rem .3rem; border-radius: 4px; }
+/* 隐私过滤提示（结果区末尾一行弱色小字，条件式措辞，零计数零路径） */
+.priv { margin: 24px 2px 0; font-size: 12px; color: var(--ink-soft); }
+
+/* ---------- 空态：最近搜索 ≤3 条 chip（只存词；可点回填，本稿画静态） ---------- */
+.rc-label { margin: 6px 2px 8px; font-size: 11px; letter-spacing: .06em; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); }
+.rc-chips { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 2px; }
+.rc-chip {
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent); border-radius: 999px; cursor: pointer;
+  background: color-mix(in srgb, var(--ink) 3%, transparent); color: var(--ink-soft);
+  font-size: 12px; padding: 3px 13px; transition: border-color .15s ease, color .15s ease;
+}
+.rc-chip:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); }
+
+/* ---------- 零结果态（隐私过滤并入此句；档位已自动放宽到 fuzzy，无档可放） ---------- */
+.zero { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 56px 16px 0; text-align: center; }
+.zero-ring {
+  width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center; color: var(--ink-soft);
+}
+.zero-ring svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; }
+.zero-t1 { font-size: 13px; color: var(--ink-soft); margin: 0; }
+.zero-t2 { font-size: 11.5px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); margin: 0; }
+
+/* ---------- ⑥ 骨架屏（仅「加载·无旧内容」分支）：零文字；灰条几何对应分组模型——
+   组间 24（复用 .grp+.grp 同刻度）/ 组内 10 与真实结果态一致，结果替换进来不跳版 ---------- */
+.sk-head, .sk-line { display: block; border-radius: 5px; position: relative; overflow: hidden;
+  background: color-mix(in srgb, var(--ink-soft) 16%, transparent); }  /* 灰条 = --ink-soft 低透明度档 */
+.sk-head { height: 15px; margin-bottom: 10px; }
+.sk-line { height: 14px; }
+.sub-skel .sk-line + .sk-line { margin-top: 10px; }
+.sk-head::after, .sk-line::after {   /* shimmer 微动效：纸色扫光 */
+  content: ''; position: absolute; inset: 0; transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--paper) 70%, transparent) 50%, transparent);
+  animation: sk-shim 1.5s ease-in-out infinite;
+}
+.sub-skel .grp:nth-of-type(2) .sk-head::after, .sub-skel .grp:nth-of-type(2) .sk-line::after { animation-delay: .3s; }
+@keyframes sk-shim { to { transform: translateX(100%); } }
+/* reduced-motion 下 shimmer 退为静态灰条 */
+@media (prefers-reduced-motion: reduce) {
+  .sk-head::after, .sk-line::after { display: none; }
+}
+
+/* ================================================================
+   对照态（文档态）：同列同顶线同列心，才有 dock / 全亮 FAB
+   ================================================================ */
+.doc-head { display: flex; align-items: center; gap: 10px; flex-shrink: 0; padding-top: var(--col-topline); padding-bottom: 12px; font-family: var(--ui); font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); }
+.doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.doc-bp .sep { opacity: .5; }
+.doc-bp .cur { color: var(--ink); }
+.doc-lock {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10.5px; color: var(--ink-soft);
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+  border-radius: 999px; padding: 1px 8px 1px 6px;
+}
+.doc-lock svg { width: 11px; height: 11px; stroke: currentColor; fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.dbody { flex: 1; overflow-y: auto; min-height: 0; padding-bottom: 56px; }
+.dbody .col { font-family: var(--serif); font-size: 16px; line-height: 1.75; color: var(--ink); }
+.dbody h1 { font-size: 26px; font-weight: 700; line-height: 1.35; margin: 1.1rem 0 1rem; padding-bottom: .5rem; border-bottom: 1px solid color-mix(in srgb, var(--brass) 45%, transparent); }
+.dbody h2 { font-size: 19px; font-weight: 600; line-height: 1.4; margin: 1.6rem 0 .7rem; }
+.dbody p { margin: .9rem 0; }
+.dbody code { font-family: var(--mono); font-size: .8125rem; background: color-mix(in srgb, var(--brass) 8%, transparent); color: color-mix(in srgb, var(--brass) 85%, var(--ink)); padding: .125rem .375rem; border-radius: 4px; }
+
+/* ---------- 右缘 dock（仅文档态；fixed 出流，不参与正文居中——摘让位 padding 后对称居中） ---------- */
+.dock {
+  position: absolute; right: 0; top: 64px; z-index: 10;
+  width: var(--dock-w); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0;
+  border-radius: 10px 0 0 10px;
+  background: var(--surface);
+  box-shadow: -1px 0 0 var(--line), -8px 0 24px -18px rgba(33, 29, 24, .30);
+}
+.dock-btn {
+  position: relative; width: 28px; height: 28px; padding: 0; border: none; border-radius: 8px;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.dock-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.dock-btn.on { background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+
+/* ---------- 左下 FAB（搜索态本体降至 40% 透明，仍可点/可 Tab；聚合徽标点恒全亮） ---------- */
+.fab { position: absolute; left: 24px; bottom: 24px; width: 48px; height: 48px; z-index: 20; }
+.fab .m {
+  position: absolute; inset: 0; border-radius: 9999px; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  box-shadow: 0 12px 30px -10px rgba(33, 29, 24, .32), 0 2px 8px rgba(33, 29, 24, .10);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--serif); font-weight: 700; font-size: 20px; color: var(--brass);
+  transition: opacity .2s ease;
+}
+.app[data-state="empty"] .fab .m, .app[data-state="results"] .fab .m,
+.app[data-state="loading"] .fab .m, .app[data-state="loading-empty"] .fab .m,
+.app[data-state="zero"] .fab .m { opacity: .4; }
+.fab .adot {
+  position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 9999px;
+  background: var(--brass); box-shadow: 0 0 0 2px var(--paper);
+}
+
+/* ---------- 右缘管家握把（44px 暗金半隐；dock 在场贴 dock 下缘，无 dock 回纵向居中） ---------- */
+.grip {
+  position: absolute; right: -22px; z-index: 40;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: color-mix(in srgb, var(--brass) 82%, var(--ink));
+  box-shadow: 0 4px 12px -4px rgba(33, 29, 24, .35), inset 0 0 0 1px color-mix(in srgb, var(--paper) 16%, transparent);
+}
+.grip svg {
+  position: absolute; top: 50%; left: 4px; transform: translateY(-50%);
+  width: 15px; height: 15px; fill: none;
+  stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.v-doc .grip { top: calc(72px + var(--dock-h)); }              /* 文档态：dock 在场，贴其下缘 */
+.v-search .grip { top: 50%; transform: translateY(-50%); }      /* 搜索态：无 dock，归纵向居中 */
+</style>
+</head>
+<body>
+<header class="pv-head">
+  <p class="pv-title">沉浸式检索页（搜索从抽屉升格为主区单页）—— 设计预览稿</p>
+  <p class="pv-sub">spec 2026-11-23-immersive-search-page · 已拍板定稿（全项按评审推荐）· 仅供浏览器视觉评审，非应用代码 · 桌面 ≥1024px 单栏壳视角（按 1280px 设计，宽度自适应）。<b>搜索不是浮层，是一页</b>：与文档列同宽、同顶线、同几何；点结果 = 列表淡出/文档淡入「原地变身」。搜索态 chrome 全壳最低：dock 整条隐藏、FAB 降 40% 透明、顶线槽换成输入框。</p>
+</header>
+
+<nav class="segbar" aria-label="状态切换">
+  <span class="tag">评审稿工具条 · 非界面</span>
+  <button class="segb" type="button" data-go="empty">① 空态</button>
+  <button class="segb on" type="button" data-go="results">② 结果态</button>
+  <button class="segb" type="button" data-go="loading">③ 加载 · 有旧结果</button>
+  <button class="segb" type="button" data-go="loading-empty">⑥ 加载 · 无旧内容</button>
+  <button class="segb" type="button" data-go="zero">④ 零结果态</button>
+  <button class="segb" type="button" data-go="doc">⑤ 对照 · 文档态</button>
+  <label class="seg-guide"><input type="checkbox" id="guide-cb"> 对齐辅助线（列心 · 列缘 · 顶线 · 文档态 dock 幽灵位）</label>
+</nav>
+
+<p class="pv-cap" id="cap"></p>
+
+<div class="app" id="app" data-state="results">
+
+  <!-- ════════════ 搜索页视图（①②③④ 共一页四态）════════════ -->
+  <div class="view v-search">
+    <!-- 顶线槽：输入框占满 measure 列宽（左缘对齐列）+ 其下 meta 行 -->
+    <div class="s-head">
+      <div class="col">
+        <div class="s-field">
+          <svg class="s-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.8" cy="6.8" r="4.2"/><path d="m10 10 3.4 3.4"/></svg>
+          <input class="s-input focused" id="q" type="text" value="回收站" placeholder="搜索全部文档内容" aria-label="搜索全部文档内容">
+          <span class="s-kbd">Esc 退出</span>
+        </div>
+        <div class="s-meta">
+          <span class="mt-n">2 篇 · 5 个片段 · 档</span>
+          <span class="mt-l"><span class="spin" aria-hidden="true"></span>检索中… · 档</span>
+          <span class="s-tier" title="切换档位：精确 / 邻近 / 宽松 / 模糊">宽松 <svg viewBox="0 0 10 10" aria-hidden="true"><path d="m2.5 3.8 2.5 2.5 2.5-2.5"/></svg></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="s-scroll">
+      <div class="col">
+
+        <!-- ① 空态（未输入）：最近搜索 ≤3 条 -->
+        <div class="sub sub-empty">
+          <p class="rc-label">最近搜索</p>
+          <div class="rc-chips">
+            <button class="rc-chip" type="button">回收站</button>
+            <button class="rc-chip" type="button">沉浸式壳</button>
+            <button class="rc-chip" type="button">键盘视口</button>
+          </div>
+        </div>
+
+        <!-- ②③ 结果分组：按文件分组、零边框纯间距；组头 = 文件名 + 目录段 + 片段数 -->
+        <div class="sub sub-results">
+          <section class="grp">
+            <div class="grp-head">
+              <span class="grp-name">回收站与恢复.md</span>
+              <span class="grp-path">projects/md-repo/specs/</span>
+              <span class="grp-cnt">3 个片段</span>
+            </div>
+
+            <article class="seg">
+              <p class="seg-h">· 删除分流</p>
+              <p class="seg-t">…删文档分两条路走：您亲手删的，先进<mark class="hit-first">回收站</mark>，静静留着等一声招呼；机器自己腾挪的，不进回收站，只在改动前留一份底。两条路都在删除那一刻记下内容指纹——日后真要找回，才知道落回去的那份和您删掉的是不是同一个。<mark class="hit">回收站</mark>不是保险箱，它只管您这一侧的删除…</p>
+            </article>
+
+            <article class="seg">
+              <p class="seg-h">· 清理与保留</p>
+              <p class="seg-t">…<mark class="hit-first">回收站</mark>不会自己长大，也不会自己悄悄过期。清一次<mark class="hit">回收站</mark>，顺带修掉那些指向已删文档的引用——链接文字还在，只是不再跳向空处。清理不碰冲突副本：那是两边内容都留了底的东西，宁可多占一页纸，也不替您做主。若同一篇文档在<mark class="hit">回收站</mark>里躺得久了，它会在待办里问您一句：留，还是走。留，它继续安静待着；走，才是真的删除——真删除之前还是会再留一份最后的底，只是这份底也不久留，够反悔一次就算尽了心。清理之后，目录里的引用计数跟着回落，关联列表里那些灰掉的小点也就少了——这一切都不动您文档里的一个字，也不动别人文档里指向您的那一行。…</p>
+              <button class="seg-more" type="button" title="实装为就地展开零请求；本稿静态示意">展开全文</button>
+            </article>
+
+            <article class="seg on">
+              <p class="seg-h">· 找回</p>
+              <p class="seg-t">…从<mark class="hit-first">回收站</mark>里找回时按原路径落回；原路径若已被别的文档占了，就在旁边落一个副本，并告诉您它去了哪儿。找回之后，它就又是一篇普通的文档，翻篇。…</p>
+            </article>
+          </section>
+
+          <section class="grp">
+            <div class="grp-head">
+              <span class="grp-name">同步通道设计说明.md</span>
+              <span class="grp-path">projects/md-repo/specs/</span>
+              <span class="grp-cnt">2 个片段</span>
+            </div>
+
+            <article class="seg">
+              <p class="seg-h">· 删除不跟着同步</p>
+              <p class="seg-t">…本地删掉的文件，服务器不会跟着删。下一次同步它顶多出现在「待确认」里，原件仍好好待在原处；等您点了头，它才离开原位，进<mark class="hit-first">回收站</mark>——而不是凭空消失。所以「删了又冒出来」多半不是故障，是您还没点头…</p>
+            </article>
+
+            <article class="seg">
+              <p class="seg-h">· 冲突副本</p>
+              <p class="seg-t">…两边都改过的文件不会互相覆盖：本地另存一份冲突副本，原版纹丝不动。副本不会被<mark class="hit-first">回收站</mark>的清理扫到——它是留底的东西，去留由您点名，机器不碰。…</p>
+            </article>
+          </section>
+
+          <p class="priv">若相关文档在隐私设置中，已被排除</p>
+        </div>
+
+        <!-- ④ 零结果态（隐私过滤并入此句；无档可放，故无放宽按钮） -->
+        <div class="sub sub-zero">
+          <div class="zero">
+            <span class="zero-ring"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.6" cy="8.6" r="5.4"/><path d="m12.6 12.6 4.4 4.4"/></svg></span>
+            <p class="zero-t1">无匹配——若相关文档在隐私设置中，已被排除</p>
+            <p class="zero-t2">已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。</p>
+          </div>
+        </div>
+
+        <!-- ⑥ 加载·无旧内容（首搜/上次零结果/已重置）：骨架屏——纯灰条零文字，2 组 ×（1 行组头 + 2–3 行摘要，行宽参差） -->
+        <div class="sub sub-skel" aria-hidden="true">
+          <section class="grp">
+            <span class="sk-head" style="width:236px"></span>
+            <span class="sk-line" style="width:100%"></span>
+            <span class="sk-line" style="width:93%"></span>
+            <span class="sk-line" style="width:52%"></span>
+          </section>
+          <section class="grp">
+            <span class="sk-head" style="width:188px"></span>
+            <span class="sk-line" style="width:97%"></span>
+            <span class="sk-line" style="width:74%"></span>
+          </section>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- 搜索态 chrome：dock 不渲染；FAB 40% 透明（徽标全亮）；握把无 dock 归纵向居中 -->
+    <div class="grip" title="管家在书房"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab" title="回首页（搜索态降透明，仍可点/可 Tab）"><span class="m">M</span><span class="adot"></span></div>
+  </div>
+
+  <!-- ════════════ ⑤ 对照态：文档态（同列同顶线同列心；才有 dock 与全亮 FAB）════════════ -->
+  <div class="view v-doc">
+    <div class="doc-head">
+      <div class="col" style="display:flex;align-items:center;gap:10px;">
+        <span class="doc-bp"><span>projects</span><span class="sep">/</span><span>md-repo</span><span class="sep">/</span><span>specs</span><span class="sep">/</span><span class="cur">回收站与恢复.md</span></span>
+        <span class="doc-lock"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.8" y="7" width="8.4" height="6.2" rx="1.2"/><path d="M5.8 7V5.6a2.2 2.2 0 0 1 4.4 0V7"/></svg>模型不可见</span>
+      </div>
+    </div>
+    <div class="dbody">
+      <div class="col">
+        <h1>回收站与恢复</h1>
+        <p>删掉的文档不会凭空消失。这篇文档讲清三件事：删除时分了哪两条路、回收站怎么清、以及找回时它会落回哪里。</p>
+        <h2>删除分流</h2>
+        <p>删文档分两条路走：您亲手删的，先进回收站；机器自己腾挪的，不进回收站，只在改动前留一份底。两条路都在删除那一刻记下内容指纹，日后对账用的就是它。</p>
+        <p>找回时按原路径落回；原路径若被占了，就在旁边落一份冲突副本（如 <code>回收站与恢复.conflict-mac.md</code>），绝不覆盖。</p>
+      </div>
+    </div>
+    <div class="dock" aria-hidden="true">
+      <button class="dock-btn on" type="button" title="预览（当前）"><svg viewBox="0 0 16 16"><path d="M11.2 2.6 13.4 4.8 5.6 12.6l-3 .8.8-3Z"/></svg></button>
+      <button class="dock-btn" type="button" title="保存"><svg viewBox="0 0 16 16"><path d="M3.2 3.2h7.2l2.4 2.4v7.2H3.2Z"/><path d="M5.6 3.2v3.1h4.4V3.2"/><path d="M5.4 12.8v-3.3h5.2v3.3"/></svg></button>
+      <button class="dock-btn" type="button" title="下载"><svg viewBox="0 0 16 16"><path d="M8 2.6v7.2M8 9.8l2.7-2.7M8 9.8 5.3 7.1M3 13h10"/></svg></button>
+      <button class="dock-btn" type="button" title="目录"><svg viewBox="0 0 16 16"><path d="M5.2 4h8M5.2 8h8M5.2 12h8M2.6 4h.8M2.6 8h.8M2.6 12h.8"/></svg></button>
+      <button class="dock-btn" type="button" title="重命名"><svg viewBox="0 0 16 16"><path d="M3.5 4.2V3h9v1.2M8 3v10M6 13h4"/></svg></button>
+      <button class="dock-btn" type="button" title="移动"><svg viewBox="0 0 16 16"><path d="M9.5 12.5h-6v-9h2.6l1.2 1.5h2.2"/><path d="M12.5 7v6M9.8 10.3l2.7 2.7 2.7-2.7"/></svg></button>
+      <button class="dock-btn" type="button" title="删除" style="color:color-mix(in srgb, var(--destructive) 75%, var(--ink-soft))"><svg viewBox="0 0 16 16"><path d="M2.8 4.3h10.4M6.4 4.3V2.9h3.2v1.4"/><path d="m4.3 4.3.6 8.1a1.1 1.1 0 0 0 1.1 1h4a1.1 1.1 0 0 0 1.1-1l.6-8.1"/></svg></button>
+    </div>
+    <div class="grip" title="管家在书房"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 8 2.8 5.3v5.4Z"/><path d="M9 8l4.2-2.7v5.4Z"/><circle cx="8" cy="8" r="1.3"/></svg></div>
+    <div class="fab"><span class="m">M</span><span class="adot"></span></div>
+  </div>
+
+  <!-- 对齐辅助线（评审稿工具，默认隐藏）：列心 / 列缘 / 顶线位 / 文档态 dock 幽灵位 -->
+  <div class="guides" id="guides" aria-hidden="true">
+    <span class="ln-c"></span>
+    <span class="ln-e l"></span><span class="ln-e r"></span>
+    <span class="ln-top"></span>
+    <span class="g-lab" style="left:calc(50% + 6px); top:8px;">列心</span>
+    <span class="g-lab" style="left:calc(50% - var(--col-measure)/2 + 6px); top:8px;">680px 列缘</span>
+    <span class="g-lab" style="left:calc(50% - var(--col-measure)/2 + 6px); top:calc(var(--col-topline) + 4px);">顶线同位</span>
+    <span class="g-ghost"><b>文档态 dock 幽灵位（搜索态整条隐藏）</b></span>
+  </div>
+</div>
+
+<details style="max-width:1280px;margin:26px auto 0;font-size:12px;color:var(--ink-soft);line-height:1.8;">
+  <summary style="cursor:pointer;font-weight:600;color:var(--ink);">spec 条款注释（评审稿备注 · 不进界面正文）</summary>
+  <ul style="margin:10px 0 0;padding-left:20px;">
+    <li><b>三 token 共读</b>：<code>--col-measure: 680px</code>（= 文档列现值）· <code>--col-topline: 16px</code> · <code>--col-inline: 24px</code>——doc 与 search 两视图逐像素同值，「同几何不同实例」（各自滚动容器）。</li>
+    <li><b>mark 分层（§11 豁免规则）</b>：每张片段卡内首处命中 = brass 12% tint 底 + 主墨；同卡后续命中 = 600 字重、无底色。黄铜底块数 O(命中数) → O(卡片数)（本屏 5 卡 = 5 块底）。</li>
+    <li><b>active 态</b>（键盘选中）：brass 8% 底 + 左缘 2px 黄铜条——刻意复用 rail 三态选中语法，不教第二套选中语言。相关性条已退役（本屏无黄铜细条）。</li>
+    <li><b>dock 与列心</b>：dock 系 fixed 出流，宽度不参与正文居中；摘除旧 padding-right 非对称让位后两视图对称居中，列心 = 视口心（本稿按修法定制，dock 幽灵位仅供对照）。</li>
+    <li><b>加载态两分支</b>：<b>有旧结果</b>走压暗——按剩余亮度 60%（opacity .6）绘制在结果列表整体上；若原意指不透明度 40%，目检时把压暗值一键改成 <code>.4</code> 即可。reduced-motion 下无压暗过渡。</li>
+    <li><b>骨架屏仅无旧结果分支</b>：首次搜索 / 上一次是零结果 / 已重置时结果列表无可压暗，meta 行「检索中…」照旧，正文列铺骨架——灰条色为 <code>--ink-soft</code> 16% 低透明度档，组间距 24 / 组内 10 与真实结果态同刻度（结果替换不跳版）；shimmer 为纸色扫光，<code>@media (prefers-reduced-motion: reduce)</code> 下停动效退静态灰条。</li>
+    <li><b>搜索态 chrome</b>：dock 整条不渲染；FAB 本体 40% 透明但恒可点/可 Tab（Esc 链后备出口），右上聚合徽标恒全亮；握把按「无 dock → 纵向居中」既有规则归位；不新增任何 z-index 层。</li>
+    <li><b>档位 chip</b>：当前档标签取响应档位——零命中时服务端同请求内已自动放宽到 fuzzy，故零结果态文案不再给「放宽按钮」（无档可放）。对用户呈现名＝精确（strict）／邻近（near）／宽松（relaxed）／模糊（fuzzy）。</li>
+    <li><b>文案口径</b>：页内框「搜索全部文档内容」（树内框「按文件名筛选」，分工钉）；隐私提示为条件式措辞、零计数零路径。</li>
+  </ul>
+</details>
+
+<script>
+(function () {
+  var app = document.getElementById('app');
+  var cap = document.getElementById('cap');
+  var q = document.getElementById('q');
+  var btns = Array.prototype.slice.call(document.querySelectorAll('.segb'));
+  var caps = {
+    empty:   '<b>① 空态（未输入）</b> —— 输入框 + 最近搜索 ≤3 条（可点回填，只存词不存结果）。明确不放最近文档/待审/智能建议——那是首页管家日报的职责，两处都做 = 造第二个首页。',
+    results: '<b>② 结果态</b> —— 按文件分组（组间 24px / 组内片段间 10px）、<b>零边框纯间距</b>；片段卡 ±150 命中窗口，<span class="hot">首处命中上黄铜底、同卡后续命中只加粗</span>；heading 降为弱色 mono 行；其中一卡 5 行 clamp +「展开全文」，一卡带键盘选中态（黄铜 8% 底 + 左缘 2px 条）。档位在 meta 行做 chip（档 [宽松 ⌄]，对用户说人话，内部名 relaxed）。列心 = 视口心（摘 dock 让位后对称居中）。',
+    loading: '<b>③ 加载 · 有旧结果</b> —— meta 行改「检索中…」，<span class="hot">旧结果压暗 40% 保留</span>：不清空、不闪跳（新请求会中断旧请求）。无旧内容时不走此态，见 ⑥ 骨架分支。',
+    'loading-empty': '<b>⑥ 加载 · 无旧内容</b>（首次搜索 / 上一次是零结果 / 已重置）—— 不得空白压暗，改铺<span class="hot">骨架屏</span>：灰条几何对应分组模型，<span class="hot">组间距 24 / 组内 10 与真实结果态同刻度</span>，结果替换进来不跳版；meta 行与 ③ 一致。与 ③ 并置即两分支对照证据；reduced-motion 下 shimmer 停、留静态灰条。',
+    zero:    '<b>④ 零结果态</b> —— 隐私过滤并入此句（条件式措辞、不带计数）；当前档说明随行：零命中即最宽档也搜过的终态，<span class="hot">无档可放，故不设放宽按钮</span>。',
+    doc:     '<b>⑤ 对照态 · 文档态</b> —— <span class="hot">本稿唯一目的性收益的目检面</span>：与 ② 同 680px 列、同顶线、同列心。勾选「对齐辅助线」后在 ②⇄⑤ 间来回切换：列宽/顶线/列心逐像素不动，只有顶线槽与正文「原地变身」（实装为溶解转场，非横向滑动）。文档态才有 dock 与全亮 FAB。'
+  };
+  function go(state) {
+    app.dataset.state = state;
+    cap.innerHTML = caps[state];
+    btns.forEach(function (b) { b.classList.toggle('on', b.dataset.go === state); });
+    q.value = state === 'empty' ? '' : '回收站';
+    q.classList.toggle('focused', true);
+  }
+  btns.forEach(function (b) { b.addEventListener('click', function () { go(b.dataset.go); }); });
+  document.getElementById('guide-cb').addEventListener('change', function (e) {
+    document.querySelector('.guides').classList.toggle('show', e.target.checked);
+  });
+  go('results');
+})();
+</script>
+</body>
+</html>
