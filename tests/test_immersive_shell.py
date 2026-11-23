@@ -505,6 +505,15 @@ def test_peek_surface_pins():
     assert re.search(r"right:\s*-22px", css), "握把半隐 right:-22px 缺（44px 钮，2026-11-23 拍板加大）"
     assert re.search(r"total > 9 \? '9\+'", bb), "pill ≥10 封顶 9+ 缺（角标宽守可见半区）"
 
+def test_fab_notif_toggle_guard_exemption():
+    # FAB「通知」子钮开下拉后，同一次 click 冒泡进 document 外点监听被关（一闪而过，
+    # 同 dock 目录钮 data-toc-toggle 病族）：豁免集必须含 [data-notif-toggle]，
+    # 且该属性绑在 notifications 子钮上（禁整弧豁免——其余子钮点击须正常关下拉）。
+    app = (TPL / "js/app.js").read_text(encoding="utf-8")
+    fab = (TPL / "js/components/FabMenu.js").read_text(encoding="utf-8")
+    assert re.search(r"closest\('\[data-notif-bell\], \[data-notif-toggle\]'\)", app), "外点守卫缺通知 toggle 豁免"
+    assert re.search(r"data-notif-toggle=\"it\.id === 'notifications'", fab), "FAB 通知子钮未挂 toggle 豁免标记"
+
 
 def test_peek_summary_once():
     # Review Focus 4/6「摘要只出一条」三层钉：

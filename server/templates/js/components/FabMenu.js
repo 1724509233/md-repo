@@ -129,6 +129,7 @@ export const FabMenu = {
       <div class="fab-fan" :class="{ open: open }" role="menu" aria-label="功能扇弧">
         <button v-for="it in items" :key="it.id" type="button" role="menuitem"
           class="fab-sub" :style="{ '--a': it.angle }"
+          :data-notif-toggle="it.id === 'notifications' || null"
           :title="subTitle(it)" :aria-label="it.label" :tabindex="open ? 0 : -1"
           @click="pick(it)" @pointerenter="armOpen" @pointerleave="armClose">
           <span class="fab-ic" v-html="it.icon"></span>

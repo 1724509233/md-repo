@@ -1134,7 +1134,9 @@ export function createApp() {
           if (state.moreMenuOpen && !e.target.closest('[data-more-menu]')) {
             state.moreMenuOpen = false
           }
-          if (state.notifOpen && !e.target.closest('[data-notif-bell]')) {
+          if (state.notifOpen && !e.target.closest('[data-notif-bell], [data-notif-toggle]')) {
+            // [data-notif-toggle] = FAB「通知」子钮（桌面唯一入口）：开态由 onFabPick→toggleNotifDropdown
+            // 置起，同一 click 冒泡到此不得抵消（同 TopBar data-toc-toggle 豁免一理，bug 同族）
             closeNotifDropdown()
           }
         })
