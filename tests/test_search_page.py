@@ -267,6 +267,9 @@ def test_s4_tier_chip_and_prefs():
     assert "mdvault.searchPrefs" not in sp
     # ③ chip 开关入口 data-tier-toggle 与外点守卫豁免链同名登记（点开秒关指纹防复发）
     assert "data-tier-toggle" in tpl and "closest('[data-tier-toggle]')" in sp
+    # ③b 回退纯文本的条件必须镜像 chip（v-else 会挂到 pop 的 v-if 上造成 chip+文本双显）
+    assert 'v-else class="sp-tier"' not in tpl, "回退文本用 v-else——双显回归"
+    assert 'v-if="!chipTierVisible" class="sp-tier"' in tpl
     # ④ 控制器档位取 state.recall（缺省 relaxed）；includeCode 布尔才发键
     assert re.search(r"state\.recall && state\.recall\.value", sj)
     assert "typeof includeCode === 'boolean'" in api and "body.include_code = includeCode" in api

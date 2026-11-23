@@ -5,7 +5,7 @@
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights, groupByPath, readPrefs, writePrefs, TIER_TIERS } from '../utils/search.js'
+import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS } from '../utils/search.js'
 import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
@@ -113,56 +113,9 @@ export const SearchPanel = {
       }
     }
 
-    // ── ② 权重控件（spec 2026-11-13 §3-②）────────────────────────────
-    // 预设 + 单滑杆（tag 轴 0.1–3.0）；落 localStorage，变更后以最后输入重跑
-    const W_PRESETS = [
-      { label: 'tag 优先', value: 2.0 },
-      { label: '均衡', value: 1.0 },
-      { label: '关键词优先', value: 0.5 }
-    ]
-    const W_DEFAULT = 2.0
-    const showSort = ref(false)
-    const sortPopEl = ref(null)
-    // localStorage 用户可写：非有限数/越界 → 回默认（防 .toFixed 渲染崩溃）
-    function initWeight() {
-      const t = readWeights().tag
-      return (typeof t === 'number' && Number.isFinite(t) && t >= 0.1 && t <= 3.0) ? t : W_DEFAULT
-    }
-    const wTag = ref(initWeight())
-
-    function presetActive(p) { return Math.abs(wTag.value - p.value) < 0.05 }
-
-    function applyWeight(w) {
-      wTag.value = w
-      try { localStorage.setItem('mdvault.searchWeights', JSON.stringify({ tag: w })) } catch (e) { /* 存储不可用（隐私模式）→ 仅本会话生效 */ }
-      search.rerun() // 以最后输入重跑（300ms 防抖由控制器承担）；尚无输入则 no-op
-    }
-
-    function onWeightInput(e) {
-      const v = e.target.valueAsNumber
-      if (Number.isFinite(v)) applyWeight(v)
-    }
-
-    // popover 点外关闭（同 FileTree 下拉的 mousedown 模式）
-    function onSortDocMouseDown(e) {
-      if (sortPopEl.value && !sortPopEl.value.contains(e.target) &&
-          !(e.target.closest && e.target.closest('.sp-sort-btn'))) {
-        showSort.value = false
-      }
-    }
-    // Escape 关 popover（P1-5，组件自有浮层自关）
-    function onSortEsc(e) {
-      if (e.key === 'Escape') showSort.value = false
-    }
-    watch(showSort, (open) => {
-      if (open) {
-        document.addEventListener('mousedown', onSortDocMouseDown)
-        document.addEventListener('keydown', onSortEsc)
-      } else {
-        document.removeEventListener('mousedown', onSortDocMouseDown)
-        document.removeEventListener('keydown', onSortEsc)
-      }
-    })
+    // ── ② 权重控件已退役（S5/T11）──
+    // §5 三层配置模型无「第四配置」：融合权重排序不进任何层（后端 weights 面留给
+    // agent/MCP 通道），排序入口随 T11 从两壳（桌面页 + 移动 sheet）一并拆除。
 
     // ── 页内档位 chip + 含代码开关（spec §5 第二层设备偏好；plan T10）──
     // chip 显档 = 响应终点档（resultTier，回退后的终态）；四项全走 TIER_LABEL 呈现名，
@@ -268,7 +221,6 @@ export const SearchPanel = {
         const idx = activeIndex.value >= 0 ? activeIndex.value : 0
         if (shaped.value[idx]) pickItem(shaped.value[idx], idx)
       } else if (e.key === 'Escape') {
-        showSort.value = false
         searchQuery.value = ''
         search.resetToIdle()
       }
@@ -281,7 +233,6 @@ export const SearchPanel = {
     }
 
     onBeforeUnmount(() => {
-      document.removeEventListener('mousedown', onSortDocMouseDown)
       document.removeEventListener('mousedown', onTierPopDocMouseDown)
       document.removeEventListener('keydown', onTierPopEsc)
       mqDesktop.removeEventListener('change', onMqDesktop)
@@ -302,38 +253,15 @@ export const SearchPanel = {
       // 最近搜索（S1b 空态）
       recent, fillRecent, clearRecent,
       // ① tag 选择器
-      tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
-      // ② 权重 popover
-      showSort, sortPopEl, wTag, W_PRESETS, W_DEFAULT, presetActive, applyWeight, onWeightInput
+      tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag
     }
   },
   template: `
     <div ref="rootEl" class="sp-root flex h-full min-h-0 flex-col">
-      <!-- 面板头（spec §3.3：与设计稿 B 同规格，48px「搜索」+「N 个文档」） -->
+      <!-- 面板头（移动 sheet 专属——桌面页 ≥1024 CSS 藏头；权重/排序入口已随 T11 退役） -->
       <div class="p-head">
         <span class="ptitle">搜索</span>
         <span class="pcount" v-if="docCount > 0">{{ docCount }} 个文档</span>
-        <span class="pacts">
-          <!-- ② 权重控件入口（absolute popover，开/关两态面板头不跳位） -->
-          <button class="sp-sort-btn" :class="{ on: showSort }" :aria-expanded="showSort" title="排序权重" aria-label="排序权重" @click="showSort = !showSort">
-            <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="7" cy="18" r="2"/></svg>
-            排序
-          </button>
-        </span>
-        <div v-if="showSort" ref="sortPopEl" class="sp-sort-pop">
-          <div class="sp-sort-title">排序权重</div>
-          <div class="sp-seg" role="group" aria-label="排序预设">
-            <button v-for="p in W_PRESETS" :key="p.value" class="sp-seg-btn"
-              :class="{ on: presetActive(p) }" :aria-pressed="presetActive(p)" @click="applyWeight(p.value)">{{ p.label }}</button>
-          </div>
-          <div class="sp-wrow">
-            <span class="sp-wlabel">tag 权重</span>
-            <span class="sp-wval">{{ wTag.toFixed(1) }}</span>
-          </div>
-          <input type="range" class="sp-wrange" min="0.1" max="3" step="0.1" aria-label="tag 权重"
-            :value="wTag" title="越大，#tag 命中排越前" @input="onWeightInput($event)">
-          <button class="sp-wreset" @click="applyWeight(W_DEFAULT)">恢复默认</button>
-        </div>
       </div>
       <!-- 输入区 -->
       <div class="sp-input">
@@ -378,7 +306,7 @@ export const SearchPanel = {
             <span class="sp-tier-sep"></span>
             <label class="sp-tier-code"><input type="checkbox" :checked="includeCode" @change="toggleIncludeCode()"><span>含代码</span></label>
           </span>
-          <span v-else class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
+          <span v-if="!chipTierVisible" class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
         </span>
       </div>
 

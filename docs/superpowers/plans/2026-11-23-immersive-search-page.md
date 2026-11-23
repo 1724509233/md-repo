@@ -212,10 +212,10 @@
 
 **Files:** Modify: `style.css`、`SearchPanel.js`、`FileTree.js`（移动保留面核对）、`app.js`（L738 扇弧 width 字段核无用后删）、`tests/test_web_ui_audit.py`；Test: 既有家族
 
-- [ ] **Step 1**：`grep -rn "sp-" server/templates/ | ` 全量引用面清点，产桌面/移动/共三列清单（**先清点后动手**——暗雷③：`sp-` 与移动 sheet 共用）。清点结果记进本文件底部「S5 清点」小节（edit 本 plan）。
-- [ ] **Step 2**：退役死重：权重/排序 popover 全链（`sp-sort-*`/`sp-w*`/`sp-seg-*`/`sp-chip*` tag 行与 `readWeights` 消费——§5 三层模型无第四配置；`search.js` 的 weights/tags 入参面随迁保留还是删，以「移动树内下拉仍在用 tags」为准裁：tags 留、weights 删）。防误删：`#search-drawer`/`.search-drawer`/`#search-sheet-handle` 系一个不动。
-- [ ] **Step 3**：钉家族翻新收口：§14 前端新钉全表对号（`tests/test_search_page.py` 汇总注释列出每钉对应 spec 节号）；`test_routes_order.py` 确认无新端点零改动；移动钉家族全绿终验 `pytest tests/ -q`。
-- [ ] **Step 4**：AGENTS.md Gotchas：若踩新坑补条（候选：「主区多页旗标并存须定义显示优先级与 Esc 折算层」「滚动容器非对称 padding 让位破坏跨视图列心」——仅实际踩中才写）。
+- [x] **Step 1**：`grep -rn "sp-" server/templates/ | ` 全量引用面清点，产桌面/移动/共三列清单（**先清点后动手**——暗雷③：`sp-` 与移动 sheet 共用）。清点结果记进本文件底部「S5 清点」小节（edit 本 plan）。
+- [x] **Step 2**：退役死重：权重/排序 popover 全链（`sp-sort-*`/`sp-w*`/`sp-seg-*`/`sp-chip*` tag 行与 `readWeights` 消费——§5 三层模型无第四配置；`search.js` 的 weights/tags 入参面随迁保留还是删，以「移动树内下拉仍在用 tags」为准裁：tags 留、weights 删）。防误删：`#search-drawer`/`.search-drawer`/`#search-sheet-handle` 系一个不动。
+- [x] **Step 3**：钉家族翻新收口：§14 前端新钉全表对号（`tests/test_search_page.py` 汇总注释列出每钉对应 spec 节号）；`test_routes_order.py` 确认无新端点零改动；移动钉家族全绿终验 `pytest tests/ -q`。
+- [x] **Step 4**：AGENTS.md Gotchas：若踩新坑补条（候选：「主区多页旗标并存须定义显示优先级与 Esc 折算层」「滚动容器非对称 padding 让位破坏跨视图列心」——仅实际踩中才写）。
 - [ ] **Step 5**：目检（全绿 + 桌面全路径手点：FABↄ→检索→Ctrl+K→chip 换档→点结果原地变身→Esc 回→首页/文档/回收站无回归）。Commit `chore(search): S5 清尾——权重/排序死面拆除+钉家族翻新清点`。
 
 ### Task 12: 文档回写（vault 需用户点头）
@@ -227,4 +227,20 @@
 
 ## S5 清点
 
-（Task 11 Step 1 回填）
+（Task 11 Step 1 回填，2026-11-23）
+
+**sp- 引用面终态**（清点脚本全量比对 style.css 定义 × SearchPanel/FileTree/app/index 引用）：
+
+| 归属 | 类 | 处置 |
+|---|---|---|
+| 桌面页+移动 sheet 共用 | `sp-root/results/empty(-t1/-t2)/chips/chip(-name/-count/-toggle)/via-badge/meta(+tier 族)/clamp5/dimmed/grp/skel/snip/unfold/prefetching/recent/input` | 保留（input 与 FileTree 树框共用） |
+| S2 残留死样式 | `sp-loading`、`sp-empty-ring(+svg)` | T11 删规则 |
+| 权重/排序面 | `sp-sort-btn/pop/title`、`sp-seg(-btn)`、`sp-wrow/wlabel/wval/wrange/wreset` | T11 全拆（组件链 + CSS + search.js `readWeights` + api.js `weights` 形参） |
+| 幽灵引用 | `sp-top`、`sp-hchip` | 从未成规则（注释/半截选择器残渣），注释改写 + `.search-item .priv-lock` 摘半 |
+
+- 后端 `weights` 请求面**保留**（agent/MCP 通道），钉 `test_api.py::test_ai_search_*_weights_*` 原样保绿。
+- app.js「扇弧 width 字段」清点为**不存在**（扇弧配置无 width 键，无拆除对象）。
+- 移动一个不动面核对：`#search-drawer`/`.search-drawer`/`#search-sheet-handle` 家族零触碰。
+- 钉翻新：`test_ui.py` 两钉转反向钉（search.js 禁 `searchWeights/readWeights`；api.js aiSearch 形参禁 `weights`、点名 `includeCode`）。
+
+**Step 对号**：Step1 ✅（本表）；Step2 ✅；Step3 ✅（1620 全绿，含移动钉家族）；Step4 ✅（外点红线补 Teleport 变体；「多页旗标并存」「非对称 padding」两候选实际未踩/已在 S1b 修复时并入既条，不另立）；Step5 待目检+oracle 评审后 commit。

@@ -226,23 +226,26 @@ def test_toc_jump_prefix_sum_uses_actual_separator_length():
 
 
 def test_search_js_tag_parser_and_weights():
-    """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；权重读 localStorage。"""
+    """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；
+    权重前端面已退役（S5/T11 §5 三层模型无第四配置——反向钉防回流）。"""
     js = read_js("utils/search.js")
     assert "parseTagQuery" in js
     assert r"#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)" in js, (
         "tag regex must use explicit CJK char set + hyphen group "
         "(JS \\w is ASCII-only; #md-repo is one tag)"
     )
-    assert "mdvault.searchWeights" in js
-    assert "readWeights" in js
+    assert "searchWeights" not in js and "readWeights" not in js, (
+        "weights frontend surface must be gone (T11)")
 
 
 def test_api_js_ai_search_structured():
     js = read_js("api.js")
     assert "getTags" in js
     m = re.search(r"async aiSearch\(([^)]*)\)", js)
-    assert m and "tags" in m.group(1) and "weights" in m.group(1), \
-        "aiSearch must accept structured tags/weights"
+    assert m and "tags" in m.group(1) and "includeCode" in m.group(1), \
+        "aiSearch must accept structured tags/includeCode"
+    assert "weights" not in m.group(1), \
+        "weights 前端面已退役（T11），api.js 不得再点名"
 
 
 def test_click_ledger_surfaces():

@@ -96,14 +96,8 @@ export function parseTagQuery(q) {
   return { keywords, tags }
 }
 
-// 排序权重（localStorage 每设备；形状 {"tag": 2.0}；两表面读同一权重）
-export function readWeights() {
-  try {
-    return JSON.parse(localStorage.getItem('mdvault.searchWeights') || '{}')
-  } catch {
-    return {} // 损坏 JSON → 默认权重
-  }
-}
+// 排序权重前端面已退役（S5/T11，§5 三层配置模型无「第四配置」；
+// 后端 weights 请求面保留给 agent/MCP 通道，前端两壳均不再点名）
 
 // 设备偏好（plan 2026-11-23 T10，spec §5 第二层）：档位与「含代码」的每设备缺省。
 // 缺键 = 跟服务端 config 默认层；损坏 JSON 逐键类型守卫退缺省。
@@ -143,7 +137,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     if (state.resultTier) state.resultTier.value = tier
     let data
     try {
-      data = await api.aiSearch(keywords, topK, controller.signal, tier, tags, readWeights(),
+      data = await api.aiSearch(keywords, topK, controller.signal, tier, tags,
                                 state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
@@ -195,7 +189,7 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.moreLoading.value = true
     let data
     try {
-      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags, readWeights(),
+      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags,
                                 state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return
