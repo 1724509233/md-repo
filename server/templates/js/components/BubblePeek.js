@@ -1,6 +1,6 @@
 /* BubblePeek 组件（沉浸式壳 T7，spec §4A / 预览稿场景 2·8）：右缘暗金半隐握把 + 管家气泡栈——桌面专属。
-   握把 = 30px 暗金圆钮一半探出右缘（right:-15px，CSS .grip），纸色线性领结（ICONS.bowtie 单点）居可见半区；
-   pill = 铃铛未读 + 管家回复合计（纸底黄铜字 .gpill）。hover 握把/气泡浮出气泡栈
+   握把 = 44px 暗金圆钮一半探出右缘（right:-22px，CSS .grip，2026-11-23 拍板由 30 加大），纸色线性领结（ICONS.bowtie 单点）居可见半区；
+   pill = 铃铛未读 + 管家回复合计（纸底黄铜字 .gpill，≥10 封顶「9+」——角标宽不超可见半区）。hover 握把/气泡浮出气泡栈
    （buildPeek 纯函数：最近 3 条摘要 + 「还有 N 条」）；点气泡 emit('pick', item)、点握把 emit('expand')。
    挂载条件 v-if="isDesktop" 在 app 模板（≤1023px 零触达红线）；visible = !aiOpen（浮窗开着握把让位）。
    docMissing 为契约保留位（V1 无行为分支；演进位 = 当前文档态参与摘要渲染时消费）。 */
@@ -41,7 +41,7 @@ export const BubblePeek = {
         :title="total > 0 ? '管家在书房——留言 ' + total + ' 条' : '管家在书房——点开聊天浮窗'"
         aria-label="管家消息" @pointerenter="arm" @pointerleave="disarm" @click="$emit('expand')">
         <span class="grip-ic" v-html="ICONS.bowtie"></span>
-        <span v-if="total > 0" class="gpill">{{ total > 99 ? '99+' : total }}</span>
+        <span v-if="total > 0" class="gpill">{{ total > 9 ? '9+' : total }}</span>
       </button>
       <div class="bubbles" v-show="hover" @pointerenter="arm" @pointerleave="disarm">
         <button v-for="it in stack.items" :key="it.id" type="button" class="bubble"

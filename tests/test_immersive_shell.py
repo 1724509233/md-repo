@@ -502,7 +502,8 @@ def test_peek_surface_pins():
     assert "emit('runDone'" in ai
 
     assert re.search(r"\.grip\s*\{", css), ".grip 画谱缺"
-    assert re.search(r"right:\s*-15px", css), "握把半隐 right:-15px 缺"
+    assert re.search(r"right:\s*-22px", css), "握把半隐 right:-22px 缺（44px 钮，2026-11-23 拍板加大）"
+    assert re.search(r"total > 9 \? '9\+'", bb), "pill ≥10 封顶 9+ 缺（角标宽守可见半区）"
 
 
 def test_peek_summary_once():

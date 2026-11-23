@@ -2207,8 +2207,8 @@ details.d-sec .body { padding: 8px 12px 14px; }
 }
 
 /* ════ 沉浸式壳 W5 · Task 7：管家消息面——右缘暗金半隐握把 + 管家气泡栈 + 聊天浮窗/图钉槽（spec §4A/§7 / 预览稿场景 2·8·9）════
-   握把 = 30px 暗金圆钮一半探出右缘（right:-15px），纸色线性领结（ICONS.bowtie 单点）居可见半区；
-   pill = 铃铛未读 + 管家回话合计（纸底黄铜字）。hover 握把/气泡浮出气泡栈（peekFeed.buildPeek
+   握把 = 44px 暗金圆钮一半探出右缘（right:-22px，2026-11-23 用户拍板由 30 加大），纸色线性领结（ICONS.bowtie 单点）居可见半区；
+   pill = 铃铛未读 + 管家回话合计（纸底黄铜字，≥10 封顶「9+」防角标宽过可见半区糊钮）。hover 握把/气泡浮出气泡栈（peekFeed.buildPeek
    纯函数：要事优先、最近 3 条 + 「还有 N 条」溢出）。chatwin 浮窗（默认）⇄ chat-slot 图钉右槽
    （state.chatPinned 单源，右槽二选一持久化 slots.right，T1 shellState.right 键在此消费）。
    几何取舍（预览稿场景 2 画法 + 短屏稳健）：dock 上锚（top:64px，高确定性 268px=8 钮×28+7 缝×4+
@@ -2219,26 +2219,27 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (min-width: 1024px) {
   :root { --dock-h: 268px; } /* dock 确定性高（钮数导出）——dock 钮增减须同改（test_dock 钉钮数 8） */
   .grip {
-    position: fixed; right: -15px; top: 50%; transform: translateY(-50%); z-index: 40;
-    width: 30px; height: 30px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
+    position: fixed; right: -22px; top: 50%; transform: translateY(-50%); z-index: 40;
+    width: 44px; height: 44px; padding: 0; border: none; border-radius: 50%; cursor: pointer;
     background: color-mix(in srgb, var(--brass) 82%, var(--ink));
     box-shadow: 0 4px 12px -4px rgba(33, 29, 24, .35), inset 0 0 0 1px color-mix(in srgb, var(--paper) 16%, transparent);
   }
   .grip:focus-visible { outline: 2px solid var(--brass); outline-offset: 1px; }
-  /* 领结居「可见半区」（左向 15px 实面）：绝对定位于钮体，出屏半侧不参与 */
-  .grip .grip-ic { position: absolute; left: 3px; top: 50%; transform: translateY(-50%); width: 11px; height: 11px; }
-  .grip .grip-ic svg { width: 11px; height: 11px; fill: none; stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  /* 领结居「可见半区」（左向 22px 实面，2026-11-23 用户拍板加大 30→44 并同步图标 11→15）：
+     绝对定位于钮体，出屏半侧不参与 */
+  .grip .grip-ic { position: absolute; left: 4px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; }
+  .grip .grip-ic svg { width: 15px; height: 15px; fill: none; stroke: color-mix(in srgb, var(--paper) 92%, transparent); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
   .grip .gpill {
-    position: absolute; top: -7px; left: -9px; min-width: 16px; height: 16px; padding: 0 4px;
+    position: absolute; top: -7px; left: -8px; min-width: 16px; height: 16px; padding: 0 4px;
     border-radius: 999px; background: var(--surface); color: var(--brass);
     border: 1px solid color-mix(in srgb, var(--brass) 45%, var(--line));
     font-size: 10px; font-weight: 700; line-height: 1;
     display: flex; align-items: center; justify-content: center;
     box-shadow: 0 0 0 2px var(--paper); font-variant-numeric: tabular-nums;
   }
-  /* 气泡栈：贴握把左侧（右缘 18px，与握把出屏半侧不相压），纵列 ≤3 条 + 溢出计数 */
+  /* 气泡栈：贴握把左侧（右缘 26px = 出屏 22px + 4px 缝，握把加大 44 后同步外移防相压），纵列 ≤3 条 + 溢出计数 */
   .bubbles {
-    position: fixed; right: 18px; top: 50%; transform: translateY(-50%); z-index: 40;
+    position: fixed; right: 26px; top: 50%; transform: translateY(-50%); z-index: 40;
     width: 272px; display: flex; flex-direction: column; gap: 10px;
   }
   .bubble {
