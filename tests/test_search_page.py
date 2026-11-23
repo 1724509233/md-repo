@@ -84,6 +84,73 @@ def test_s1_fab_search_entry_and_dim():
     assert m and "visibility" not in m.group(0), "is-dim 禁 visibility（FAB 须可点/可 Tab）"
 
 
+def _run_node(js: str):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node missing")
+    subprocess.run([node, "--input-type=module", "-e", js], check=True, timeout=30)
+
+
+def test_s2_snippet_render_pure():
+    # spec §17 可钉管线：单趟 alternation（code→bold→heading→terms）+ callback 逐段 escapeHtml。
+    # XSS 样本必上（Review Focus 3）；首处 hit-first / 后续 hit（spec §11）。
+    sr = (TPL / "js/utils/snippetRender.js")
+    assert sr.exists(), "snippetRender.js 未建"
+    mod = sr.as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        # --- sliceWindow ---
+        "const t='x'.repeat(400);"
+        "let s=m.sliceWindow(t,200);"
+        "eq(s.lead&&s.tail,true,'mid lead+tail'); eq(s.slice.length,302,'mid slice 150+150+2 ellipsis');"
+        "s=m.sliceWindow(t,10);"
+        "eq(s.lead,false,'head no lead'); eq(s.slice.startsWith('x'),true,'head raw start');"
+        "s=m.sliceWindow(t,-1);"
+        "eq(s.slice.startsWith('x'),true,'nohit head-cut'); eq(s.slice.length,151,'nohit after+ellipsis');"
+        # --- renderInline XSS：查询词命中实体内部不得打碎实体 ---
+        "let h=m.renderInline('<a>&amp;</a>',['amp']);"
+        "if(h.includes('<a>')){console.error('raw tag leaked');process.exit(1)}"
+        "eq(h.includes('&lt;a&gt;&amp;<mark class=\"hit-first\">amp</mark>;&lt;/a&gt;'),true,'entity split ok');"
+        # --- code span 免疫：代码内星号/命中词不进 bold/mark ---
+        "h=m.renderInline('`**x**` and **y**',['x']);"
+        "eq(h.includes('<code>**x**</code>'),true,'code immune');"
+        "eq(h.includes('<strong>y</strong>'),true,'bold outside code');"
+        "if(h.includes('<mark')){console.error('term inside code matched');process.exit(1)}"
+        # --- 首处/后续分层 ---
+        "h=m.renderInline('foo bar foo',['foo']);"
+        "eq((h.match(/hit-first/g)||[]).length,1,'exactly one hit-first');"
+        "eq((h.match(/class=\\\"hit\\\"/g)||[]).length,1,'one plain hit');"
+        "if(h.indexOf('hit-first')>h.indexOf('class=\\\"hit\\\"')){console.error('order');process.exit(1)}"
+        # --- 行首 # 标记剥离 ---
+        "h=m.renderInline('para\\n## Title x',[]);"
+        "eq(h.includes('##'),false,'heading marker stripped');"
+        "eq(h.includes('Title x'),true,'heading text kept');"
+        # --- 空 terms = 纯转义 ---
+        "eq(m.renderInline('a\\\"b',[]),'a&quot;b','empty terms pure escape');"
+        # --- firstHitIndex：整词优先再逐词 ---
+        "eq(m.firstHitIndex('the quick brown fox'.split('').reduce((a,c)=>a+c,''),'quick brown'.split(' ')),4,'term order');"
+        "eq(m.firstHitIndex('abc',[]),-1,'no terms -1');"
+        # --- TIER_LABEL 四呈现名 ---
+        "eq(m.TIER_LABEL.strict,'精确','tier strict');eq(m.TIER_LABEL.near,'邻近','tier near');"
+        "eq(m.TIER_LABEL.relaxed,'宽松','tier relaxed');eq(m.TIER_LABEL.fuzzy,'模糊','tier fuzzy');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+    src = sr.read_text(encoding="utf-8")
+    assert not re.search(r"\bimport\b", src), "snippetRender 零 import（node 直测纪律）"
+    assert "Vue" not in src
+
+
+def test_s2_search_panel_consumes_escape_helpers():
+    # escapeHtml/escapeRe 迁至 utils 单点；SearchPanel 改 import（防两仓转义漂移）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    assert "from '../utils/snippetRender.js'" in sp
+    assert "function escapeHtml" not in sp and "function escapeRe" not in sp, "转义函数须迁出组件"
+
+
 def test_s1b_three_tokens_and_centering():
     # spec §3：--col-measure(680)/--col-topline/--col-inline 三 token 两视图共读；
     # 摘 .doc-scroll/.doc-head 非对称 padding-right 让位（列心病根，Review Focus 4）。

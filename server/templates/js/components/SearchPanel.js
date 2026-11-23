@@ -6,20 +6,11 @@
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
 import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights } from '../utils/search.js'
+import { escapeHtml, escapeRe } from '../utils/snippetRender.js'   // 转义单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
 
 const SEARCH_TOP_K = 8
-
-// HTML 转义（P0：content 是服务端 markdown 原文，v-html 前必须先转义防 XSS）
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-}
-
-// 匹配词高亮：先 escapeHtml，再对转义后的文本做正则替换（替换产物仅含 <mark> 标签）
-function escapeRe(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
 
 // 片段窗口：以首个命中为中心截取，保证命中落在 3 行 clamp 的前 ~2 行内（260px 宽下 ≈30 汉字）。
 // 优先整句、再逐词定位；fuzzy/relaxed 档可能无字面命中 → 退化为头部截取（同旧行为）。
