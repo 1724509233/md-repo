@@ -5,7 +5,7 @@
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights, groupByPath } from '../utils/search.js'
+import { createSearchController, shapeSegments, countRows, parseTagQuery, readWeights, groupByPath, readPrefs, writePrefs, TIER_TIERS } from '../utils/search.js'
 import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
@@ -28,13 +28,19 @@ export const SearchPanel = {
 
     // 共享控制器写入的响应式容器（spec §4.3：与树内下拉同一状态机）
     // 字段必须是 ref（控制器经 .value 读写）；不能包 reactive（会自动解包 ref）
+    // 设备偏好（spec §5 第二层；localStorage 键名与读写全住 utils——组件零镜像）：
+    // 缺键 = 跟服务端 config 默认层——recall 不预置 null 而是落 relaxed 运行值
+    // （F1 回退语义只在 relaxed 上成立），includeCode null → 不发键。
+    const prefs = readPrefs()
     const state = {
       results: ref([]),
       loading: ref(false),
       activeIndex: ref(-1),
       moreLoading: ref(false),  // 显式 fuzzy 请求进行中（「展示更多」点击后）
-      fuzzyDone: ref(false),    // fuzzy 通道已关闭（跑过 / 零命中已耗尽 / 请求失败）
-      resultTier: ref('relaxed') // 产出当前结果的档位（relaxed/fuzzy，spec 2026-11-13 §3）
+      fuzzyDone: ref(false),    // 显式 fuzzy 已跑过（fuzzy 通道关闭）
+      resultTier: ref('relaxed'), // 产出当前结果的档位（终态以响应 recall 为准）
+      recall: ref(prefs.recall || 'relaxed'),        // 请求档位（chip 写面）
+      includeCode: ref(prefs.includeCode === true)   // 含代码开关（true 才发键）
     }
 
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
@@ -158,6 +164,48 @@ export const SearchPanel = {
       }
     })
 
+    // ── 页内档位 chip + 含代码开关（spec §5 第二层设备偏好；plan T10）──
+    // chip 显档 = 响应终点档（resultTier，回退后的终态）；四项全走 TIER_LABEL 呈现名，
+    // 内部档位名不进呈现。换档/翻开关 = rerun 立即重跑（F1：一行新落账——**不加去重**，
+    // rerun 即「再提交一次查询」的用户动作；同档点击 no-op 不算去重）。
+    const showTierPop = ref(false)
+    const tierPopEl = ref(null)
+    const includeCode = state.includeCode   // 模板绑定用（避免模板里拖 state.* 长链）
+    const currentTier = computed(() => resultTier.value || state.recall.value)
+    const chipTierVisible = computed(() =>
+      results.value.length > 0 && currentTier.value !== 'fuzzy')
+    function selectTier(t) {
+      showTierPop.value = false
+      if (t === currentTier.value) return
+      state.recall.value = t
+      writePrefs({ ...readPrefs(), recall: t })
+      search.rerun()   // 尚无输入（lastRaw 空）则 no-op
+    }
+    function toggleIncludeCode() {
+      const next = !state.includeCode.value
+      state.includeCode.value = next
+      writePrefs({ ...readPrefs(), includeCode: next })
+      search.rerun()
+    }
+    // 点外关闭（同 sort-pop 的 mousedown 模式）。入口豁免走 [data-tier-toggle] 属性粒度
+    //（AGENTS 红线：外点守卫豁免链必须登记旗标全部写入点，防「点开秒关」同族病）。
+    function onTierPopDocMouseDown(e) {
+      if (tierPopEl.value && !tierPopEl.value.contains(e.target) &&
+          !(e.target.closest && e.target.closest('[data-tier-toggle]'))) {
+        showTierPop.value = false
+      }
+    }
+    function onTierPopEsc() { showTierPop.value = false }
+    watch(showTierPop, (open) => {
+      if (open) {
+        document.addEventListener('mousedown', onTierPopDocMouseDown)
+        document.addEventListener('keydown', onTierPopEsc)
+      } else {
+        document.removeEventListener('mousedown', onTierPopDocMouseDown)
+        document.removeEventListener('keydown', onTierPopEsc)
+      }
+    })
+
     // 结果整形：segment 平铺 + 相对相关性（本次结果最高分 = 100%）
     // via 徽标（spec §3-③）：文档级 via 映射到每个 segment 项；缺失（无 tag 路径/legacy 兜底）不渲染
     const shaped = computed(() => {
@@ -234,6 +282,8 @@ export const SearchPanel = {
 
     onBeforeUnmount(() => {
       document.removeEventListener('mousedown', onSortDocMouseDown)
+      document.removeEventListener('mousedown', onTierPopDocMouseDown)
+      document.removeEventListener('keydown', onTierPopEsc)
       mqDesktop.removeEventListener('change', onMqDesktop)
       search.destroy()
     })
@@ -246,6 +296,9 @@ export const SearchPanel = {
       isPriv, ICONS_LOCAL,
       // S2 呈现：呈现名映射 / 展开态 / 占位分工 / 隐私提示
       TIER_LABEL, expanded, toggleExpand, inputPlaceholder, privacyNote,
+      // T10 档位 chip + 含代码开关（设备偏好）
+      showTierPop, tierPopEl, currentTier, chipTierVisible, selectTier, toggleIncludeCode,
+      TIER_TIERS, includeCode,
       // 最近搜索（S1b 空态）
       recent, fillRecent, clearRecent,
       // ① tag 选择器
@@ -314,7 +367,19 @@ export const SearchPanel = {
       <div v-if="searchQuery.trim()" class="sp-meta">
         <span v-if="loading" class="sp-meta-loading"><span class="search-spinner search-spinner-sm"></span>检索中…</span>
         <span v-else>{{ docCount }} 篇 · {{ segmentCount }} 个片段</span>
-        <span v-if="!loading || results.length">· 档 <span class="sp-tier">{{ TIER_LABEL[resultTier] || '宽松' }}</span></span>
+        <span v-if="!loading || results.length" class="sp-meta-tier">· 档
+          <!-- 桌面页内 chip（plan T10）：四项全称下拉 + 含代码开关；移动 sheet 零改动退纯文本
+              （CSS 媒体块藏 chip/pop，此面逐字同 S2 前形态）。显档恒取响应终点档（resultTier） -->
+          <button v-if="chipTierVisible" type="button" class="sp-tier sp-tier-chip" data-tier-toggle
+            :aria-expanded="showTierPop ? 'true' : 'false'" @click="showTierPop = !showTierPop">{{ TIER_LABEL[currentTier] }} ⌄</button>
+          <span v-if="showTierPop" ref="tierPopEl" class="sp-tier-pop">
+            <button v-for="t in TIER_TIERS" :key="t" type="button" class="sp-tier-opt"
+              :class="{ on: t === currentTier }" :aria-pressed="t === currentTier" @click="selectTier(t)">{{ TIER_LABEL[t] }}</button>
+            <span class="sp-tier-sep"></span>
+            <label class="sp-tier-code"><input type="checkbox" :checked="includeCode" @change="toggleIncludeCode()"><span>含代码</span></label>
+          </span>
+          <span v-else class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
+        </span>
       </div>
 
       <!-- 结果区（两分支加载，§4）：有旧结果压暗保留不清空；无旧结果出骨架不空白 -->
@@ -324,7 +389,7 @@ export const SearchPanel = {
           <div class="sp-skel-grp"><div class="sp-skel-row sk-head" style="width:38%"></div><div class="sp-skel-row" style="width:92%"></div><div class="sp-skel-row" style="width:77%"></div><div class="sp-skel-row" style="width:60%"></div></div>
           <div class="sp-skel-grp"><div class="sp-skel-row sk-head" style="width:46%"></div><div class="sp-skel-row" style="width:85%"></div><div class="sp-skel-row" style="width:68%"></div></div>
         </div>
-        <!-- 零结果 = relaxed→fuzzy 回退耗尽的终态（两句人话，档位名不进文案；隐私并入条件式） -->
+        <!-- 零结果 = 宽档→模糊全链回退耗尽的终态（两句人话，档位名不进文案；隐私并入条件式） -->
         <div v-else-if="!loading && !results.length && fuzzyDone" class="sp-empty">
           <div class="sp-empty-t1">无匹配<span v-if="privacyNote">——若相关文档在隐私设置中，已被排除</span></div>
           <div class="sp-empty-t2">已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。</div>
@@ -348,7 +413,7 @@ export const SearchPanel = {
           <!-- 隐私过滤提示（§6：结果区末尾一行弱字，条件式措辞，无计数无路径） -->
           <div v-if="privacyNote && results.length" class="sp-privacy-note">若相关文档在隐私设置中，已被排除</div>
 
-          <!-- 底部：显式 fuzzy 请求进行中 → 展示更多（relaxed 有命中且 fuzzy 未跑）→ 耗尽终态 -->
+          <!-- 底部：显式「更多」请求进行中 → 展示更多（宽档有命中且模糊未跑）→ 耗尽终态 -->
           <div v-if="moreLoading && results.length > 0" class="sp-prefetching">
             <span class="search-spinner search-spinner-sm"></span>
             <span>正在加载更多…</span>

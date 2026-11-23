@@ -1519,12 +1519,15 @@ export const SettingsPage = {
                         <span v-if="err('search.top_k_max')" class="st-field-err">{{ err('search.top_k_max') }}</span>
                       </label>
                     </div>
-                    <!-- 容器 div（label 内禁 labelable 后代——AGENTS 红线；本字段后代是 button） -->
+                    <!-- 容器 div（label 内禁 labelable 后代——AGENTS 红线；本字段后代是 button）；
+                         st-trg-head = 标签与开关同行形（沿「复用主智能体模型」先例，非字段列形） -->
                     <div class="st-field">
-                      <span class="st-lbl" id="st-code-lbl">结果包含代码文件</span>
-                      <button class="st-toggle" :class="{ on: form.search.include_code }" type="button" role="switch"
-                        :aria-checked="form.search.include_code" aria-labelledby="st-code-lbl"
-                        @click="form.search.include_code = !form.search.include_code"></button>
+                      <div class="st-trg-head">
+                        <span class="st-lbl" id="st-code-lbl">结果包含代码文件</span>
+                        <button class="st-toggle" :class="{ on: form.search.include_code }" type="button" role="switch"
+                          :aria-checked="form.search.include_code" aria-labelledby="st-code-lbl"
+                          @click="form.search.include_code = !form.search.include_code"></button>
+                      </div>
                       <span class="st-hint">默认关：代码块不进检索结果</span>
                     </div>
                     <span class="st-hint">这里是全局默认；检索页的档位与「含代码」按次生效，不改这里</span>

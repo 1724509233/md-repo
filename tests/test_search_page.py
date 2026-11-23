@@ -251,6 +251,27 @@ def test_s3_drawer_guard_exemptions():
     assert re.search(r"searchQuery\.value = '';\s*e\.stopPropagation\(\)", ft), "Esc 清词未拦冒泡"
 
 
+def test_s4_tier_chip_and_prefs():
+    # spec §5 三层分层收口（T10）：chip 呈现零内部档位名 / 设备偏好单源 utils /
+    # 外点守卫入口登记（红线同款）/ include_code 缺省不发键。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    sj = (TPL / "js/utils/search.js").read_text(encoding="utf-8")
+    api = (TPL / "js/api.js").read_text(encoding="utf-8")
+    # ① 模板呈现面逐字禁 strict/near/relaxed/fuzzy（档位名只住 TIER_LABEL 映射与请求参数）
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    for name in ("strict", "near", "relaxed", "fuzzy"):
+        assert not re.search(r"\b" + name + r"\b", tpl), f"模板含内部档位名 {name}"
+    assert "TIER_LABEL[t]" in tpl and "TIER_TIERS" in tpl and "chipTierVisible" in tpl
+    # ② 设备偏好单源 utils（组件不各写各的键）
+    assert "mdvault.searchPrefs" in sj and "function readPrefs" in sj and "function writePrefs" in sj
+    assert "mdvault.searchPrefs" not in sp
+    # ③ chip 开关入口 data-tier-toggle 与外点守卫豁免链同名登记（点开秒关指纹防复发）
+    assert "data-tier-toggle" in tpl and "closest('[data-tier-toggle]')" in sp
+    # ④ 控制器档位取 state.recall（缺省 relaxed）；includeCode 布尔才发键
+    assert re.search(r"state\.recall && state\.recall\.value", sj)
+    assert "typeof includeCode === 'boolean'" in api and "body.include_code = includeCode" in api
+
+
 def test_s1b_three_tokens_and_centering():
     # spec §3：--col-measure(680)/--col-topline/--col-inline 三 token 两视图共读；
     # 摘 .doc-scroll/.doc-head 非对称 padding-right 让位（列心病根，Review Focus 4）。

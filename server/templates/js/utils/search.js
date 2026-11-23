@@ -105,6 +105,21 @@ export function readWeights() {
   }
 }
 
+// 设备偏好（plan 2026-11-23 T10，spec §5 第二层）：档位与「含代码」的每设备缺省。
+// 缺键 = 跟服务端 config 默认层；损坏 JSON 逐键类型守卫退缺省。
+export const TIER_TIERS = ['strict', 'near', 'relaxed', 'fuzzy']   // 内部名（永不进呈现串）
+export function readPrefs() {
+  let o = {}
+  try { o = JSON.parse(localStorage.getItem('mdvault.searchPrefs') || '{}') || {} } catch { o = {} }
+  return {
+    recall: TIER_TIERS.includes(o.recall) ? o.recall : null,   // null = 跟缺省
+    includeCode: typeof o.includeCode === 'boolean' ? o.includeCode : null
+  }
+}
+export function writePrefs(p) {
+  try { localStorage.setItem('mdvault.searchPrefs', JSON.stringify(p)) } catch { /* 隐私模式等 → 内存态照常 */ }
+}
+
 export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput, onSearchComplete }) {
   let debounceTimer = null
   let abortController = null
@@ -113,21 +128,23 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
   let lastKeywords = '' // 产出当前结果的 keywords（点击落账的 query 来源）
   let lastTags = []
 
-  // 一次 runSearch = 一个 relaxed 请求（F1：一次用户动作一行落账）。
-  // 零命中时服务端已在同请求内回退 fuzzy（响应 recall=fuzzy），
-  // 客户端收到空结果 = fuzzy 亦零 → 终态，无「放宽再试」。
+  // 一次 runSearch = 一个请求（F1：一次用户动作一行落账）。档位 = 设备偏好
+  // （state.recall，T10），缺省 relaxed——零命中时服务端仅 relaxed 档同请求内
+  // 回退 fuzzy（响应 recall=终点档），客户端收到空结果 = 终态，无「放宽再试」。
   async function runSearch(keywords, tags) {
     if (abortController) abortController.abort()
     const controller = new AbortController()
     abortController = controller
     const id = ++requestId
+    const tier = (state.recall && state.recall.value) || 'relaxed'
     state.loading.value = true
     state.moreLoading.value = false
     state.fuzzyDone.value = false
-    if (state.resultTier) state.resultTier.value = 'relaxed'
+    if (state.resultTier) state.resultTier.value = tier
     let data
     try {
-      data = await api.aiSearch(keywords, topK, controller.signal, 'relaxed', tags, readWeights())
+      data = await api.aiSearch(keywords, topK, controller.signal, tier, tags, readWeights(),
+                                state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
       if (id !== requestId) return
@@ -178,7 +195,8 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.moreLoading.value = true
     let data
     try {
-      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags, readWeights())
+      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags, readWeights(),
+                                state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return
       if (id !== requestId) return
