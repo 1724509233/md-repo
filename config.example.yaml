@@ -227,3 +227,10 @@ background_agents:
 # 同 alias 的 review 类通知（proposal_paths 相交）自动合并。
 notifications:
   daily_cap: 20
+
+# 检索全局默认层（spec 2026-11-23 §5 三层配置分层）：页内档位 chip 是查询级、
+# 设备偏好走 localStorage，本段只是「客户端不点名时」的服务端默认。
+search:
+  top_k_default: 12   # 请求不带 top_k 时的返回片段数
+  top_k_max: 50       # 请求 top_k 超限钳制（不报错）
+  exclude_code: true  # true = 围栏代码块不进召回；页内「含代码」开关可逐次覆盖

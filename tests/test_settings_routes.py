@@ -272,7 +272,7 @@ def test_put_success_fidelity_backup_revision(tmp_path, vault_dir, db_conn):
     resp = client.put("/api/settings", json=body)
     assert resp.status_code == 200
     data = resp.json()
-    assert data["applied"] == ["ai", "background_agents", "notifications", "privacy", "log"]
+    assert data["applied"] == ["ai", "background_agents", "notifications", "privacy", "log", "search"]
     assert data["restart_needed"] == []
     saved = w.config_path.read_bytes()
     assert data["revision"] == revision_of(w.config_path) != rev0

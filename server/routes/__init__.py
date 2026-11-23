@@ -57,6 +57,10 @@ class WebContext:
     # 热生效代际戳（spec §5.1）：设置路由保存成功后 ++；agent_cache 的
     # _get_agent 读侧比对（Task 6）——失效只在读侧发生，永不外清缓存。
     settings_gen: int = 0
+    # 检索配置活引用（plan 2026-11-23 T8，spec §5 全局默认层）：main 启动值，
+    # /api/settings 保存成功后换引用（同 notif 套路）；None = 未接线 → 路由用
+    # SearchConfig() 缺省。
+    search_cfg: object | None = None
 
 
 from . import agent, console, egress, home, memory, notifications, recall, settings, sync, trash

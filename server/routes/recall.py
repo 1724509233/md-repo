@@ -29,7 +29,14 @@ def register(app, ctx) -> None:
     async def ai_search(request: Request) -> dict:
         body = await request.json()
         query = body.get("query", "")
-        top_k = int(body.get("top_k", 5))
+        # 全局默认层（plan 2026-11-23 T8，spec §5）：top_k 缺省走 config
+        # search.top_k_default，超限钳制不 400；include_code 缺省 = config
+        # exclude_code 的反义（显式请求键始终赢）。ctx.search_cfg 未接线退
+        # SearchConfig() 缺省（12/50/True，与旧硬编码 5 的差异仅缺省面）。
+        from ..config.search import SearchConfig
+        cfg = ctx.search_cfg or SearchConfig()
+        top_k = min(int(body.get("top_k", cfg.top_k_default)), cfg.top_k_max)
+        include_code = bool(body.get("include_code", not cfg.exclude_code))
         recall = body.get("recall", "strict")
         if recall not in ("strict", "near", "relaxed", "fuzzy"):
             raise HTTPException(status_code=400, detail="invalid recall tier")
@@ -42,7 +49,8 @@ def register(app, ctx) -> None:
         from ..ai import rag_search
         try:
             results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
-                                 recall=recall, tags=tags, weights=weights)
+                                 recall=recall, tags=tags, weights=weights,
+                                 include_code=include_code)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -60,7 +68,8 @@ def register(app, ctx) -> None:
         if recall == "relaxed" and not results:
             try:
                 results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
-                                     recall="fuzzy", tags=tags, weights=weights)
+                                     recall="fuzzy", tags=tags, weights=weights,
+                                     include_code=include_code)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:

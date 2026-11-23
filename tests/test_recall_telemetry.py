@@ -21,7 +21,8 @@ def _mock_rag_search(monkeypatch, results):
 
     calls = []
 
-    def stub(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None):
+    def stub(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None,
+             include_code=False, **kw):
         calls.append({"query": query, "top_k": top_k, "recall": recall})
         return results
 
@@ -38,7 +39,8 @@ def test_search_hits_ledgered_in_recall_log(app, db_conn, client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert [r["path"] for r in body["results"]] == ["notes/a.md", "notes/b.md"]
-    assert calls == [{"query": "hello", "top_k": 5, "recall": "near"}]
+    # top_k 缺省 = config search 段默认 12（plan 2026-11-23 T8 取代旧硬编码 5）
+    assert calls == [{"query": "hello", "top_k": 12, "recall": "near"}]
 
     rows = db_conn.execute(
         "SELECT ts, source, query, path, score, recall FROM recall_log"
@@ -69,7 +71,8 @@ def _mock_rag_search_tiers(monkeypatch, by_tier):
 
     calls = []
 
-    def stub(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None):
+    def stub(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None,
+             include_code=False, **kw):
         calls.append({"query": query, "top_k": top_k, "recall": recall})
         return by_tier.get(recall, [])
 
@@ -150,7 +153,8 @@ def test_fts_syntax_error_400_no_ledger(app, db_conn, client, monkeypatch):
     import server.ai as ai_mod
     import sqlite3
 
-    def boom(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None):
+    def boom(vault_dir, query, top_k=5, recall="strict", tags=None, weights=None,
+             include_code=False, **kw):
         raise sqlite3.OperationalError("fts5: syntax error near \"*\"")
 
     monkeypatch.setattr(ai_mod, "rag_search", boom)
