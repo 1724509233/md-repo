@@ -1768,3 +1768,49 @@ def test_e2e_frontmatter_tag_related(vault_dir, db_conn):
 
     assert "notes/b.md" in out
     assert "score 0.50" in out
+
+
+# --- shared tag names on tag-mediated related rows (doc-face chips) ---
+
+def test_shared_tags_aggregates_multi_tag_dedup(vault_dir):
+    """doc×tag 多行按 doc 聚合去重；tag 名升序；start doc 不入键。"""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import (
+        graph_upsert_entity, graph_add_edge, graph_shared_tags)
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        c = graph_upsert_entity(conn, "c.md", "doc", "c.md")
+        t1 = graph_upsert_entity(conn, "beta", "tag")
+        t2 = graph_upsert_entity(conn, "alpha", "tag")
+        graph_add_edge(conn, a, t1, "tag", "a.md")
+        graph_add_edge(conn, a, t2, "tag", "a.md")
+        graph_add_edge(conn, b, t1, "tag", "b.md")   # b shares both tags
+        graph_add_edge(conn, b, t2, "tag", "b.md")
+        graph_add_edge(conn, c, t2, "tag", "c.md")   # c shares one
+
+        out = graph_shared_tags(conn, "a.md")
+        assert out == {"b.md": ["alpha", "beta"], "c.md": ["alpha"]}
+        assert "a.md" not in out  # start doc never a key
+    finally:
+        conn.close()
+
+
+def test_shared_tags_empty_without_tag_edges(vault_dir):
+    """wikilink-only doc / unknown path → {}（非 tag 中介行拿不到 tags）。"""
+    from server.vault.db.schema import init_db
+    from server.vault.db.graph_sql import (
+        graph_upsert_entity, graph_add_edge, graph_shared_tags)
+
+    conn = init_db(vault_dir / ".sync" / "index.db")
+    try:
+        a = graph_upsert_entity(conn, "a.md", "doc", "a.md")
+        b = graph_upsert_entity(conn, "b.md", "doc", "b.md")
+        graph_add_edge(conn, a, b, "wikilink", "a.md")
+
+        assert graph_shared_tags(conn, "a.md") == {}
+        assert graph_shared_tags(conn, "missing.md") == {}
+    finally:
+        conn.close()

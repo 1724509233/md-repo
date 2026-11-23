@@ -646,3 +646,25 @@ def test_doc_face_endpoint_ignored_and_drained(
     assert ledger_conn.execute(
         "SELECT COUNT(*) FROM relatedness WHERE ignored = 0").fetchone()[0] == 1
     assert eid_b != eid
+
+
+# ── doc face: shared tag names on tag-mediated link rows ─────────────────
+
+def test_doc_face_tag_rows_carry_shared_tags(client, vault_dir, db_conn, ledger_conn):
+    """tag 中介链接行附 tags 数组（共享 tag 名升序）；wikilink 行无 tags 键。"""
+    _write(vault_dir, "notes/a.md", b"---\ntags: [x, y]\n---\n# A\n\nSee [[d]].\n")
+    _write(vault_dir, "notes/b.md", b"---\ntags: [x, y]\n---\n# B\n")
+    _write(vault_dir, "notes/c.md", b"---\ntags: [x]\n---\n# C\n")
+    _write(vault_dir, "notes/d.md", b"# D\n")
+    for relp in ("notes/a.md", "notes/b.md", "notes/c.md", "notes/d.md"):
+        graph_extract_file(db_conn, vault_dir, relp)
+
+    resp = client.get("/api/memory/doc/notes/a.md")
+    assert resp.status_code == 200
+    links = {r["path"]: r for r in resp.json()["links"]}
+    assert links["notes/b.md"]["type"] == "tag"
+    assert links["notes/b.md"]["tags"] == ["x", "y"]
+    assert links["notes/c.md"]["type"] == "tag"
+    assert links["notes/c.md"]["tags"] == ["x"]
+    assert links["notes/d.md"]["type"] == "wikilink"
+    assert "tags" not in links["notes/d.md"]

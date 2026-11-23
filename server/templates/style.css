@@ -78,9 +78,11 @@ input, textarea { -webkit-user-select: text; user-select: text; }
    滚动面内可聚焦元素改 inset 环。最小集 = 文件树滚动容器（.tree-scroll，FileTree nav）
    + .sp-results；grep overflow-y: auto 全表核对的第三处 = .search-dropdown——实效来自
    「展示更多」钮（option 走 aria-activedescendant 方案，焦点恒留 input，:focus-visible
-   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll/
-   .rel-scroll 及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
-.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible {
+   不在 option 上触发）。其余滚动面（.toc-list/.c-scroll/.m-scroll
+   及 #ai-messages/.doc-scroll）本轮不动，见 ledger 勘察记录。 */
+/* .rel-scroll 补挂（spec 2026-11-23-rel-face-redesign §2.3，上方注释预留补挂位兑现）：
+   「关联」面桌面浮层 overflow:hidden 裁外描环，面内整行 button 有键盘焦点落点 */
+.tree-scroll :focus-visible, .sp-results :focus-visible, .search-dropdown :focus-visible, .rel-scroll :focus-visible {
   box-shadow: inset 0 0 0 2px var(--paper), inset 0 0 0 3px var(--brass);
 }
 
@@ -1389,8 +1391,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 
 /* ============ 记忆控制台 · 文档面（v2b② spec §6.4：控制台呈现面，2026-11-14）
    纯追加：既有类零改动。三块可折叠（2026-11-14 用户拍板：tag 与 wikilink 分块 + 各块折叠 + 机器建议改名 AI 建议）。
-   新增件 = .doc-path-line 文档路径行（mono 10px ellipsis，hover title 全值）
-   / .doc-row 链接行（wikilink 块 = 中性，整行可点跳转；.mach = AI 建议机器行，
+   新增件 = .doc-row 链接行（wikilink 块 = 中性，整行可点跳转；.mach = AI 建议机器行，
    黄铜左缘 2px + 4% 黄铜底 = 唯一强调色）
    / .c-sec-h .b-ic 块标题图标槽（图标 = 关联类型：wikilink 链环 / tag 标签 / AI 建议 relatedness 黄铜）
    / .c-sec-fold 可折叠块标题（.c-sec-h 升级 button，整行可点；.car chevron 展开旋转 90°；.fold 0fr→1fr）
@@ -1400,8 +1401,6 @@ details.d-sec .body { padding: 8px 12px 14px; }
    / .doc-row.fading 忽略淡出（opacity .2s，JS 200ms 后移除行）
    / .topbar-btn:disabled 顶栏「关联」禁用态（未选文档；按钮恒定渲染零跳变，D5 同口径）
    动效仅 opacity/transform 路径（.fold grid 0fr→1fr，GPU 友好无 reflow）。 ============ */
-/* 文档路径行（p-head 之下；全值在 hover title） */
-.doc-path-line { flex-shrink: 0; padding: 7px 14px 0; font-family: var(--mono); font-size: 10px; color: color-mix(in srgb, var(--ink-soft) 75%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 链接行：wikilink 块 = 中性（整行可点跳转）；AI 建议 = 机器行（黄铜）；文档名行全宽（无每行图标） */
 .doc-row { display: block; width: 100%; text-align: left; background: transparent; border: none; font-family: var(--sans); padding: 7px 8px; margin: 0 0 6px; border-radius: 7px; cursor: pointer; transition: background-color .15s ease, opacity .2s ease; }
 .doc-row:hover { background: color-mix(in srgb, var(--ink) 4%, transparent); }
@@ -1436,6 +1435,25 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 顶栏「关联」：未选文档 → disabled（按钮恒定渲染零跳变，D5 同口径） */
 .topbar-btn:disabled { opacity: .4; cursor: default; }
 .topbar-btn:disabled:hover { background: transparent; color: var(--ink-soft); }
+/* ── rel-face-redesign 追加（2026-11-23 定稿，spec 同名文件 §2/§3）：用户层单列表两行式行规格
+   + tag chip + 头计数徽标 + 按压反馈 + 空态次行。纯追加，token 全走 :root 零新色。
+   内宽推导：280px 浮层 − .c-sec 左右内距 24 − 行内距 16 ≈ 240px（移动 sheet 更宽，规格不变只是余量大）。
+   名行/次行 = R2 basename 去 .md / R3 目录（根 = 「根目录」恒显，行高恒定）；
+   chip = R5 黄铜弱描边 pill——与 .cnt.hot（12%/35%）同族再弱一档（6%/32%），
+   行级黄铜轨 + 4% 底仍是机器层专属，不互撞；
+   :active 墨 6% 一次性按压确认感（.15s ease = 基础行 background-color 过渡同族），
+   :not(.mach) 限定——机器层行底色（黄铜 4%/7%）不被按压态墨底覆写。
+   名↔chip gap = .doc-row-line 既有 flex 容器 gap 7px 直用（§2 表 6px 为推导值，存量规则不动）。 */
+.doc-row-name { flex: 1; min-width: 0; font-family: var(--sans); font-size: 12.5px; font-weight: 500; line-height: 1.4; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row-dir { font-family: var(--mono); font-size: 10px; line-height: 1.4; margin-top: 2px; color: color-mix(in srgb, var(--ink-soft) 78%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-tag { display: inline-flex; align-items: center; flex-shrink: 0; max-width: 96px; height: 16px; padding: 0 6px; border-radius: 999px; font-family: var(--mono); font-size: 9.5px; color: var(--brass); border: 1px solid color-mix(in srgb, var(--brass) 32%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-row:not(.mach):active { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+/* 头计数徽标 = .c-sec-h .cnt 画法复用（§3：mono 10px pill；为 0 模板层不渲染）；
+   .rel-face 作用域覆写 .p-head .pcount 文本形——其余面板头 pcount 零改动 */
+.rel-face .p-head .pcount { font-family: var(--mono); font-size: 10px; font-weight: 500; min-width: 1.25rem; height: 1.125rem; padding: 0 .375rem; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, var(--surface)); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); color: var(--ink-soft); }
+/* 空态次行（§4 行动指引；比 .doc-none 主行再弱一档。负 margin 收 .doc-none 下内距 8px 至 ~2px，
+   不动存量 .doc-none 规则——负外距跨内核安全，不用 :has） */
+.doc-none-sub { font-family: var(--sans); font-size: 10px; line-height: 1.4; margin-top: -6px; padding: 0 4px 8px; color: color-mix(in srgb, var(--ink-soft) 55%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .doc-row, .doc-ignore, .c-sec-fold .car { transition: none; }
 }
@@ -1648,7 +1666,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* ============ 关联呈现 · 预览区侧栏 + 移动 bottom sheet（spec §6.4 候选①，2026-11-14；
    设计稿 docs/design/2026-11-14-relatedness-doc-face-alternative.html 1:1）
    纯追加：既有类零改动。内容件 = 上方文档面分节同一套（.doc-row/.mach/.doc-basis/.doc-ignore/
-   .c-sec-h/.cnt.hot/.doc-path-line/.doc-none，候选① 与控制台方案零分叉）。
+   .c-sec-h/.cnt.hot/.doc-none，候选① 与控制台方案零分叉）。
    新增件 = .rel-side 280px 右侧栏（关闭态 width 0 零占位、瞬时切换 + 面入场 cFaceIn，同 console-shell 开合纪律；
    680px 列在剩余空间一次性重居中，无 width 过渡不做逐帧回流）
    / .rel-face 面容器（侧栏 = absolute inset；sheet = 手柄下 flex 子件）
@@ -1661,11 +1679,11 @@ details.d-sec .body { padding: 8px 12px 14px; }
 
 /* ── 桌面/平板（≥861px）：280px 右侧栏 ── */
 /* 容器：关闭态 width 0（不占位、不可点）；.open = 瞬时 width 280px（无 width 过渡 → 主区一次性重布局） */
-.rel-side { width: 0; flex-shrink: 0; position: relative; overflow: hidden; background: var(--paper); border-left: 0; pointer-events: none; }
+.rel-side { width: 0; flex-shrink: 0; position: relative; overflow: hidden; background: #fff; border-left: 0; pointer-events: none; } /* 2026-11-23 用户拍板：关联子页白底（三态同源统一） */
 .rel-side.open { width: 280px; border-left: 1px solid var(--line); pointer-events: auto; }
 /* 面容器：侧栏内 absolute inset（关闭态 width 0 由 overflow:hidden 裁剪，无残留）；
    与预览间距 = 侧栏自身 padding（内容件 .c-sec 12px 左内距）+ 1px 左缘线 */
-.rel-side .rel-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); }
+.rel-side .rel-face { position: absolute; inset: 0; display: flex; flex-direction: column; background: #fff; }
 .rel-side .rel-face.anim { animation: cFaceIn .2s var(--ease) both; }
 /* 主滚动区 */
 .rel-scroll { flex: 1; min-height: 0; overflow-y: auto; }
@@ -1684,7 +1702,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
   .rel-sheet {
     position: fixed; left: 0; right: 0; bottom: 0; height: 80vh; z-index: 40;
     transform: translateY(100%);
-    background: var(--surface); border-top: 2px solid var(--brass);
+    background: #fff; border-top: 2px solid var(--brass); /* 白底随关联子页三态统一（2026-11-23） */
     border-radius: 24px 24px 0 0;
     box-shadow: 0 -16px 48px rgba(33,29,24,.25), 0 -1px 0 color-mix(in srgb, var(--brass) 45%, transparent);
     display: flex; flex-direction: column;

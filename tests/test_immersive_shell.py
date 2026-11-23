@@ -663,3 +663,83 @@ def test_rel_side_desktop_float():
                      r"[^}]*state\.tocOpen[^}]*toggleToc\(\)", app), "relOpen→toc 互斥支路缺"
     assert re.search(r"watch\(\(\) => state\.tocOpen, \(v\) => \{[^}]*isDesktop\.value"
                      r"[^}]*state\.relOpen = false", app), "tocOpen→rel 互斥支路缺"
+
+
+def test_rel_face_row_format_pure():
+    # rel-face-redesign（spec 2026-11-23）docRelFormat node 行为钉：行口径单源纯函数（R2–R4/§7）——
+    # fileName 去 .md / dupBasenames 只报撞名 / tailDir 保尾段前缀「…/」、短目录不切 /
+    # dirText 三式（普通 | 根→「根目录」恒显 | 撞名切尾部、非撞名不动）/
+    # tagChip 双字段兼容（tags[0] 优先、单值 tag 回退、双缺=null = 字段缺席期不渲染 chip 合法）/
+    # rowTitle 无 tag 行 = 全路径；tag 行追加「 · 共享标签：」全量顿号并列。
+    mod = (TPL / "js/utils/docRelFormat.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const dq=(a,b,w)=>{if(a!==b){console.error(w,'got:',JSON.stringify(a),'want:',JSON.stringify(b));process.exit(1)}};"
+        "dq(m.fileName('docs/a/b/design.md'),'design','fileName 去 .md');"
+        "dq(m.fileName('x/noext'),'noext','fileName 无后缀');"
+        "dq(m.fileName(''),'','fileName 空');"
+        "const d=m.dupBasenames(['a/设计.md','b/设计.md','c/其他.md']);"
+        "dq(d.has('设计'),true,'dup 命中');"
+        "dq(d.has('其他'),false,'非 dup 不入集');"
+        "dq(d.size,1,'dup 集只含撞名');"
+        "dq(m.tailDir('docs/superpowers',30),'docs/superpowers','tailDir 短目录不切');"
+        "dq(m.tailDir('a/b/c/d/e',4),'…/e','tailDir 保尾段');"
+        "dq(m.tailDir('docs/superpowers/projects/vault-notes',30),'…/projects/vault-notes','tailDir 默认预算保尾两段');"
+        "dq(m.dirText('a/b/x.md',null),'a/b','dirText 普通目录');"
+        "dq(m.dirText('x.md',null),'根目录','dirText 根目录恒显');"
+        "dq(m.dirText('docs/superpowers/projects/vault-notes/x.md',new Set(['x'])),'…/projects/vault-notes','dirText 撞名切尾部');"
+        "dq(m.dirText('docs/superpowers/projects/vault-notes/x.md',new Set(['y'])),'docs/superpowers/projects/vault-notes','dirText 非撞名不切');"
+        "dq(m.tagChip({tags:['rel-face','x']}),'rel-face','tagChip tags[0] 优先');"
+        "dq(m.tagChip({tag:'solo'}),'solo','tagChip 单值 tag 回退');"
+        "dq(m.tagChip({tags:[],tag:'solo'}),'solo','tagChip 空数组回退 tag');"
+        "dq(m.tagChip({}),null,'tagChip 双缺=null（字段缺席期不渲染 chip）');"
+        "dq(m.rowTitle({path:'a/b.md'}),'a/b.md','rowTitle 无 tag 全路径');"
+        "dq(m.rowTitle({path:'a/b.md',tags:['x','y']}),'a/b.md · 共享标签：x、y','rowTitle tags 全量');"
+        "dq(m.rowTitle({path:'a/b.md',tag:'z'}),'a/b.md · 共享标签：z','rowTitle 单 tag');"
+        "process.exit(0)},()=>process.exit(1))") % mod
+    _run_node(js)
+
+
+def test_rel_face_structure_pins():
+    # rel-face-redesign 静态钉（spec §9 回归钉建议落地）：
+    # ① 旧块题字样退役（'Wikilink' 全文件零出现、Tag 块题零出现、fold 只剩 ai、旧分块 computed 删净）、
+    #   v-for 直耗后端序（R7 前端不二次排序）；
+    # ② 次行 helper 在位且撞名判定 + 尾部截断逻辑成立（dupBasenames → dirText 守卫 → tailDir '…/'）、
+    #   dirOf 复用 vaultLinks 不另起炉灶；
+    # ③ chip 双字段兼容串 `tags?.[0] ?? l.tag` 在位（docRelFormat 单源）+ 组件同源消费；
+    # ④ style.css 追加集在位（新类 + :active 带 :not(.mach) 守卫 + .rel-scroll 补挂 inset 环集合）。
+    dr = (TPL / "js/components/DocRelated.js").read_text(encoding="utf-8")
+    fmt = (TPL / "js/utils/docRelFormat.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+
+    # ① 用户层无块题无折叠
+    assert "Wikilink" not in dr, "旧块题 'Wikilink' 字样残留"
+    assert ">Tag<" not in dr and "'Tag'" not in dr and '"Tag"' not in dr, "旧块题 Tag 残留"
+    assert "fold.tag" not in dr and "fold.value.tag" not in dr and "tag: false" not in dr, "fold.tag 未退役"
+    assert "fold.wikilink" not in dr and "wikiLinks" not in dr and "tagLinks" not in dr, "旧分块 computed 未删净"
+    assert re.search(r"const fold = ref\(\{ ai: true \}\)", dr), "fold 初值未收敛到只剩 ai"
+    assert re.search(r'v-for="l in data\.links"', dr), "用户层未直耗 data.links 后端序（R7 禁前端二次排序）"
+
+    # ② 次行三式 + 撞名尾部截断
+    assert "…/" in fmt and "tailDir" in fmt and "dupBasenames" in fmt, "次行尾部截断 helper 缺"
+    assert re.search(r"if \(dups && dups\.has\(fileName\(path\)\)\) return tailDir\(dir\)", fmt), \
+        "dirText 缺「仅撞名行切尾部」守卫形（非撞名行不得切）"
+    assert re.search(r"return '根目录'", fmt), "根目录恒显缺"
+    assert "import { dirOf } from './vaultLinks.js'" in fmt, "dirOf 未复用 vaultLinks 既有口径"
+
+    # ③ chip 双字段兼容（后端交付 tags[] 或 tag 皆零前端改动；缺席期 null = 不渲染 chip）
+    assert "l.tags?.[0] ?? l.tag ?? null" in fmt, "chip 双字段兼容读取串缺"
+    assert "tagChip(l)" in dr and "rowTitle(l)" in dr and "dirFor(l.path)" in dr, "组件未同源消费行口径 helper"
+    assert re.search(r"import \{[^}]*\} from '\.\./utils/docRelFormat\.js'", dr), "组件未 import 行口径单源"
+    assert "{{ fileName(s.path) }}" in dr, "AI 段名行未改 fileName 口径（R6）"
+
+    # ④ CSS 追加集
+    rules = _css_rules(css)
+    for sel in (".doc-row-name", ".doc-row-dir", ".doc-tag", ".doc-none-sub"):
+        assert any(s == sel for s, b in rules), sel
+    assert any(s == ".doc-row:not(.mach):active" and "var(--ink) 6%" in b for s, b in rules), \
+        ":active 按压态缺或未 :not(.mach) 守卫（墨底会覆机器行黄铜底）"
+    assert any(s == ".rel-face .p-head .pcount" and "var(--mono)" in b for s, b in rules), \
+        "pcount 浮层 pill 覆写缺（.p-head .pcount 文本形为其余面板头共用，须作用域覆写）"
+    assert re.search(r"\.rel-scroll :focus-visible[^{]*\{[^}]*inset 0 0 0 2px", css), \
+        ".rel-scroll 未补挂 inset 环集合（浮层 overflow:hidden 裁外描环，§2.3 预留位兑现）"

@@ -378,7 +378,7 @@ def register(app, ctx) -> None:
         404 = the doc is gone (the face renders its dead-doc state); the
         suggestions carry ``edge_id`` for the ignore button.
         """
-        from ..vault.db.graph_sql import graph_get_related_with_machine
+        from ..vault.db.graph_sql import graph_get_related_with_machine, graph_shared_tags
 
         rel = _safe_rel_path(relpath)
         if rel is None:
@@ -388,9 +388,18 @@ def register(app, ctx) -> None:
             raise HTTPException(status_code=404, detail="document not found")
         rows = graph_get_related_with_machine(
             ctx.db_conn, ctx.ledger_conn, ctx.vault_dir, rel.as_posix())
+        links = [r for r in rows if r["layer"] == "user"]
+        # Tag-mediated rows carry the shared tag names (doc-face chips).
+        # Privacy-safe by construction: graph_shared_tags is enrichment-only
+        # — it annotates rows the BFS already privacy-filtered upstream
+        # (privacy-dir docs never reach ``links``), never adds new rows.
+        shared = graph_shared_tags(ctx.db_conn, rel.as_posix())
+        for l in links:
+            if l["type"] == "tag":
+                l["tags"] = shared.get(l["path"], [])
         return {
             "path": rel.as_posix(),
-            "links": [r for r in rows if r["layer"] == "user"],
+            "links": links,
             "suggestions": [r for r in rows if r["layer"] == "machine"],
         }
 
