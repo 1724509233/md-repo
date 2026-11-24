@@ -472,7 +472,11 @@ def test_s6_doc_tag_badges_template_pins():
     head = tpl[tpl.index('class="sp-grp-head"'):tpl.index("</div>", tpl.index('class="sp-grp-head"'))]
     assert "sp-doc-tags" in head and 'class="ct"' in head
     assert head.index("sp-doc-tags") < head.index('class="ct"'), "徽标流须在 ct 读数前"
-    assert '<div v-if="it.heading" class="sp-head-line">{{ it.heading }}</div>' in tpl
+    # 475 换形（spec 2026-11-24 §3 + §7.4 明令的设计变更授权，非弱化）：heading 从
+    # 「纯插值不高亮」翻为「v-html 走 renderInline 同管线必高亮」（escape/XSS 免疫复用，
+    # 不新造高亮路径）。旧形钉对号改钉新形 + 纯插值反钉防回潜。
+    assert '<div v-if="it.heading" class="sp-head-line" v-html="headHtml(it)"></div>' in tpl
+    assert "{{ it.heading }}" not in tpl, "heading 纯插值回潜（475 换形钉，spec 2026-11-24 §7.4）"
     # CSS 件面全在；.on = .sp-chip.on 同款黄铜混色语法（复用非新造）
     for sel in (".sp-doc-tags {", ".sp-doc-tag {", ".sp-doc-tag.on {", ".sp-doc-fold {"):
         assert sel in css, f"缺规则：{sel}"
@@ -565,3 +569,289 @@ def test_s7_meta_line_untouched_reverse_pin():
     assert "sp-mtime" not in meta, "mtime 误挂 meta 行（应住组头）"
     assert re.search(r"\{\{ docCount \}\} 篇 · \{\{ segmentCount \}\} 个片段", tpl)
     assert '<template v-else>· 档 <span class="sp-tier">' in tpl, "移动侧「· 档 + 纯文本档值」句流被破"
+
+
+# ── spec 2026-11-24 search-highlight-unification（T-FE1：tokens 换源 + 标题高亮 + pick 交接）──
+
+
+def test_s8_render_inline_terms_probe():
+    # spec §5 钉面：renderInline 词元表用例——长词优先（防短吞长：alternation 同位置按
+    # 书写序试支，短词在前吞长词命中位）、输入序不变、调用方数组不被原地改（同引用共享面
+    # 安全）、正则元字符词元字面化、小写词元命大小写混排且 mark 保原文大小写。
+    mod = (TPL / "js/utils/snippetRender.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        # 长词优先：短词在前的输入表，长词仍拿整词命中位（「修」不得抢「修复」头剩「复」裸奔）
+        "let h=m.renderInline('\u4fee\u590d\u4e0e\u4fee\u6539',['\u4fee','\u4fee\u590d']);"
+        "eq(h,'<mark class=\"hit-first\">\u4fee\u590d</mark>\u4e0e<mark class=\"hit\">\u4fee</mark>\u6539','long-first wins');"
+        "eq(m.renderInline('\u4fee\u590d\u4e0e\u4fee\u6539',['\u4fee\u590d','\u4fee']),h,'input order invariant');"
+        # 排序落 filter 副本：调用方词元数组序恒不变（pick payload terms 同引用共享面安全）
+        "const arr=['\u4fee','\u4fee\u590d','x'];"
+        "m.renderInline('\u4fee\u590d\u4e0e\u4fee\u6539',arr);"
+        "eq(arr.join(','),'\u4fee,\u4fee\u590d,x','caller terms not mutated');"
+        # 正则元字符词元字面化：点不配任意字符、括号不成组（词元表场景 escapeRe 不许回归）
+        "eq(m.renderInline('a.c and abc',['a.c']),'<mark class=\"hit-first\">a.c</mark> and abc','dot literal');"
+        "eq(m.renderInline('re(x) plain',['re(x)']),'<mark class=\"hit-first\">re(x)</mark> plain','parens literal');"
+        # 小写词元命中大小写混排文本：全命中且 mark 内容保原文
+        "eq(m.renderInline('Fix FIXED fix',['fix']),"
+        "'<mark class=\"hit-first\">Fix</mark> <mark class=\"hit\">FIX</mark>ED <mark class=\"hit\">fix</mark>','case-insensitive keep-case');"
+        # CJK 混长词元表（双字+单字同表）：首处分层与全词命中位皆按排序后 alternation
+        "h=m.renderInline('\u641c\u7d22 \u9ad8\u4eae \u641c\u7d22\u9ad8\u4eae',['\u641c\u7d22','\u641c\u7d22\u9ad8\u4eae','\u9ad8\u4eae','\u4eae']);"
+        "eq(h,'<mark class=\"hit-first\">\u641c\u7d22</mark> <mark class=\"hit\">\u9ad8\u4eae</mark> <mark class=\"hit\">\u641c\u7d22\u9ad8\u4eae</mark>','cjk mixed lengths');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
+def test_s8_tokens_source_switch_pins():
+    # spec §3 换源钉面 + 联调现场 bug（2026-11-24）回归钉。根因：控制器选项字面量同时
+    # 含 `api: apiProxy,` 与尾部 `api,` 简写——JS 后键覆盖前键，裸 api 静默吞掉薄壳，
+    # respTokens 恒空、高亮全走回退支且零报错（静态钉只钉「api: apiProxy 字面在场」
+    # 正是此类运行时接线语义的盲区 → 薄壳迁 utils 补运行时探针 test_s8_token_shim_runtime_probe）。
+    # 本钉 = 选项内 api 键唯一性反钉 + sink 接线 + lastTerms 双支 + 消费纪律（管线单点）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    sj = (TPL / "js/utils/search.js").read_text(encoding="utf-8")
+    assert "function createTokenShim(api, setTokens)" in sj, "薄壳未住 utils（node harness 不可达）"
+    assert "const respTokens = ref([])" in sp
+    assert re.search(r"const apiProxy = createTokenShim\(api, t => \{ respTokens\.value = t \}\)", sp), "sink 接线缺席"
+    i = sp.index("createSearchController({")
+    opts = sp[i:sp.index("focusInput()", i)]
+    assert opts.count("api: apiProxy") == 1, "api: apiProxy 须恰出现一次"
+    assert not re.search(r"^\s*api,\s", opts, re.M), \
+        "控制器选项再现 api 简写重复键（后键覆盖 apiProxy——联调 bug 2026-11-24 根因反钉）"
+    m = re.search(r"function lastTerms\(\) \{(.*?)\n    \}", sp, re.S)
+    assert m, "lastTerms 缺失"
+    seg = m.group(1)
+    assert "respTokens.value" in seg and ".toLowerCase()" in seg, "tokens 非空直用支缺失（换源未落）"
+    assert "return q ? [q.toLowerCase(), ...q.split(/\\s+/).map(t => t.toLowerCase()).filter(Boolean)] : []" in seg, \
+        "旧空白切分回退支被改动（spec §3「原样保留为回退」）"
+    # 消费纪律（管线单点）：组件禁手搓 mark，标题高亮只准走 renderInline
+    assert "<mark" not in sp, "组件手搓 mark（镜像管线纪律）"
+    assert re.search(r"function headHtml\(it\) \{\s*return renderInline\(it\.heading \|\| '', lastTerms\(\)\)", sp), \
+        "标题高亮未走 renderInline 同管线（新造高亮路径）"
+
+
+def test_s8_token_shim_runtime_probe():
+    # 运行时钉（联调 bug 家族的根治补面：接线/时序语义静态钉抓不住，node harness 直测）。
+    # createTokenShim + createSearchController 全组合（mock api，零真网）：
+    # ① tokens 落 sink 且响应体同引用透传（pick payload 共享面）；② 迟到过期响应不覆新值
+    # （自发序守卫）；③ tokens 空/缺席 → 空数组（回退入口）；④ 发单 reject（abort 穿回）
+    # sink 不动、守卫不死锁；⑤ 全链 runSearch 后 sink 与控制器 results 同步落账。
+    mod = (TPL / "js/utils/search.js").as_uri()
+    js = (
+        "import(%r).then(async m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        # mock api：发单入队受控 resolve/reject（模拟乱序回包与 abort）
+        "const deferred=[];"
+        "const mockApi={aiSearch:(q)=>new Promise((res,rej)=>deferred.push({q,res,rej}))};"
+        "let stored=null;"
+        "const shim=m.createTokenShim(mockApi,t=>{stored=t});"
+        # ① 响应含 tokens → sink 拿词元；响应体同引用透传（非拷贝）
+        "const r1={results:[],recall:'strict',tokens:['\u5206\u5c42','\u53ec\u56de']};"
+        "let p=shim.aiSearch('q1');deferred[0].res(r1);let got=await p;"
+        "if(got!==r1){console.error('response not same-ref passthrough');process.exit(1)}"
+        "eq(stored.join(','),'\u5206\u5c42,\u53ec\u56de','tokens land in sink');"
+        # ② 过期迟到：q2 发单挂起、q3 后发先至，q2 迟到落账不得覆新（自发序守卫）
+        "p=shim.aiSearch('q2');const p3=shim.aiSearch('q3');"
+        "deferred[2].res({results:[],recall:'relaxed',tokens:['a3']});await p3;"
+        "eq(stored.join(','),'a3','latest issued lands');"
+        "deferred[1].res({results:[],recall:'relaxed',tokens:['a2-STALE']});await p;"
+        "eq(stored.join(','),'a3','stale late response must not clobber');"
+        # ③ 旧服务端（键缺席）与降级空集 → 空数组（lastTerms 回退入口）
+        "p=shim.aiSearch('q4');deferred[3].res({results:[],recall:'fuzzy'});await p;"
+        "eq(stored.length,0,'missing tokens key -> empty');"
+        "p=shim.aiSearch('q5');deferred[4].res({results:[],tokens:[]});await p;"
+        "if(!(Array.isArray(stored)&&stored.length===0)){console.error('empty tokens stay array');process.exit(1)}"
+        # ④ 发单成功一次建立非空 sink，随后新发单 reject（abort 穿回）：异常达调用方、sink 不动
+        "p=shim.aiSearch('q6');deferred[5].res({results:[],tokens:['a6']});await p;"
+        "eq(stored.join(','),'a6','pre-reject baseline');"
+        "p=shim.aiSearch('q7');deferred[6].rej(Object.assign(new Error('aborted'),{name:'AbortError'}));"
+        "let threw=false;try{await p}catch(e){threw=e.name==='AbortError'}"
+        "if(!threw){console.error('abort not propagated to controller');process.exit(1)}"
+        "eq(stored.join(','),'a6','reject leaves sink untouched');"
+        # 守卫死锁自证：reject 之后最新发单照常回填
+        "p=shim.aiSearch('q8');deferred[7].res({results:[],tokens:['a8']});await p;"
+        "eq(stored.join(','),'a8','no guard deadlock after reject');"
+        # ⑤ 全链组合：控制器吃薄壳，debounce 尾跑 runSearch → sink 与 state.results 同步落账
+        "const state={results:{value:[]},loading:{value:false},activeIndex:{value:-1},moreLoading:{value:false},"
+        "fuzzyDone:{value:false},resultTier:{value:'relaxed'},recall:{value:'relaxed'},includeCode:{value:null}};"
+        "const ctrl=m.createSearchController({api:shim,topK:8,debounceMs:0,state});"
+        "ctrl.setInput('\u5206\u5c42 \u53ec\u56de');"
+        "await new Promise(r=>setTimeout(r,10));"
+        "deferred[deferred.length-1].res({results:[{path:'a.md',segments:[{heading_path:'h',content:'\u5206\u5c42\u53ec\u56de'}],score:1}],"
+        "recall:'strict',tokens:['\u5206\u5c42','\u53ec\u56de']});"
+        "await new Promise(r=>setTimeout(r,10));"
+        "eq(stored.join(','),'\u5206\u5c42,\u53ec\u56de','controller chain lands tokens');"
+        "eq(state.results.value.length,1,'controller applied results');"
+        "eq(state.loading.value,false,'loading closed');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
+def test_s8_pick_payload_terms_pin():
+    # spec §4 会合契约（字段名与形状不许改）：pickItem 的 pick 事件第三参 = item 带下的
+    # terms（当前响应 tokens 数组，同引用不拷贝）。T-FE2 消费端实装
+    # onSearchPick(path, heading, terms) 以 Array.isArray 防呆；旧消费方按位收
+    # (path, heading) 零破坏。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    m = re.search(r"function pickItem\(item, i\) \{(.*?)\n    \}", sp, re.S)
+    assert m, "pickItem 缺失"
+    seg = m.group(1)
+    assert "api.recallClick({ path: item.path, via: 'search', query: search.lastQuery(), rank: i + 1 })" in seg, \
+        "点击落账旧行为被改动（一行一落账纪律）"
+    assert re.search(r"props\.onPick\(item\.path, item\.heading, respTokens\.value\)", seg), \
+        "pick payload terms 契约破形（第三参=tokens 数组同引用，不许改）"
+
+
+def test_s8_heading_mark_css():
+    # spec §3 CSS 钉面：标题命中记号与片段 mark 同族更克制——hit-first 上底 22%→16%、
+    # hit 只 brass 掺灰墨不上底不加粗（不抢标题层级）。顶层选择器（零新 @media）；
+    # 禁 .search-page 前缀 = 共享件双壳同渲染族先例（.sp-snip mark 同款；前缀化会让
+    # 移动 sheet 掉回浏览器默认黄底——移动 sheet 无 .search-page 容器）。
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    m1 = re.search(r"(?m)^\.sp-head-line mark\.hit-first \{([^}]*)\}", css)
+    m2 = re.search(r"(?m)^\.sp-head-line mark\.hit \{([^}]*)\}", css)
+    assert m1, ".sp-head-line mark.hit-first 规则缺席（顶层，零新 @media）"
+    assert m2, ".sp-head-line mark.hit 规则缺席（顶层，零新 @media）"
+    assert "var(--brass) 16%" in m1.group(1), "hit-first 底未比片段 22% 降一档（标题克制）"
+    assert "none" in m2.group(1) and "var(--brass)" in m2.group(1), "hit 须黄铜字色不上底（不抢标题层级）"
+    assert ".search-page .sp-head-line mark" not in css, "标题 mark 族禁 .search-page 前缀（移动 sheet 掉默认黄）"
+
+
+# ── 2026-11-24 乙案（用户拍板）：tag 条件合一行（桌面支路）+ 长尾下拉 ──
+
+
+def test_s9_chips_visible_probe():
+    # chipsVisible 纯函数 node 探针（乙案呈现铁律，utils/search.js，foldDocTags 家族）：
+    # 空选=现状 top5 / 已选恒浮前且相互间保 doc_count 序 / 未选补满 cap=5 /
+    # 已选>cap 全显无幽灵（条件永不隐藏，foldDocTags 命中铁律同源）/ 表外手输 tag
+    # doc_count=null 排表内已选后 / 缺席防御 / 大小写归一 / cap 参数 / 恒等式族 / 序稳定。
+    mod = (TPL / "js/utils/search.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        "const j=JSON.stringify;"
+        "const T=(...p)=>p.map(x=>({name:x[0],doc_count:x[1]}));"
+        "const tags=T(['a',100],['b',90],['c',80],['d',70],['e',60],['f',50],['g',40]);"
+        "let r=m.chipsVisible(tags,[]);"
+        "eq(j(r.map(t=>t.name)),j(['a','b','c','d','e']),'empty selected = top5');"
+        "eq(r.every(t=>!t.on),true,'empty selected all ghost');"
+        "r=m.chipsVisible(tags,['c']);"
+        "eq(j(r.map(t=>t.name)),j(['c','a','b','d','e']),'selected floats first, fills to 5');"
+        "eq(j(r.map(t=>!!t.on)),j([true,false,false,false,false]),'float on-flags');"
+        "r=m.chipsVisible(tags,['g','a']);"
+        "eq(j(r.map(t=>t.name)),j(['a','g','b','c','d']),'multi-selected keeps doc_count order');"
+        "r=m.chipsVisible(tags,['f','g','e','d','c','b']);"
+        "eq(j(r.map(t=>t.name)),j(['b','c','d','e','f','g']),'selected>cap all shown, no ghost');"
+        "r=m.chipsVisible(tags,['zz','c']);"
+        "eq(j(r.map(t=>t.name)),j(['c','zz','a','b','d']),'extra after table-selected');"
+        "eq(r[1].doc_count,null,'extra count null (hand-typed unknown tag)');"
+        "eq(j(m.chipsVisible(undefined,[])),j([]),'tags missing defensive');"
+        "eq(j(m.chipsVisible(null,['x'])),j([{name:'x',doc_count:null,on:true}]),'both-defensive extra');"
+        "r=m.chipsVisible([{name:'FOO',doc_count:3}],['foo']);"
+        "eq(r[0].on,true,'case-insensitive float');"
+        "eq(j(m.chipsVisible(tags,[],2).map(t=>t.name)),j(['a','b']),'cap param');"
+        "for(const sel of [[],['a'],['c','g'],['zz','c'],['f','g','e','d','c','b']]){"
+        "const out=m.chipsVisible(tags,sel);const u=new Set(sel.map(s=>s.toLowerCase()));"
+        "if(out.length!==Math.max(5,u.size)){console.error('total=max(cap,selected)');process.exit(1)}"
+        "if(out.filter(t=>t.on).length!==u.size){console.error('all selected shown');process.exit(1)}"
+        "if(out.filter(t=>!t.on).length>Math.max(0,5-u.size)){console.error('ghost fill budget');process.exit(1)}"
+        "if(out.some((t,i)=>i&&t.name===out[i-1].name)){console.error('dup entry');process.exit(1)}}"
+        "eq(j(m.chipsVisible(tags,['c'])),j(m.chipsVisible(tags,['c'])),'deterministic');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
+def test_s9_cond_row_desktop_template_pins():
+    # 乙案桌面支路结构钉：壳门（isDesktopShell）/实心条件胶囊+✕/幽灵补位/「全部 N ▾」
+    # 下拉 toggle/行式列表+限高滚动+尾部提示；折叠逻辑住 utils 反镜像钉；CSS 件面全在
+    # 且黄铜实心只许 .sp-cchip（候选池 .sp-chip 出实心 = 黄铜预算破口，必钉）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    # ① 桌面支路门 + 合一行件面
+    assert '<div v-if="tagOptions.length && isDesktopShell" class="sp-chips sp-chips-cond">' in tpl, \
+        "桌面条件合一行缺 isDesktopShell 壳门（移动泄漏）"
+    assert '<template v-for="t in chipsRow" :key="t.name">' in tpl, "合一行未消费 chipsRow"
+    assert '<span v-if="t.on" class="sp-cchip">' in tpl, "实心条件胶囊缺席"
+    m_x = re.search(r'<button type="button" class="sp-cchip-x"[^>]*>', tpl)
+    assert m_x and '@click="toggleTag(t.name)"' in m_x.group(0) and 'title="移除筛选"' in m_x.group(0) \
+        and ':aria-label=' in m_x.group(0), \
+        "✕ 未接 toggleTag（事实源=输入文本铁律）"
+    assert '<span v-if="t.doc_count != null" class="sp-chip-count">' in tpl, "表外 tag 幽灵胶囊计数豁免缺席"
+    # ② 下拉 toggle + 面板结构（tier-pop 面板同参族先例）
+    assert 'class="sp-chip-toggle" data-tagpop-toggle' in tpl, "长尾 toggle 缺 data-tagpop-toggle 标记"
+    assert '<span>全部 {{ tagOptions.length }}</span>' in tpl, "toggle 未显全量数"
+    assert 'ref="tagPopEl" class="sp-tag-pop"' in tpl, "下拉面板锚缺失"
+    _pp = tpl.index('class="sp-tag-pop"')
+    pop = tpl[_pp:tpl.index("</span>\n      </div>", _pp)]
+    assert 'v-for="t in tagOptions"' in pop and 'class="sp-tag-row"' in pop, "行式列表缺"
+    assert ':class="{ on: isTagSelected(t.name) }" :aria-pressed="isTagSelected(t.name)" @click="toggleTag(t.name)"' in pop, \
+        "下拉行未同源选中态/未接 toggleTag"
+    assert 'class="sp-tag-pop-f"' in pop and "POP_WINDOW" in pop, "尾部「余 X 枚可滚」提示缺"
+    # ③ 纯函数住 utils（组件禁镜像实现，foldDocTags 先例）+ 单源消费形
+    assert "chipsVisible" in sp and "from '../utils/search.js'" in sp
+    assert "function chipsVisible" not in sp, "合行逻辑须住 utils 纯函数，禁在组件镜像"
+    assert "chipsVisible(tagOptions.value, selectedTags.value, CHIPS_CAP)" in sp, \
+        "chipsRow 未以 tagOptions×selectedTags 派生（单一事实源）"
+    # ④ CSS 件面 + 黄铜预算钉
+    for sel in (".sp-chips-cond {", ".sp-cchip {", ".sp-cchip-x {", ".sp-tag-pop {",
+                ".sp-tag-row.on {", ".sp-tag-pop-f {"):
+        assert sel in css, f"缺规则：{sel}"
+    m_cc = re.search(r"(?m)^\.sp-cchip \{([^}]*)\}", css)
+    assert m_cc and "background: var(--brass)" in m_cc.group(1), "条件胶囊非实心黄铜"
+    m_ghost = re.search(r"(?m)^\.sp-chip \{([^}]*)\}", css)
+    assert m_ghost and "var(--brass)" not in m_ghost.group(1), "候选池幽灵胶囊出黄铜=预算破口"
+    m_pop = re.search(r"(?m)^\.sp-tag-pop \{([^}]*)\}", css)
+    assert m_pop and "z-index: 50" in m_pop.group(1), "下拉 z 层须对号壳层 z 表（下拉=50）"
+
+
+def test_s9_tag_pop_state_machine_pins():
+    # 下拉状态机钉（乙案红线主体，tier-pop 先例逐件对抄）：入口豁免链同名登记
+    # （AGENTS 2026-11-23「点开秒关」两连犯升格条）/ watch 挂摘对 / Esc / 卸载摘净 /
+    # 跨断点清零 / 旗标写入点普查（true 恒不直写——只由 toggle 翻）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    # ① 豁免链同名登记：toggle 入口属性 与 守卫 closest 字面同串
+    assert "data-tagpop-toggle" in tpl and "closest('[data-tagpop-toggle]')" in sp, \
+        "外点守卫豁免链未登记（点开秒关指纹放行）"
+    # ② 状态机三件套：mousedown+keydown 挂摘对 / Esc 关
+    assert re.search(r"watch\(tagsPopOpen, \(open\) => \{\s*if \(open\) \{\s*document\.addEventListener\('mousedown', onTagPopDocMouseDown\)\s*document\.addEventListener\('keydown', onTagPopEsc\)", sp), \
+        "tagsPopOpen watch 挂载对缺席（tier-pop 同构破坏）"
+    assert "document.removeEventListener('mousedown', onTagPopDocMouseDown)" in sp.split("onBeforeUnmount")[1], \
+        "卸载未摘 mousedown（双实例泄漏）"
+    assert "document.removeEventListener('keydown', onTagPopEsc)" in sp.split("onBeforeUnmount")[1], \
+        "卸载未摘 Esc keydown"
+    assert "function onTagPopEsc() { tagsPopOpen.value = false }" in sp, "Esc 关闭件缺席"
+    # ③ 守卫体形态：面板内不关 + toggle 入口不关（同点抵消防线）
+    m = re.search(r"function onTagPopDocMouseDown\(e\) \{(.*?)\n    \}", sp, re.S)
+    assert m and "tagPopEl.value.contains(e.target)" in m.group(1), "守卫缺面板内豁免"
+    # ④ 写入点普查：旗标 false 恰三写（守卫/Esc/mq 清零），true 恒不直写（toggle 翻）
+    assert sp.count("tagsPopOpen.value = false") == 3, "旗标 false 写入点 != 3（守卫/Esc/跨断点清零）"
+    assert "tagsPopOpen.value = true" not in sp, "禁直写 true（唯一开=toggle 钮翻转）"
+    assert '@click="tagsPopOpen = !tagsPopOpen"' in tpl and ':aria-expanded="tagsPopOpen ? ' in tpl
+    # ⑤ 跨断点清零（沉浸式壳纪律：旗标所在壳 v-if 卸载同点清零）
+    assert re.search(r"const onMqDesktop = \(e\) => \{ isDesktopShell\.value = e\.matches; if \(!e\.matches\) tagsPopOpen\.value = false \}", sp), \
+        "桌面→移动未清 tagsPopOpen"
+    # ⑥ 桌面支路不得触旧旗标（两旗标分治：tagsExpanded=移动专属）
+    dsk = tpl[tpl.index('class="sp-chips sp-chips-cond"'):tpl.index('v-else-if="tagOptions.length"')]
+    assert "tagsExpanded" not in dsk, "桌面支路触碰移动旗标"
+
+
+def test_s9_mobile_branch_verbatim_reverse_pin():
+    # 移动 sheet 逐字不动反钉（零改动红线）：v-else-if 旧支路保留全部旧件
+    # （visibleTags/tagsExpanded/收起展开更多/aria-pressed/on 绑定），且零新件渗漏。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    assert 'v-else-if="tagOptions.length" class="sp-chips" :class="{ expanded: tagsExpanded }"' in tpl, \
+        "移动旧支路容器行被改动"
+    i = tpl.index('v-else-if="tagOptions.length"')
+    mob = tpl[i:tpl.index("</div>", i)]
+    for keep in ('v-for="t in visibleTags"', ':class="{ on: isTagSelected(t.name) }"',
+                 ':aria-pressed="isTagSelected(t.name)"', "@click=\"toggleTag(t.name)\"",
+                 "{{ tagsExpanded ? '收起' : '展开更多' }}", 'class="sp-chip-name"', 'class="sp-chip-count"'):
+        assert keep in mob, f"移动支路旧件丢失：{keep}"
+    for leak in ("sp-cchip", "tagpop", "tagsPopOpen", "chipsRow", "sp-tag-pop", "POP_WINDOW", "tagPopEl", "✕"):
+        assert leak not in mob, f"桌面新件渗漏移动支路：{leak}"
+    # utils 旧导出零动（visibleTags 消费链完整）
+    assert "const visibleTags = computed(() => tagsExpanded.value ? tagOptions.value : tagOptions.value.slice(0, 5))" in sp

@@ -878,6 +878,16 @@ pre code.hljs { background: transparent; padding: 0; }
 .sp-snip mark.hit-first { background: color-mix(in srgb, var(--brass) 22%, transparent); color: color-mix(in srgb, var(--brass) 75%, var(--ink));
   font-weight: 700; border-radius: 3px; padding: 0 1px; }
 .sp-snip mark.hit { background: none; font-weight: 700; color: color-mix(in srgb, var(--brass) 75%, var(--ink)); }
+/* heading 命中记号（spec 2026-11-24 §3 标题高亮，475 换形同波）：与片段 mark 同族黄铜口径但更
+   克制一档——标题行本体是 12px 弱色 mono（降级层级），hit-first 上底 22%→16%、hit 只上
+   brass 掺灰墨的暗色不加底不加粗，高亮绝不反向抢标题层级。不带 .search-page 前缀 = 共享
+   件双壳同渲染，族先例即 .sp-snip mark（前缀化会让移动 sheet 掉回浏览器默认黄底）；零新 @media。 */
+.sp-head-line mark.hit-first { background: color-mix(in srgb, var(--brass) 16%, transparent); color: color-mix(in srgb, var(--brass) 62%, var(--ink-soft)); border-radius: 2px; }
+.sp-head-line mark.hit { background: none; color: color-mix(in srgb, var(--brass) 62%, var(--ink-soft)); }
+/* 正文搜索高亮（spec 2026-11-24 §4，T-FE2 合流落盘）：brass 22% 底家族口径（同
+   .sp-snip mark.hit-first 现值同参），正文无「首处」语义——全词元同底色不分 first/subsequent */
+.doc-hit { background: color-mix(in srgb, var(--brass) 22%, transparent); color: color-mix(in srgb, var(--brass) 75%, var(--ink));
+  border-radius: 3px; padding: 0 1px; }
 .sp-unfold { appearance: none; border: 0; background: none; padding: 4px 0 0; cursor: pointer;
   font-size: 12px; color: var(--brass); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
 .sp-unfold:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -1686,6 +1696,40 @@ details.d-sec .body { padding: 8px 12px 14px; }
   font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; font-variant-numeric: tabular-nums;
   color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 0 3px;
 }
+
+/* ④ tag 条件合一行（乙案 2026-11-24 用户拍板，mockup .openchamber/mockups/tag-query-options.html
+   乙案快照同参）：桌面 ≥1024 专属——类只出现在 SearchPanel 桌面支路 DOM（isDesktopShell 壳门），
+   移动 sheet 零此类（像素级零触达）。件面 = .sp-chips-cond（下拉锚）/ .sp-cchip(+.sp-cchip-x)
+   （实心条件胶囊：B 带唯一黄铜实心件，枚数=条件数——黄铜预算钉）/ .sp-tag-pop 系
+   （长尾下拉：.sp-tier-pop 面板语法同参 surface/line/8 圆角/shadow，z-50 对号壳层 z 表「下拉」行）。 */
+.sp-chips-cond { position: relative; }
+.sp-cchip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 4px 3px 10px; border: 1px solid var(--brass); border-radius: 999px;
+  background: var(--brass); color: var(--paper);
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; white-space: nowrap; }
+.sp-cchip-name { overflow: hidden; text-overflow: ellipsis; }
+.sp-cchip-x { appearance: none; border: 0; background: none; padding: 0 5px; border-radius: 999px; cursor: pointer;
+  color: var(--paper); font-size: 10px; line-height: 1.7; opacity: .8; transition: background-color .15s, opacity .15s; }
+.sp-cchip-x:hover { background: color-mix(in srgb, var(--paper) 25%, transparent); opacity: 1; }
+.sp-chips-cond .sp-chip-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.sp-tag-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 252px; max-width: 92%;
+  display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .12); padding: 4px; }
+.sp-tag-pop-h { display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 4px 10px 6px; }
+.sp-tag-pop-list { display: block; max-height: 224px; overflow-y: auto; }
+.sp-tag-row { appearance: none; border: 0; background: none; width: 100%; text-align: left; cursor: pointer;
+  display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; border-radius: 6px;
+  font-family: inherit; font-size: 12px; color: var(--ink); transition: background-color .15s, color .15s; }
+.sp-tag-row:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.sp-tag-row.on { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
+.sp-tag-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-tag-row-count { margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px;
+  font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); }
+.sp-tag-row.on .sp-tag-row-count { color: color-mix(in srgb, var(--brass) 75%, transparent); }
+.sp-tag-pop-f { display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  color: color-mix(in srgb, var(--ink-soft) 65%, transparent); padding: 5px 10px 4px; margin-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 
 /* ============ 关联呈现 · 预览区侧栏 + 移动 bottom sheet（spec §6.4 候选①，2026-11-14；
    设计稿 docs/design/2026-11-14-relatedness-doc-face-alternative.html 1:1）

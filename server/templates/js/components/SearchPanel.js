@@ -6,7 +6,7 @@
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS, foldDocTags, formatDocAge } from '../utils/search.js'
+import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS, foldDocTags, formatDocAge, createTokenShim, chipsVisible } from '../utils/search.js'
 import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
@@ -49,11 +49,23 @@ export const SearchPanel = {
     const appState = inject('state', null) // 全局状态（§2 D2 事件失效 bump；局部 state 已被控制器容器占用）
     // 隐私回显（spec 2026-11-18 §2.5，display-only）：结果命中隐私目录 → 同款小锁（差集可视化）
     const isPriv = p => isPrivacyScoped(appState ? appState.privacyDirs : [], p)
+    // ── 高亮词元消费源（spec 2026-11-24 §3 T-FE1 换源）──────────────────
+    // 高亮单一事实源 = /api/ai/search 响应顶层 tokens（后端实际参与召回的词元，
+    // 小写、恒在可空，与 results/recall 平级；契约见 spec §6 会合表）。截留住
+    // createTokenShim 薄壳（utils/search.js，防过期与透传语义在内，node harness 可测），
+    // 组件侧只接 sink。tokens 空/缺席（旧服务端、后端 jieba 异常降级）→ 存空数组
+    // → lastTerms 自然回退旧口径。数组原样入存（不拷贝）——pick payload terms 同引用。
+    // 联调 bug 2026-11-24 回归钉（test_s8_tokens_source_switch_pins 反钉）：曾同时
+    // 留 `api: apiProxy,` 与选项尾部 `api,` 简写——字面量后键覆盖前键，裸 api 静默
+    // 吞掉薄壳，高亮全走回退支且零报错。控制器选项 api 键自此恒唯一。
+    const respTokens = ref([])
+    const apiProxy = createTokenShim(api, t => { respTokens.value = t })
+
     const search = createSearchController({
       // topK 分层（A1：设置页「默认结果数」必须真生效）：桌面页不发键 → 跟 config
       // top_k_default（宽栏 12）；移动 sheet 与树内下拉钉 8（移动零改动红线）。
       // 函数形态=运行时求值，跨断点切换即换层（isDesktopShell 声明在后，调用期已初始化）
-      api, topK: () => (isDesktopShell.value ? null : SEARCH_TOP_K), debounceMs: 300, state,
+      api: apiProxy, topK: () => (isDesktopShell.value ? null : SEARCH_TOP_K), debounceMs: 300, state,
       focusInput() { if (inputEl.value) inputEl.value.focus({ preventScroll: true }) },
       onSearchComplete() { if (appState) appState.recallDataVersion++; if (results.value.length) rememberRecent(search.lastQuery()) } // §2 D2 事件失效：搜索完成 → 监控页 L2 静默重拉
     })
@@ -86,7 +98,10 @@ export const SearchPanel = {
     // ── 壳断点感知（spec §7/§10：页内框与移动 sheet 文案分工；移动侧逐字不动）──
     const mqDesktop = window.matchMedia('(min-width: 1024px)')
     const isDesktopShell = ref(mqDesktop.matches)
-    const onMqDesktop = (e) => { isDesktopShell.value = e.matches }
+    // 跨断点清零（沉浸式壳纪律）：桌面条件合一行下拉是桌面支路件——离开桌面清零，
+    // 防滞留 true（tagPopEl 已 null 而监听空转、回桌面时旧开态悬挂）。mq 事件恒在
+    // setup 完成后触发，tagsPopOpen 届时已初始化（const 时序安全）。
+    const onMqDesktop = (e) => { isDesktopShell.value = e.matches; if (!e.matches) tagsPopOpen.value = false }
     mqDesktop.addEventListener('change', onMqDesktop)
     const inputPlaceholder = computed(() => isDesktopShell.value ? '搜索全部文档内容' : '搜索文档… #tag 按标签搜')
     // 隐私过滤提示（spec §6：条件式措辞、零计数零路径；显隐判据 = privacy.dirs 非空，前端判定后端零改动）
@@ -118,6 +133,35 @@ export const SearchPanel = {
         searchQuery.value = q.trim() ? q.trimEnd() + ' #' + name : '#' + name
       }
     }
+
+    // ── ①b tag 条件合一行·桌面支路（乙案 2026-11-24 用户拍板）─────────────────
+    // 合一行规则 = chipsVisible 纯函数（utils，node 直测，foldDocTags 家族）：已选恒浮
+    // 行首、未选补满 cap=5。单一事实源 = 输入文本——实心胶囊 ✕ / 下拉行 / 幽灵补位
+    // 全经 toggleTag 回写文本，零第二 tag 状态。长尾（实测 204 枚）进下拉行式列表，
+    // 状态机照抄 tier-pop：mousedown 外点 + Esc；入口豁免 [data-tagpop-toggle] 属性
+    // 粒度（AGENTS 2026-11-23 红线——「点开秒关」同族病，tier pop [data-tier-toggle] 先例）。
+    // 移动 sheet 不消费本旗标（其展开/收起恒走旧 tagsExpanded，旧支路逐字不动）。
+    const tagsPopOpen = ref(false)
+    const tagPopEl = ref(null)
+    const CHIPS_CAP = 5
+    const POP_WINDOW = 8   // 下拉 max-height 224px ÷ 行高 27px ≈ 8 行整见；尾部「余 X 枚可滚」提示常数
+    const chipsRow = computed(() => chipsVisible(tagOptions.value, selectedTags.value, CHIPS_CAP))
+    function onTagPopDocMouseDown(e) {
+      if (tagPopEl.value && !tagPopEl.value.contains(e.target) &&
+          !(e.target.closest && e.target.closest('[data-tagpop-toggle]'))) {
+        tagsPopOpen.value = false
+      }
+    }
+    function onTagPopEsc() { tagsPopOpen.value = false }
+    watch(tagsPopOpen, (open) => {
+      if (open) {
+        document.addEventListener('mousedown', onTagPopDocMouseDown)
+        document.addEventListener('keydown', onTagPopEsc)
+      } else {
+        document.removeEventListener('mousedown', onTagPopDocMouseDown)
+        document.removeEventListener('keydown', onTagPopEsc)
+      }
+    })
 
     // ── ② 权重控件已退役（S5/T11）──
     // §5 三层配置模型无「第四配置」：融合权重排序不进任何层（后端 weights 面留给
@@ -220,11 +264,19 @@ export const SearchPanel = {
       expanded.value = s
     }
     watch(results, () => { if (expanded.value.size) expanded.value = new Set() })
-    // 命中词源 = 控制器产出 keywords（修旧毛病：原始输入连 #tag token 一起打进 mark，spec §4 点击落账条）
+    // 命中词源（spec 2026-11-24 §3 换源）：响应 tokens 非空 = 单一事实源（实际参与召回
+    // 的词元，修旧口径 bug：前端整串 vs 后端 jieba 子词）——小写归一后直用，长短词
+    // 优先序由 renderInline 管线内保证。空/缺席（旧服务端、后端降级）= 现空白切分
+    // 逻辑逐字回退（整串+逐词，兼容期禁改——修旧毛病句的 keywords 语义在此支保留）。
     function lastTerms() {
+      const tk = respTokens.value
+      if (tk.length) return tk.map(t => String(t).toLowerCase())
       const q = (search.lastQuery() || '').trim()
       return q ? [q.toLowerCase(), ...q.split(/\s+/).map(t => t.toLowerCase()).filter(Boolean)] : []
     }
+    // 标题高亮（spec 2026-11-24 §3，475 换形同波）：与片段同管线——renderInline 管
+    // escape 与 hit-first/hit 分层，标题无 code span/粗体语义（词元天然可命），不新造高亮路径。
+    function headHtml(it) { return renderInline(it.heading || '', lastTerms()) }
     function snip(it) {
       const text = (it.content || '').trim()
       const terms = lastTerms()
@@ -239,7 +291,11 @@ export const SearchPanel = {
     // openDoc（onPick）之前发出、不 await（fire-and-forget，恒 204）
     function pickItem(item, i) {
       api.recallClick({ path: item.path, via: 'search', query: search.lastQuery(), rank: i + 1 })
-      props.onPick(item.path, item.heading)
+      // 正文高亮交接（spec 2026-11-24 §4 会合契约，T-FE2 消费）：pick 事件第三参即
+      // item 带下的 terms——当前响应 tokens 数组原体（string[]，小写，同引用不拷贝）。
+      // 旧消费方按位收 (path, heading) 看不见新增参，签名零破坏；字段名与形状不许改
+      // （T-FE2 消费端 onSearchPick(path, heading, terms) 以 Array.isArray 防呆）。
+      props.onPick(item.path, item.heading, respTokens.value)
     }
 
     function onKeydown(e) {
@@ -281,6 +337,8 @@ export const SearchPanel = {
     onBeforeUnmount(() => {
       document.removeEventListener('mousedown', onTierPopDocMouseDown)
       document.removeEventListener('keydown', onTierPopEsc)
+      document.removeEventListener('mousedown', onTagPopDocMouseDown)
+      document.removeEventListener('keydown', onTagPopEsc)
       mqDesktop.removeEventListener('change', onMqDesktop)
       search.destroy()
     })
@@ -289,7 +347,7 @@ export const SearchPanel = {
       searchQuery, inputEl, rootEl, shaped, groups, segmentCount, docCount, resultTier,
       results, loading, activeIndex, moreLoading, fuzzyDone,
       shownRowCount, SEARCH_TOP_K,
-      pickItem, onKeydown, snip, search,
+      pickItem, onKeydown, snip, headHtml, search,
       isPriv, ICONS_LOCAL,
       // S2 呈现：呈现名映射 / 展开态 / 占位分工 / 隐私提示
       TIER_LABEL, expanded, toggleExpand, inputPlaceholder, privacyNote, isDesktopShell,
@@ -300,6 +358,8 @@ export const SearchPanel = {
       recent, fillRecent, clearRecent,
       // ① tag 选择器
       tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
+      // ①b tag 条件合一行（乙案桌面支路；下拉单实例锚 tagPopEl）
+      chipsRow, tagsPopOpen, tagPopEl, POP_WINDOW,
       // per-doc tag 徽标（spec 2026-11-24 §3）
       docTags, foldTitle,
       // 组头文档更新时间（格式化住 utils 纯函数，tooltip 完整日期在此）
@@ -329,8 +389,39 @@ export const SearchPanel = {
         <button v-for="w in recent" :key="w" type="button" @click="fillRecent(w)">{{ w }}</button>
         <button class="clr" type="button" @click="clearRecent">清空</button>
       </div>
-      <!-- ① tag 选择器行（输入区与 meta 行之间；/api/tags 失败/空 → 整行隐藏） -->
-      <div v-if="tagOptions.length" class="sp-chips" :class="{ expanded: tagsExpanded }">
+      <!-- ① tag 选择器/条件行（输入区与 meta 行之间；/api/tags 失败/空 → 整行隐藏）。
+           乙案 2026-11-24 用户拍板：桌面 ≥1024（isDesktopShell 壳门）= 条件合一行——
+           已选 tag 实心黄铜胶囊恒浮行首（✕ = 删输入 token，单一事实源=输入文本），未选
+           按 doc_count 补满 5（chipsVisible 纯函数），长尾进「全部 N ▾」下拉行式列表；
+           移动 sheet（v-else-if 支路）旧结构逐字不动（零改动红线）。 -->
+      <div v-if="tagOptions.length && isDesktopShell" class="sp-chips sp-chips-cond">
+        <template v-for="t in chipsRow" :key="t.name">
+          <span v-if="t.on" class="sp-cchip">
+            <span class="sp-cchip-name">#{{ t.name }}</span>
+            <button type="button" class="sp-cchip-x" title="移除筛选" :aria-label="'移除筛选 #' + t.name" @click="toggleTag(t.name)">✕</button>
+          </span>
+          <button v-else type="button" class="sp-chip" :title="'#'+t.name" @click="toggleTag(t.name)">
+            <span class="sp-chip-name">#{{ t.name }}</span>
+            <span v-if="t.doc_count != null" class="sp-chip-count">{{ t.doc_count }}</span>
+          </button>
+        </template>
+        <button v-if="tagOptions.length > 5" type="button" class="sp-chip-toggle" data-tagpop-toggle
+          :aria-expanded="tagsPopOpen ? 'true' : 'false'" @click="tagsPopOpen = !tagsPopOpen">
+          <span>全部 {{ tagOptions.length }}</span><svg aria-hidden="true" class="sp-tier-chev" :class="{ open: tagsPopOpen }" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <span v-if="tagsPopOpen" ref="tagPopEl" class="sp-tag-pop">
+          <span class="sp-tag-pop-h">全部 {{ tagOptions.length }} 个 tag · 按文档数降序</span>
+          <span class="sp-tag-pop-list">
+            <button v-for="t in tagOptions" :key="t.name" type="button" class="sp-tag-row"
+              :class="{ on: isTagSelected(t.name) }" :aria-pressed="isTagSelected(t.name)" @click="toggleTag(t.name)">
+              <span class="sp-tag-row-name">#{{ t.name }}</span>
+              <span class="sp-tag-row-count">{{ t.doc_count }}</span>
+            </button>
+          </span>
+          <span v-if="tagOptions.length > POP_WINDOW" class="sp-tag-pop-f">… 余 {{ tagOptions.length - POP_WINDOW }} 枚可滚</span>
+        </span>
+      </div>
+      <div v-else-if="tagOptions.length" class="sp-chips" :class="{ expanded: tagsExpanded }">
         <button v-for="t in visibleTags" :key="t.name" class="sp-chip"
           :class="{ on: isTagSelected(t.name) }" :aria-pressed="isTagSelected(t.name)" :title="'#'+t.name" @click="toggleTag(t.name)">
           <span class="sp-chip-name">#{{ t.name }}</span>
@@ -405,7 +496,7 @@ export const SearchPanel = {
             </div>
             <div v-for="it in g.items" :key="it.flat" class="sp-snip-card" :class="{ active: it.flat === activeIndex }"
                  :title="it.path" @click="pickItem(it, it.flat)" @mouseenter="activeIndex = it.flat">
-              <div v-if="it.heading" class="sp-head-line">{{ it.heading }}</div>
+              <div v-if="it.heading" class="sp-head-line" v-html="headHtml(it)"></div>
               <div class="sp-snip" :class="{ 'sp-clamp5': !expanded.has(it.flat) }" v-html="snip(it)"></div>
               <button type="button" class="sp-unfold" v-if="expanded.has(it.flat) || (it.content || '').trim().length > 160" @click.stop.prevent="toggleExpand(it.flat)">{{ expanded.has(it.flat) ? '收起' : '展开全文' }}</button>
             </div>

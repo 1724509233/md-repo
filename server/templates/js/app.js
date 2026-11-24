@@ -77,7 +77,9 @@ const state = reactive({
                           //  移动三补挡住一切置位路径）；显示优先级 monitoring > search > doc > home 由模板门实现
   chatPinned: false,      // 沉浸式壳 W5（T7，spec §4A）：聊天面板图钉态——false=右缘 .chatwin 浮窗 /
                           // true=.chat-slot in-flow 右槽（并入 mdvault.shellSlots.right='ai' 持久化）
-  peekReplies: []         // 气泡栈「管家回话」源（浮窗不可见时完成的 assistant 行；cap5 同 run 戳去重）
+  peekReplies: [],        // 气泡栈「管家回话」源（浮窗不可见时完成的 assistant 行；cap5 同 run 戳去重）
+  searchHighlight: null,  // 搜索跳转正文高亮落账（spec 2026-11-24 §4）：{ path, terms } | null——
+                          // onSearchPick 写；非搜索 openDoc / 编辑态清零；terms=后端召回词元（小写，可空）
 })
 
 // ─── 二级边栏（spec §3.4）：纯内存 activePanel，两面板 v-show 常驻 ───
@@ -250,6 +252,11 @@ async function loadDocs() {
 // 守卫 retry 捕获发起时 token，过期即 no-op（防挂起的「重试」复活旧切换目标）
 const navAttempt = createAttemptBox()
 
+// 搜索跳转高亮放行令牌（spec 2026-11-24 §4）：onSearchPick 在 openDoc 之前落账
+// state.searchHighlight 并发一次性令牌；openDoc 只认此令牌，其余来源（文件树/链接/
+// hash 深链）一律清零。读后即清——令牌不得跨导航残留（否则下一次同路径导航被假放行）
+let searchNavGrant = null
+
 async function openDoc(path, heading, fromLink) {
   // 监控页深链（如失败报告行）：文档区在整页模式下隐藏 → 离开该页，否则用户看不到打开的结果
   // （设置浮层无需此守卫：不占主页面，关闭归浮层自身）
@@ -269,6 +276,11 @@ async function openDoc(path, heading, fromLink) {
   // 监控页的退场在函数首行既有 exitMonitorPage 调用（开文档需文档区可见，原有契约不动）。
   state.drawer = null
   state.currentPath = path
+  // 正文搜索高亮清零闸门（spec 2026-11-24 §4）：非搜索来源（文件树/链接/hash 深链）一律清；
+  // 搜索跳转经 searchNavGrant 一次性令牌放行。落账必须先于 docContent 更新——那才是
+  // EditorPane 重渲染的扳机，届时高亮状态须已定
+  if (searchNavGrant !== path) state.searchHighlight = null
+  searchNavGrant = null
   state.view = 'doc'    // 检索页规则①改述：openDoc 时 view := 'doc'（spec §9）
   state.dirty = false
   // 软链无锚点跳转（bug 83e7241f）：落点必须是可读预览，编辑态不跟随着跳过去
@@ -405,7 +417,13 @@ function setMode(mode) {
   // 单向锁（审阅轮）：404 只锁进编辑（保存=PUT 重建幽灵）、放行回预览（双向锁+旁路=模式死胡同）
   if (mode === 'edit' && state.docMissing) return
   state.previewMode = mode === 'preview'
+  if (mode === 'edit') state.searchHighlight = null // 进编辑态即熄正文高亮（spec 2026-11-24 §4）
 }
+
+// 进编辑态第二路兜底（spec 2026-11-24 §4）：EditorPane landOn/landCell 格落位/块落位
+// 直接置 state.previewMode=false（setMode 的镜像旁路，不经上方清零支），watch 统一兜住
+// 一切编辑态进入；回预览时落账已 null，refreshPreview 的 applySearchHighlight 自然不跑
+watch(() => state.previewMode, (on) => { if (!on) state.searchHighlight = null })
 
 // ─── 目录（P4-3）：浮层开合 + scrollspy（仅浮层开启期间挂，rAF 节流，预览态高亮）───
 function tocScroller() {
@@ -890,7 +908,12 @@ function onTreeSelect(path, heading) {
 }
 
 // 搜索页结果点击：openDoc → 切回文件页 → 树展开 + 高亮滚动（spec §3.3）
-function onSearchPick(path, heading) {
+// terms（spec 2026-11-24 §4）：pick 事件 item 带下的后端召回词元（小写词元表）；
+// 可空/缺席（undefined=旧服务端或未接线）——两态归一防呆，空词元表 = EditorPane 侧不亮
+function onSearchPick(path, heading, terms) {
+  // 正文高亮落账：{ path, terms } + 一次性放行令牌（openDoc 清零闸门的唯一放行凭据）
+  state.searchHighlight = { path, terms: Array.isArray(terms) ? terms : [] }
+  searchNavGrant = path
   // 检索页（spec 2026-11-23 §7）：点击结果原地变身回文档，不再切回文件页——
   // 10-18「点击后切回文件页」作废（桌面路径）；树展开态由 watch currentPath 幂等驱动。
   // 移动抽屉分支逐字保留（≤1023px 零改动红线）。

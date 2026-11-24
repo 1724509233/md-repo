@@ -121,7 +121,25 @@ def register(app, ctx) -> None:
         for r in results:
             if isinstance(r, dict) and r.get("path"):
                 r["mtime"] = mtimes.get(r["path"])
-        return {"results": results, "recall": tier}
+        # 词元挂载面（spec 2026-11-24 §2，lane T-BE）：后端**实际参与召回的词元**
+        # 随响应顶层 "tokens" 返回（与 results/recall 平级、非 per-doc——词元是
+        # 查询属性，逐条挂纯属浪费；小写 canonical，可空）。前端三处高亮（片段/
+        # 标题/跳转正文）以它为唯一事实源，消灭「后端命中、前端不亮」。挂载同区
+        # 纪律（log_query 之后、tags/mtime 同款）：台账输入 dict 字节级不变。
+        # query_tokens = segments_search 本体的共享提取（防口径漂移：路由层永不
+        # 自带第二套分词规则），按**终档**取（tier 变量已含 F1 回退结果）。内核
+        # （rag_search/segments_search）返回值永不含 tokens 键——反钉守卫：
+        # agent/MCP 通道 token 预算零变。降级：任何异常（jieba 挂 / query 非串等）
+        # → tokens: [] 不 500（前端回退旧空白切分口径）。legacy 全库扫描路（内核
+        # 返回值形态是红线、_tokenize 私有跨包不可达 R3——路由无廉价降级信号）挂
+        # 同查询的 jieba 词元：仍是合法词元表，最坏高亮不中，与 [] 同降级面
+        # （§2「或 []」口径）。
+        from ..vault.db.segments_sql import query_tokens
+        try:
+            tokens = query_tokens(query, tier)
+        except Exception:
+            tokens = []
+        return {"results": results, "recall": tier, "tokens": tokens}
 
     @app.post("/api/recall/click")
     async def recall_click(request: Request) -> Response:

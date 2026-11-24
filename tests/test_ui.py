@@ -196,13 +196,18 @@ def test_refreshpreview_postprocesses_before_mapping():
 
     映射须按 postProcess 后的最终 DOM 写（mermaid pre → div.mermaid 替换发生在 postProcess）；
     顺序颠倒会把映射写到被替换掉的 pre 上。函数体内顺序正则钉住先后。
+    （2026-11-24 搜索正文高亮 spec §4 授权在两 call 之间挂 applySearchHighlight()——
+    逐行相邻正则换为先后序正则，§9.2 先后语义不变，非弱化。）
     """
     js = read_js("components/EditorPane.js")
     m = re.search(r"async function refreshPreview\(\) \{(.+?)\n    \}", js, re.S)
     assert m, "missing refreshPreview in EditorPane.js"
-    assert re.search(
-        r"postProcessPreview\([^)]*\)\s*\n\s*writeSrcLineMapping\(", m.group(0)
-    ), "refreshPreview must call postProcessPreview before writeSrcLineMapping (spec §9.2)"
+    seg = m.group(0)
+    i_post = seg.index("postProcessPreview(") if "postProcessPreview(" in seg else -1
+    i_map = seg.index("writeSrcLineMapping(") if "writeSrcLineMapping(" in seg else -1
+    assert -1 < i_post < i_map, (
+        "refreshPreview must call postProcessPreview before writeSrcLineMapping (spec §9.2)"
+    )
 
 
 def test_toc_jump_prefix_sum_uses_actual_separator_length():

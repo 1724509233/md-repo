@@ -46,8 +46,13 @@ export const TIER_LABEL = { strict: '精确', near: '邻近', relaxed: '宽松',
 
 // 内联级渲染（禁 marked，spec §4）：code→strong→行首 # 剥离→命中词，单趟 alternation + 逐段转义。
 // 命中分层（spec §11 黄铜预算豁免）：首处 hit-first（上底色），同卡后续只加粗——class 由 CSS 分层。
+// 词元表长词优先（spec 2026-11-24 §3）：alternation 同位置按书写序试支，短词在前会吞长词命中位
+// （「修」抢「修复」头、剩「复」裸奔）——降序排序兜住任意调用序（后端词元表不保证长度序）。
+// 排序落在 filter 产物（副本）上，调用方词元数组恒不被原地改（pick payload terms 同引用共享面安全）。
 export function renderInline(slice, terms) {
-  const esc = (terms || []).filter(Boolean).map(escapeRe)
+  const esc = (terms || []).filter(Boolean)
+    .sort((a, b) => String(b).length - String(a).length)
+    .map(escapeRe)
   const termAlt = esc.length ? esc.join('|') : '(?!\\u0000)'   // 无命中词 = 永不匹配占位（纯转义直落）
   const re = new RegExp('(`[^`\\n]+`)|(\\*\\*[^*\\n]+\\*\\*)|(^#{1,6}[ \\t]+)|(' + termAlt + ')', 'gmi')
   let out = ''

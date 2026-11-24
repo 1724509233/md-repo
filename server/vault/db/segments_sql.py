@@ -198,6 +198,41 @@ def _select_t3(tokens: list[str]) -> list[str]:
     return rest if rest else list(tokens)
 
 
+def query_tokens(query: str, tier: str, *, fuzzy_keep_single_cjk: bool = True) -> list[str]:
+    """The token list ``segments_search`` actually selects for ``query`` at ``tier``.
+
+    Shared extraction of the query → jieba 分词 → 档位 → 选中词元 sequence from
+    the :func:`segments_search` body (spec 2026-11-24-search-highlight-unification
+    §2 — 防口径漂移: the ``/api/ai/search`` route mounts its response-level
+    ``tokens`` key through THIS function, so no second tokenization rule set can
+    drift into the route layer). Pure refactor — the returned lists are
+    byte-identical to what the old inline body computed (the 档位/召回 pin family
+    in tests/test_recall_tiers.py is its regression net):
+
+    - ``strict``        → ``_select_t2(_query_tokens(query))`` (T2)
+    - ``near``/``relaxed`` → ``_select_t3(_query_tokens(query))`` (T3)
+    - ``fuzzy``         → ``_select_t3(_query_tokens(query, keep_single_cjk=True))``
+      (T4 = T3 + 单字 CJK 保留, spec R4 — char* prefixing works around the
+      index side dropping single chars). ``fuzzy_keep_single_cjk=False`` drops
+      the retention (fuzzy then equals the near/relaxed token set); it exists
+      for callers that want highlight tokens without single-char noise —
+      :func:`segments_search` itself always takes the default (True).
+
+    Tokens are lower-case canonical; stopword / single-char filtering and no
+    dedup all mirror :func:`_query_tokens` verbatim (empty query → ``[]``).
+    Raises ``ValueError`` for an unknown ``tier`` (same discipline as
+    :func:`segments_search`).
+    """
+    if tier not in RECALL_TIERS:
+        raise ValueError(f"unknown recall tier: {tier!r} (expected one of {', '.join(RECALL_TIERS)})")
+    if tier == "fuzzy":
+        return _select_t3(_query_tokens(query, keep_single_cjk=fuzzy_keep_single_cjk))
+    tokens = _query_tokens(query)
+    if tier == "strict":
+        return _select_t2(tokens)
+    return _select_t3(tokens)
+
+
 def _fuzzy_part(t: str) -> str:
     """Fuzzy token shape (spec §3.4): prefix for ASCII words and single CJK
     chars, exact quoted phrase otherwise."""
@@ -346,7 +381,9 @@ def segments_search(
     """Tiered FTS5 search over segments (spec: 2026-10-15-tiered-recall-design).
 
     ``query`` is the RAW query string; tokenization (jieba cut_for_search +
-    stopword filter) happens here, per tier:
+    stopword filter) happens here, per tier, through the shared
+    :func:`query_tokens` (spec 2026-11-24 §2 — the route layer reads the very
+    same selection for its response ``tokens`` key; 行为重构, 逐字等价):
 
     - ``strict``  (T2 × AND × segment-level, all columns): longest-word
       quoted phrases ANDed in a single MATCH. The legacy AND→OR zero-result
@@ -382,26 +419,19 @@ def segments_search(
     if paths is not None and not paths:
         return []
 
-    if recall == "fuzzy":
-        # T4 = T3 + single-char CJK retention (char* prefixing below).
-        tokens = _select_t3(_query_tokens(query, keep_single_cjk=True))
-    else:
-        tokens = _query_tokens(query)
-    if not tokens:
+    # 「query→档位→选中词元」共享序列 (query_tokens, spec 2026-11-24 §2): fuzzy
+    # = T4 (单字 CJK 保留, char* prefixing below), strict = T2, near/relaxed =
+    # T3 — empty selection short-circuits exactly where the old inline body did.
+    selected = query_tokens(query, recall)
+    if not selected:
         return []
 
     if recall == "strict":
-        selected = _select_t2(tokens)
-        if not selected:
-            return []
         expr = and_expr([phrase(t) for t in selected])
         return _search_single_match(conn, expr, top_k, expand, top_k * 3, paths,
                                     privacy_dirs=privacy_dirs)
 
     if recall == "near":
-        selected = _select_t3(tokens)
-        if not selected:
-            return []
         if len(selected) == 1:
             # NEAR needs ≥2 phrases; a single token degrades to strict semantics.
             expr = phrase(selected[0])
@@ -411,9 +441,6 @@ def segments_search(
                                     privacy_dirs=privacy_dirs)
 
     if recall == "relaxed":
-        selected = _select_t3(tokens)
-        if not selected:
-            return []
         # Document-level AND (C5): one MATCH per token, intersect on path.
         # A path hits iff every selected token has ≥1 row in it.
         privacy_sql, privacy_params = privacy_clause(privacy_dirs, "s.path")
@@ -501,7 +528,7 @@ def segments_search(
     # fuzzy: single OR query with prefix shapes, document-level grouping.
     # v2b②: the Python-side grouping sort gets the relatedness tie-break
     # (strict/near above never pass it — their order is FTS built-in).
-    expr = or_expr([_fuzzy_part(t) for t in tokens])
+    expr = or_expr([_fuzzy_part(t) for t in selected])
     if not include_code:
         expr = exclude_code(expr)
     limit = min(top_k * 10, _FUZZY_ROW_BUDGET_CAP)

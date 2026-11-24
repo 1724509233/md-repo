@@ -122,6 +122,37 @@ export function foldDocTags(tags, selectedTags, cap = 4) {
   return { shown: hits.concat(rest.slice(0, keep)), folded: rest.slice(keep) }
 }
 
+// tag 条件合一行（乙案 2026-11-24 用户拍板，SearchPanel 桌面分支消费；spec 无——mockup
+// .openchamber/mockups/tag-query-options.html 乙案快照为呈现法源）：
+// tags = /api/tags 全量（[{name, doc_count}]，doc_count 降序 name 升序——顺序即展示序，
+// 本函数不重排）；selectedTags = parseTagQuery 产物（已小写、查询出现序）。
+// 铁律（foldDocTags 命中铁律同源——条件永不隐藏）：已选恒浮前行首（相互间保持
+// doc_count 序）；手输而不在全量表的 tag 也入列（doc_count=null 呈现层免计数），
+// 排在表内已选之后；未选按列表序（= doc_count 序）补满 cap（缺省 5）。
+// 总数 = max(cap, 已选数)。单一事实源 = 输入文本——本函数是纯展示投影，
+// 不产生第二份 tag 状态。纯函数 node 可直 import（foldDocTags 先例），组件只消费不实现。
+export function chipsVisible(tags, selectedTags, cap = 5) {
+  const list = Array.isArray(tags) ? tags : []
+  const sel = (Array.isArray(selectedTags) ? selectedTags : []).map(t => String(t).toLowerCase())
+  const selSet = new Set(sel)
+  const out = []
+  const seen = new Set()
+  for (const t of list) {
+    const ln = String(t.name).toLowerCase()
+    if (selSet.has(ln)) { out.push({ name: t.name, doc_count: t.doc_count, on: true }); seen.add(ln) }
+  }
+  for (const s of sel) {
+    if (!seen.has(s)) { out.push({ name: s, doc_count: null, on: true }); seen.add(s) }
+  }
+  for (const t of list) {
+    if (out.length >= cap) break
+    const ln = String(t.name).toLowerCase()
+    if (seen.has(ln)) continue
+    out.push({ name: t.name, doc_count: t.doc_count, on: false })
+  }
+  return out
+}
+
 // 文档更新时间呈现（2026-11-24 挂载契约前端消费）：mtime = results[].mtime（unix 秒，
 // number|null 恒在）；now = 参照毫秒（缺省 Date.now，探针参数化用）。口径：null/非法 → ''
 // （呈现层整件不渲染，零占位）；<24h →「今天」；<48h →「昨天」；<8 天 →「N 天前」；
@@ -156,6 +187,26 @@ export function readPrefs() {
 }
 export function writePrefs(p) {
   try { localStorage.setItem('mdvault.searchPrefs', JSON.stringify(p)) } catch { /* 隐私模式等 → 内存态照常 */ }
+}
+
+// 高亮词元截留薄壳（spec 2026-11-24 §3 T-FE1；2026-11-24 联调复盘后自组件迁入——
+// 运行时接线语义静态钉盲区，须住 utils 让 node 可直 import 组 harness 探针）：
+// 包一层 api.aiSearch 在响应落点把顶层 tokens（后端实际参与召回的小写词元，恒在
+// 可空；旧服务端缺席）写入 setTokens，响应体原样透传（同引用，pick payload 共享面）。
+// 自发序守卫 = 镜像控制器 requestId 防过期语义：已更新发单在后（seq 落后）则迟到
+// 旧响应恒不回填（旧词元表不得污染当前结果）。发单自身 abort/出错时 await 即 reject
+// ——异常原样穿回调用方 catch 支，sink 不动；守卫不因此死锁（后续最新发单照常回填）。
+export function createTokenShim(api, setTokens) {
+  let issueSeq = 0
+  return {
+    ...api,
+    async aiSearch(...args) {
+      const seq = ++issueSeq
+      const data = await api.aiSearch(...args)
+      if (seq === issueSeq) setTokens(Array.isArray(data && data.tokens) ? data.tokens : [])
+      return data
+    }
+  }
 }
 
 export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput, onSearchComplete }) {
