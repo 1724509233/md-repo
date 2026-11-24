@@ -172,8 +172,10 @@ def test_s2_grouped_presentation_pins():
     assert "sp-skel-shine" in css, "骨架 shimmer 动画未落"
     assert ".sp-skel-row { animation: none; }" in css, "RM 退静态灰条未落"
     assert "sp-meta-loading" in sp and "search-spinner" in sp, "压暗分支缺活指示"
-    # via 徽标 = 笼统「tag」占位（tag 名逐枚展示 = 后续待办：需结果面带 per-doc tags 后再接）
-    assert 'class="sp-via-badge">tag</span>' in sp and "viaTags" not in sp
+    # via 徽标彻底退役（spec 2026-11-24 §3-3：徽标语义单一 = 文档携带的 tag；
+    # 原钉「笼统 tag 占位」由本反向钉取代——模板与 CSS 均不得再出现该字面）
+    assert "sp-via-badge" not in sp and "sp-via-badge" not in css
+    assert "viaByPath" not in sp and "it.via" not in sp, "via 字段仍被呈现层消费"
     # 零结果两句（逐字）+ 无放宽按钮
     assert "无匹配" in sp
     assert "已经尽量放宽着找过，还是没有——换个说法，或只留一两个关键词再试。" in sp
@@ -394,3 +396,86 @@ def test_s1_exit_search_target():
     seg = m.group(1)
     assert "state.view = state.currentPath ? 'doc' : 'home'" in seg, "退出目标规则错"
     assert "docHash(" in seg, "回文档须手写作回 doc hash（Review Focus 2）"
+
+
+# ── spec 2026-11-24 search-tag-badge-upgrade：per-doc tag 徽标升格（前端 F lane）──
+
+
+def test_s6_fold_doc_tags_probe():
+    # 折叠铁律 node 探针（spec §3 精确定稿，utils/search.js 纯函数）：
+    # 命中全量前置恒显（组内字母序）/ 非命中显示数 = max(0, 4−命中数) / 命中 ≥4 非命中全折 /
+    # folded = 溢出集（恰为 +n title 集）/ 空 tags / 大小写混合两侧归一比对 / 缺席防御 / cap 参数。
+    mod = (TPL / "js/utils/search.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        "const j=JSON.stringify;"
+        # 空 tags / 缺席防御（契约恒在，但 legacy/降级形态皆当 [] 处理，行形不变）
+        "eq(j(m.foldDocTags([],[])),j({shown:[],folded:[]}),'empty tags');"
+        "eq(j(m.foldDocTags(undefined,['x'])),j({shown:[],folded:[]}),'missing tags defensive');"
+        # 命中前置 + 非命中补满 4 + 溢出进 folded（字母序两组）
+        "let f=m.foldDocTags(['a','b','c','d','e'],['c','e']);"
+        "eq(j(f.shown),j(['c','e','a','b']),'hits first + fill to 4');"
+        "eq(j(f.folded),j(['d']),'overflow alphabetical remainder');"
+        # 命中 ≥cap ⇒ 非命中全量折叠（0 枚非命中显示）
+        "f=m.foldDocTags(['a','b','c','d','x'],['b','a','d','c']);"
+        "eq(j(f.shown),j(['a','b','c','d']),'hits>=cap: all hits alphabetical');"
+        "eq(j(f.folded),j(['x']),'hits>=cap: non-hits fully folded');"
+        # 命中自身可超 cap（全显不截，行形可换行）
+        "f=m.foldDocTags(['a','b','c','d','e'],['a','b','c','d','e']);"
+        "eq(j(f.shown),j(['a','b','c','d','e']),'all hits shown even past cap');"
+        "eq(j(f.folded),j([]),'no non-hits left');"
+        # 无命中：显示 4 枚，folded = 其余（溢出集恰 = title 集，展示层直接绑 folded）
+        "f=m.foldDocTags(['a','b','c','d','e','f'],[]);"
+        "eq(j(f.shown),j(['a','b','c','d']),'no hits cap 4');"
+        "eq(j(f.folded),j(['e','f']),'folded is exactly the +n title set');"
+        # 大小写混合（两侧 toLowerCase 归一，isTagSelected 同口径；canonical 原样进输出——
+        # canonical 实际已由 normalize_tag 小写化，本例纯防御：组内码点序与后端 ORDER BY 同口径）
+        "f=m.foldDocTags(['FOO','bar','Zed'],['foo']);"
+        "eq(j(f.shown),j(['FOO','Zed','bar']),'case-insensitive hit, binary group order');"
+        # CJK tag 前置
+        "f=m.foldDocTags(['code','\u8bbe\u8ba1'],['\u8bbe\u8ba1']);"
+        "eq(j(f.shown),j(['\u8bbe\u8ba1','code']),'CJK hit first');"
+        # 组内字母序自洽兜底（输入乱序不漏进呈现面）+ cap 参数化
+        "f=m.foldDocTags(['e','c','a'],[],2);"
+        "eq(j(f.shown),j(['a','c']),'non-hits sorted + cap param');"
+        "eq(j(f.folded),j(['e']),'cap=2 overflow');"
+        # 恒等式族（任意集×任意选中子集）：shown∪folded 恰全量无重、非命中显示数 ≤ max(0,4−命中数)
+        "const tags=['b','A','z','M','q','k'];"
+        "for(const sel of [[],['b'],['b','z'],['b','z','m','q','k']]){"
+        "const g=m.foldDocTags(tags,sel);"
+        "if(g.shown.length+g.folded.length!==tags.length){console.error('partition');process.exit(1)}"
+        "const inter=g.shown.filter(t=>g.folded.includes(t));"
+        "if(inter.length){console.error('overlap');process.exit(1)}"
+        "const low=sel.map(s=>s.toLowerCase());"
+        "const hc=g.shown.filter(t=>low.includes(t.toLowerCase())).length;"
+        "const rc=g.shown.length-hc;"
+        "if(rc>Math.max(0,4-hc)){console.error('display budget');process.exit(1)}}"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
+def test_s6_doc_tag_badges_template_pins():
+    # spec §3 前端钉面：组头逐枚 sp-doc-tag + .on 命中高亮 + +n 折叠件（title 绑 folded）；
+    # 徽标缺席零占位（容器挂 shown.length）；折叠逻辑住纯函数（组件禁镜像实现）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    assert "foldDocTags" in sp and "from '../utils/search.js'" in sp
+    assert "function foldDocTags" not in sp, "折叠逻辑须住 utils 纯函数，禁在组件镜像"
+    assert 'v-if="docTags(g.path).shown.length" class="sp-doc-tags"' in tpl, "徽标缺席零占位门缺失"
+    assert ('<span v-for="t in docTags(g.path).shown" :key="t" class="sp-doc-tag"'
+            ' :class="{ on: isTagSelected(t) }">#{{ t }}</span>') in tpl, "逐枚徽标 + .on 高亮钉"
+    assert 'class="sp-doc-fold" :title="foldTitle(docTags(g.path).folded)"' in tpl, "+n 件 title 未绑 folded 集"
+    assert '+{{ docTags(g.path).folded.length }}</span>' in tpl
+    # 徽标是文档级件 → 只住组头（priv-lock 后、ct 前）；片段卡 head-line 只余 heading
+    head = tpl[tpl.index('class="sp-grp-head"'):tpl.index("</div>", tpl.index('class="sp-grp-head"'))]
+    assert "sp-doc-tags" in head and 'class="ct"' in head
+    assert head.index("sp-doc-tags") < head.index('class="ct"'), "徽标流须在 ct 读数前"
+    assert '<div v-if="it.heading" class="sp-head-line">{{ it.heading }}</div>' in tpl
+    # CSS 件面全在；.on = .sp-chip.on 同款黄铜混色语法（复用非新造）
+    for sel in (".sp-doc-tags {", ".sp-doc-tag {", ".sp-doc-tag.on {", ".sp-doc-fold {"):
+        assert sel in css, f"缺规则：{sel}"
+    m = re.search(r"\.sp-doc-tag\.on \{([^}]*)\}", css)
+    assert m and "var(--brass) 50%" in m.group(1) and "var(--brass) 12%" in m.group(1) \
+        and "color: var(--brass)" in m.group(1), ".on 未复用 chip 选中黄铜语法"

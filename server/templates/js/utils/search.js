@@ -96,6 +96,28 @@ export function parseTagQuery(q) {
   return { keywords, tags }
 }
 
+// per-doc tag 徽标折叠（spec 2026-11-24 §3 折叠铁律）：
+// tags = 结果面 tags 字段（canonical 名、字母序、恒在、可能空/缺席皆防御为 []）；
+// selectedTags = 输入框解析的 #tag token（parseTagQuery 产物，已小写）。
+// 命中判定 = 两侧 String().toLowerCase() 归一比对（与 SearchPanel.isTagSelected 同口径）。
+// 返回 {shown, folded}：命中徽标全量前置（组内字母序）；非命中显示数 = max(0, cap − 命中数)
+// （cap 缺省 4，组内字母序），溢出进 folded（+n 件消费：title = folded 全列表）。
+// 命中 ≥cap 时非命中全量折叠（0 枚显示）。两组各自显式排序（契约序的自洽兜底，
+// 比较器 = 码点序，与后端 ORDER BY name 同口径）。纯函数 node 可直 import
+// （chatEvents.js / parseTagQuery 先例），组件只消费不实现。
+export function foldDocTags(tags, selectedTags, cap = 4) {
+  const list = Array.isArray(tags) ? tags : []
+  const sel = new Set((Array.isArray(selectedTags) ? selectedTags : []).map(t => String(t).toLowerCase()))
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const hits = []
+  const rest = []
+  for (const t of list) (sel.has(String(t).toLowerCase()) ? hits : rest).push(t)
+  hits.sort(cmp)
+  rest.sort(cmp)
+  const keep = Math.max(0, cap - hits.length)
+  return { shown: hits.concat(rest.slice(0, keep)), folded: rest.slice(keep) }
+}
+
 // 排序权重前端面已退役（S5/T11，§5 三层配置模型无「第四配置」；
 // 后端 weights 请求面保留给 agent/MCP 通道，前端两壳均不再点名）
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 
 from fastapi import HTTPException, Request, Response
@@ -86,6 +87,24 @@ def register(app, ctx) -> None:
             logger.exception(
                 "recall telemetry insert failed (source=web query=%r tier=%s)",
                 query, tier)
+        # Tag 徽标面（spec 2026-11-24 §2）：对最终结果 paths 批量反查携带的
+        # tag 名（doc→tag 边），逐条挂 "tags"——字段恒在（无 tag/降级 → []，
+        # 前端免判 undefined）。挂点在路由层：F1 回退 / fuzzy / 权重融合的
+        # 合流都在 rag_search 返回之后，一处挂全覆盖；内核零变（45 caller 与
+        # agent/MCP 通道输出不受影响）。置于 log_query 之后：台账输入的 dict
+        # 字节级不变。旧版 index.db 无 graph 表 → 整批 []，不 500（同款先例
+        # graph_tag_counts 静默降级）。防御同 log_query 的 malformed 守卫：
+        # 缺 path 的垃圾条目原样透传（不挂键、不抛）。
+        from ..vault.db.graph_sql import graph_tags_for_docs
+        paths = [r["path"] for r in results
+                 if isinstance(r, dict) and r.get("path")]
+        try:
+            tags_by_path = graph_tags_for_docs(ctx.db_conn, paths)
+        except sqlite3.Error:
+            tags_by_path = {}
+        for r in results:
+            if isinstance(r, dict) and r.get("path"):
+                r["tags"] = tags_by_path.get(r["path"], [])
         return {"results": results, "recall": tier}
 
     @app.post("/api/recall/click")

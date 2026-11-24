@@ -6,7 +6,7 @@
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS } from '../utils/search.js'
+import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS, foldDocTags } from '../utils/search.js'
 import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
@@ -179,13 +179,24 @@ export const SearchPanel = {
     })
 
     // 结果整形：segment 平铺 + 相对相关性（本次结果最高分 = 100%）
-    // via 徽标（spec §3-③）：文档级 via 映射到每个 segment 项；缺失（无 tag 路径/legacy 兜底）不渲染
+    // （spec 2026-11-24 §3：via 徽标退役后 via 字段不再被呈现层消费——响应保留供遥测）
     const shaped = computed(() => {
       const items = shapeSegments(results.value)
-      const viaByPath = new Map(results.value.map(r => [r.path, r.via]))
       const max = items.reduce((m, it) => Math.max(m, it.score), 0)
-      return items.map(it => ({ ...it, via: viaByPath.get(it.path), rel: max > 0 ? (it.score / max) * 100 : 0 }))
+      return items.map(it => ({ ...it, rel: max > 0 ? (it.score / max) * 100 : 0 }))
     })
+
+    // ── per-doc tag 徽标（spec 2026-11-24 §3，组头逐枚 #tag + .on 命中高亮 + +n 折叠）──
+    // 折叠规则住纯函数 foldDocTags（utils，node 可直测）；组件只消费：
+    // 命中判定同源 = selectedTags（输入框解析派生，与芯片行 isTagSelected 同口径，零新状态机）。
+    const docTagFolds = computed(() => {
+      const m = new Map()
+      for (const r of results.value) m.set(r.path, foldDocTags(r.tags, selectedTags.value))
+      return m
+    })
+    function docTags(path) { return docTagFolds.value.get(path) || { shown: [], folded: [] } }
+    // +n 件 title = folded 全列表（折叠铁律：溢出集恰 = title 集）
+    function foldTitle(folded) { return folded.map(t => '#' + t).join(' ') }
 
     const segmentCount = computed(() => shaped.value.length)
     const docCount = computed(() => new Set(results.value.map(r => r.path)).size)
@@ -281,7 +292,9 @@ export const SearchPanel = {
       // 最近搜索（S1b 空态）
       recent, fillRecent, clearRecent,
       // ① tag 选择器
-      tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag
+      tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
+      // per-doc tag 徽标（spec 2026-11-24 §3）
+      docTags, foldTitle
     }
   },
   template: `
@@ -369,11 +382,17 @@ export const SearchPanel = {
               <span class="fn">{{ g.name }}</span>
               <span v-if="g.dir" class="dr">{{ g.dir }}/</span>
               <span v-if="isPriv(g.path)" class="priv-lock" title="隐私目录，模型不可见" v-html="ICONS_LOCAL.lock"></span>
+              <!-- per-doc tag 徽标（spec 2026-11-24 §3）：命中全量前置恒显 + 非命中补满 4 位 + 溢出 +n（title=折上集）；
+                   tags 缺席/空 → 零徽标行形不变。两壳同模板零特判 -->
+              <span v-if="docTags(g.path).shown.length" class="sp-doc-tags">
+                <span v-for="t in docTags(g.path).shown" :key="t" class="sp-doc-tag" :class="{ on: isTagSelected(t) }">#{{ t }}</span>
+                <span v-if="docTags(g.path).folded.length" class="sp-doc-fold" :title="foldTitle(docTags(g.path).folded)">+{{ docTags(g.path).folded.length }}</span>
+              </span>
               <span class="ct">{{ g.items.length }} 片段</span>
             </div>
             <div v-for="it in g.items" :key="it.flat" class="sp-snip-card" :class="{ active: it.flat === activeIndex }"
                  :title="it.path" @click="pickItem(it, it.flat)" @mouseenter="activeIndex = it.flat">
-              <div v-if="it.heading || it.via" class="sp-head-line"><span v-if="it.via === 'tag' || it.via === 'both'" class="sp-via-badge">tag</span><template v-if="it.heading">· {{ it.heading }}</template></div>
+              <div v-if="it.heading" class="sp-head-line">{{ it.heading }}</div>
               <div class="sp-snip" :class="{ 'sp-clamp5': !expanded.has(it.flat) }" v-html="snip(it)"></div>
               <button type="button" class="sp-unfold" v-if="expanded.has(it.flat) || (it.content || '').trim().length > 160" @click.stop.prevent="toggleExpand(it.flat)">{{ expanded.has(it.flat) ? '收起' : '展开全文' }}</button>
             </div>

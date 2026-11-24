@@ -1629,11 +1629,12 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* ③ 源码选区可见性 = textarea 原生选区高亮，仅把选区色纳入主题（§4.2，不加高亮带/行号栏） */
 #editor::selection { background: color-mix(in srgb, var(--brass) 26%, transparent); }
 
-/* ============ 搜索子页 · tag 选择器 + via 徽标（spec 2026-11-13 §3，2026-11-13）============
+/* ============ 搜索子页 · tag 选择器 + per-doc tag 徽标（spec 2026-11-13 §3 → 2026-11-24 §3）============
    纯追加：既有类零改动，色调沿用 --ink/--line/--brass/--surface。
-   新增件 = .sp-chips/.sp-chip/.sp-chip-toggle（tag 选择器行，输入区与 meta 行之间；
+   件面 = .sp-chips/.sp-chip/.sp-chip-toggle（tag 选择器行，输入区与 meta 行之间；
    展开态 max-height 40% 滚动，「收起」sticky 钉底）
-   / .sp-via-badge 结果卡 tag 徽标（outline chip）。
+   / .sp-doc-tags/.sp-doc-tag(+.on)/.sp-doc-fold（组头逐枚 #tag 徽标 + 命中黄铜选中 + 溢出 +n，
+   spec 2026-11-24 §3——取代已退役的笼统「tag」via 占位徽标，反向钉禁回流）。
    （权重 popover 家族 .sp-sort-*/.sp-seg*/.sp-w* 已随 T11 拆除——§5 三层模型无第四配置） */
 
 /* ① tag 选择器行：sp-root 直接子（max-height 40% 需对确定高度容器解析）；默认态前 5 芯片 + 展开更多 */
@@ -1663,13 +1664,24 @@ details.d-sec .body { padding: 8px 12px 14px; }
 
 /* ② 权重控件族（.sp-sort-btn/.sp-sort-pop/.sp-seg*/.sp-w*）已随 T11 退役拆除 */
 
-/* ③ via 徽标：结果卡标题行前；via=tag|both 才渲染，缺失不渲染 */
-.sp-via-badge {
-  display: inline-flex; align-items: center; flex-shrink: 0;
-  font-size: 9px; font-weight: 500; letter-spacing: .04em; line-height: 1.5;
-  color: var(--brass); background: transparent;
-  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); border-radius: 999px;
-  padding: 0 6px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+/* ③ per-doc tag 徽标（spec 2026-11-24 §3）：组标题行逐枚 #tag（文档携带的 tag），
+   折叠件面 = shown 徽标流 + 溢出 +n（title 折上集）。与 tag chips 行同族描边胶囊、
+   轻一级（10px / 更淡边 / 无计数）；.on = 命中查询 tag，复用 .sp-chip.on 黄铜选中语法。
+   容器 inline-flex wrap：命中 ≥cap 时徽标变多可换行，组头基线对齐不受扰（fn 基线 = 首行）。 */
+.sp-doc-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.sp-doc-tag {
+  display: inline-flex; align-items: center; flex-shrink: 0; max-width: 100%;
+  padding: 0 7px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 999px;
+  background: transparent;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10px; line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-soft) 88%, transparent);
+}
+.sp-doc-tag.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+/* +n 溢出件：非交互纯读数（title 承载折上清单），比徽标再轻一级（mono 小字无边框） */
+.sp-doc-fold {
+  display: inline-flex; align-items: center; flex-shrink: 0; cursor: default;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 0 3px;
 }
 
 /* ============ 关联呈现 · 预览区侧栏 + 移动 bottom sheet（spec §6.4 候选①，2026-11-14；
