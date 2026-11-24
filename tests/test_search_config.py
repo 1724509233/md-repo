@@ -133,8 +133,9 @@ def test_settings_get_includes_search_section(tmp_path, vault_dir, db_conn):
     client = _client_for(tmp_path, vault_dir, db_conn)
     with client:
         data = client.get("/api/settings").json()
-        # 样本 config 无 search 段 → 回显缺省三值（同 notifications setdefault 形）
-        assert data["search"] == {"top_k_default": 12, "top_k_max": 50, "exclude_code": True}
+        # 样本 config 无 search 段 → 回显缺省四值（同 notifications setdefault 形）
+        assert data["search"] == {"top_k_default": 12, "top_k_max": 50,
+                                  "exclude_code": True, "tag_weight": 2.0}
 
 
 def test_settings_put_search_roundtrip_and_applied(tmp_path, vault_dir, db_conn):

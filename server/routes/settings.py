@@ -83,7 +83,8 @@ _BG_MODEL_KEYS = frozenset({"provider", "model_id", "base_url", "api_key",
 _BG_TRIGGER_KEYS = frozenset({"source", "events", "metric", "arm_count",
                               "min_interval_h", "low_score"})
 _NOTIF_KEYS = frozenset({"daily_cap"})
-_SEARCH_KEYS = frozenset({"top_k_default", "top_k_max", "exclude_code"})
+_SEARCH_KEYS = frozenset({"top_k_default", "top_k_max", "exclude_code",
+                          "tag_weight"})
 _PRIVACY_KEYS = frozenset({"dirs"})
 # log 段页可见键 ↔ server 段扁平键名（config 的 log 配置本就平铺在 server 下）。
 _LOG_FLAT_KEYS = {"level": "log_level", "dir": "log_dir",
@@ -210,6 +211,7 @@ def _get(ctx) -> dict:
     search.setdefault("top_k_default", 12)
     search.setdefault("top_k_max", 50)
     search.setdefault("exclude_code", True)
+    search.setdefault("tag_weight", 2.0)
 
     privacy = (_plain(doc.get("privacy"))
                if isinstance(doc.get("privacy"), dict) else {})

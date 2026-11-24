@@ -31,6 +31,8 @@
  */
 
 // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
+// mtime（spec 2026-11-24 挂载契约：results[].mtime = unix 秒 number|null 恒在）随项透传——
+// 文档级字段，组头呈现经 groupByPath 取组首现值；legacy/降级缺席防御为 null（呈现零占位）。
 export function shapeSegments(results) {
   const items = []
   for (const item of results) {
@@ -38,7 +40,7 @@ export function shapeSegments(results) {
     const name = base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base
     const segments = item.segments || []
     if (!segments.length) {
-      items.push({ path: item.path, name, heading: '', content: '', score: item.score || 0 })
+      items.push({ path: item.path, name, heading: '', content: '', score: item.score || 0, mtime: item.mtime ?? null })
       continue
     }
     for (const seg of segments) {
@@ -46,7 +48,8 @@ export function shapeSegments(results) {
         path: item.path, name,
         heading: seg.heading_path || '',
         content: seg.content || '',
-        score: seg.score != null ? seg.score : (item.score || 0)
+        score: seg.score != null ? seg.score : (item.score || 0),
+        mtime: item.mtime ?? null
       })
     }
   }
@@ -64,7 +67,8 @@ export function countRows(items) {
 }
 
 // 按文件分组（spec 2026-11-23 §4 分组模型：文件=阅读心智单位，segment 只是定位符）：
-// shaped 平铺项 → [{path, name, dir, items:[同序 shaped 项]}]，组序 = 首现序（score 最优在前）。
+// shaped 平铺项 → [{path, name, dir, mtime, items:[同序 shaped 项]}]，组序 = 首现序（score 最优在前）。
+// mtime 为文档级字段（shapeSegments 自 results[].mtime 透传），组随首现项落值（同 path 同文档同值）。
 export function groupByPath(items) {
   const out = []
   const idx = new Map()
@@ -72,7 +76,7 @@ export function groupByPath(items) {
     if (!idx.has(it.path)) {
       idx.set(it.path, out.length)
       const p = it.path || ''
-      out.push({ path: it.path, name: it.name, dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', items: [] })
+      out.push({ path: it.path, name: it.name, dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', mtime: it.mtime ?? null, items: [] })
     }
     out[idx.get(it.path)].items.push(it)
   }
@@ -116,6 +120,24 @@ export function foldDocTags(tags, selectedTags, cap = 4) {
   rest.sort(cmp)
   const keep = Math.max(0, cap - hits.length)
   return { shown: hits.concat(rest.slice(0, keep)), folded: rest.slice(keep) }
+}
+
+// 文档更新时间呈现（2026-11-24 挂载契约前端消费）：mtime = results[].mtime（unix 秒，
+// number|null 恒在）；now = 参照毫秒（缺省 Date.now，探针参数化用）。口径：null/非法 → ''
+// （呈现层整件不渲染，零占位）；<24h →「今天」；<48h →「昨天」；<8 天 →「N 天前」；
+// 同年内 →「MM-DD」；跨年 →「YYYY-MM-DD」（年判定与月日均本地时区）。完整日期进 title
+// 不进正文（文案铁律）。纯函数 node 可直 import（foldDocTags 先例），组件只消费不实现。
+export function formatDocAge(mtime, now = Date.now()) {
+  if (typeof mtime !== 'number' || !Number.isFinite(mtime)) return ''
+  const DAY = 86400000
+  const age = now - mtime * 1000
+  if (age < DAY) return '今天'
+  if (age < 2 * DAY) return '昨天'
+  if (age < 8 * DAY) return `${Math.floor(age / DAY)} 天前`
+  const d = new Date(mtime * 1000)
+  const p = (n) => String(n).padStart(2, '0')
+  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}-${md}`
 }
 
 // 排序权重前端面已退役（S5/T11，§5 三层配置模型无「第四配置」；

@@ -46,7 +46,10 @@ def register(app, ctx) -> None:
         tags = body.get("tags")
         if isinstance(tags, list) and not tags:
             tags = None
-        weights = body.get("weights")
+        # 权重全局默认层（spec 2026-11-23 §5 修订，2026-11-24）：body 无
+        # weights 键 → config search.tag_weight；有键（含显式 null）body 优先，
+        # 行为不变。界外值由 rag_search 的 validate_weights 兜成 400。
+        weights = body["weights"] if "weights" in body else {"tag": cfg.tag_weight}
         from ..ai import rag_search
         try:
             results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
@@ -105,6 +108,19 @@ def register(app, ctx) -> None:
         for r in results:
             if isinstance(r, dict) and r.get("path"):
                 r["tags"] = tags_by_path.get(r["path"], [])
+        # mtime 挂载面（2026-11-24，tags 徽标同款姿势）：对最终结果 paths 批量
+        # 反查 index files 表的 mtime，逐条挂 "mtime"——字段恒在（files 无行/
+        # 降级 → null，前端免判 undefined）。同挂点纪律：置于 log_query 之后
+        # （台账输入 dict 字节级不变），内核零变；get_mtimes 抛 sqlite3.Error
+        # → 整批 null 不 500；malformed 条目（无 path）不挂不抛。
+        from ..vault.db.file_index import get_mtimes
+        try:
+            mtimes = get_mtimes(ctx.db_conn, paths)
+        except sqlite3.Error:
+            mtimes = {}
+        for r in results:
+            if isinstance(r, dict) and r.get("path"):
+                r["mtime"] = mtimes.get(r["path"])
         return {"results": results, "recall": tier}
 
     @app.post("/api/recall/click")

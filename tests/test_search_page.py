@@ -479,3 +479,89 @@ def test_s6_doc_tag_badges_template_pins():
     m = re.search(r"\.sp-doc-tag\.on \{([^}]*)\}", css)
     assert m and "var(--brass) 50%" in m.group(1) and "var(--brass) 12%" in m.group(1) \
         and "color: var(--brass)" in m.group(1), ".on 未复用 chip 选中黄铜语法"
+
+
+# ── 2026-11-24 前端两小件：IME composing 守卫（待办 805ee0c2）+ 组头文档更新时间（bc07b190）──
+
+
+def test_s7_ime_composing_guard():
+    # 待办 805ee0c2：IME 组合态（选词 Enter 带 isComposing，旧浏览器 keyCode=229）不得驱动任何
+    # 键盘分支——守卫在 onKeydown 函数体首行、先于 ArrowDown/ArrowUp/Enter/Escape
+    # （AIChatPanel.js onKeydown 同款先例与注释；组合态方向键/Esc 同样不导航）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    i = sp.index("function onKeydown(e) {")
+    seg = sp[i:sp.index("function scrollActiveIntoView")]
+    m = re.search(r"if \(e\.isComposing \|\| e\.keyCode === 229\) return", seg)
+    assert m, "IME composing 守卫缺失（isComposing || keyCode === 229）"
+    for key in ("'ArrowDown'", "'ArrowUp'", "'Enter'", "'Escape'"):
+        assert m.start() < seg.index("e.key === " + key), f"守卫未先于 {key} 分支"
+    assert "输入法" in seg[:m.start()], "守卫注释缺回归缘由（输入法回车误触发）"
+
+
+def test_s7_format_doc_age_probe():
+    # 待办 bc07b190：utils/search.js 纯函数 formatDocAge（unix 秒入参 / now 毫秒参数化）node 探针：
+    # null 与非法 → '' / <24h 今天 / <48h 昨天 / <8 天 N 天前 / 同年 MM-DD / 跨年 YYYY-MM-DD /
+    # 边界 24h·48h·8 天按严格 < 落下一段 / now 缺省 = Date.now（缺省参真实钟自证）。
+    mod = (TPL / "js/utils/search.js").as_uri()
+    js = (
+        "import(%r).then(m=>{"
+        "const eq=(a,b,w)=>{if(a!==b){console.error(w,'|got:',JSON.stringify(a));process.exit(1)}};"
+        "const NOW=new Date(2026,10,24,12,0,0).getTime(), D=86400000, s=ms=>Math.floor(ms/1000);"
+        # 近期三档 + 零龄
+        "eq(m.formatDocAge(s(NOW-3600000),NOW),'\u4eca\u5929','1h ago');"
+        "eq(m.formatDocAge(s(NOW),NOW),'\u4eca\u5929','zero age');"
+        # 边界 24h / 48h / 8 天：严格 <，恰点落下一段
+        "eq(m.formatDocAge(s(NOW-D-1000),NOW),'\u6628\u5929','24h+1s');"
+        "eq(m.formatDocAge(s(NOW-D),NOW),'\u6628\u5929','exactly 24h -> \u6628\u5929');"
+        "eq(m.formatDocAge(s(NOW-2*D+60000),NOW),'\u6628\u5929','48h-1min');"
+        "eq(m.formatDocAge(s(NOW-2*D),NOW),'2 \u5929\u524d','exactly 48h -> 2 \u5929\u524d');"
+        "eq(m.formatDocAge(s(NOW-3*D),NOW),'3 \u5929\u524d','3d');"
+        "eq(m.formatDocAge(s(NOW-8*D+1000),NOW),'7 \u5929\u524d','8d-1s');"
+        "eq(m.formatDocAge(s(NOW-8*D),NOW),'11-16','exactly 8d -> date form');"
+        # 同年 MM-DD（零补齐）/ 跨年 YYYY-MM-DD
+        "eq(m.formatDocAge(s(NOW-40*D),NOW),'10-15','same year MM-DD zero pad');"
+        "eq(m.formatDocAge(s(new Date(2025,11,31,9,0,0).getTime()),NOW),'2025-12-31','cross year');"
+        # null / 非法值族 → ''（呈现层据此零占位）
+        "eq(m.formatDocAge(null,NOW),'','null');"
+        "eq(m.formatDocAge(undefined,NOW),'','undefined');"
+        "eq(m.formatDocAge('1764000000',NOW),'','string invalid');"
+        "eq(m.formatDocAge(NaN,NOW),'','NaN');"
+        "eq(m.formatDocAge(Infinity,NOW),'','Infinity');"
+        # epoch unix 0（跨年长形态；期望由本地时区自算，TZ 无关）
+        "eq(m.formatDocAge(0,NOW),(()=>{const e0=new Date(0),q=n=>String(n).padStart(2,'0');return e0.getFullYear()+'-'+q(e0.getMonth()+1)+'-'+q(e0.getDate())})(),'epoch unix 0');"
+        # now 缺省参 = Date.now（1h 前恒今天，真实钟稳定可复现）
+        "eq(m.formatDocAge(s(Date.now()-3600000)),'\u4eca\u5929','now defaults Date.now');"
+        "process.exit(0)})") % mod
+    _run_node(js)
+
+
+def test_s7_group_head_mtime_template_pins():
+    # 待办 bc07b190 模板钉：组头 ct 旁挂 sp-mtime；格式化住 utils 纯函数（组件禁镜像）；
+    # title 绑完整日期 tooltip（toLocaleString 口径，解释不进正文——文案铁律）；
+    # mtime null → 整件不渲染（v-if 零占位门）；CSS 全挂 .search-page 前缀（移动零触达）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    assert "formatDocAge" in sp and "from '../utils/search.js'" in sp
+    assert "function formatDocAge" not in sp, "格式化逻辑须住 utils 纯函数，禁在组件镜像"
+    head = tpl[tpl.index('class="sp-grp-head"'):tpl.index("</div>", tpl.index('class="sp-grp-head"'))]
+    assert 'v-if="g.mtime != null" class="sp-mtime"' in head, "sp-mtime 件或 null 零渲染门缺失"
+    assert ':title="mtimeTitle(g.mtime)"' in head and "{{ formatDocAge(g.mtime) }}" in head
+    assert head.index('class="ct"') < head.index('class="sp-mtime"'), "sp-mtime 须在 ct 读数旁（之后）"
+    assert "toLocaleString" in sp, "title 完整日期未走 toLocaleString 口径"
+    # CSS 隔离：sp-mtime 只准以 .search-page 前缀存在（移动 sheet 无该容器类 → 零触达；禁裸类规则外溢）
+    assert ".search-page .sp-mtime {" in css, "缺 .search-page .sp-mtime 规则"
+    assert not re.search(r"(?m)^\s*\.sp-mtime\b", css), "sp-mtime 裸类规则未挂 .search-page 前缀（移动外溢）"
+    m = re.search(r"\.search-page \.sp-mtime \{([^}]*)\}", css)
+    assert m and re.search(r"font-size: 1[01]px", m.group(1)), "sp-mtime 字号须 10-11px（不抢标题）"
+
+
+def test_s7_meta_line_untouched_reverse_pin():
+    # 反向钉（mtime 挂组头不挂 meta 行）：meta 行区段零 sp-mtime；移动 sheet 句流既有钉逐字不破
+    # （「8 篇 · 8 个片段 · 档 宽松」的静态面 = 篇/片段读数与「· 档 + 纯文本档值」句流）。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    meta = tpl[tpl.index('class="sp-meta"'):tpl.index('class="sp-results"')]
+    assert "sp-mtime" not in meta, "mtime 误挂 meta 行（应住组头）"
+    assert re.search(r"\{\{ docCount \}\} 篇 · \{\{ segmentCount \}\} 个片段", tpl)
+    assert '<template v-else>· 档 <span class="sp-tier">' in tpl, "移动侧「· 档 + 纯文本档值」句流被破"

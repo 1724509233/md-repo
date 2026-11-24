@@ -117,6 +117,7 @@ search:
 
 - **exclude_code 内核现成（评审核实）**：`rag_search` 已有 `include_code: bool = False` 参数 + FTS 层过滤器——**config 默认 `true` 就是对现状的显式化**，零行为变化；页内翻转只差 `POST /api/ai/search` 路由（`routes/recall.py`）一行透传——或 v1 明言不做页内代码块开关，config 字段仅留语义（计划期拍一句）。
 - **不进 config 的**：单个档位（查询期决定，不是策略）；`tier_on_no_result`（**评审撤项**，见上 F1 对齐注③）；**BM25 权重调参 / trigram 表 / `rank` 默认配置**——10-15 §2 白纸黑字列在"不在范围内"，别因为顺手要做设置页就把那个坑挖开。
+- **§5 修订（2026-11-24 用户拍板）**：`search.tag_weight: 2.0`（界 [0.1, 3.0]，fts 恒 1.0）**入 config 全局默认层**，成为第四个字段——这是对上方"不进 config"裁决与 S5/T11 拆除（f66b8af，原 localStorage 每设备权重面）的显式修订：找回融合权重入口时用户选择全局默认层而非设备偏好层。口径：`/api/ai/search` body 无 `weights` 键时权重=`{"tag": cfg.tag_weight}`，有键 body 优先；**BM25 `rank` 参数仍不在范围内**，勿借势扩面。实现钉：`tests/test_search_weights_mtime.py`。
 - **诚实标注接入成本**：`search:` 一旦进设置页，自动继承"页面改与手改 yaml 互不打架"契约 + 校验即启动校验 + 乐观并发 409 + `test_routes_order` 快照更新 + 表单项级 422 定位映射（`section: "search"`）。**加三个字段不是加三个输入框。**
 - 文案纪律（settings §6）：分段标题统一「检索」，正文不写"落盘/热生效"这类实现 meta。
 

@@ -30,6 +30,20 @@ def get_file_hash(conn: sqlite3.Connection, path: str) -> str | None:
     return row[0] if row else None
 
 
+def get_mtimes(conn: sqlite3.Connection, paths: list[str]) -> dict[str, float]:
+    """Stored mtimes for the given paths (2026-11-24 search 结果 mtime 挂载面,
+    route-layer read helper). Paths absent from ``files`` are simply missing
+    from the result dict — the caller maps absence to null. Empty input
+    short-circuits to ``{}`` (never builds an empty-IN query)."""
+    if not paths:
+        return {}
+    marks = ",".join("?" * len(paths))
+    cursor = conn.execute(
+        f"SELECT path, mtime FROM files WHERE path IN ({marks})", list(paths)
+    )
+    return {row[0]: row[1] for row in cursor.fetchall()}
+
+
 def delete_file(conn: sqlite3.Connection, path: str) -> None:
     """Remove a file entry from the index."""
     conn.execute("DELETE FROM files WHERE path = ?", (path,))

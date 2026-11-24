@@ -6,7 +6,7 @@
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
 const { ref, computed, watch, onMounted, onBeforeUnmount, nextTick, inject } = Vue
 import { api } from '../api.js'
-import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS, foldDocTags } from '../utils/search.js'
+import { createSearchController, shapeSegments, countRows, parseTagQuery, groupByPath, readPrefs, writePrefs, TIER_TIERS, foldDocTags, formatDocAge } from '../utils/search.js'
 import { escapeRe, sliceWindow, firstHitIndex, renderInline, TIER_LABEL } from '../utils/snippetRender.js'   // 渲染管线单点（S2/T4 迁出组件，防两仓漂移）
 import { ICONS } from '../utils/icons.js'
 import { isPrivacyScoped } from '../utils/privacy.js'
@@ -198,6 +198,10 @@ export const SearchPanel = {
     // +n 件 title = folded 全列表（折叠铁律：溢出集恰 = title 集）
     function foldTitle(folded) { return folded.map(t => '#' + t).join(' ') }
 
+    // 组头「更新时间」tooltip = 完整日期（toLocaleString 口径；解释进 title 不进正文——文案铁律）。
+    // 呈现值格式化住 utils 纯函数 formatDocAge（组件禁镜像）；mtime null → 模板整件不渲染。
+    function mtimeTitle(m) { return new Date(m * 1000).toLocaleString() }
+
     const segmentCount = computed(() => shaped.value.length)
     const docCount = computed(() => new Set(results.value.map(r => r.path)).size)
     const shownRowCount = computed(() => countRows(results.value))
@@ -239,6 +243,9 @@ export const SearchPanel = {
     }
 
     function onKeydown(e) {
+      // IME 组合态（中文输入法）Enter 先确认候选词：此时 keydown 带 isComposing=true
+      // （部分旧浏览器 keyCode=229），不拦截则选词瞬间误发送（回归：输入法回车误触发）；↑↓/Esc 同守，守卫在函数顶
+      if (e.isComposing || e.keyCode === 229) return
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         activeIndex.value = Math.min(activeIndex.value + 1, shaped.value.length - 1)
@@ -294,7 +301,9 @@ export const SearchPanel = {
       // ① tag 选择器
       tagOptions, tagsExpanded, visibleTags, isTagSelected, toggleTag,
       // per-doc tag 徽标（spec 2026-11-24 §3）
-      docTags, foldTitle
+      docTags, foldTitle,
+      // 组头文档更新时间（格式化住 utils 纯函数，tooltip 完整日期在此）
+      formatDocAge, mtimeTitle
     }
   },
   template: `
@@ -389,6 +398,10 @@ export const SearchPanel = {
                 <span v-if="docTags(g.path).folded.length" class="sp-doc-fold" :title="foldTitle(docTags(g.path).folded)">+{{ docTags(g.path).folded.length }}</span>
               </span>
               <span class="ct">{{ g.items.length }} 片段</span>
+              <!-- 文档更新时间（2026-11-24 挂载契约前端消费）：ct 旁弱字读数，完整日期进 title 不进正文；
+                   mtime null/缺席 → 整件不渲染（零占位）。双壳同模板零特判；样式只挂 .search-page .sp-mtime
+                   （移动 sheet 无 .search-page 容器 → 前缀隔离零触达，不新增 @media） -->
+              <span v-if="g.mtime != null" class="sp-mtime" :title="mtimeTitle(g.mtime)">{{ formatDocAge(g.mtime) }}</span>
             </div>
             <div v-for="it in g.items" :key="it.flat" class="sp-snip-card" :class="{ active: it.flat === activeIndex }"
                  :title="it.path" @click="pickItem(it, it.flat)" @mouseenter="activeIndex = it.flat">

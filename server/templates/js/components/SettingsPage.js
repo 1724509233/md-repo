@@ -329,6 +329,7 @@ const MISC_FIELD_MAP = [
 const SEARCH_FIELD_MAP = [
   [/top_k_default/, 'top_k_default'],
   [/top_k_max/, 'top_k_max'],
+  [/tag_weight/, 'tag_weight'],
   [/exclude_code/, 'include_code']
 ]
 
@@ -446,6 +447,23 @@ export const SettingsPage = {
       return fps.length !== baseBg.value.length || fps.some((f, i) => f !== baseBg.value[i])
     })
     const bgEntryDirty = i => bgFps()[i] !== baseBg.value[i]
+    // tag_weight 滑杆视图面（2026-11-24 换形 number→range：寻回 2026-11-13 权重滑杆手感）。
+    // 语义链零动：hydrate 存值 / buildPayload 空键省略回缺省 / 预检与 422 定位 / 脏指纹全走
+    // form.search.tag_weight 原路。range 表达不了空值：空态显示缺省 2.0；拖动写入即回数值路。
+    const TW_MIN = 0.1, TW_MAX = 3.0, TW_DEF = 2.0
+    const tagWeightNum = computed(() => {
+      const v = form.value && form.value.search ? form.value.search.tag_weight : ''
+      return isNumVal(v) ? Number(v) : TW_DEF
+    })
+    const tagWeightText = computed(() => tagWeightNum.value.toFixed(1)) // 恒一位小数：2 → 「2.0」
+    const tagWeightStyle = computed(() => ({
+      '--st-wfill': ((tagWeightNum.value - TW_MIN) / (TW_MAX - TW_MIN) * 100).toFixed(2) + '%'
+    }))
+    function setTagWeight(raw) {
+      if (!form.value) return
+      form.value.search.tag_weight = raw // 字符串数值直进既有指纹/预检/buildPayload 链
+      clearErr('search.tag_weight')
+    }
     const settingsDirty = computed(() => dirtyAi.value || dirtyBg.value || dirtyMisc.value || dirtySearch.value)
     function resetBaselines() {
       baseAi.value = aiFp()
@@ -545,6 +563,7 @@ export const SettingsPage = {
         search: {
           top_k_default: numOrEmpty(d.search && d.search.top_k_default),
           top_k_max: numOrEmpty(d.search && d.search.top_k_max),
+          tag_weight: numOrEmpty(d.search && d.search.tag_weight),
           include_code: !!(d.search && d.search.exclude_code === false)
         },
         log: {
@@ -919,6 +938,12 @@ export const SettingsPage = {
         const v = sCfg[key]
         if (v !== '' && v != null && (!isIntVal(v) || Number(v) < 1)) add(fk, 'search', '需为不小于 1 的整数')
       }
+      // tag_weight：数值 ∈ [0.1, 3.0]（镜像 loader/rerank 界，可空=回缺省 2.0）
+      {
+        const v = sCfg.tag_weight
+        if (v !== '' && v != null && (!isNumVal(v) || !(Number(v) >= 0.1 && Number(v) <= 3.0)))
+          add('search.tag_weight', 'search', '需为 0.1 到 3.0 之间的数字')
+      }
       if (isIntVal(sCfg.top_k_default) && isIntVal(sCfg.top_k_max)
           && Number(sCfg.top_k_default) > Number(sCfg.top_k_max))
         add('search.top_k_default', 'search', '默认结果数不能大于结果数上限')
@@ -1095,6 +1120,8 @@ export const SettingsPage = {
       if (tkd !== null) search.top_k_default = tkd
       const tkm = toNum(f.search.top_k_max)
       if (tkm !== null) search.top_k_max = tkm
+      const tw = toNum(f.search.tag_weight)
+      if (tw !== null) search.tag_weight = tw
       if (f.search.include_code) search.exclude_code = false
       p.search = search
       const log = { level: f.log.level, dir: f.log.dir }
@@ -1128,6 +1155,8 @@ export const SettingsPage = {
       err, clearErr, cardErrs, dirErr, clearDirErr,
       // 分段徽标 + 关闭确认浮层
       dirtyAi, dirtyBg, dirtyMisc, dirtySearch, bgEntryDirty,
+      // tag_weight 滑杆视图面（值/读数/进度填充/写回——只换控件形态，语义链零动）
+      tagWeightNum, tagWeightText, tagWeightStyle, setTagWeight,
       confirmOpen, confirmRef, cancelBtnRef, cancelConfirm, discardAndClose, saveAndClose, onConfirmKeydown,
       dirDraft, dirInputRef, dirListRef, dirOpen, dirActive, dirCandidates,
       removeDir, onDirKeydown, onDirInput, onDirOpenList, onDirBlurClose, pickDir,
@@ -1518,6 +1547,22 @@ export const SettingsPage = {
                           type="number" min="1" step="1" v-model="form.search.top_k_max" @input="clearErr('search.top_k_max')">
                         <span v-if="err('search.top_k_max')" class="st-field-err">{{ err('search.top_k_max') }}</span>
                       </label>
+                      <!-- 滑杆形（2026-11-24 换形，寻回 2026-11-13 权重滑杆手感；老 .sp-w* 族退役，
+                           .st-w* 承接观感）：range 是 labelable 后代，不得进 label.st-field——
+                           label 空白/文字点击会转发激活它（2026-11-22 隐私目录误删同款结构，AGENTS
+                           label 红线）；修法同密钥字段先例 = div.st-field + label[for] 补语义 -->
+                      <div class="st-field">
+                        <label class="st-lbl" for="st-tag-weight">标签权重</label>
+                        <div class="st-wrow">
+                          <input id="st-tag-weight" class="st-wrange" data-fk="search.tag_weight"
+                            :class="{ 'is-err': err('search.tag_weight') }" type="range"
+                            min="0.1" max="3.0" step="0.1" :value="tagWeightNum" :style="tagWeightStyle"
+                            :aria-valuetext="tagWeightText" @input="setTagWeight($event.target.value)">
+                          <span class="st-wval">{{ tagWeightText }}</span>
+                        </div>
+                        <span class="st-hint">标签召回相对全文检索的权重（0.1–3.0，缺省 2.0）</span>
+                        <span v-if="err('search.tag_weight')" class="st-field-err">{{ err('search.tag_weight') }}</span>
+                      </div>
                     </div>
                     <!-- 容器 div（label 内禁 labelable 后代——AGENTS 红线；本字段后代是 button）；
                          st-trg-head = 标签与开关同行形（沿「复用主智能体模型」先例，非字段列形） -->

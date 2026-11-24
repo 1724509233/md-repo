@@ -858,6 +858,9 @@ pre code.hljs { background: transparent; padding: 0; }
 .sp-grp-head .fn { font-size: 14px; font-weight: 500; color: var(--ink); flex-shrink: 0; }
 .sp-grp-head .dr { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-grp-head .ct { margin-left: auto; font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); flex-shrink: 0; }
+/* 文档更新时间（组头 ct 旁弱字读数）：字色比 ct 再轻一档、11px 不抢标题；完整日期进 title。
+   前缀隔离（移动 sheet 共模板但无 .search-page 容器 → 零触达，不新增 @media；共享基础类禁裸改） */
+.search-page .sp-mtime { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 50%, transparent); flex-shrink: 0; white-space: nowrap; }
 /* 片段卡：零边框纯间距；active = brass 8% 底 + 左缘 2px 条（复用 rail/W1 子钮三态语法，§4） */
 .sp-snip-card { flex-shrink: 0; display: block; width: 100%; text-align: left; cursor: pointer;
   padding: 2px 4px 0 10px; border-left: 2px solid transparent; border-radius: 6px; transition: background-color .15s, border-color .15s; }
@@ -1892,6 +1895,8 @@ details.d-sec .body { padding: 8px 12px 14px; }
    归监控页独占，本页不再挂该类。本分节只长出表单面最小件：
    .st-cols 双列体（≥640 左锚列 sticky / ≤639 折顶部分段钮行）· .st-nav-* 分段导航（mode-btn 激活态先例）
    · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
+     · .st-wrow/.st-wrange/.st-wval 滑杆行（tag_weight 换形 2026-11-24；老 .sp-w* 权重滑杆族
+     退役后的观感承接：细线轨道 + 黄铜填充进度 + 圆钮 + 等宽读数）
    · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族；.st-toolchip 权限三态 =
      允许（实心黄铜）/ 询问（描边 + 后缀）/ 拒绝（虚线弱化），勾选与否仍由 .on 承载）
    · .st-tag(s) 隐私目录标签 · .st-dir-* 隐私目录 combobox 候选面板 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
@@ -1912,6 +1917,30 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-input:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; }
 .st-hint { font-size: 10.5px; color: var(--ink-soft); }
 .st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; }
+/* 滑杆行（tag_weight，2026-11-24 换形）：观感承接已退役的 .sp-w* 权重滑杆族——
+   细线轨道 + 黄铜填充进度（color-mix 语法同 .sp-chip.on 家族；进度比例由 JS 经
+   --st-wfill 内联给定）+ 黄铜实心圆钮；读数等宽黄铜字（老 .sp-wval 规格）。 */
+.st-wrow { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.st-wrange {
+  flex: 1; min-width: 0; height: 18px; margin: 0; background: transparent; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+}
+.st-wrange::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 999px;
+  background: linear-gradient(to right, color-mix(in srgb, var(--brass) 55%, var(--line)) 0 var(--st-wfill, 50%), var(--line) var(--st-wfill, 50%) 100%);
+}
+.st-wrange::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -4.5px;
+  width: 12px; height: 12px; border: none; border-radius: 50%;
+  background: var(--brass); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 25%, transparent);
+}
+.st-wrange::-moz-range-track { height: 3px; border-radius: 999px; background: var(--line); }
+.st-wrange::-moz-range-progress { height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+.st-wrange::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--brass); }
+.st-wrange:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 2px; border-radius: 4px; }
+.st-wrange.is-err::-webkit-slider-thumb { background: var(--st-error); }
+.st-wrange.is-err::-moz-range-thumb { background: var(--st-error); }
+.st-wval { font-family: var(--mono); font-size: 11px; color: var(--brass); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 2.5em; text-align: right; }
 .st-keyrow { display: flex; align-items: stretch; gap: 6px; }
 .st-keyrow .st-input { flex: 1; }
 .st-keyrow .mp-back { align-self: center; }
