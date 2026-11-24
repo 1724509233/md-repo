@@ -1,5 +1,6 @@
 /* SearchPanel 组件（spec 2026-11-23-immersive-search §4 呈现重做后）：
- * 输入框（占位分壳）+ 最近搜索空态 + tag 选择器行 + meta 行（篇·片段·档呈现名）
+ * 输入框（占位分壳）+ 最近搜索空态 + tag 选择器行 + meta 行（读数左：篇·片段；
+ * 操作件右：档呈现名 chip + 含代码开关——S3 审查后开关出弹层进 meta 行）
  * + 按文件分组结果列表（5 行 clamp/就地展开/±150 窗口/内联级渲染/mark 分层）
  * + 键盘导航（↑↓ Enter，跨组连续）+ 展示更多（显式 fuzzy）+ 隐私提示行。
  * 渲染管线在 utils/snippetRender.js、控制器在 utils/search.js（桌面页与移动 sheet 共享组件）。 */
@@ -309,35 +310,44 @@ export const SearchPanel = {
       <!-- ① tag 选择器行（输入区与 meta 行之间；/api/tags 失败/空 → 整行隐藏） -->
       <div v-if="tagOptions.length" class="sp-chips" :class="{ expanded: tagsExpanded }">
         <button v-for="t in visibleTags" :key="t.name" class="sp-chip"
-          :class="{ on: isTagSelected(t.name) }" :title="'#'+t.name" @click="toggleTag(t.name)">
+          :class="{ on: isTagSelected(t.name) }" :aria-pressed="isTagSelected(t.name)" :title="'#'+t.name" @click="toggleTag(t.name)">
           <span class="sp-chip-name">#{{ t.name }}</span>
           <span class="sp-chip-count">{{ t.doc_count }}</span>
         </button>
-        <button v-if="tagOptions.length > 5" class="sp-chip-toggle" @click="tagsExpanded = !tagsExpanded">
+        <button v-if="tagOptions.length > 5" class="sp-chip-toggle" :aria-expanded="tagsExpanded" @click="tagsExpanded = !tagsExpanded">
           {{ tagsExpanded ? '收起' : '展开更多' }}
         </button>
       </div>
-      <!-- 召回 meta 行（spec 2026-11-23 §4/§5）：N 篇 · M 个片段 · 档 [呈现名]（零结果即同请求内回退
-           耗尽的终态——当前档恒取响应 recall，无档可升故 D8 撤销升档入口）；加载态只显「检索中…」 -->
+      <!-- 召回 meta 行（spec 2026-11-23 §4/§5 + S3 呈现层次）：读数靠左（N 篇 · M 个片段），
+           操作件靠右（档 chip + 含代码开关，margin-left:auto 分域）；零结果即同请求内回退
+           耗尽的终态——当前档恒取响应 recall，无档可升故 D8 撤销升档入口；加载无旧结果时
+           灰字统计占位（行宽近终态防撑行；档组缺席是文档化的唯一例外） -->
       <div v-if="searchQuery.trim()" class="sp-meta">
-        <span v-if="loading" class="sp-meta-loading"><span class="search-spinner search-spinner-sm"></span>检索中…</span>
+        <span v-if="loading" class="sp-meta-loading"><span class="search-spinner search-spinner-sm"></span>检索中…<span v-if="!results.length" class="sp-meta-skel" aria-hidden="true">…篇 · …个片段</span></span>
         <span v-else>{{ docCount }} 篇 · {{ segmentCount }} 个片段</span>
-        <span v-if="!loading || results.length" class="sp-meta-tier">· 档
+        <span v-if="!loading || results.length" class="sp-meta-tier">
           <!-- 档位面（评审 A2/B2 重构）：桌面壳恒渲染 chip（chip 可达性硬约束：零结果/模糊态
               也必须能换档）；移动壳恒纯文本（零改动，档值跟响应终点档）。CSS 媒体块退役——
-              可达性由 shell 分支保证，不留双保险死样式 -->
-          <template v-if="isDesktopShell">
-            <button type="button" class="sp-tier sp-tier-chip" data-tier-toggle
-              :aria-expanded="showTierPop ? 'true' : 'false'" @click="showTierPop = !showTierPop">{{ TIER_LABEL[currentTier] }} ⌄</button>
+              可达性由 shell 分支保证，不留双保险死样式。
+              S3 修复二：「·」分隔点不再住共享文本——桌面操作件组右移分域后正文流的「·」
+              悬空成孤点，桌面支路只留「档」；移动支路「· 档 宽松」句流逐字原样（flex 匿名
+              文本项 + gap 4 几何与旧「· 档」单文本项 + gap 4 完全同构） -->
+          <template v-if="isDesktopShell">档<button type="button" class="sp-tier sp-tier-chip" data-tier-toggle
+              :aria-expanded="showTierPop ? 'true' : 'false'" @click="showTierPop = !showTierPop"><span>{{ TIER_LABEL[currentTier] }}</span><svg aria-hidden="true" class="sp-tier-chev" :class="{ open: showTierPop }" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
             <span v-if="showTierPop" ref="tierPopEl" class="sp-tier-pop">
               <button v-for="t in TIER_TIERS" :key="t" type="button" class="sp-tier-opt"
                 :class="{ on: t === currentTier }" :aria-pressed="t === currentTier" @click="selectTier(t)">{{ TIER_LABEL[t] }}</button>
-              <span class="sp-tier-sep"></span>
-              <label class="sp-tier-code"><input type="checkbox" :checked="includeCode" @change="toggleIncludeCode()"><span>含代码</span></label>
             </span>
           </template>
-          <span v-else class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span>
+          <template v-else>· 档 <span class="sp-tier">{{ TIER_LABEL[currentTier] || '宽松' }}</span></template>
         </span>
+        <!-- 含代码开关（S3 审查 P0-2：弹层内 checkbox+sep 退役，出弹层与档 chip 同域靠右；
+             可见性判据与 chip 同源 = 可达性红线不稀释；三态语义进 title 不进正文；
+             双壳双实例挂载 → 用 aria-label 不用 aria-labelledby（防重复 id 撞名） -->
+        <span v-if="isDesktopShell && (!loading || results.length)" class="sp-meta-code"><span>含代码</span><button type="button"
+          class="st-toggle sp-code-toggle" :class="{ on: includeCode === true }" role="switch" :aria-checked="includeCode === true" aria-label="含代码"
+          :title="includeCode === true ? '代码文件已计入结果，点击恢复跟随默认' : '开：检索包含代码文件；关：跟随默认设置'"
+          @click="toggleIncludeCode()"></button></span>
       </div>
 
       <!-- 结果区（两分支加载，§4）：有旧结果压暗保留不清空；无旧结果出骨架不空白 -->

@@ -836,8 +836,6 @@ pre code.hljs { background: transparent; padding: 0; }
   font-size: 12.5px; color: var(--ink); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
 .sp-tier-opt:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
 .sp-tier-opt.on { color: var(--brass); font-weight: 600; }
-.sp-tier-sep { height: 1px; background: var(--line); margin: 4px 2px; }
-.sp-tier-code { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: 12.5px; color: var(--ink-soft); cursor: pointer; }
 /* 结果列表 */
 .sp-results { flex: 1; overflow-y: auto; padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 /* 空态 */
@@ -2376,3 +2374,47 @@ details.d-sec .body { padding: 8px 12px 14px; }
      同 .panel-shell/.chatwin 纪律）。置本浮层化块之后——同名声明后来者胜，放前会被覆写行吃掉 */
   .rel-side, .rel-side.open { transition: none; }
 }
+
+/* ════ 检索页 S3 呈现层次（UI 审查清单 P0/P1/P2 落地 2026-11-24）════
+   三带节奏：A 查询带（输入框）→ B 筛选带（最近搜索 / tag chips / meta 控制行）→ C 结果带。
+   间距表：输入框→B 带首行 16；B 带行内 10；B 带→C 带 24+2=26。左缘线统一：行内横距归零
+   （页盒 .search-page 已供 --col-inline 外垫），全行对 680 正文列，与文档视图列缘重合。
+   红线：全部规则 .search-page 前缀——.sp-input/.sp-q-input 与 FileTree 树内下拉共用、
+   移动 sheet 挂 #search-drawer，两者均不在 .search-page 子树（像素级零触达）；
+   零新增 @media、零新增 z-index（含代码开关 in-flow；档弹层沿用 .sp-tier-pop z-50 锚位，
+   仅列尾对缘收 right 锚，top 偏移不动）。 */
+/* —— A 带：输入框 pb 10→16；图标/清除钮脱离旧 12/10 内距的 -30% 定死校准，改定值对中
+   （top = pt12 + 输入框半高≈19 − 控件半高：图标 16px 取 23、清除钮 22px 取 20）—— */
+.search-page .sp-input { padding: 12px 0 16px; }
+.search-page .sp-q-ic { left: 12px; top: 23px; transform: none; }
+.search-page .sp-q-clear { right: 10px; top: 20px; transform: none; }
+/* —— B 带：行距统一 10（recent 退役 18/4 怪节奏）；recent 胶囊去描边浅底，
+   与 tag 描边胶囊形状分层（hover 黄铜语法不动）—— */
+.search-page .sp-recent { padding: 0 0 10px; }
+.search-page .sp-recent button { border-color: transparent; background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.search-page .sp-chips { padding: 0 0 10px; }
+/* —— C 带：meta pb 8→24 + results pt 4→2 = 26 落差；results 横距 12→0；空态上垫 28→48 —— */
+.search-page .sp-meta { padding: 0 0 24px; }
+.search-page .sp-results { padding: 2px 0 14px; }
+.search-page .sp-empty { padding-top: 48px; }
+/* —— meta 行分域：读数靠左，操作件（档 chip 组）margin-left:auto 整体靠右，含代码组尾随
+   （.sp-meta gap 8 承担组距）；弹层随操作件落列尾，收 right 对缘（top 偏移不变）—— */
+.search-page .sp-meta-tier { margin-left: auto; }
+.search-page .sp-meta-code { display: inline-flex; align-items: center; gap: 6px; }
+.search-page .sp-tier-pop { left: auto; right: 0; }
+/* —— 含代码开关：st-toggle 34×20 → 28×16 缩型（钮 12 / 位移 12 / top-left 1 三处同步，
+   特异度 ≥ .st-toggle.on::after 靠三类名取胜）；::before 透明扩命中 40×26，视觉几何不变 —— */
+.search-page .sp-code-toggle { width: 28px; height: 16px; }
+.search-page .sp-code-toggle::after { top: 1px; left: 1px; width: 12px; height: 12px; }
+.search-page .sp-code-toggle.on::after { transform: translateX(12px); }
+.search-page .sp-code-toggle::before { content: ''; position: absolute; inset: -5px -6px; }
+/* —— 加载期灰字统计占位（行宽近终态，防完成瞬间撑行；aria-hidden 纯骨架）—— */
+.search-page .sp-meta-skel { color: color-mix(in srgb, var(--ink-soft) 35%, transparent); margin-left: 6px; }
+/* —— 档 chip 可点性：与正文同号 11px、加横垫（三类名 + 置后压 .sp-meta .sp-tier 10px）；
+   chevron SVG 开合联动（180° transform，RM 下无害不动画几何）—— */
+.search-page .sp-tier-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; font-size: 11px; }
+.search-page .sp-tier-chev { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease; }
+.search-page .sp-tier-chev.open { transform: rotate(180deg); }
+/* —— 「展开更多」全页限高：40% 是树面板口径，全页 132px ≈ 4 行 + sticky 收起钮照旧 —— */
+.search-page .sp-chips.expanded { max-height: 132px; }

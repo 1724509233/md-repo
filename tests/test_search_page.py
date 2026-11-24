@@ -280,10 +280,71 @@ def test_s4_tier_chip_and_prefs():
     # 双显病（v-else 挂错 pop 的 v-if）由「chip 只在桌面 template 分支内」结构性排除
     assert "chipTierVisible" not in tpl and "chipTierVisible" not in sp, "旧可达性式禁回流"
     assert '<template v-if="isDesktopShell">' in tpl, "档位面未分桌面/移动两支"
-    assert '<span v-else class="sp-tier">' in tpl, "移动侧档值纯文本缺席（悬空「· 档」回归）"
+    # S3 修复二等价升级（原钉 '<span v-else class="sp-tier">'）：移动支路「· 档 + 纯文本档值」
+    # 整句流入钉——分隔点归移动支路后，此断言同时钉住「· 档 宽松」句流逐字与纯文本形态，只强不弱
+    assert '<template v-else>· 档 <span class="sp-tier">' in tpl, "移动侧「· 档 + 纯文本档值」句流缺席（悬空/丢点回归）"
     # ④ 控制器档位取 state.recall（缺省 relaxed）；includeCode 布尔才发键
     assert re.search(r"state\.recall && state\.recall\.value", sj)
     assert "typeof includeCode === 'boolean'" in api and "body.include_code = includeCode" in api
+
+
+def test_s5_code_switch_meta_row():
+    # S3 呈现层次 P0-2（2026-11-24 审查落地）：含代码开关出弹层进 meta 行——
+    # 与档 chip 同分支同可见性判据（可达性红线不稀释）、形态 = st-toggle 缩型
+    # button role=switch（非 checkbox、不进 label 容器）、弹层瘦身为纯四档。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    # ① 开关在场：可见性判据与 chip 同源 + 绑原函数 + switch 形态 + 三态判型
+    assert '<span v-if="isDesktopShell && (!loading || results.length)" class="sp-meta-code">' in tpl, \
+        "含代码开关未挂 meta 行或可见性判据与 chip 不同源"
+    _start = tpl.index('class="sp-meta-code"')
+    seg = tpl[_start:tpl.index("</div>", _start)]
+    assert 'class="st-toggle sp-code-toggle"' in seg and 'role="switch"' in seg
+    assert ':aria-checked="includeCode === true"' in seg and 'toggleIncludeCode()' in seg
+    # on 类与 aria-checked 同判据成对绑定（实锤回归 2026-11-24：缺 on 类 = 开关视觉永不翻转）
+    assert ':class="{ on: includeCode === true }"' in seg, "开关缺 on 类绑定（轨道底色恒 off 态）"
+    assert "<label" not in seg and "<input" not in seg, "开关混入 label/checkbox 形态（红线：button role=switch）"
+    # ② 弹层等价更新（旧钉「弹层内含代码 checkbox」的等价替代，禁弱化方向=形态升级）：
+    # sep/checkbox 模板与样式全退役，弹层只剩 TIER_TIERS 选项
+    assert "sp-tier-code" not in tpl and "sp-tier-sep" not in tpl
+    assert ".sp-tier-code" not in css and ".sp-tier-sep" not in css
+    pop = tpl[tpl.index('class="sp-tier-pop"'):tpl.index("</span>", tpl.index('class="sp-tier-pop"'))]
+    assert "TIER_TIERS" in pop and "checkbox" not in pop and "sp-tier-code" not in pop
+    # ③ 缩型与分域样式全在 CSS 且带 .search-page 前缀（移动 sheet/树内下拉零触达证据）
+    for rule in (".search-page .sp-code-toggle { width: 28px; height: 16px; }",
+                 ".search-page .sp-code-toggle.on::after { transform: translateX(12px); }",
+                 ".search-page .sp-meta-tier { margin-left: auto; }"):
+        assert rule in css, f"缺规则：{rule}"
+
+
+def test_s5_search_page_layout_rhythm():
+    # S3 呈现层次 P0-1/P1/P2：三带节奏（16/10/26）、左缘线归零、图标定值校准、
+    # chips.expanded 全页限高 132px、空态 48px——全部 .search-page 前缀；
+    # 共享基础规则（树内下拉/移动 sheet 消费）逐字禁裸改。
+    sp = (TPL / "js/components/SearchPanel.js").read_text(encoding="utf-8")
+    css = (TPL / "style.css").read_text(encoding="utf-8")
+    tpl = sp[sp.index("template: `") + len("template: `"):sp.rindex("`")]
+    for rule in (
+        ".search-page .sp-input { padding: 12px 0 16px; }",
+        ".search-page .sp-q-ic { left: 12px; top: 23px; transform: none; }",
+        ".search-page .sp-q-clear { right: 10px; top: 20px; transform: none; }",
+        ".search-page .sp-recent { padding: 0 0 10px; }",
+        ".search-page .sp-chips { padding: 0 0 10px; }",
+        ".search-page .sp-meta { padding: 0 0 24px; }",
+        ".search-page .sp-results { padding: 2px 0 14px; }",
+        ".search-page .sp-empty { padding-top: 48px; }",
+        ".search-page .sp-chips.expanded { max-height: 132px; }",
+    ):
+        assert rule in css, f"缺规则：{rule}"
+    # 基础态原样（共享类裸改 = 移动 sheet/树内下拉外溢事故）
+    for base in (".sp-input { flex-shrink: 0; padding: 12px 14px 10px; position: relative; background: transparent; }",
+                 ".sp-results { flex: 1; overflow-y: auto; padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 8px; }"):
+        assert base in css, f"基础规则被裸改：{base}"
+    # P1-4 灰字统计占位 + P2-2 chip 语义 + P2-3 chevron 开合联动
+    assert "sp-meta-skel" in tpl
+    assert ':aria-pressed="isTagSelected(t.name)"' in tpl and ':aria-expanded="tagsExpanded"' in tpl
+    assert "sp-tier-chev" in tpl and ".search-page .sp-tier-chev.open { transform: rotate(180deg); }" in css
 
 
 def test_s1b_three_tokens_and_centering():
