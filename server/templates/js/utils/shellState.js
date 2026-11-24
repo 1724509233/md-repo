@@ -3,17 +3,20 @@
 // localStorage 读写归调用方（app.js），本模块只管字符串进出。
 
 // 抽屉态机：再点同一个 → null（关）；否则切到 target。
-// cur/target ∈ 'file'|'search'|'trash'|'monitor'|null
+// cur/target ∈ 'file'|'trash'|null（2026-11-23 检索页：'search' 移出抽屉值域，升格 view 页态；
+// 'monitor' 历史注释保留——app 从不传，批准偏离在案）
 export function drawerNext(cur, target) {
   return target === cur ? null : target;
 }
 
-// Esc 优先级链：settings > fan > drawer > dropdown。
-// f = {settingsOpen, fanOpen, drawer, dropdownOpen}（布尔/字符串）
+// Esc 优先级链：settings > fan > drawer > search > dropdown。
+// 浮层压页面：检索页（view==='search'）折叠位恒在抽屉/监控之后、下拉族之前。
+// f = {settingsOpen, fanOpen, drawer, view, dropdownOpen}（布尔/字符串）
 export function escTarget(f) {
   if (f.settingsOpen) return 'settings';
   if (f.fanOpen) return 'fan';
   if (f.drawer) return 'drawer';
+  if (f.view === 'search') return 'search';
   if (f.dropdownOpen) return 'dropdown';
   return null;
 }

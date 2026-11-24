@@ -196,13 +196,18 @@ def test_refreshpreview_postprocesses_before_mapping():
 
     映射须按 postProcess 后的最终 DOM 写（mermaid pre → div.mermaid 替换发生在 postProcess）；
     顺序颠倒会把映射写到被替换掉的 pre 上。函数体内顺序正则钉住先后。
+    （2026-11-24 搜索正文高亮 spec §4 授权在两 call 之间挂 applySearchHighlight()——
+    逐行相邻正则换为先后序正则，§9.2 先后语义不变，非弱化。）
     """
     js = read_js("components/EditorPane.js")
     m = re.search(r"async function refreshPreview\(\) \{(.+?)\n    \}", js, re.S)
     assert m, "missing refreshPreview in EditorPane.js"
-    assert re.search(
-        r"postProcessPreview\([^)]*\)\s*\n\s*writeSrcLineMapping\(", m.group(0)
-    ), "refreshPreview must call postProcessPreview before writeSrcLineMapping (spec §9.2)"
+    seg = m.group(0)
+    i_post = seg.index("postProcessPreview(") if "postProcessPreview(" in seg else -1
+    i_map = seg.index("writeSrcLineMapping(") if "writeSrcLineMapping(" in seg else -1
+    assert -1 < i_post < i_map, (
+        "refreshPreview must call postProcessPreview before writeSrcLineMapping (spec §9.2)"
+    )
 
 
 def test_toc_jump_prefix_sum_uses_actual_separator_length():
@@ -226,23 +231,26 @@ def test_toc_jump_prefix_sum_uses_actual_separator_length():
 
 
 def test_search_js_tag_parser_and_weights():
-    """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；权重读 localStorage。"""
+    """客户端 #tag 解析：显式字符集（CJK 支持）+ 与服务端同形；
+    权重前端面已退役（S5/T11 §5 三层模型无第四配置——反向钉防回流）。"""
     js = read_js("utils/search.js")
     assert "parseTagQuery" in js
     assert r"#([\w\u4e00-\u9fff]+(?:-[\w\u4e00-\u9fff]+)*)" in js, (
         "tag regex must use explicit CJK char set + hyphen group "
         "(JS \\w is ASCII-only; #md-repo is one tag)"
     )
-    assert "mdvault.searchWeights" in js
-    assert "readWeights" in js
+    assert "searchWeights" not in js and "readWeights" not in js, (
+        "weights frontend surface must be gone (T11)")
 
 
 def test_api_js_ai_search_structured():
     js = read_js("api.js")
     assert "getTags" in js
     m = re.search(r"async aiSearch\(([^)]*)\)", js)
-    assert m and "tags" in m.group(1) and "weights" in m.group(1), \
-        "aiSearch must accept structured tags/weights"
+    assert m and "tags" in m.group(1) and "includeCode" in m.group(1), \
+        "aiSearch must accept structured tags/includeCode"
+    assert "weights" not in m.group(1), \
+        "weights 前端面已退役（T11），api.js 不得再点名"
 
 
 def test_click_ledger_surfaces():
@@ -264,7 +272,8 @@ def test_click_ledger_surfaces():
     ft = read_js("components/FileTree.js")
     for js in (sp, ft):
         assert "via: 'search'" in js, "search surface must ledger via:'search'"
-        assert "search.lastQuery()" in js, "click query = 产出当前结果的 keywords"
+        # S3 起 FileTree 控制器惰性创建：两条路径（search.x / ensureSearch().x）同语义
+        assert re.search(r"(search|ensureSearch\(\))\.lastQuery\(\)", js), "click query = 产出当前结果的 keywords"
         assert "rank: i + 1" in js, "rank = 1-based 项序号"
 
     app_js = read_js("app.js")

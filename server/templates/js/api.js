@@ -74,11 +74,13 @@ export const api = {
   },
 
   /** POST /api/ai/search — RAG 搜索（recall: strict/near/relaxed/fuzzy，缺省 strict；
-   *  tags = 结构化 tag 条件（spec 2026-11-13，非空数组才发送）；weights = {tag: number}） */
-  async aiSearch(query, topK = 5, signal, recall = 'strict', tags, weights) {
-    const body = { query, top_k: topK, recall }
+   *  tags = 结构化 tag 条件（spec 2026-11-13，非空数组才发送）；weights 前端面已退役
+   *  （T11，后端面保留）；includeCode = 设备/查询级覆盖（plan T10，**缺省不发键** = 跟 config exclude_code） */
+  async aiSearch(query, topK = 5, signal, recall = 'strict', tags, includeCode) {
+    const body = { query, recall }
+    if (typeof topK === 'number') body.top_k = topK   // null/undefined = 不发键，跟 config top_k_default
     if (Array.isArray(tags) && tags.length) body.tags = tags
-    if (weights && typeof weights.tag === 'number') body.weights = { tag: weights.tag }
+    if (typeof includeCode === 'boolean') body.include_code = includeCode   // 三态：非布尔不发
     const res = await fetch('/api/ai/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

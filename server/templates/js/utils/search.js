@@ -31,6 +31,8 @@
  */
 
 // 数据整形：每个 segment 展开为独立项（同一文件多项连续排列）
+// mtime（spec 2026-11-24 挂载契约：results[].mtime = unix 秒 number|null 恒在）随项透传——
+// 文档级字段，组头呈现经 groupByPath 取组首现值；legacy/降级缺席防御为 null（呈现零占位）。
 export function shapeSegments(results) {
   const items = []
   for (const item of results) {
@@ -38,7 +40,7 @@ export function shapeSegments(results) {
     const name = base.toLowerCase().endsWith('.md') ? base.slice(0, -3) : base
     const segments = item.segments || []
     if (!segments.length) {
-      items.push({ path: item.path, name, heading: '', content: '', score: item.score || 0 })
+      items.push({ path: item.path, name, heading: '', content: '', score: item.score || 0, mtime: item.mtime ?? null })
       continue
     }
     for (const seg of segments) {
@@ -46,7 +48,8 @@ export function shapeSegments(results) {
         path: item.path, name,
         heading: seg.heading_path || '',
         content: seg.content || '',
-        score: seg.score != null ? seg.score : (item.score || 0)
+        score: seg.score != null ? seg.score : (item.score || 0),
+        mtime: item.mtime ?? null
       })
     }
   }
@@ -61,6 +64,23 @@ export function countRows(items) {
     n += segs.length ? segs.length : 1
   }
   return n
+}
+
+// 按文件分组（spec 2026-11-23 §4 分组模型：文件=阅读心智单位，segment 只是定位符）：
+// shaped 平铺项 → [{path, name, dir, mtime, items:[同序 shaped 项]}]，组序 = 首现序（score 最优在前）。
+// mtime 为文档级字段（shapeSegments 自 results[].mtime 透传），组随首现项落值（同 path 同文档同值）。
+export function groupByPath(items) {
+  const out = []
+  const idx = new Map()
+  for (const it of items) {
+    if (!idx.has(it.path)) {
+      idx.set(it.path, out.length)
+      const p = it.path || ''
+      out.push({ path: it.path, name: it.name, dir: p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '', mtime: it.mtime ?? null, items: [] })
+    }
+    out[idx.get(it.path)].items.push(it)
+  }
+  return out
 }
 
 // #tag 解析（芯片选中态与 API 参数同一来源，spec 2026-11-13 §2）：
@@ -80,16 +100,118 @@ export function parseTagQuery(q) {
   return { keywords, tags }
 }
 
-// 排序权重（localStorage 每设备；形状 {"tag": 2.0}；两表面读同一权重）
-export function readWeights() {
-  try {
-    return JSON.parse(localStorage.getItem('mdvault.searchWeights') || '{}')
-  } catch {
-    return {} // 损坏 JSON → 默认权重
+// per-doc tag 徽标折叠（spec 2026-11-24 §3 折叠铁律）：
+// tags = 结果面 tags 字段（canonical 名、字母序、恒在、可能空/缺席皆防御为 []）；
+// selectedTags = 输入框解析的 #tag token（parseTagQuery 产物，已小写）。
+// 命中判定 = 两侧 String().toLowerCase() 归一比对（与 SearchPanel.isTagSelected 同口径）。
+// 返回 {shown, folded}：命中徽标全量前置（组内字母序）；非命中显示数 = max(0, cap − 命中数)
+// （cap 缺省 4，组内字母序），溢出进 folded（+n 件消费：title = folded 全列表）。
+// 命中 ≥cap 时非命中全量折叠（0 枚显示）。两组各自显式排序（契约序的自洽兜底，
+// 比较器 = 码点序，与后端 ORDER BY name 同口径）。纯函数 node 可直 import
+// （chatEvents.js / parseTagQuery 先例），组件只消费不实现。
+export function foldDocTags(tags, selectedTags, cap = 4) {
+  const list = Array.isArray(tags) ? tags : []
+  const sel = new Set((Array.isArray(selectedTags) ? selectedTags : []).map(t => String(t).toLowerCase()))
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const hits = []
+  const rest = []
+  for (const t of list) (sel.has(String(t).toLowerCase()) ? hits : rest).push(t)
+  hits.sort(cmp)
+  rest.sort(cmp)
+  const keep = Math.max(0, cap - hits.length)
+  return { shown: hits.concat(rest.slice(0, keep)), folded: rest.slice(keep) }
+}
+
+// tag 条件合一行（乙案 2026-11-24 用户拍板，SearchPanel 桌面分支消费；spec 无——mockup
+// .openchamber/mockups/tag-query-options.html 乙案快照为呈现法源）：
+// tags = /api/tags 全量（[{name, doc_count}]，doc_count 降序 name 升序——顺序即展示序，
+// 本函数不重排）；selectedTags = parseTagQuery 产物（已小写、查询出现序）。
+// 铁律（foldDocTags 命中铁律同源——条件永不隐藏）：已选恒浮前行首（相互间保持
+// doc_count 序）；手输而不在全量表的 tag 也入列（doc_count=null 呈现层免计数），
+// 排在表内已选之后；未选按列表序（= doc_count 序）补满 cap（缺省 5）。
+// 总数 = max(cap, 已选数)。单一事实源 = 输入文本——本函数是纯展示投影，
+// 不产生第二份 tag 状态。纯函数 node 可直 import（foldDocTags 先例），组件只消费不实现。
+export function chipsVisible(tags, selectedTags, cap = 5) {
+  const list = Array.isArray(tags) ? tags : []
+  const sel = (Array.isArray(selectedTags) ? selectedTags : []).map(t => String(t).toLowerCase())
+  const selSet = new Set(sel)
+  const out = []
+  const seen = new Set()
+  for (const t of list) {
+    const ln = String(t.name).toLowerCase()
+    if (selSet.has(ln)) { out.push({ name: t.name, doc_count: t.doc_count, on: true }); seen.add(ln) }
+  }
+  for (const s of sel) {
+    if (!seen.has(s)) { out.push({ name: s, doc_count: null, on: true }); seen.add(s) }
+  }
+  for (const t of list) {
+    if (out.length >= cap) break
+    const ln = String(t.name).toLowerCase()
+    if (seen.has(ln)) continue
+    out.push({ name: t.name, doc_count: t.doc_count, on: false })
+  }
+  return out
+}
+
+// 文档更新时间呈现（2026-11-24 挂载契约前端消费）：mtime = results[].mtime（unix 秒，
+// number|null 恒在）；now = 参照毫秒（缺省 Date.now，探针参数化用）。口径：null/非法 → ''
+// （呈现层整件不渲染，零占位）；<24h →「今天」；<48h →「昨天」；<8 天 →「N 天前」；
+// 同年内 →「MM-DD」；跨年 →「YYYY-MM-DD」（年判定与月日均本地时区）。完整日期进 title
+// 不进正文（文案铁律）。纯函数 node 可直 import（foldDocTags 先例），组件只消费不实现。
+export function formatDocAge(mtime, now = Date.now()) {
+  if (typeof mtime !== 'number' || !Number.isFinite(mtime)) return ''
+  const DAY = 86400000
+  const age = now - mtime * 1000
+  if (age < DAY) return '今天'
+  if (age < 2 * DAY) return '昨天'
+  if (age < 8 * DAY) return `${Math.floor(age / DAY)} 天前`
+  const d = new Date(mtime * 1000)
+  const p = (n) => String(n).padStart(2, '0')
+  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return d.getFullYear() === new Date(now).getFullYear() ? md : `${d.getFullYear()}-${md}`
+}
+
+// 排序权重前端面已退役（S5/T11，§5 三层配置模型无「第四配置」；
+// 后端 weights 请求面保留给 agent/MCP 通道，前端两壳均不再点名）
+
+// 设备偏好（plan 2026-11-23 T10，spec §5 第二层）：档位与「含代码」的每设备缺省。
+// 缺键 = 跟服务端 config 默认层；损坏 JSON 逐键类型守卫退缺省。
+export const TIER_TIERS = ['strict', 'near', 'relaxed', 'fuzzy']   // 内部名（永不进呈现串）
+export function readPrefs() {
+  let o = {}
+  try { o = JSON.parse(localStorage.getItem('mdvault.searchPrefs') || '{}') || {} } catch { o = {} }
+  return {
+    recall: TIER_TIERS.includes(o.recall) ? o.recall : null,   // null = 跟缺省
+    includeCode: typeof o.includeCode === 'boolean' ? o.includeCode : null
+  }
+}
+export function writePrefs(p) {
+  try { localStorage.setItem('mdvault.searchPrefs', JSON.stringify(p)) } catch { /* 隐私模式等 → 内存态照常 */ }
+}
+
+// 高亮词元截留薄壳（spec 2026-11-24 §3 T-FE1；2026-11-24 联调复盘后自组件迁入——
+// 运行时接线语义静态钉盲区，须住 utils 让 node 可直 import 组 harness 探针）：
+// 包一层 api.aiSearch 在响应落点把顶层 tokens（后端实际参与召回的小写词元，恒在
+// 可空；旧服务端缺席）写入 setTokens，响应体原样透传（同引用，pick payload 共享面）。
+// 自发序守卫 = 镜像控制器 requestId 防过期语义：已更新发单在后（seq 落后）则迟到
+// 旧响应恒不回填（旧词元表不得污染当前结果）。发单自身 abort/出错时 await 即 reject
+// ——异常原样穿回调用方 catch 支，sink 不动；守卫不因此死锁（后续最新发单照常回填）。
+export function createTokenShim(api, setTokens) {
+  let issueSeq = 0
+  return {
+    ...api,
+    async aiSearch(...args) {
+      const seq = ++issueSeq
+      const data = await api.aiSearch(...args)
+      if (seq === issueSeq) setTokens(Array.isArray(data && data.tokens) ? data.tokens : [])
+      return data
+    }
   }
 }
 
 export function createSearchController({ api, topK = 8, debounceMs = 300, state, focusInput, onSearchComplete }) {
+  // topK 可为函数（SearchPanel 按壳分层：桌面 null=不发键跟 config，移动 8）
+  const resolveTopK = () => (typeof topK === 'function' ? topK() : topK)
   let debounceTimer = null
   let abortController = null
   let requestId = 0
@@ -97,21 +219,23 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
   let lastKeywords = '' // 产出当前结果的 keywords（点击落账的 query 来源）
   let lastTags = []
 
-  // 一次 runSearch = 一个 relaxed 请求（F1：一次用户动作一行落账）。
-  // 零命中时服务端已在同请求内回退 fuzzy（响应 recall=fuzzy），
-  // 客户端收到空结果 = fuzzy 亦零 → 终态，无「放宽再试」。
+  // 一次 runSearch = 一个请求（F1：一次用户动作一行落账）。档位 = 设备偏好
+  // （state.recall，T10），缺省 relaxed——零命中时服务端仅 relaxed 档同请求内
+  // 回退 fuzzy（响应 recall=终点档），客户端收到空结果 = 终态，无「放宽再试」。
   async function runSearch(keywords, tags) {
     if (abortController) abortController.abort()
     const controller = new AbortController()
     abortController = controller
     const id = ++requestId
+    const tier = (state.recall && state.recall.value) || 'relaxed'
     state.loading.value = true
     state.moreLoading.value = false
     state.fuzzyDone.value = false
-    if (state.resultTier) state.resultTier.value = 'relaxed'
+    if (state.resultTier) state.resultTier.value = tier
     let data
     try {
-      data = await api.aiSearch(keywords, topK, controller.signal, 'relaxed', tags, readWeights())
+      data = await api.aiSearch(keywords, resolveTopK(), controller.signal, tier, tags,
+                                state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return // 被新查询/清空取代：忽略
       if (id !== requestId) return
@@ -162,7 +286,8 @@ export function createSearchController({ api, topK = 8, debounceMs = 300, state,
     state.moreLoading.value = true
     let data
     try {
-      data = await api.aiSearch(lastKeywords, topK, controller.signal, 'fuzzy', lastTags, readWeights())
+      data = await api.aiSearch(lastKeywords, resolveTopK(), controller.signal, 'fuzzy', lastTags,
+                                state.includeCode ? state.includeCode.value : undefined)
     } catch (err) {
       if (err.name === 'AbortError') return
       if (id !== requestId) return

@@ -1,11 +1,11 @@
 """Settings domain: /api/settings — config.yaml 页面化编辑 (spec 2026-11-22 §4).
 
-GET = 五段掩码回显（api_key 永不明文），PUT = 字段级写回 + 校验即启动 + 备份 +
+GET = 六段掩码回显（api_key 永不明文），PUT = 字段级写回 + 校验即启动 + 备份 +
 编排热生效。写回模型（§4.2）：ruamel round-trip 原文档，只对页面可见键（下方
 `_*_KEYS` 集合）set/delete——未建模键（bgagent 条目的 escalation 等）与页面外
 section（server/client/mcp）天然逐字节保留。
 
-payload 语义（与前端 SettingsPage buildPayload 契约一致）：PUT body = 页面五段
+payload 语义（与前端 SettingsPage buildPayload 契约一致）：PUT body = 页面六段
 全量状态——键缺省 = 删除该可见键（回加载器缺省）；显式例外：
 - `api_key` 缺省/`null` = 保持原明文（回填），`""` = 显式清除（spec §4.2.2，
   null ≡ 缺省钉死：防前端 undefined/null 序列化差异误删 key）；
@@ -19,10 +19,10 @@ payload 语义（与前端 SettingsPage buildPayload 契约一致）：PUT body 
 路由级 asyncio.Lock——lock 在 register 闭包内建（非模块全局：多 create_app
 实例互不染）。
 
-apply 编排顺序（§5 分级热生效，applied 恒为稳定五段全量词表）：
+apply 编排顺序（§5 分级热生效，applied 恒为稳定六段全量词表）：
 ctx.ai_config 替换 → supervisor.apply(loaded) → ctx.bg_targets=agent_caps →
 ctx.settings_gen += 1（agent 缓存代际戳，读侧失效在 Task 6——永不外清缓存）→
-notif_hook.set_daily_cap → root_logger.setLevel + file_handler.backupCount →
+notif_hook.set_daily_cap → ctx.search_cfg 换引用 → root_logger.setLevel + file_handler.backupCount →
 端点集合 (host, model_id) 有变化才重跑 log_model_endpoints（红线 7）。
 apply 段抛 = 文件已落盘、绝不反滚（回滚只制造第三态，spec §4.2.6 / 评审 M6.3）
 → 500 {saved: true, error}。
@@ -45,6 +45,7 @@ from ..config import (
     TRIGGER_OPS,
     load_background_agents,
     load_notifications,
+    load_search,
     load_server_config,
 )
 from ..config.doc_io import (
@@ -62,8 +63,9 @@ from ..services.egress import log_model_endpoints, parse_endpoint
 
 logger = logging.getLogger("md-vault.settings")
 
-# applied 稳定五段全量词表（spec §4.2 步 6：响应恒带全部段名）。
-_APPLIED = ["ai", "background_agents", "notifications", "privacy", "log"]
+# applied 稳定六段全量词表（spec §4.2 步 6：响应恒带全部段名；search 段
+# = plan 2026-11-23 T8 增列）。
+_APPLIED = ["ai", "background_agents", "notifications", "privacy", "log", "search"]
 # 重启标注常量（spec §4.1 _meta.restart_fields：就一个字段，不成机制）。
 _RESTART_FIELDS = ["log.dir"]
 _LOG_DEFAULT_DIR = ".sync/logs"
@@ -81,6 +83,8 @@ _BG_MODEL_KEYS = frozenset({"provider", "model_id", "base_url", "api_key",
 _BG_TRIGGER_KEYS = frozenset({"source", "events", "metric", "arm_count",
                               "min_interval_h", "low_score"})
 _NOTIF_KEYS = frozenset({"daily_cap"})
+_SEARCH_KEYS = frozenset({"top_k_default", "top_k_max", "exclude_code",
+                          "tag_weight"})
 _PRIVACY_KEYS = frozenset({"dirs"})
 # log 段页可见键 ↔ server 段扁平键名（config 的 log 配置本就平铺在 server 下）。
 _LOG_FLAT_KEYS = {"level": "log_level", "dir": "log_dir",
@@ -114,6 +118,8 @@ def _section_of(message: str) -> str:
         return "privacy"
     if "notifications" in message:
         return "notifications"
+    if "search." in message or "'search'" in message:
+        return "search"
     if "log_" in message or "log." in message:
         return "log"
     return "config"
@@ -199,6 +205,14 @@ def _get(ctx) -> dict:
                      if isinstance(doc.get("notifications"), dict) else {})
     notifications.setdefault("daily_cap", 20)
 
+    # 检索段（plan T8）：同 notifications 的 setdefault 缺省回显形
+    search = (_plain(doc.get("search"))
+              if isinstance(doc.get("search"), dict) else {})
+    search.setdefault("top_k_default", 12)
+    search.setdefault("top_k_max", 50)
+    search.setdefault("exclude_code", True)
+    search.setdefault("tag_weight", 2.0)
+
     privacy = (_plain(doc.get("privacy"))
                if isinstance(doc.get("privacy"), dict) else {})
     dirs = privacy.get("dirs")
@@ -217,6 +231,7 @@ def _get(ctx) -> dict:
         "ai": ai,
         "background_agents": bgs,
         "notifications": notifications,
+        "search": search,
         "privacy": privacy,
         "log": log,
         "_meta": {
@@ -397,6 +412,7 @@ async def _put(request: Request, ctx, lock: asyncio.Lock) -> JSONResponse:
             _write_ai(doc, body.get("ai"))
             _write_bg(doc, body.get("background_agents"))
             _write_simple(doc, "notifications", body.get("notifications"), _NOTIF_KEYS)
+            _write_simple(doc, "search", body.get("search"), _SEARCH_KEYS)
             _write_simple(doc, "privacy", body.get("privacy"), _PRIVACY_KEYS)
             _write_log(doc, body.get("log"))
         except _Rejected as exc:
@@ -414,6 +430,7 @@ async def _put(request: Request, ctx, lock: asyncio.Lock) -> JSONResponse:
             try:
                 loaded_server = load_server_config(tmp_name)
                 loaded_notifications = load_notifications(tmp_name)
+                loaded_search = load_search(tmp_name)
                 loaded_bg = load_background_agents(tmp_name, ctx.vault_dir)
                 validate_tool_whitelists(loaded_server, loaded_bg)
             except (ValueError, FileNotFoundError) as exc:
@@ -445,6 +462,7 @@ async def _put(request: Request, ctx, lock: asyncio.Lock) -> JSONResponse:
             ctx.bg_targets = agent_caps(loaded_bg)    # 监控页预算显示随热切
             ctx.settings_gen += 1                     # agent_cache 代际戳（读侧失效）
             rt.notif_hook.set_daily_cap(loaded_notifications.daily_cap)  # §5.2
+            ctx.search_cfg = loaded_search  # 检索全局默认层热切（plan T8，同 notif 套路）
             rt.root_logger.setLevel(getattr(logging, loaded_server.log.level))
             rt.file_handler.backupCount = loaded_server.log.retention_days
             if _endpoint_set(loaded_server.ai, loaded_bg) != pre_endpoints:

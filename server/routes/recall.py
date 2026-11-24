@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import time
 
 from fastapi import HTTPException, Request, Response
@@ -29,7 +30,14 @@ def register(app, ctx) -> None:
     async def ai_search(request: Request) -> dict:
         body = await request.json()
         query = body.get("query", "")
-        top_k = int(body.get("top_k", 5))
+        # 全局默认层（plan 2026-11-23 T8，spec §5）：top_k 缺省走 config
+        # search.top_k_default，超限钳制不 400；include_code 缺省 = config
+        # exclude_code 的反义（显式请求键始终赢）。ctx.search_cfg 未接线退
+        # SearchConfig() 缺省（12/50/True，与旧硬编码 5 的差异仅缺省面）。
+        from ..config.search import SearchConfig
+        cfg = ctx.search_cfg or SearchConfig()
+        top_k = max(1, min(int(body.get("top_k", cfg.top_k_default)), cfg.top_k_max))
+        include_code = bool(body.get("include_code", not cfg.exclude_code))
         recall = body.get("recall", "strict")
         if recall not in ("strict", "near", "relaxed", "fuzzy"):
             raise HTTPException(status_code=400, detail="invalid recall tier")
@@ -38,11 +46,15 @@ def register(app, ctx) -> None:
         tags = body.get("tags")
         if isinstance(tags, list) and not tags:
             tags = None
-        weights = body.get("weights")
+        # 权重全局默认层（spec 2026-11-23 §5 修订，2026-11-24）：body 无
+        # weights 键 → config search.tag_weight；有键（含显式 null）body 优先，
+        # 行为不变。界外值由 rag_search 的 validate_weights 兜成 400。
+        weights = body["weights"] if "weights" in body else {"tag": cfg.tag_weight}
         from ..ai import rag_search
         try:
             results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
-                                 recall=recall, tags=tags, weights=weights)
+                                 recall=recall, tags=tags, weights=weights,
+                                 include_code=include_code)
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -60,7 +72,8 @@ def register(app, ctx) -> None:
         if recall == "relaxed" and not results:
             try:
                 results = rag_search(str(ctx.vault_dir), query, top_k=top_k,
-                                     recall="fuzzy", tags=tags, weights=weights)
+                                     recall="fuzzy", tags=tags, weights=weights,
+                                     include_code=include_code)
             except ValueError as e:
                 raise HTTPException(status_code=400, detail=str(e))
             except Exception as e:
@@ -77,7 +90,56 @@ def register(app, ctx) -> None:
             logger.exception(
                 "recall telemetry insert failed (source=web query=%r tier=%s)",
                 query, tier)
-        return {"results": results, "recall": tier}
+        # Tag 徽标面（spec 2026-11-24 §2）：对最终结果 paths 批量反查携带的
+        # tag 名（doc→tag 边），逐条挂 "tags"——字段恒在（无 tag/降级 → []，
+        # 前端免判 undefined）。挂点在路由层：F1 回退 / fuzzy / 权重融合的
+        # 合流都在 rag_search 返回之后，一处挂全覆盖；内核零变（45 caller 与
+        # agent/MCP 通道输出不受影响）。置于 log_query 之后：台账输入的 dict
+        # 字节级不变。旧版 index.db 无 graph 表 → 整批 []，不 500（同款先例
+        # graph_tag_counts 静默降级）。防御同 log_query 的 malformed 守卫：
+        # 缺 path 的垃圾条目原样透传（不挂键、不抛）。
+        from ..vault.db.graph_sql import graph_tags_for_docs
+        paths = [r["path"] for r in results
+                 if isinstance(r, dict) and r.get("path")]
+        try:
+            tags_by_path = graph_tags_for_docs(ctx.db_conn, paths)
+        except sqlite3.Error:
+            tags_by_path = {}
+        for r in results:
+            if isinstance(r, dict) and r.get("path"):
+                r["tags"] = tags_by_path.get(r["path"], [])
+        # mtime 挂载面（2026-11-24，tags 徽标同款姿势）：对最终结果 paths 批量
+        # 反查 index files 表的 mtime，逐条挂 "mtime"——字段恒在（files 无行/
+        # 降级 → null，前端免判 undefined）。同挂点纪律：置于 log_query 之后
+        # （台账输入 dict 字节级不变），内核零变；get_mtimes 抛 sqlite3.Error
+        # → 整批 null 不 500；malformed 条目（无 path）不挂不抛。
+        from ..vault.db.file_index import get_mtimes
+        try:
+            mtimes = get_mtimes(ctx.db_conn, paths)
+        except sqlite3.Error:
+            mtimes = {}
+        for r in results:
+            if isinstance(r, dict) and r.get("path"):
+                r["mtime"] = mtimes.get(r["path"])
+        # 词元挂载面（spec 2026-11-24 §2，lane T-BE）：后端**实际参与召回的词元**
+        # 随响应顶层 "tokens" 返回（与 results/recall 平级、非 per-doc——词元是
+        # 查询属性，逐条挂纯属浪费；小写 canonical，可空）。前端三处高亮（片段/
+        # 标题/跳转正文）以它为唯一事实源，消灭「后端命中、前端不亮」。挂载同区
+        # 纪律（log_query 之后、tags/mtime 同款）：台账输入 dict 字节级不变。
+        # query_tokens = segments_search 本体的共享提取（防口径漂移：路由层永不
+        # 自带第二套分词规则），按**终档**取（tier 变量已含 F1 回退结果）。内核
+        # （rag_search/segments_search）返回值永不含 tokens 键——反钉守卫：
+        # agent/MCP 通道 token 预算零变。降级：任何异常（jieba 挂 / query 非串等）
+        # → tokens: [] 不 500（前端回退旧空白切分口径）。legacy 全库扫描路（内核
+        # 返回值形态是红线、_tokenize 私有跨包不可达 R3——路由无廉价降级信号）挂
+        # 同查询的 jieba 词元：仍是合法词元表，最坏高亮不中，与 [] 同降级面
+        # （§2「或 []」口径）。
+        from ..vault.db.segments_sql import query_tokens
+        try:
+            tokens = query_tokens(query, tier)
+        except Exception:
+            tokens = []
+        return {"results": results, "recall": tier, "tokens": tokens}
 
     @app.post("/api/recall/click")
     async def recall_click(request: Request) -> Response:

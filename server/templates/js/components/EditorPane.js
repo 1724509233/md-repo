@@ -1,6 +1,7 @@
 /* EditorPane 组件：textarea + markdown 预览 + 编辑/预览切换 + page-turn 动画 */
 const { ref, computed, watch, nextTick, onMounted, inject } = Vue
 import { renderMarkdown, postProcessPreview, writeSrcLineMapping } from '../utils/markdown.js'
+import { highlightDocTerms, clearDocHits } from '../utils/bodyHighlight.js'
 import { dirOf } from '../utils/vaultLinks.js'
 import { EDITOR_LINE_HEIGHT, LAND_ANCHOR, measureEditorLineTopY } from '../utils/editorGeom.js'
 
@@ -48,12 +49,40 @@ export const EditorPane = {
     // 预览后处理：hljs + mermaid + 选区→源码行号映射（§9.2 顺序敏感：mermaid pre→div.mermaid
     // 替换发生在 postProcess，映射须按最终 DOM 写）。映射随每次内容重渲染整体重建（§3.2），
     // 不依赖当前模式——编辑后切回预览时 v-html 已替换预览 DOM、旧映射属性丢失，须重写，否则落位缺失。
+    // 搜索跳转正文高亮落账消费（spec 2026-11-24 §4）：state.searchHighlight = { path, terms }
+    // 由 app.js onSearchPick 写入、非搜索 openDoc / 编辑态清零（清零点见 app.js）。
+    // 仅命中当前文档且词元非空才跑；内容变更路径（computed 重算 → v-html 重 patch）天然重打——
+    // 内容未变则 refreshPreview 不跑，清除侧归下方 watch（联调返工 2026-11-24）。
+    function applySearchHighlight() {
+      const hl = state && state.searchHighlight
+      if (!hl || !Array.isArray(hl.terms) || !hl.terms.length) return
+      if (hl.path !== state.currentPath) return
+      highlightDocTerms(previewHtmlEl.value, hl.terms)
+    }
+
+    // 落账的 DOM 同步面（双向，联调返工 2026-11-24 收口）：app.js 三处清零只归 null state——
+    // 预览 v-show 常驻、内容未变时 renderedHtml 输入不变 → v-html 不重 patch、refreshPreview
+    // 不跑（编辑↔预览往返实证指纹：旧 .doc-hit 原样留亮）。watch 跟落账双向同步：
+    // ① 清零面：变 null → 解包预览 DOM（回预览不清=落账还在该亮；无 span 零操作）；
+    // ② 重打面：非 null 且 path=当前文档 → applySearchHighlight 补打——同文档
+    //   「进编辑熄灭→再点同一条结果」零 patch 无重打面，全靠此支；异 path 不打
+    //   （openDoc→docContent→refreshPreview 重打面负责，禁双打）；空 terms 自短接。
+    //   重打幂等安全：highlightDocTerms 既有 .doc-hit 跳过（防重包）
+    watch(() => state && state.searchHighlight, (hl) => {
+      if (!hl) {
+        if (previewHtmlEl.value) clearDocHits(previewHtmlEl.value)
+        return
+      }
+      if (hl.path === state.currentPath && previewHtmlEl.value) applySearchHighlight()
+    })
+
     async function refreshPreview() {
       clearBlockSel() // 重渲染即 v-html 重建，sticky 选中随之作废（spec 2026-11-17 §3.2）
       if (!previewEl.value || !previewHtmlEl.value) return
       await nextTick()
       if (!previewEl.value || !previewHtmlEl.value) return
       postProcessPreview(previewHtmlEl.value)
+      applySearchHighlight()
       writeSrcLineMapping(previewHtmlEl.value, localContent.value, renderOpts())
     }
 
@@ -452,7 +481,7 @@ export const EditorPane = {
     return { editorEl, previewEl, previewHtmlEl, ebtnEl, docWrapEl, localContent, renderedHtml, onInput, onPreviewClick, onPreviewPointerDown, onPreviewPointerUp, onPreviewDblClick, landingSel, clearBlockSel, onEditBtnClick, ebtnOn, onPreviewHoverIn, onPreviewHoverOut, triggerPageTurn, getScrollerEl }
   },
   template: `
-    <div ref="docWrapEl" class="doc-wrap max-w-[680px] mx-auto min-h-full flex flex-col">
+    <div ref="docWrapEl" class="doc-wrap max-w-[var(--col-measure)] mx-auto min-h-full flex flex-col">
       <textarea id="editor" ref="editorEl"
         v-show="mode === 'edit'"
         :disabled="docMissing"

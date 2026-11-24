@@ -15,7 +15,7 @@ from .core import events
 from .api import create_app
 from .bgagent.notify import GuardedNotificationHook, cleanup_old_notifications
 from .bgagent.scheduler import BgSupervisor, agent_caps
-from .config import load_background_agents, load_notifications, load_server_config
+from .config import load_background_agents, load_notifications, load_search, load_server_config
 from .config.core import lan_gate_check
 from .routes import SettingsDeps
 from .services.egress import log_model_endpoints
@@ -153,6 +153,9 @@ def main(argv: list[str] | None = None) -> None:
     # Notification volume guard (debt #6, D33): the daily cap is law from
     # config.yaml's top-level notifications: section (default 20).
     notifications_cfg = load_notifications(config_path)
+    # Search global default layer (plan 2026-11-23 T8): top_k default/max +
+    # code-block exclusion. Hot-updated on settings save via ctx.search_cfg.
+    search_cfg = load_search(config_path)
 
     bg_agents = load_background_agents(config_path, vault_dir)
     # Tool-whitelist validation (card 13): the registry owner owns the
@@ -238,7 +241,8 @@ def main(argv: list[str] | None = None) -> None:
     settings_deps = SettingsDeps(config_path=Path(config_path))
     app = create_app(vault_dir=vault_dir, db_conn=conn, ledger_conn=ledger_conn,
                      ai_config=config.ai, bg_targets=_agent_caps(bg_agents),
-                     privacy=privacy, settings=settings_deps)
+                     privacy=privacy, settings=settings_deps,
+                     search_cfg=search_cfg)
 
     config_obj = uvicorn.Config(
         app, host=config.host, port=config.port, log_level=config.log.level.lower()

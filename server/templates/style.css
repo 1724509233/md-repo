@@ -71,7 +71,7 @@ button, .tree-row, .tree-file, .rlabel, #current-file { -webkit-user-select: non
 input, textarea { -webkit-user-select: text; user-select: text; }
 /* 豁免：搜索结果文本需可划词抄录（树搜索下拉行 + 搜索页结果卡，后者 button 化后语义保留）——
    button 语义与划选共存；caret 点击后滞留的 mac 风险此两面可控（结果行点击即跳转/关下拉，选区不留存） */
-.search-item, .sp-card { -webkit-user-select: text; user-select: text; }
+.search-item, .sp-snip-card { -webkit-user-select: text; user-select: text; }
 
 /* ============ 焦点环内描（P2②）============ */
 /* overflow 滚动面边缘会裁掉外描 ring（:focus-visible 全局环贴容器边被切）——
@@ -822,33 +822,96 @@ pre code.hljs { background: transparent; padding: 0; }
 /* 分层召回 meta 行 */
 .sp-meta { flex-shrink: 0; display: flex; align-items: center; gap: 8px; padding: 0 14px 8px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft); }
 .sp-meta .sp-tier { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--brass) 35%, var(--line)); background: color-mix(in srgb, var(--brass) 8%, transparent); color: var(--brass); }
+.sp-meta-loading { display: inline-flex; align-items: center; gap: 6px; }  /* 压暗旧结果时唯一活指示（RM 下 spinner 停转，文字仍在） */
+/* 档位 chip + 下拉（plan T10）：chip 复用 .sp-tier 胶囊形；下拉 = 卡底小浮层（z 层序表「下拉」档 50）。
+   移动 sheet 零改动红线：chip/pop 藏（此面退纯文本），桌面页可达集 = chip 可见面 */
+.sp-meta { position: relative; }
+.sp-meta-tier { display: inline-flex; align-items: center; gap: 4px; position: relative; }
+.sp-tier-chip { appearance: none; cursor: pointer; font-family: inherit; }
+.sp-tier-chip:hover { border-color: color-mix(in srgb, var(--brass) 60%, var(--line)); }
+.sp-tier-pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 50; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px rgba(0, 0, 0, .12);
+  padding: 4px; min-width: 96px; }
+.sp-tier-opt { appearance: none; border: 0; background: none; text-align: left; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+  font-size: 12.5px; color: var(--ink); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-tier-opt:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.sp-tier-opt.on { color: var(--brass); font-weight: 600; }
 /* 结果列表 */
 .sp-results { flex: 1; overflow-y: auto; padding: 4px 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-/* 加载态 */
-.sp-loading { display: flex; align-items: center; gap: 8px; padding: 14px; color: var(--ink-soft); font-size: 12px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
 /* 空态 */
 .sp-empty { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 28px 16px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
-.sp-empty-ring { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--ink-soft); }
-.sp-empty-ring svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; }
 .sp-empty-t1 { font-size: 12px; color: var(--ink-soft); }
 .sp-empty-t2 { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); text-align: center; }
-/* 平铺卡片：每个 segment 独立成卡（B 变体 .f-card）；flex-shrink:0 —— 卡片不可压缩，
-   超出由 .sp-results 滚动（否则默认 shrink:1 + overflow:hidden 会让卡片被压矮而非出滚动条） */
-.sp-card { flex-shrink: 0; appearance: none; width: 100%; text-align: left; font: inherit; color: inherit;
-  /* 原生 button 化（键盘可达，待办 e96cf4ed）UA 重置按 .src-link 先例；焦点环走 .sp-results :focus-visible inset 家族（:80） */
-  background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px 0; overflow: hidden; cursor: pointer; transition: border-color .15s, background-color .15s; }
-.sp-card:hover, .sp-card.active { border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
-.sp-top { display: flex; align-items: baseline; gap: 8px; }
-.sp-name { font-size: 13px; font-weight: 500; flex-shrink: 0; color: var(--ink); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
-.sp-path { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* heading pill chip */
-.sp-hchip { display: inline-block; margin: 6px 0 5px; font-size: 10px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; color: var(--ink-soft); background: color-mix(in srgb, var(--ink) 4%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); padding: 1px 8px; border-radius: 999px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 片段：12px 3 行 clamp，匹配词黄铜高亮 */
-.sp-snip { font-size: 12px; line-height: 1.65; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.sp-snip :is(mark) { background: color-mix(in srgb, var(--brass) 22%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
-/* 相关性条：3px，宽度 ∝ 相对 score（最高分 = 100%），无数字 */
-.sp-bar { height: 3px; background: color-mix(in srgb, var(--ink) 6%, transparent); margin-top: 8px; }
-.sp-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--brass), color-mix(in srgb, var(--brass) 55%, var(--line))); border-radius: 0 999px 999px 0; }
+/* 最近搜索 chip 行（S1b 空态，spec 2026-11-23 §4）：弱字描边胶囊，回填即搜；黄铜预算不占用 */
+.sp-recent { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 18px 0 4px; }
+.sp-recent .lb { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); margin-right: 2px; }
+.sp-recent button { font-size: 12.5px; color: var(--ink-soft); background: none; border: 1px solid var(--line);
+  border-radius: 9999px; padding: 3px 12px; cursor: pointer; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-recent button:hover { color: var(--ink); border-color: color-mix(in srgb, var(--brass) 45%, var(--line)); }
+.sp-recent .clr { border: 0; text-decoration: underline; text-underline-offset: 3px; padding: 3px 2px; opacity: .65; }
+@media (max-width: 1023px) { .sp-recent { display: none; } }  /* 移动 sheet 零改动红线：共享组件的桌面空态件不外溢 */
+/* ════ S2 呈现重做（spec 2026-11-23 §4/§11）：分组模型——文件头一行 + 组内片段纯间距零边框。
+   窄栏补丁时代终结：平铺卡 / heading pill / 相关性条 / 3 行 clamp 全部退役。 */
+@media (min-width: 1024px) { .search-page .p-head { display: none; } }  /* 页内无面板头；移动 sheet 头保留（零改动） */
+.sp-grp { flex-shrink: 0; margin-bottom: 24px; }
+.sp-grp-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.sp-grp-head .fn { font-size: 14px; font-weight: 500; color: var(--ink); flex-shrink: 0; }
+.sp-grp-head .dr { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-grp-head .ct { margin-left: auto; font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 65%, transparent); flex-shrink: 0; }
+/* 文档更新时间（组头 ct 旁弱字读数）：字色比 ct 再轻一档、11px 不抢标题；完整日期进 title。
+   前缀隔离（移动 sheet 共模板但无 .search-page 容器 → 零触达，不新增 @media；共享基础类禁裸改） */
+.search-page .sp-mtime { font-size: 11px; color: color-mix(in srgb, var(--ink-soft) 50%, transparent); flex-shrink: 0; white-space: nowrap; }
+/* 片段卡：零边框纯间距；active = brass 8% 底 + 左缘 2px 条（复用 rail/W1 子钮三态语法，§4） */
+.sp-snip-card { flex-shrink: 0; display: block; width: 100%; text-align: left; cursor: pointer;
+  padding: 2px 4px 0 10px; border-left: 2px solid transparent; border-radius: 6px; transition: background-color .15s, border-color .15s; }
+.sp-snip-card + .sp-snip-card { margin-top: 10px; }
+.sp-snip-card:hover { background: color-mix(in srgb, var(--brass) 4%, transparent); }
+.sp-snip-card.active { background: color-mix(in srgb, var(--brass) 8%, transparent); border-left-color: var(--brass); }
+/* heading 降级：弱色文本行（pill 退役——窄栏视觉锚点补偿不再需要） */
+.sp-head-line { display: flex; align-items: baseline; gap: 6px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent); margin-bottom: 2px; }
+/* 片段：13px 5 行 clamp（宽栏 5 行 ≈ 旧 3 行四倍信息量）；展开走 .is-open 语义用类切换（is-clamp 反转）；
+   非命中正文淡一档（ink→paper 72%），让 mark 靠对比度自然跳出（用户目检 2026-11-23） */
+.sp-snip { font-size: 13px; line-height: 1.6; color: color-mix(in srgb, var(--ink) 72%, var(--paper)); overflow: hidden; }
+.sp-snip.sp-clamp5 { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+/* mark 分层（§11 黄铜预算豁免）：两档命中统一黄铜色加粗；首处额外上底——底块数 O(命中数)→O(卡片数) */
+.sp-snip mark.hit-first { background: color-mix(in srgb, var(--brass) 22%, transparent); color: color-mix(in srgb, var(--brass) 75%, var(--ink));
+  font-weight: 700; border-radius: 3px; padding: 0 1px; }
+.sp-snip mark.hit { background: none; font-weight: 700; color: color-mix(in srgb, var(--brass) 75%, var(--ink)); }
+/* heading 命中记号（spec 2026-11-24 §3 标题高亮，475 换形同波）：与片段 mark 同族黄铜口径但更
+   克制一档——标题行本体是 12px 弱色 mono（降级层级），hit-first 上底 22%→16%、hit 只上
+   brass 掺灰墨的暗色不加底不加粗，高亮绝不反向抢标题层级。不带 .search-page 前缀 = 共享
+   件双壳同渲染，族先例即 .sp-snip mark（前缀化会让移动 sheet 掉回浏览器默认黄底）；零新 @media。 */
+.sp-head-line mark.hit-first { background: color-mix(in srgb, var(--brass) 16%, transparent); color: color-mix(in srgb, var(--brass) 62%, var(--ink-soft)); border-radius: 2px; }
+.sp-head-line mark.hit { background: none; color: color-mix(in srgb, var(--brass) 62%, var(--ink-soft)); }
+/* 正文搜索高亮（spec 2026-11-24 §4，T-FE2 合流落盘）：brass 22% 底家族口径（同
+   .sp-snip mark.hit-first 现值同参），正文无「首处」语义——全词元同底色不分 first/subsequent */
+.doc-hit { background: color-mix(in srgb, var(--brass) 22%, transparent); color: color-mix(in srgb, var(--brass) 75%, var(--ink));
+  border-radius: 3px; padding: 0 1px; }
+.sp-unfold { appearance: none; border: 0; background: none; padding: 4px 0 0; cursor: pointer;
+  font-size: 12px; color: var(--brass); font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; }
+.sp-unfold:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 隐私过滤提示（§6：条件式措辞、零计数零路径；显隐判据在前端） */
+.sp-privacy-note { flex-shrink: 0; font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 6px 0 0; }
+/* 加载两分支（§4）：有旧结果压暗保留不清空不闪跳 */
+.sp-dimmed { opacity: .6; transition: opacity .2s ease; }
+/* 骨架屏（无旧结果分支）：灰条 --ink-soft 低透档，行宽参差，组间/组内与真实结果同刻度；
+   shimmer 扫描可有（spec §4），reduced-motion 退静态灰条 */
+.sp-skel { flex-shrink: 0; }
+.sp-skel-grp { margin-bottom: 24px; }
+.sp-skel-row { height: 12px; border-radius: 6px; margin: 10px 0;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--ink-soft) 10%, transparent) 25%,
+    color-mix(in srgb, var(--ink-soft) 22%, transparent) 37%,
+    color-mix(in srgb, var(--ink-soft) 10%, transparent) 63%);
+  background-size: 400% 100%; animation: sp-skel-shine 1.4s ease infinite; }
+.sp-skel-row.sk-head { height: 14px;
+  background-image: linear-gradient(90deg,
+    color-mix(in srgb, var(--ink-soft) 16%, transparent) 25%,
+    color-mix(in srgb, var(--ink-soft) 30%, transparent) 37%,
+    color-mix(in srgb, var(--ink-soft) 16%, transparent) 63%); background-size: 400% 100%; }
+@keyframes sp-skel-shine { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .sp-dimmed, .sp-snip-card { transition: none; } .sp-skel-row { animation: none; } }
 /* "展示更多"：复用现有 .search-more 胶囊规格 */
 .sp-more-wrap { flex-shrink: 0; display: flex; justify-content: center; padding: 8px 0 2px; }
 /* 预取占位 */
@@ -1579,13 +1642,13 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* ③ 源码选区可见性 = textarea 原生选区高亮，仅把选区色纳入主题（§4.2，不加高亮带/行号栏） */
 #editor::selection { background: color-mix(in srgb, var(--brass) 26%, transparent); }
 
-/* ============ 搜索子页 · tag 选择器 + 权重 popover + via 徽标（spec 2026-11-13 §3，2026-11-13）============
+/* ============ 搜索子页 · tag 选择器 + per-doc tag 徽标（spec 2026-11-13 §3 → 2026-11-24 §3）============
    纯追加：既有类零改动，色调沿用 --ink/--line/--brass/--surface。
-   新增件 = .sp-chips/.sp-chip/.sp-chip-toggle（tag 选择器行，输入区与 meta 行之间；
+   件面 = .sp-chips/.sp-chip/.sp-chip-toggle（tag 选择器行，输入区与 meta 行之间；
    展开态 max-height 40% 滚动，「收起」sticky 钉底）
-   / .sp-sort-btn + .sp-sort-pop（权重 popover：absolute 右对齐贴面板头下缘，开/关不挤压布局，z-30 压结果区）
-   / .sp-seg 三预设 segmented / .sp-wrange 滑杆 / .sp-wreset 恢复默认
-   / .sp-via-badge 结果卡 tag 徽标（outline chip，.sp-hchip 缩小规格）。 ============ */
+   / .sp-doc-tags/.sp-doc-tag(+.on)/.sp-doc-fold（组头逐枚 #tag 徽标 + 命中黄铜选中 + 溢出 +n，
+   spec 2026-11-24 §3——取代已退役的笼统「tag」via 占位徽标，反向钉禁回流）。
+   （权重 popover 家族 .sp-sort-*/.sp-seg*/.sp-w* 已随 T11 拆除——§5 三层模型无第四配置） */
 
 /* ① tag 选择器行：sp-root 直接子（max-height 40% 需对确定高度容器解析）；默认态前 5 芯片 + 展开更多 */
 .sp-chips { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 14px 10px; }
@@ -1612,56 +1675,61 @@ details.d-sec .body { padding: 8px 12px 14px; }
 /* 展开态「收起」钉在滚动区底（芯片流可滚走，按钮恒可见） */
 .sp-chips.expanded .sp-chip-toggle { position: sticky; bottom: 0; background: var(--surface); }
 
-/* ② 权重控件：面板头 .pacts 槽入口 + absolute popover（.p-head 为 position:relative 锚点） */
-.sp-sort-btn {
-  display: inline-flex; align-items: center; gap: 5px;
-  height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px;
-  background: transparent; cursor: pointer;
-  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; color: var(--ink-soft);
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
-}
-.sp-sort-btn svg { width: 12px; height: 12px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; }
-.sp-sort-btn svg circle { fill: currentColor; stroke: none; }
-.sp-sort-btn:hover { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); color: var(--ink); }
-.sp-sort-btn.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
+/* ② 权重控件族（.sp-sort-btn/.sp-sort-pop/.sp-seg*/.sp-w*）已随 T11 退役拆除 */
 
-.sp-sort-pop {
-  position: absolute; right: 14px; top: 48px; z-index: 30; width: 232px;
-  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-  box-shadow: 0 12px 32px rgba(33,29,24,.14), 0 2px 8px rgba(33,29,24,.08);
-  padding: 12px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+/* ③ per-doc tag 徽标（spec 2026-11-24 §3）：组标题行逐枚 #tag（文档携带的 tag），
+   折叠件面 = shown 徽标流 + 溢出 +n（title 折上集）。与 tag chips 行同族描边胶囊、
+   轻一级（10px / 更淡边 / 无计数）；.on = 命中查询 tag，复用 .sp-chip.on 黄铜选中语法。
+   容器 inline-flex wrap：命中 ≥cap 时徽标变多可换行，组头基线对齐不受扰（fn 基线 = 首行）。 */
+.sp-doc-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.sp-doc-tag {
+  display: inline-flex; align-items: center; flex-shrink: 0; max-width: 100%;
+  padding: 0 7px; border: 1px solid color-mix(in srgb, var(--line) 78%, transparent); border-radius: 999px;
+  background: transparent;
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10px; line-height: 1.7;
+  color: color-mix(in srgb, var(--ink-soft) 88%, transparent);
 }
-.sp-sort-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; color: var(--ink-soft); margin-bottom: 8px; }
-/* 三预设 segmented：tag 优先 2.0 / 均衡 1.0 / 关键词优先 0.5（高亮 = wTag 值匹配，滑杆双向同步） */
-.sp-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 3px; background: color-mix(in srgb, var(--ink) 5%, transparent); border-radius: 8px; }
-.sp-seg-btn {
-  border: none; background: transparent; cursor: pointer; border-radius: 6px;
-  font-family: inherit; font-size: 10.5px; color: var(--ink-soft); padding: 5px 2px;
-  white-space: nowrap; transition: background-color .15s ease, color .15s ease;
+.sp-doc-tag.on { border-color: color-mix(in srgb, var(--brass) 50%, var(--line)); background: color-mix(in srgb, var(--brass) 12%, transparent); color: var(--brass); }
+/* +n 溢出件：非交互纯读数（title 承载折上清单），比徽标再轻一级（mono 小字无边框） */
+.sp-doc-fold {
+  display: inline-flex; align-items: center; flex-shrink: 0; cursor: default;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 0 3px;
 }
-.sp-seg-btn:hover { color: var(--ink); }
-.sp-seg-btn.on { background: var(--surface); color: var(--brass); font-weight: 500; box-shadow: 0 1px 3px rgba(33,29,24,.12); }
-.sp-wrow { display: flex; align-items: baseline; justify-content: space-between; margin: 10px 0 4px; }
-.sp-wlabel { font-size: 11px; color: var(--ink-soft); }
-.sp-wval { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; color: var(--brass); font-variant-numeric: tabular-nums; }
-/* 滑杆：原生 input[type=range]，accent 走黄铜 */
-.sp-wrange { width: 100%; height: 18px; margin: 0; accent-color: var(--brass); cursor: pointer; }
-.sp-wreset {
-  margin-top: 8px; width: 100%; padding: 5px 0;
-  border: 1px solid var(--line); border-radius: 7px; background: transparent; cursor: pointer;
-  font-family: inherit; font-size: 11px; color: var(--ink-soft);
-  transition: background-color .15s ease, border-color .15s ease, color .15s ease;
-}
-.sp-wreset:hover { color: var(--brass); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); background: color-mix(in srgb, var(--brass) 6%, transparent); }
 
-/* ③ via 徽标：sp-top 行 sp-name 前；via=tag|both 才渲染，缺失不渲染 */
-.sp-via-badge {
-  display: inline-flex; align-items: center; flex-shrink: 0;
-  font-size: 9px; font-weight: 500; letter-spacing: .04em; line-height: 1.5;
-  color: var(--brass); background: transparent;
-  border: 1px solid color-mix(in srgb, var(--brass) 40%, var(--line)); border-radius: 999px;
-  padding: 0 6px; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
-}
+/* ④ tag 条件合一行（乙案 2026-11-24 用户拍板，mockup .openchamber/mockups/tag-query-options.html
+   乙案快照同参）：桌面 ≥1024 专属——类只出现在 SearchPanel 桌面支路 DOM（isDesktopShell 壳门），
+   移动 sheet 零此类（像素级零触达）。件面 = .sp-chips-cond（下拉锚）/ .sp-cchip(+.sp-cchip-x)
+   （实心条件胶囊：B 带唯一黄铜实心件，枚数=条件数——黄铜预算钉）/ .sp-tag-pop 系
+   （长尾下拉：.sp-tier-pop 面板语法同参 surface/line/8 圆角/shadow，z-50 对号壳层 z 表「下拉」行）。 */
+.sp-chips-cond { position: relative; }
+.sp-cchip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 4px 3px 10px; border: 1px solid var(--brass); border-radius: 999px;
+  background: var(--brass); color: var(--paper);
+  font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 11px; white-space: nowrap; }
+.sp-cchip-name { overflow: hidden; text-overflow: ellipsis; }
+.sp-cchip-x { appearance: none; border: 0; background: none; padding: 0 5px; border-radius: 999px; cursor: pointer;
+  color: var(--paper); font-size: 10px; line-height: 1.7; opacity: .8; transition: background-color .15s, opacity .15s; }
+.sp-cchip-x:hover { background: color-mix(in srgb, var(--paper) 25%, transparent); opacity: 1; }
+.sp-chips-cond .sp-chip-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.sp-tag-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 50; width: 252px; max-width: 92%;
+  display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .12); padding: 4px; }
+.sp-tag-pop-h { display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  color: color-mix(in srgb, var(--ink-soft) 70%, transparent); padding: 4px 10px 6px; }
+.sp-tag-pop-list { display: block; max-height: 224px; overflow-y: auto; }
+.sp-tag-row { appearance: none; border: 0; background: none; width: 100%; text-align: left; cursor: pointer;
+  display: flex; align-items: baseline; gap: 8px; padding: 4px 10px; border-radius: 6px;
+  font-family: inherit; font-size: 12px; color: var(--ink); transition: background-color .15s, color .15s; }
+.sp-tag-row:hover { background: color-mix(in srgb, var(--brass) 8%, transparent); }
+.sp-tag-row.on { background: color-mix(in srgb, var(--brass) 10%, transparent); color: var(--brass); }
+.sp-tag-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-tag-row-count { margin-left: auto; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px;
+  font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--ink-soft) 70%, transparent); }
+.sp-tag-row.on .sp-tag-row-count { color: color-mix(in srgb, var(--brass) 75%, transparent); }
+.sp-tag-pop-f { display: block; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 9.5px;
+  color: color-mix(in srgb, var(--ink-soft) 65%, transparent); padding: 5px 10px 4px; margin-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
 
 /* ============ 关联呈现 · 预览区侧栏 + 移动 bottom sheet（spec §6.4 候选①，2026-11-14；
    设计稿 docs/design/2026-11-14-relatedness-doc-face-alternative.html 1:1）
@@ -1739,7 +1807,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .tree-priv .tree-count { opacity: .8; }
 /* 小锁 glyph：树目录行 / 搜索结果行共用；随所在行文字色（树内弱调、搜索内灰墨） */
 .priv-lock { display: inline-flex; flex-shrink: 0; }
-.search-item .priv-lock, .sp-top .priv-lock { color: var(--ink-soft); }
+.search-item .priv-lock { color: var(--ink-soft); }
 /* 编辑器头徽标：同 .spill 形态家族（pill + 边框 + 弱色），锁 glyph 替代状态点 */
 .priv-badge { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif; font-size: 10.5px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line); background: color-mix(in srgb, var(--ink) 4%, transparent); color: var(--ink-soft); white-space: nowrap; }
 .priv-badge .icon { width: 11px; height: 11px; }
@@ -1871,6 +1939,8 @@ details.d-sec .body { padding: 8px 12px 14px; }
    归监控页独占，本页不再挂该类。本分节只长出表单面最小件：
    .st-cols 双列体（≥640 左锚列 sticky / ≤639 折顶部分段钮行）· .st-nav-* 分段导航（mode-btn 激活态先例）
    · .st-field/.st-lbl/.st-input/.st-hint 字段行 · .st-grid 数值自适应网格 · .st-keyrow 密钥行
+     · .st-wrow/.st-wrange/.st-wval 滑杆行（tag_weight 换形 2026-11-24；老 .sp-w* 权重滑杆族
+     退役后的观感承接：细线轨道 + 黄铜填充进度 + 圆钮 + 等宽读数）
    · .st-seg-* 两态分段 · .st-chip(s) 工具多选片（sp-chip 规格同族；.st-toolchip 权限三态 =
      允许（实心黄铜）/ 询问（描边 + 后缀）/ 拒绝（虚线弱化），勾选与否仍由 .on 承载）
    · .st-tag(s) 隐私目录标签 · .st-dir-* 隐私目录 combobox 候选面板 · .st-alerts 告警固定区（浮层头部下方、滚动区之外；非字段校验族专席）
@@ -1891,6 +1961,39 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-input:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 1px; }
 .st-hint { font-size: 10.5px; color: var(--ink-soft); }
 .st-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 12px; }
+/* 滑杆行（tag_weight，2026-11-24 换形）：观感承接已退役的 .sp-w* 权重滑杆族——
+   细线轨道 + 黄铜填充进度（color-mix 语法同 .sp-chip.on 家族；进度比例由 JS 经
+   --st-wfill 内联给定）+ 黄铜实心圆钮；读数等宽黄铜字（老 .sp-wval 规格）。 */
+.st-wrow { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+.st-wrange {
+  flex: 1; min-width: 0; height: 18px; margin: 0; background: transparent; cursor: pointer;
+  -webkit-appearance: none; appearance: none;
+  /* Chromium 已知行为：appearance:none 的 range 聚焦时会在控件内画闪烁文本光标 */
+  caret-color: transparent;
+}
+.st-wrange::-webkit-slider-runnable-track {
+  height: 3px; border-radius: 999px;
+  background: linear-gradient(to right, color-mix(in srgb, var(--brass) 55%, var(--line)) 0 var(--st-wfill, 50%), var(--line) var(--st-wfill, 50%) 100%);
+}
+/* 级联防线（2026-11-24 蓝钮回归复盘）：flowbite.min.css 自带
+   input[type=range]::-webkit-slider-thumb（特异性 0,1,1：蓝 #1c64f2 20px 钮、:focus 4px 蓝环；
+   ::-moz-range-thumb / ::-moz-range-progress 同族蓝）——裸 .st-wrange:: 只有 (0,1,0) 被压。
+   钮/进度选择器恒带 input. 前缀达到同级、靠 style.css 后加载取胜；去前缀 = 蓝钮复辟。
+   轨道 runnable-track flowbite 未染指，裸类即可。回归钉 test_search_weights_mtime。 */
+input.st-wrange::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; margin-top: -4.5px;
+  width: 12px; height: 12px; border: none; border-radius: 50%;
+  background: var(--brass); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 25%, transparent);
+}
+/* 压 flowbite :focus 的 4px 蓝环（同级后置）：焦点态保持本族细阴影 */
+input.st-wrange:focus::-webkit-slider-thumb { box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 25%, transparent); }
+.st-wrange::-moz-range-track { height: 3px; border-radius: 999px; background: var(--line); }
+input.st-wrange::-moz-range-progress { height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+input.st-wrange::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--brass); }
+.st-wrange:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 2px; border-radius: 4px; }
+input.st-wrange.is-err::-webkit-slider-thumb { background: var(--st-error); }
+input.st-wrange.is-err::-moz-range-thumb { background: var(--st-error); }
+.st-wval { font-family: var(--mono); font-size: 11px; color: var(--brass); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 2.5em; text-align: right; }
 .st-keyrow { display: flex; align-items: stretch; gap: 6px; }
 .st-keyrow .st-input { flex: 1; }
 .st-keyrow .mp-back { align-self: center; }
@@ -2179,7 +2282,7 @@ details.d-sec .body { padding: 8px 12px 14px; }
    .ai-open right 让位规则——桌面已左下锚点，不再与 AI 面板对位。 */
 .doc-head {
   display: flex; align-items: center; gap: 10px; flex-shrink: 0;
-  padding: 12px 24px 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
+  padding: var(--col-topline) var(--col-inline) 0; font-family: 'Inter', -apple-system, 'PingFang SC', sans-serif;
   font-size: 12px; color: color-mix(in srgb, var(--ink-soft) 85%, transparent);
 }
 .doc-bp { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; white-space: nowrap; }
@@ -2213,7 +2316,9 @@ details.d-sec .body { padding: 8px 12px 14px; }
    doc-scroll/doc-head 桌面右侧给 dock 让位一个 --dock-w 槽（文本列 max-width 居中于剩余
    空间，1024px 档最窄情形也不压字）。dock 在场时 AI 面板/edge tab 同步让出右缘槽
    （过渡态——T7 消息面重做锚点时按 spec §4A 的 chatwin/slot 体系改写，本块为其前最小避让）。 */
-:root { --dock-w: 40px; --destructive: #b91c1c; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
+:root { --dock-w: 40px; --destructive: #b91c1c;
+  /* 检索页三 token（spec 2026-11-23 §3，doc/search 两视图共读；Home 720px 出生即豁免挂账 §16） */
+  --col-measure: 680px; --col-topline: 12px; --col-inline: 24px; } /* dock 宽单源；告警色（沿现红 #b91c1c 家族） */
 .dock {
   position: fixed; right: 0; top: 64px; /* T7 几何：上锚定（原纵向居中与右缘居中握把同带相撞——
     预览稿场景 2 画法：dock 上带、握把贴 dock 下缘；Home 无 dock 时握把回纵向居中） */
@@ -2243,12 +2348,22 @@ details.d-sec .body { padding: 8px 12px 14px; }
 @media (min-width: 1024px) {
   /* toc-dd 桌面锚 = dock 左缘（top 贴顶栏退役后的行位；z-50 压过 dock 10） */
   .toc-dd { top: 16px; right: calc(var(--dock-w) + 8px); }
-  /* 文档列让位：滚动容器与头行右侧各空一个 dock 槽（选择器列表与 .doc-head 基础视觉规则
-     分离——T4 钉只审基础态） */
-  .doc-scroll, .doc-head { padding-right: calc(24px + var(--dock-w)); }
+  /* 2026-11-23 检索页 S1：原「.doc-scroll, .doc-head 右侧 padding-right 非对称 dock 让位」已摘——
+     它是 doc 列心左偏 20px 的病根（spec 2026-11-23-immersive-search §3）；
+     680 档 ≥1024 下与 fixed dock 无重叠面（目检定档项）。 */
   /* AI 面 dock 槽避让由 T7 消息面块承接（chatwin 右锚含 dock 槽 / chat-slot in-flow 占位）；
      旧「过渡态」#ai-panel/#ai-btn right 让位行已删（桌面 #ai-btn tab 退役，spec §4A 握把升格） */
 }
+
+/* ════ 沉浸式检索页 S1b（plan 2026-11-23-immersive-search）════
+   .search-page = 主区检索页容器（桌面专属旗标驱动）：三 token 与文档列对心（box=680 列宽+对称
+   inline 外垫——摘非对称让位后两视图列心恒等同视口心，doc⇄search 原地变身零横跳）。
+   FAB 检索态降 40% 透明但仍可点/可 Tab——后备出口禁隐藏（spec §8，Review Focus 6）。 */
+.search-page { display: flex; flex-direction: column; min-height: 0; flex: 1;
+  max-width: calc(var(--col-measure) + 2 * var(--col-inline)); margin: 0 auto;
+  padding: var(--col-topline) var(--col-inline) 40px; }
+.fab-root.is-dim { opacity: .4; }
+.fab-root.is-dim:hover { opacity: 1; }
 
 /* ════ 沉浸式壳 W5 · Task 7：管家消息面——右缘暗金半隐握把 + 管家气泡栈 + 聊天浮窗/图钉槽（spec §4A/§7 / 预览稿场景 2·8·9）════
    握把 = 44px 暗金圆钮一半探出右缘（right:-22px，2026-11-23 用户拍板由 30 加大），纸色线性领结（ICONS.bowtie 单点）居可见半区；
@@ -2353,3 +2468,47 @@ details.d-sec .body { padding: 8px 12px 14px; }
      同 .panel-shell/.chatwin 纪律）。置本浮层化块之后——同名声明后来者胜，放前会被覆写行吃掉 */
   .rel-side, .rel-side.open { transition: none; }
 }
+
+/* ════ 检索页 S3 呈现层次（UI 审查清单 P0/P1/P2 落地 2026-11-24）════
+   三带节奏：A 查询带（输入框）→ B 筛选带（最近搜索 / tag chips / meta 控制行）→ C 结果带。
+   间距表：输入框→B 带首行 16；B 带行内 10；B 带→C 带 24+2=26。左缘线统一：行内横距归零
+   （页盒 .search-page 已供 --col-inline 外垫），全行对 680 正文列，与文档视图列缘重合。
+   红线：全部规则 .search-page 前缀——.sp-input/.sp-q-input 与 FileTree 树内下拉共用、
+   移动 sheet 挂 #search-drawer，两者均不在 .search-page 子树（像素级零触达）；
+   零新增 @media、零新增 z-index（含代码开关 in-flow；档弹层沿用 .sp-tier-pop z-50 锚位，
+   仅列尾对缘收 right 锚，top 偏移不动）。 */
+/* —— A 带：输入框 pb 10→16；图标/清除钮脱离旧 12/10 内距的 -30% 定死校准，改定值对中
+   （top = pt12 + 输入框半高≈19 − 控件半高：图标 16px 取 23、清除钮 22px 取 20）—— */
+.search-page .sp-input { padding: 12px 0 16px; }
+.search-page .sp-q-ic { left: 12px; top: 23px; transform: none; }
+.search-page .sp-q-clear { right: 10px; top: 20px; transform: none; }
+/* —— B 带：行距统一 10（recent 退役 18/4 怪节奏）；recent 胶囊去描边浅底，
+   与 tag 描边胶囊形状分层（hover 黄铜语法不动）—— */
+.search-page .sp-recent { padding: 0 0 10px; }
+.search-page .sp-recent button { border-color: transparent; background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.search-page .sp-chips { padding: 0 0 10px; }
+/* —— C 带：meta pb 8→24 + results pt 4→2 = 26 落差；results 横距 12→0；空态上垫 28→48 —— */
+.search-page .sp-meta { padding: 0 0 24px; }
+.search-page .sp-results { padding: 2px 0 14px; }
+.search-page .sp-empty { padding-top: 48px; }
+/* —— meta 行分域：读数靠左，操作件（档 chip 组）margin-left:auto 整体靠右，含代码组尾随
+   （.sp-meta gap 8 承担组距）；弹层随操作件落列尾，收 right 对缘（top 偏移不变）—— */
+.search-page .sp-meta-tier { margin-left: auto; }
+.search-page .sp-meta-code { display: inline-flex; align-items: center; gap: 6px; }
+.search-page .sp-tier-pop { left: auto; right: 0; }
+/* —— 含代码开关：st-toggle 34×20 → 28×16 缩型（钮 12 / 位移 12 / top-left 1 三处同步，
+   特异度 ≥ .st-toggle.on::after 靠三类名取胜）；::before 透明扩命中 40×26，视觉几何不变 —— */
+.search-page .sp-code-toggle { width: 28px; height: 16px; }
+.search-page .sp-code-toggle::after { top: 1px; left: 1px; width: 12px; height: 12px; }
+.search-page .sp-code-toggle.on::after { transform: translateX(12px); }
+.search-page .sp-code-toggle::before { content: ''; position: absolute; inset: -5px -6px; }
+/* —— 加载期灰字统计占位（行宽近终态，防完成瞬间撑行；aria-hidden 纯骨架）—— */
+.search-page .sp-meta-skel { color: color-mix(in srgb, var(--ink-soft) 35%, transparent); margin-left: 6px; }
+/* —— 档 chip 可点性：与正文同号 11px、加横垫（三类名 + 置后压 .sp-meta .sp-tier 10px）；
+   chevron SVG 开合联动（180° transform，RM 下无害不动画几何）—— */
+.search-page .sp-tier-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; font-size: 11px; }
+.search-page .sp-tier-chev { width: 10px; height: 10px; stroke: currentColor; fill: none; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform .15s ease; }
+.search-page .sp-tier-chev.open { transform: rotate(180deg); }
+/* —— 「展开更多」全页限高：40% 是树面板口径，全页 132px ≈ 4 行 + sticky 收起钮照旧 —— */
+.search-page .sp-chips.expanded { max-height: 132px; }

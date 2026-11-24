@@ -131,6 +131,42 @@ def graph_docs_for_tags(conn: sqlite3.Connection, tags: list[str]) -> dict[str, 
     return {name: n for name, n in rows}
 
 
+def graph_tags_for_docs(conn: sqlite3.Connection, paths: list[str]) -> dict[str, list[str]]:
+    """Canonical tag names carried by each of the given doc paths
+    (spec 2026-11-24 §2, the search tag-badge reverse lookup).
+
+    doc→tag edges (src=doc, dst=tag — the mirror of
+    :func:`graph_docs_for_tags`'s direction over the same tables). Returns
+    ``{doc_path: [tag, ...]}`` with tags in ascending ``dst.name`` order
+    (stable badge order for the UI); docs without tags are ABSENT from the
+    dict (the caller defaults them to ``[]``). ``paths`` empty → ``{}``
+    without touching SQL. The IN-list is placeholder-bound (path count ≤
+    top_k_max(50), far below the variable limit). No sqlite3 guard here —
+    the caller owns the degrade (same split as ``graph_docs_for_tags``).
+    Pure SQL over edges/entities (no disk I/O).
+    """
+    if not paths:
+        return {}
+    ph = ",".join("?" * len(paths))
+    rows = conn.execute(
+        f"""
+        SELECT src.name, dst.name FROM edges ed
+        JOIN entities src ON src.id = ed.src_id
+        JOIN entities dst ON dst.id = ed.dst_id
+        WHERE src.type = 'doc' AND dst.type = 'tag'
+          AND src.name IN ({ph})
+        ORDER BY src.name, dst.name
+        """,
+        paths,
+    ).fetchall()
+    out: dict[str, list[str]] = {}
+    for path, tag in rows:
+        if not tag:
+            continue  # 空串 tag 理论不存在（normalize_tag 产非空 canonical 名），归组防御
+        out.setdefault(path, []).append(tag)
+    return out
+
+
 def graph_tag_counts(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     """All tags with their document counts, for the tag selector.
 

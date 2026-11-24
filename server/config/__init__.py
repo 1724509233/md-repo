@@ -1,4 +1,4 @@
-"""Server configuration package: core, ai, log, notifications, bgagent."""
+"""Server configuration package: core, ai, log, notifications, search, bgagent."""
 from .ai import AIConfig
 from .bgagent import (
     TRIGGER_DEFAULTS,
@@ -10,6 +10,7 @@ from .bgagent import (
 from .core import ServerConfig, load_server_config
 from .log import LogConfig
 from .notifications import NotificationsConfig, load_notifications
+from .search import SearchConfig, load_search
 
 __all__ = [
     "ServerConfig",
@@ -18,6 +19,8 @@ __all__ = [
     "LogConfig",
     "NotificationsConfig",
     "load_notifications",
+    "SearchConfig",
+    "load_search",
     "ModelConfig",
     "BackgroundAgentConfig",
     "load_background_agents",
