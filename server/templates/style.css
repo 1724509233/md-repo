@@ -1968,22 +1968,31 @@ details.d-sec .body { padding: 8px 12px 14px; }
 .st-wrange {
   flex: 1; min-width: 0; height: 18px; margin: 0; background: transparent; cursor: pointer;
   -webkit-appearance: none; appearance: none;
+  /* Chromium 已知行为：appearance:none 的 range 聚焦时会在控件内画闪烁文本光标 */
+  caret-color: transparent;
 }
 .st-wrange::-webkit-slider-runnable-track {
   height: 3px; border-radius: 999px;
   background: linear-gradient(to right, color-mix(in srgb, var(--brass) 55%, var(--line)) 0 var(--st-wfill, 50%), var(--line) var(--st-wfill, 50%) 100%);
 }
-.st-wrange::-webkit-slider-thumb {
+/* 级联防线（2026-11-24 蓝钮回归复盘）：flowbite.min.css 自带
+   input[type=range]::-webkit-slider-thumb（特异性 0,1,1：蓝 #1c64f2 20px 钮、:focus 4px 蓝环；
+   ::-moz-range-thumb / ::-moz-range-progress 同族蓝）——裸 .st-wrange:: 只有 (0,1,0) 被压。
+   钮/进度选择器恒带 input. 前缀达到同级、靠 style.css 后加载取胜；去前缀 = 蓝钮复辟。
+   轨道 runnable-track flowbite 未染指，裸类即可。回归钉 test_search_weights_mtime。 */
+input.st-wrange::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none; margin-top: -4.5px;
   width: 12px; height: 12px; border: none; border-radius: 50%;
   background: var(--brass); box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 25%, transparent);
 }
+/* 压 flowbite :focus 的 4px 蓝环（同级后置）：焦点态保持本族细阴影 */
+input.st-wrange:focus::-webkit-slider-thumb { box-shadow: 0 1px 3px color-mix(in srgb, var(--ink) 25%, transparent); }
 .st-wrange::-moz-range-track { height: 3px; border-radius: 999px; background: var(--line); }
-.st-wrange::-moz-range-progress { height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--brass) 55%, var(--line)); }
-.st-wrange::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--brass); }
+input.st-wrange::-moz-range-progress { height: 3px; border-radius: 999px; background: color-mix(in srgb, var(--brass) 55%, var(--line)); }
+input.st-wrange::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--brass); }
 .st-wrange:focus-visible { outline: 2px solid color-mix(in srgb, var(--brass) 55%, transparent); outline-offset: 2px; border-radius: 4px; }
-.st-wrange.is-err::-webkit-slider-thumb { background: var(--st-error); }
-.st-wrange.is-err::-moz-range-thumb { background: var(--st-error); }
+input.st-wrange.is-err::-webkit-slider-thumb { background: var(--st-error); }
+input.st-wrange.is-err::-moz-range-thumb { background: var(--st-error); }
 .st-wval { font-family: var(--mono); font-size: 11px; color: var(--brass); font-variant-numeric: tabular-nums; flex-shrink: 0; min-width: 2.5em; text-align: right; }
 .st-keyrow { display: flex; align-items: stretch; gap: 6px; }
 .st-keyrow .st-input { flex: 1; }

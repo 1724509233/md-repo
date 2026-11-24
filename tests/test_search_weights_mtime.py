@@ -219,10 +219,17 @@ def test_settings_tag_weight_slider_frontend_pins():
     for blk in re.findall(r'<label[^>]*class="st-field"[^>]*>[\s\S]*?</label>', sp):
         assert "search.tag_weight" not in blk, "range 不得回 label.st-field（labelable 转发激活）"
     # ⑤ CSS 家族在场：轨道/钮/读数三类 + 黄铜填充进度经 --st-wfill（JS 内联给定）
+    #    caret-color: transparent = 压 Chromium appearance:none range 聚焦闪烁文本光标
     css = (root / "server/templates/style.css").read_text(encoding="utf-8")
-    for sel in (".st-wrange::-webkit-slider-thumb", ".st-wrange::-moz-range-thumb",
-                ".st-wrange::-moz-range-progress", "--st-wfill", ".st-wval"):
+    for sel in ("input.st-wrange::-webkit-slider-thumb", "input.st-wrange::-moz-range-thumb",
+                "input.st-wrange::-moz-range-progress", "--st-wfill", ".st-wval",
+                "caret-color: transparent"):
         assert sel in css, sel
+    # ⑥ 级联防线反钉（2026-11-24 蓝钮回归）：flowbite 的 input[type=range] thumb 族为 (0,1,1)，
+    #    裸类选择器必被压回蓝钮——钮/进度选择器不得去 input. 前缀
+    #    （负向环视防误伤：input.st-wrange:: 字面包含裸类子串）
+    for m in re.finditer(r"(?<![\w.])\.st-wrange::(-webkit-slider-thumb|-moz-range-thumb|-moz-range-progress)", css):
+        raise AssertionError(f"裸类 {m.group(0)} 会被 flowbite (0,1,1) 蓝钮压过（须 input. 前缀）")
 
 
 # ── B① get_mtimes helper ─────────────────────────────────────────────────
